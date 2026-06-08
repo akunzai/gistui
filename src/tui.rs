@@ -8,9 +8,10 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
-    Terminal,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    Frame, Terminal,
 };
 use std::io;
 use std::path::PathBuf;
@@ -29,11 +30,18 @@ pub enum Screen {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GistView {
+    Description,
+    Id,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyOutcome {
     None,
     Quit,
     PreviewDiff,
     Download,
+    DownloadGist,
 }
 
 #[derive(Debug, Clone)]
@@ -44,19 +52,36 @@ pub struct AppState {
     pub focus: FocusPane,
     pub local_index: usize,
     pub gist_index: usize,
+    pub local_hscroll: u16,
+    pub gist_hscroll: u16,
     pub screen: Screen,
+    pub gist_view: GistView,
     pub diff_previewed: bool,
     pub diff_text: String,
     pub diff_scroll: u16,
+    pub diff_hscroll: u16,
     pub preview_remote: String,
     pub preview_local: PathBuf,
+    pub download_target: PathBuf,
+    pub cwd: PathBuf,
     pub status: Option<String>,
 }
 
 impl AppState {
     pub fn ranked_gists(&self) -> Vec<RankedGistFile> {
         let Some(local) = self.locals.get(self.local_index) else {
-            return Vec::new();
+            // No local selected (e.g. an empty directory): list every gist
+            // unranked so the user can still preview and download into the cwd.
+            return self
+                .gists
+                .iter()
+                .cloned()
+                .map(|file| RankedGistFile {
+                    file,
+                    score: 0,
+                    reasons: Vec::new(),
+                })
+                .collect();
         };
         rank_gist_files(&local.path, &self.gists, &self.pinned)
     }
@@ -69,12 +94,60 @@ impl AppState {
         self.ranked_gists().into_iter().nth(self.gist_index)
     }
 
-    pub fn enter_diff(&mut self, diff_text: String, remote: String, local: PathBuf) {
+    /// Highest horizontal-scroll offset for the focused pane, based on its longest row
+    /// (viewport width is unknown to the pure key logic, mirroring the diff scroll cap).
+    fn focused_hscroll_max(&self) -> u16 {
+        let longest = match self.focus {
+            FocusPane::Local => self
+                .locals
+                .iter()
+                .map(|c| local_row_label(&c.path).chars().count())
+                .max(),
+            FocusPane::Gist => self
+                .ranked_gists()
+                .iter()
+                .map(|g| gist_row_label(g, self.gist_view).chars().count())
+                .max(),
+        };
+        longest
+            .unwrap_or(0)
+            .saturating_sub(1)
+            .min(u16::MAX as usize) as u16
+    }
+
+    fn scroll_focused_right(&mut self) {
+        let max = self.focused_hscroll_max();
+        let scroll = match self.focus {
+            FocusPane::Local => &mut self.local_hscroll,
+            FocusPane::Gist => &mut self.gist_hscroll,
+        };
+        if *scroll < max {
+            *scroll += 1;
+        }
+    }
+
+    fn scroll_focused_left(&mut self) {
+        let scroll = match self.focus {
+            FocusPane::Local => &mut self.local_hscroll,
+            FocusPane::Gist => &mut self.gist_hscroll,
+        };
+        *scroll = scroll.saturating_sub(1);
+    }
+
+    pub fn enter_diff(
+        &mut self,
+        diff_text: String,
+        remote: String,
+        local: PathBuf,
+        target: PathBuf,
+    ) {
         self.diff_text = diff_text;
         self.preview_remote = remote;
         self.preview_local = local;
+        self.download_target = target;
         self.diff_previewed = true;
         self.diff_scroll = 0;
+        self.diff_hscroll = 0;
         self.status = None;
         self.screen = Screen::Diff;
     }
@@ -84,7 +157,9 @@ impl AppState {
         self.diff_text.clear();
         self.preview_remote.clear();
         self.preview_local = PathBuf::new();
+        self.download_target = PathBuf::new();
         self.diff_scroll = 0;
+        self.diff_hscroll = 0;
         self.diff_previewed = false;
     }
 
@@ -108,6 +183,24 @@ impl AppState {
         self.diff_scroll = self.diff_scroll.saturating_sub(1);
     }
 
+    pub fn scroll_diff_right(&mut self) {
+        let max = self
+            .diff_text
+            .lines()
+            .map(|line| line.chars().count())
+            .max()
+            .unwrap_or(0)
+            .saturating_sub(1)
+            .min(u16::MAX as usize) as u16;
+        if self.diff_hscroll < max {
+            self.diff_hscroll += 1;
+        }
+    }
+
+    pub fn scroll_diff_left(&mut self) {
+        self.diff_hscroll = self.diff_hscroll.saturating_sub(1);
+    }
+
     pub fn handle_key(&mut self, code: KeyCode) -> KeyOutcome {
         match self.screen {
             Screen::List => self.handle_key_list(code),
@@ -117,6 +210,9 @@ impl AppState {
     }
 
     fn handle_key_list(&mut self, code: KeyCode) -> KeyOutcome {
+        // Any key dismisses a lingering status message (e.g. "Downloaded …"). A new
+        // status may be set afterwards by the run_loop IO helper for this key.
+        self.status = None;
         match code {
             KeyCode::Char('q') => return KeyOutcome::Quit,
             KeyCode::Tab => {
@@ -129,9 +225,12 @@ impl AppState {
                 FocusPane::Local if self.local_index + 1 < self.locals.len() => {
                     self.local_index += 1;
                     self.gist_index = 0;
+                    self.local_hscroll = 0;
+                    self.gist_hscroll = 0;
                 }
                 FocusPane::Gist if self.gist_index + 1 < self.ranked_gists().len() => {
-                    self.gist_index += 1
+                    self.gist_index += 1;
+                    self.gist_hscroll = 0;
                 }
                 _ => {}
             },
@@ -139,14 +238,30 @@ impl AppState {
                 FocusPane::Local if self.local_index > 0 => {
                     self.local_index -= 1;
                     self.gist_index = 0;
+                    self.local_hscroll = 0;
+                    self.gist_hscroll = 0;
                 }
-                FocusPane::Gist if self.gist_index > 0 => self.gist_index -= 1,
+                FocusPane::Gist if self.gist_index > 0 => {
+                    self.gist_index -= 1;
+                    self.gist_hscroll = 0;
+                }
                 _ => {}
             },
+            KeyCode::Right => self.scroll_focused_right(),
+            KeyCode::Left => self.scroll_focused_left(),
+            KeyCode::Char('t') => {
+                self.gist_view = match self.gist_view {
+                    GistView::Description => GistView::Id,
+                    GistView::Id => GistView::Description,
+                };
+            }
+            KeyCode::Char('d')
+                if self.focus == FocusPane::Gist && self.gist_index < self.ranked_gists().len() =>
+            {
+                return KeyOutcome::DownloadGist;
+            }
             KeyCode::Enter
-                if self.focus == FocusPane::Gist
-                    && self.selected_local().is_some()
-                    && self.gist_index < self.ranked_gists().len() =>
+                if self.focus == FocusPane::Gist && self.gist_index < self.ranked_gists().len() =>
             {
                 return KeyOutcome::PreviewDiff;
             }
@@ -161,8 +276,10 @@ impl AppState {
             KeyCode::Esc => self.back_to_list(),
             KeyCode::Down => self.scroll_diff_down(),
             KeyCode::Up => self.scroll_diff_up(),
+            KeyCode::Right => self.scroll_diff_right(),
+            KeyCode::Left => self.scroll_diff_left(),
             KeyCode::Char('d') => {
-                if self.preview_local.exists() {
+                if self.download_target.exists() {
                     self.screen = Screen::ConfirmOverwrite;
                 } else {
                     return KeyOutcome::Download;
@@ -192,12 +309,18 @@ pub fn initial_state() -> AppState {
         focus: FocusPane::Local,
         local_index: 0,
         gist_index: 0,
+        local_hscroll: 0,
+        gist_hscroll: 0,
         screen: Screen::List,
+        gist_view: GistView::Description,
         diff_previewed: false,
         diff_text: String::new(),
         diff_scroll: 0,
+        diff_hscroll: 0,
         preview_remote: String::new(),
         preview_local: PathBuf::new(),
+        download_target: PathBuf::new(),
+        cwd: PathBuf::from("."),
         status: None,
     }
 }
@@ -206,11 +329,14 @@ pub fn load_startup_state() -> Result<AppState> {
     let mut state = initial_state();
     let config_path = crate::config::config_path()?;
     let config = crate::config::load_config(&config_path)?;
-    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
     let cwd = std::env::current_dir()?;
 
     state.pinned = config.pinned;
-    state.locals = crate::local::discover_local_candidates(&cwd, &home, &state.pinned)?;
+    state.locals = crate::local::discover_local_candidates(&cwd, &state.pinned)?;
+    state.cwd = cwd;
+    // Start focused on the gist pane: the common flow is to pick a gist and pull it
+    // into the cwd, and the gist list is shown even when no local file is selected.
+    state.focus = FocusPane::Gist;
 
     if crate::gh::check_gh_ready().is_ok() {
         if let Ok(gists) =
@@ -242,55 +368,14 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
     let mut state = load_startup_state()?;
 
     loop {
-        terminal.draw(|frame| {
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(5), Constraint::Length(3)])
-                .split(frame.size());
-            let columns = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-                .split(chunks[0]);
-
-            let local_items: Vec<ListItem> = state
-                .locals
-                .iter()
-                .map(|c| ListItem::new(c.path.display().to_string()))
-                .collect();
-            frame.render_widget(
-                List::new(local_items).block(Block::default().title("Local").borders(Borders::ALL)),
-                columns[0],
-            );
-
-            let gist_items: Vec<ListItem> = state
-                .ranked_gists()
-                .into_iter()
-                .map(|g| {
-                    ListItem::new(format!(
-                        "{} / {} ({})",
-                        g.file.gist_id, g.file.filename, g.score
-                    ))
-                })
-                .collect();
-            frame.render_widget(
-                List::new(gist_items).block(Block::default().title("Gists").borders(Borders::ALL)),
-                columns[1],
-            );
-
-            frame.render_widget(
-                Paragraph::new(
-                    "Tab switch  Enter diff  u upload  d download  n create  p pin  q quit",
-                )
-                .block(Block::default().title("Commands").borders(Borders::ALL)),
-                chunks[1],
-            );
-        })?;
+        terminal.draw(|frame| render(frame, &state))?;
 
         if let Event::Key(key) = event::read()? {
             match state.handle_key(key.code) {
                 KeyOutcome::Quit => break,
                 KeyOutcome::PreviewDiff => preview_diff(&mut state),
                 KeyOutcome::Download => download(&mut state),
+                KeyOutcome::DownloadGist => download_selected(&mut state),
                 KeyOutcome::None => {}
             }
         }
@@ -300,34 +385,267 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
 }
 
 fn preview_diff(state: &mut AppState) {
-    let (Some(local), Some(ranked)) = (state.selected_local().cloned(), state.selected_gist())
-    else {
+    let Some(ranked) = state.selected_gist() else {
         return;
     };
+    // A local file may not be selected (empty cwd); diff against empty content then.
+    let local_path = state.selected_local().map(|local| local.path.clone());
     let gist = ranked.file;
     match crate::gh::fetch_gist_file_content(&gist.gist_id, &gist.filename) {
         Ok(remote) => {
-            let local_content = std::fs::read_to_string(&local.path).unwrap_or_default();
+            let local_content = local_path
+                .as_ref()
+                .map(|path| std::fs::read_to_string(path).unwrap_or_default())
+                .unwrap_or_default();
             let diff = crate::diff::unified_diff("local", &local_content, "gist", &remote);
-            state.enter_diff(diff, remote, local.path.clone());
+            // Download saves the gist into the current working directory under the
+            // gist's own filename, leaving the compared local file untouched.
+            let target = state.cwd.join(&gist.filename);
+            state.enter_diff(diff, remote, local_path.unwrap_or_default(), target);
+        }
+        Err(error) => state.set_status(format!("fetch failed: {error}")),
+    }
+}
+
+fn download_selected(state: &mut AppState) {
+    let Some(ranked) = state.selected_gist() else {
+        return;
+    };
+    let gist = ranked.file;
+    let target = state.cwd.join(&gist.filename);
+    match crate::gh::fetch_gist_file_content(&gist.gist_id, &gist.filename) {
+        Ok(remote) => {
+            if target.exists() {
+                // A same-named file already exists: show its diff and require a y/n
+                // overwrite confirmation before writing.
+                let local_content = std::fs::read_to_string(&target).unwrap_or_default();
+                let diff = crate::diff::unified_diff("local", &local_content, "gist", &remote);
+                state.enter_diff(diff, remote, target.clone(), target);
+            } else {
+                // No collision: download straight into the cwd without forcing a diff.
+                match crate::actions::execute_download(&target, &remote, false) {
+                    Ok(()) => {
+                        state.set_status(format!("Downloaded {}", target.display()));
+                        refresh_locals(state);
+                    }
+                    Err(error) => state.set_status(format!("download failed: {error}")),
+                }
+            }
         }
         Err(error) => state.set_status(format!("fetch failed: {error}")),
     }
 }
 
 fn download(state: &mut AppState) {
-    let local = state.preview_local.clone();
+    let target = state.download_target.clone();
     let content = state.preview_remote.clone();
-    match crate::actions::execute_download(&local, &content, true) {
+    match crate::actions::execute_download(&target, &content, true) {
         Ok(()) => {
-            state.set_status(format!("Downloaded {}", local.display()));
+            state.set_status(format!("Downloaded {}", target.display()));
             state.back_to_list();
+            refresh_locals(state);
         }
         Err(error) => {
             state.set_status(format!("download failed: {error}"));
             state.screen = Screen::Diff;
         }
     }
+}
+
+/// Re-discovers the cwd file list after a write so a freshly downloaded file appears in the
+/// Local pane. The current selection is preserved by path when still present.
+fn refresh_locals(state: &mut AppState) {
+    let selected = state.selected_local().map(|c| c.path.clone());
+    if let Ok(locals) = crate::local::discover_local_candidates(&state.cwd, &state.pinned) {
+        state.locals = locals;
+        state.local_index = selected
+            .and_then(|path| state.locals.iter().position(|c| c.path == path))
+            .unwrap_or(0)
+            .min(state.locals.len().saturating_sub(1));
+        if state.gist_index >= state.ranked_gists().len() {
+            state.gist_index = 0;
+        }
+    }
+}
+
+fn render(frame: &mut Frame, state: &AppState) {
+    match state.screen {
+        Screen::List => render_list(frame, state),
+        Screen::Diff => render_diff(frame, state, false),
+        Screen::ConfirmOverwrite => render_diff(frame, state, true),
+    }
+}
+
+fn local_row_label(path: &std::path::Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+fn hscroll_str(text: &str, offset: u16) -> String {
+    text.chars().skip(offset as usize).collect()
+}
+
+/// Match strength as stars. Mirrors the ranking tiers (exact-filename/pinned = 1000+,
+/// path hint = 250+); a recent-only score of 1 is too weak to be worth a star.
+fn match_stars(score: u16) -> &'static str {
+    match score {
+        s if s >= 1000 => "⭐⭐⭐",
+        s if s >= 250 => "⭐⭐",
+        s if s >= 2 => "⭐",
+        _ => "",
+    }
+}
+
+fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
+    let stars = match_stars(g.score);
+    let prefix = if stars.is_empty() {
+        String::new()
+    } else {
+        format!("{stars} ")
+    };
+    match view {
+        GistView::Description => {
+            if g.file.description.trim().is_empty() {
+                format!("{prefix}{}", g.file.filename)
+            } else {
+                format!("{prefix}{} — {}", g.file.filename, g.file.description)
+            }
+        }
+        GistView::Id => format!("{prefix}{} / {}", g.file.gist_id, g.file.filename),
+    }
+}
+
+fn render_list(frame: &mut Frame, state: &AppState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(3)])
+        .split(frame.size());
+    let columns = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(chunks[0]);
+
+    // Discovery is scoped to the cwd, so each candidate is a direct child; show just the
+    // file name and put the cwd in the pane title as the shared baseline.
+    let local_items: Vec<ListItem> = state
+        .locals
+        .iter()
+        .map(|c| ListItem::new(hscroll_str(&local_row_label(&c.path), state.local_hscroll)))
+        .collect();
+    let local_focused = state.focus == FocusPane::Local;
+    let local_selected = (!state.locals.is_empty()).then_some(state.local_index);
+    let local_title = format!("Local · {}", state.cwd.display());
+    render_pane(
+        frame,
+        columns[0],
+        &local_title,
+        local_items,
+        local_focused,
+        local_selected,
+    );
+
+    let ranked = state.ranked_gists();
+    let gist_items: Vec<ListItem> = ranked
+        .iter()
+        .map(|g| {
+            ListItem::new(hscroll_str(
+                &gist_row_label(g, state.gist_view),
+                state.gist_hscroll,
+            ))
+        })
+        .collect();
+    let gist_focused = state.focus == FocusPane::Gist;
+    let gist_selected = (!ranked.is_empty()).then_some(state.gist_index);
+    render_pane(
+        frame,
+        columns[1],
+        "Gists",
+        gist_items,
+        gist_focused,
+        gist_selected,
+    );
+
+    let footer = match &state.status {
+        Some(message) => message.clone(),
+        None => "Tab  Up/Down move  Left/Right scroll  Enter diff  d download  t view  q quit"
+            .to_string(),
+    };
+    frame.render_widget(
+        Paragraph::new(footer).block(Block::default().title("Commands").borders(Borders::ALL)),
+        chunks[1],
+    );
+}
+
+fn render_pane(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    items: Vec<ListItem>,
+    focused: bool,
+    selected: Option<usize>,
+) {
+    let border_style = if focused {
+        Style::default().fg(Color::Cyan)
+    } else {
+        Style::default()
+    };
+    let highlight_style = if focused {
+        Style::default().add_modifier(Modifier::REVERSED)
+    } else {
+        Style::default().add_modifier(Modifier::BOLD)
+    };
+    let title = if focused {
+        format!("{title} [focus]")
+    } else {
+        title.to_string()
+    };
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(border_style),
+        )
+        .highlight_style(highlight_style)
+        .highlight_symbol("▶ ");
+
+    let mut list_state = ListState::default();
+    list_state.select(selected);
+    frame.render_stateful_widget(list, area, &mut list_state);
+}
+
+fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(3)])
+        .split(frame.size());
+
+    let title = format!(
+        "Diff: {}  ->  {}",
+        state.preview_local.display(),
+        state.download_target.display()
+    );
+    frame.render_widget(
+        Paragraph::new(state.diff_text.clone())
+            .scroll((state.diff_scroll, state.diff_hscroll))
+            .block(Block::default().title(title).borders(Borders::ALL)),
+        chunks[0],
+    );
+
+    let footer = if confirming {
+        format!("Overwrite {}? (y/n)", state.download_target.display())
+    } else {
+        format!(
+            "Up/Down/Left/Right scroll  d download -> {}  Esc back  q quit",
+            state.download_target.display()
+        )
+    };
+    frame.render_widget(
+        Paragraph::new(footer).block(Block::default().title("Commands").borders(Borders::ALL)),
+        chunks[1],
+    );
 }
 
 #[cfg(test)]
@@ -344,9 +662,193 @@ mod tests {
     }
 
     #[test]
+    fn t_toggles_gist_view() {
+        let mut state = initial_state();
+        assert_eq!(state.gist_view, GistView::Description);
+        state.handle_key(KeyCode::Char('t'));
+        assert_eq!(state.gist_view, GistView::Id);
+        state.handle_key(KeyCode::Char('t'));
+        assert_eq!(state.gist_view, GistView::Description);
+    }
+
+    #[test]
+    fn gist_row_label_switches_with_view() {
+        let g = RankedGistFile {
+            file: GistFile {
+                gist_id: "abc".into(),
+                description: "My Ghostty config".into(),
+                filename: "config".into(),
+                public: true,
+                updated_at: "x".into(),
+            },
+            score: 1,
+            reasons: Vec::new(),
+        };
+        // A recent-only score of 1 is too weak to earn a star.
+        assert_eq!(
+            gist_row_label(&g, GistView::Description),
+            "config — My Ghostty config"
+        );
+        assert_eq!(gist_row_label(&g, GistView::Id), "abc / config");
+    }
+
+    #[test]
+    fn strong_match_prefixes_stars() {
+        let g = RankedGistFile {
+            file: GistFile {
+                gist_id: "abc".into(),
+                description: "cfg".into(),
+                filename: "config".into(),
+                public: true,
+                updated_at: "x".into(),
+            },
+            score: 1000,
+            reasons: Vec::new(),
+        };
+        assert_eq!(
+            gist_row_label(&g, GistView::Description),
+            "⭐⭐⭐ config — cfg"
+        );
+        assert_eq!(gist_row_label(&g, GistView::Id), "⭐⭐⭐ abc / config");
+    }
+
+    #[test]
+    fn match_stars_tiers() {
+        assert_eq!(match_stars(0), "");
+        assert_eq!(match_stars(1), "");
+        assert_eq!(match_stars(250), "⭐⭐");
+        assert_eq!(match_stars(1000), "⭐⭐⭐");
+        assert_eq!(match_stars(10_001), "⭐⭐⭐");
+    }
+
+    #[test]
+    fn gist_row_label_falls_back_to_filename_when_description_empty() {
+        let g = RankedGistFile {
+            file: GistFile {
+                gist_id: "abc".into(),
+                description: "  ".into(),
+                filename: "config".into(),
+                public: true,
+                updated_at: "x".into(),
+            },
+            score: 0,
+            reasons: Vec::new(),
+        };
+        assert_eq!(gist_row_label(&g, GistView::Description), "config");
+    }
+
+    #[test]
+    fn left_right_scrolls_focused_gist_pane() {
+        let mut state = initial_state();
+        state.gists = vec![GistFile {
+            gist_id: "a".into(),
+            description: "a fairly long description for scrolling".into(),
+            filename: "f.json".into(),
+            public: false,
+            updated_at: "x".into(),
+        }];
+        state.focus = FocusPane::Gist;
+        assert_eq!(state.gist_hscroll, 0);
+        state.handle_key(KeyCode::Left); // saturates at 0
+        assert_eq!(state.gist_hscroll, 0);
+        state.handle_key(KeyCode::Right);
+        state.handle_key(KeyCode::Right);
+        assert_eq!(state.gist_hscroll, 2);
+        state.handle_key(KeyCode::Left);
+        assert_eq!(state.gist_hscroll, 1);
+    }
+
+    #[test]
+    fn gist_hscroll_caps_at_longest_row() {
+        let mut state = initial_state();
+        state.gists = vec![GistFile {
+            gist_id: "a".into(),
+            description: "tiny".into(),
+            filename: "f".into(),
+            public: false,
+            updated_at: "x".into(),
+        }];
+        state.focus = FocusPane::Gist;
+        let row = gist_row_label(&state.ranked_gists()[0], state.gist_view);
+        let max = (row.chars().count() - 1) as u16;
+        for _ in 0..200 {
+            state.handle_key(KeyCode::Right);
+        }
+        assert_eq!(state.gist_hscroll, max);
+    }
+
+    #[test]
+    fn moving_gist_selection_resets_hscroll() {
+        let mut state = initial_state();
+        state.gists = vec![
+            GistFile {
+                gist_id: "a".into(),
+                description: "first long description here".into(),
+                filename: "a.json".into(),
+                public: false,
+                updated_at: "x".into(),
+            },
+            GistFile {
+                gist_id: "b".into(),
+                description: "second long description here".into(),
+                filename: "b.json".into(),
+                public: false,
+                updated_at: "x".into(),
+            },
+        ];
+        state.focus = FocusPane::Gist;
+        state.handle_key(KeyCode::Right);
+        assert_eq!(state.gist_hscroll, 1);
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.gist_hscroll, 0);
+    }
+
+    #[test]
     fn empty_state_has_no_ranked_gists() {
         let state = initial_state();
         assert!(state.ranked_gists().is_empty());
+    }
+
+    #[test]
+    fn no_local_selected_lists_all_gists_unranked() {
+        let mut state = initial_state();
+        state.gists = vec![
+            GistFile {
+                gist_id: "a".into(),
+                description: "first".into(),
+                filename: "alpha.json".into(),
+                public: false,
+                updated_at: "x".into(),
+            },
+            GistFile {
+                gist_id: "b".into(),
+                description: "second".into(),
+                filename: "beta.json".into(),
+                public: false,
+                updated_at: "x".into(),
+            },
+        ];
+        let ranked = state.ranked_gists();
+        assert_eq!(ranked.len(), 2);
+        // Order preserved (unranked) and no scoring applied.
+        assert_eq!(ranked[0].file.filename, "alpha.json");
+        assert_eq!(ranked[0].score, 0);
+        assert!(ranked[0].reasons.is_empty());
+    }
+
+    #[test]
+    fn enter_with_no_local_but_gist_selected_returns_preview() {
+        let mut state = initial_state();
+        state.gists = vec![GistFile {
+            gist_id: "a".into(),
+            description: "first".into(),
+            filename: "alpha.json".into(),
+            public: false,
+            updated_at: "x".into(),
+        }];
+        state.focus = FocusPane::Gist;
+        assert!(state.locals.is_empty());
+        assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::PreviewDiff);
     }
 
     #[test]
@@ -426,24 +928,32 @@ mod tests {
             "the diff".into(),
             "remote body".into(),
             PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/cwd/x"),
         );
         assert_eq!(state.screen, Screen::Diff);
         assert!(state.diff_previewed);
         assert_eq!(state.preview_remote, "remote body");
         assert_eq!(state.preview_local, PathBuf::from("/tmp/x"));
+        assert_eq!(state.download_target, PathBuf::from("/tmp/cwd/x"));
         assert_eq!(state.diff_scroll, 0);
     }
 
     #[test]
     fn back_to_list_clears_preview() {
         let mut state = initial_state();
-        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/x"));
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
         state.back_to_list();
         assert_eq!(state.screen, Screen::List);
         assert!(!state.diff_previewed);
         assert!(state.diff_text.is_empty());
         assert!(state.preview_remote.is_empty());
         assert_eq!(state.preview_local, PathBuf::new());
+        assert_eq!(state.download_target, PathBuf::new());
     }
 
     #[test]
@@ -460,6 +970,33 @@ mod tests {
     }
 
     #[test]
+    fn d_in_gist_focus_returns_download_gist() {
+        let mut state = state_with_selection();
+        assert_eq!(
+            state.handle_key(KeyCode::Char('d')),
+            KeyOutcome::DownloadGist
+        );
+    }
+
+    #[test]
+    fn d_in_local_focus_is_noop() {
+        let mut state = state_with_selection();
+        state.focus = FocusPane::Local;
+        assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn d_without_gists_is_noop() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/x"),
+            pinned: false,
+        }];
+        state.focus = FocusPane::Gist;
+        assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
+    }
+
+    #[test]
     fn enter_without_gists_is_noop() {
         let mut state = initial_state();
         state.locals = vec![LocalCandidate {
@@ -473,7 +1010,12 @@ mod tests {
     #[test]
     fn diff_scroll_respects_bounds() {
         let mut state = initial_state();
-        state.enter_diff("l1\nl2\nl3".into(), "r".into(), PathBuf::from("/tmp/x"));
+        state.enter_diff(
+            "l1\nl2\nl3".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
         assert_eq!(state.diff_scroll, 0);
         state.handle_key(KeyCode::Up); // stays at 0
         assert_eq!(state.diff_scroll, 0);
@@ -488,9 +1030,35 @@ mod tests {
     }
 
     #[test]
+    fn diff_hscroll_respects_bounds() {
+        let mut state = initial_state();
+        // Longest line is "abcd" (4 chars) -> max offset 3.
+        state.enter_diff(
+            "abcd\nab".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
+        assert_eq!(state.diff_hscroll, 0);
+        state.handle_key(KeyCode::Left); // stays at 0
+        assert_eq!(state.diff_hscroll, 0);
+        for _ in 0..10 {
+            state.handle_key(KeyCode::Right);
+        }
+        assert_eq!(state.diff_hscroll, 3);
+        state.handle_key(KeyCode::Left);
+        assert_eq!(state.diff_hscroll, 2);
+    }
+
+    #[test]
     fn esc_in_diff_returns_to_list() {
         let mut state = initial_state();
-        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/x"));
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
         assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
         assert_eq!(state.screen, Screen::List);
         assert!(!state.diff_previewed);
@@ -501,7 +1069,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let missing = dir.path().join("does-not-exist.json");
         let mut state = initial_state();
-        state.enter_diff("d".into(), "r".into(), missing);
+        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/local"), missing);
         assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::Download);
     }
 
@@ -511,7 +1079,12 @@ mod tests {
         let existing = dir.path().join("exists.json");
         std::fs::write(&existing, "old").unwrap();
         let mut state = initial_state();
-        state.enter_diff("d".into(), "r".into(), existing);
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/local"),
+            existing,
+        );
         assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
         assert_eq!(state.screen, Screen::ConfirmOverwrite);
     }
@@ -519,7 +1092,12 @@ mod tests {
     #[test]
     fn confirm_y_returns_download() {
         let mut state = initial_state();
-        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/x"));
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
         state.screen = Screen::ConfirmOverwrite;
         assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::Download);
     }
@@ -527,7 +1105,12 @@ mod tests {
     #[test]
     fn confirm_n_returns_to_diff() {
         let mut state = initial_state();
-        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/x"));
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
         state.screen = Screen::ConfirmOverwrite;
         assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
         assert_eq!(state.screen, Screen::Diff);
@@ -536,7 +1119,12 @@ mod tests {
     #[test]
     fn q_in_diff_quits() {
         let mut state = initial_state();
-        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/x"));
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
         assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
     }
 
@@ -549,7 +1137,12 @@ mod tests {
     #[test]
     fn q_in_confirm_quits() {
         let mut state = initial_state();
-        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/x"));
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
         state.screen = Screen::ConfirmOverwrite;
         assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
     }
@@ -557,7 +1150,12 @@ mod tests {
     #[test]
     fn confirm_esc_returns_to_diff() {
         let mut state = initial_state();
-        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/x"));
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
         state.screen = Screen::ConfirmOverwrite;
         assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
         assert_eq!(state.screen, Screen::Diff);

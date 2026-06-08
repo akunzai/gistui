@@ -1,21 +1,13 @@
 use crate::domain::{LocalCandidate, PinnedMapping};
 use anyhow::Result;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-pub fn known_config_paths(home: &Path) -> Vec<PathBuf> {
-    vec![
-        home.join(".zshrc"),
-        home.join(".gemini/antigravity-cli/settings.json"),
-        home.join(".config/opencode/opencode.json"),
-        home.join(".claude/settings.json"),
-        home.join(".claude/statusline.sh"),
-    ]
-}
-
+/// Lists the files in `cwd` as local candidates. Discovery is scoped to the
+/// current working directory only; `pinned` is used solely to mark which of those
+/// files already have a saved gist mapping (it does not pull in out-of-cwd paths).
 pub fn discover_local_candidates(
     cwd: &Path,
-    home: &Path,
     pinned: &[PinnedMapping],
 ) -> Result<Vec<LocalCandidate>> {
     let mut paths = Vec::new();
@@ -25,18 +17,6 @@ pub fn discover_local_candidates(
         let path = entry.path();
         if path.is_file() {
             paths.push(path);
-        }
-    }
-
-    for path in known_config_paths(home) {
-        if path.is_file() {
-            paths.push(path);
-        }
-    }
-
-    for mapping in pinned {
-        if mapping.local_path.is_file() {
-            paths.push(mapping.local_path.clone());
         }
     }
 
@@ -64,25 +44,52 @@ mod tests {
     use super::*;
 
     #[test]
-    fn discovers_cwd_files_and_known_configs() {
+    fn discovers_cwd_files_only() {
         let dir = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("settings.json"), "{}").unwrap();
-        fs::create_dir_all(home.path().join(".claude")).unwrap();
-        fs::write(home.path().join(".claude/settings.json"), "{}").unwrap();
+        fs::write(outside.path().join("elsewhere.json"), "{}").unwrap();
 
-        let candidates = discover_local_candidates(dir.path(), home.path(), &[]).unwrap();
+        let candidates = discover_local_candidates(dir.path(), &[]).unwrap();
         let paths: Vec<_> = candidates.iter().map(|c| c.path.clone()).collect();
 
         assert!(paths.contains(&dir.path().join("settings.json")));
-        assert!(paths.contains(&home.path().join(".claude/settings.json")));
+        assert!(!paths.contains(&outside.path().join("elsewhere.json")));
+    }
+
+    #[test]
+    fn marks_pinned_cwd_files_without_pulling_outside_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd_file = dir.path().join("settings.json");
+        fs::write(&cwd_file, "{}").unwrap();
+        let outside = dir.path().join("nope/elsewhere.json");
+        let pinned = vec![
+            PinnedMapping {
+                local_path: cwd_file.clone(),
+                gist_id: "a".into(),
+                gist_filename: "settings.json".into(),
+                direction: None,
+                last_seen_hash: None,
+            },
+            PinnedMapping {
+                local_path: outside,
+                gist_id: "b".into(),
+                gist_filename: "x".into(),
+                direction: None,
+                last_seen_hash: None,
+            },
+        ];
+
+        let candidates = discover_local_candidates(dir.path(), &pinned).unwrap();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].path, cwd_file);
+        assert!(candidates[0].pinned);
     }
 
     #[test]
     fn empty_candidate_mode_when_nothing_found() {
         let dir = tempfile::tempdir().unwrap();
-        let home = tempfile::tempdir().unwrap();
-        let candidates = discover_local_candidates(dir.path(), home.path(), &[]).unwrap();
+        let candidates = discover_local_candidates(dir.path(), &[]).unwrap();
         assert!(is_empty_candidate_mode(&candidates));
     }
 }
