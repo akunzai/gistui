@@ -87,13 +87,44 @@ pub fn initial_state() -> AppState {
     }
 }
 
+pub fn load_startup_state() -> Result<AppState> {
+    let mut state = initial_state();
+    let config_path = crate::config::config_path()?;
+    let config = crate::config::load_config(&config_path)?;
+    let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    let cwd = std::env::current_dir()?;
+
+    state.pinned = config.pinned;
+    state.locals = crate::local::discover_local_candidates(&cwd, &home, &state.pinned)?;
+
+    if crate::gh::check_gh_ready().is_ok() {
+        if let Ok(gists) =
+            crate::gh::fetch_gist_list_json().and_then(|raw| crate::gh::parse_gist_list_json(&raw))
+        {
+            state.gists = gists;
+        }
+    }
+
+    Ok(state)
+}
+
 pub fn run() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let mut state = initial_state();
+
+    let result = run_loop(&mut terminal);
+
+    let _ = disable_raw_mode();
+    let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+
+    result
+}
+
+fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+    let mut state = load_startup_state()?;
 
     loop {
         terminal.draw(|frame| {
@@ -147,8 +178,6 @@ pub fn run() -> Result<()> {
         }
     }
 
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     Ok(())
 }
 
