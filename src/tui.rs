@@ -287,13 +287,47 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
         })?;
 
         if let Event::Key(key) = event::read()? {
-            if state.handle_key(key.code) == KeyOutcome::Quit {
-                break;
+            match state.handle_key(key.code) {
+                KeyOutcome::Quit => break,
+                KeyOutcome::PreviewDiff => preview_diff(&mut state),
+                KeyOutcome::Download => download(&mut state),
+                KeyOutcome::None => {}
             }
         }
     }
 
     Ok(())
+}
+
+fn preview_diff(state: &mut AppState) {
+    let (Some(local), Some(ranked)) = (state.selected_local().cloned(), state.selected_gist())
+    else {
+        return;
+    };
+    let gist = ranked.file;
+    match crate::gh::fetch_gist_file_content(&gist.gist_id, &gist.filename) {
+        Ok(remote) => {
+            let local_content = std::fs::read_to_string(&local.path).unwrap_or_default();
+            let diff = crate::diff::unified_diff("local", &local_content, "gist", &remote);
+            state.enter_diff(diff, remote, local.path.clone());
+        }
+        Err(error) => state.set_status(format!("fetch failed: {error}")),
+    }
+}
+
+fn download(state: &mut AppState) {
+    let local = state.preview_local.clone();
+    let content = state.preview_remote.clone();
+    match crate::actions::execute_download(&local, &content, true) {
+        Ok(()) => {
+            state.set_status(format!("Downloaded {}", local.display()));
+            state.back_to_list();
+        }
+        Err(error) => {
+            state.set_status(format!("download failed: {error}"));
+            state.screen = Screen::Diff;
+        }
+    }
 }
 
 #[cfg(test)]
