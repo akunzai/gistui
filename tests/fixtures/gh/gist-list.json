@@ -1,0 +1,21 @@
+[
+  {
+    "id": "abc123",
+    "description": "claude config",
+    "public": false,
+    "updated_at": "2026-06-08T00:00:00Z",
+    "files": {
+      "settings.json": { "filename": "settings.json", "type": "application/json" },
+      "statusline.sh": { "filename": "statusline.sh", "type": "text/x-shellscript" }
+    }
+  },
+  {
+    "id": "def456",
+    "description": null,
+    "public": true,
+    "updated_at": "2026-06-07T00:00:00Z",
+    "files": {
+      "notes.md": { "filename": "notes.md", "type": "text/markdown" }
+    }
+  }
+]
