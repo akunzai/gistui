@@ -1,4 +1,3 @@
-use crate::actions::PendingAction;
 use crate::domain::{GistFile, LocalCandidate, PinnedMapping};
 use crate::ranking::{rank_gist_files, RankedGistFile};
 use anyhow::Result;
@@ -14,11 +13,27 @@ use ratatui::{
     Terminal,
 };
 use std::io;
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusPane {
     Local,
     Gist,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Screen {
+    List,
+    Diff,
+    ConfirmOverwrite,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyOutcome {
+    None,
+    Quit,
+    PreviewDiff,
+    Download,
 }
 
 #[derive(Debug, Clone)]
@@ -29,8 +44,13 @@ pub struct AppState {
     pub focus: FocusPane,
     pub local_index: usize,
     pub gist_index: usize,
+    pub screen: Screen,
     pub diff_previewed: bool,
-    pub pending_action: Option<PendingAction>,
+    pub diff_text: String,
+    pub diff_scroll: u16,
+    pub preview_remote: String,
+    pub preview_local: PathBuf,
+    pub status: Option<String>,
 }
 
 impl AppState {
@@ -41,9 +61,64 @@ impl AppState {
         rank_gist_files(&local.path, &self.gists, &self.pinned)
     }
 
-    pub fn handle_key(&mut self, code: KeyCode) -> bool {
+    pub fn selected_local(&self) -> Option<&LocalCandidate> {
+        self.locals.get(self.local_index)
+    }
+
+    pub fn selected_gist(&self) -> Option<RankedGistFile> {
+        self.ranked_gists().into_iter().nth(self.gist_index)
+    }
+
+    pub fn enter_diff(&mut self, diff_text: String, remote: String, local: PathBuf) {
+        self.diff_text = diff_text;
+        self.preview_remote = remote;
+        self.preview_local = local;
+        self.diff_previewed = true;
+        self.diff_scroll = 0;
+        self.status = None;
+        self.screen = Screen::Diff;
+    }
+
+    pub fn back_to_list(&mut self) {
+        self.screen = Screen::List;
+        self.diff_text.clear();
+        self.preview_remote.clear();
+        self.preview_local = PathBuf::new();
+        self.diff_scroll = 0;
+        self.diff_previewed = false;
+    }
+
+    pub fn set_status(&mut self, message: impl Into<String>) {
+        self.status = Some(message.into());
+    }
+
+    pub fn scroll_diff_down(&mut self) {
+        let max = self
+            .diff_text
+            .lines()
+            .count()
+            .saturating_sub(1)
+            .min(u16::MAX as usize) as u16;
+        if self.diff_scroll < max {
+            self.diff_scroll += 1;
+        }
+    }
+
+    pub fn scroll_diff_up(&mut self) {
+        self.diff_scroll = self.diff_scroll.saturating_sub(1);
+    }
+
+    pub fn handle_key(&mut self, code: KeyCode) -> KeyOutcome {
+        match self.screen {
+            Screen::List => self.handle_key_list(code),
+            Screen::Diff => self.handle_key_diff(code),
+            Screen::ConfirmOverwrite => self.handle_key_confirm(code),
+        }
+    }
+
+    fn handle_key_list(&mut self, code: KeyCode) -> KeyOutcome {
         match code {
-            KeyCode::Char('q') => return true,
+            KeyCode::Char('q') => return KeyOutcome::Quit,
             KeyCode::Tab => {
                 self.focus = match self.focus {
                     FocusPane::Local => FocusPane::Gist,
@@ -68,9 +143,44 @@ impl AppState {
                 FocusPane::Gist if self.gist_index > 0 => self.gist_index -= 1,
                 _ => {}
             },
+            KeyCode::Enter
+                if self.focus == FocusPane::Gist
+                    && self.selected_local().is_some()
+                    && self.gist_index < self.ranked_gists().len() =>
+            {
+                return KeyOutcome::PreviewDiff;
+            }
             _ => {}
         }
-        false
+        KeyOutcome::None
+    }
+
+    fn handle_key_diff(&mut self, code: KeyCode) -> KeyOutcome {
+        match code {
+            KeyCode::Char('q') => return KeyOutcome::Quit,
+            KeyCode::Esc => self.back_to_list(),
+            KeyCode::Down => self.scroll_diff_down(),
+            KeyCode::Up => self.scroll_diff_up(),
+            KeyCode::Char('d') => {
+                if self.preview_local.exists() {
+                    self.screen = Screen::ConfirmOverwrite;
+                } else {
+                    return KeyOutcome::Download;
+                }
+            }
+            _ => {}
+        }
+        KeyOutcome::None
+    }
+
+    fn handle_key_confirm(&mut self, code: KeyCode) -> KeyOutcome {
+        match code {
+            KeyCode::Char('q') => return KeyOutcome::Quit,
+            KeyCode::Char('y') => return KeyOutcome::Download,
+            KeyCode::Char('n') | KeyCode::Esc => self.screen = Screen::Diff,
+            _ => {}
+        }
+        KeyOutcome::None
     }
 }
 
@@ -82,8 +192,13 @@ pub fn initial_state() -> AppState {
         focus: FocusPane::Local,
         local_index: 0,
         gist_index: 0,
+        screen: Screen::List,
         diff_previewed: false,
-        pending_action: None,
+        diff_text: String::new(),
+        diff_scroll: 0,
+        preview_remote: String::new(),
+        preview_local: PathBuf::new(),
+        status: None,
     }
 }
 
@@ -172,7 +287,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
         })?;
 
         if let Event::Key(key) = event::read()? {
-            if state.handle_key(key.code) {
+            if state.handle_key(key.code) == KeyOutcome::Quit {
                 break;
             }
         }
@@ -251,5 +366,166 @@ mod tests {
         state.gist_index = 2;
         state.handle_key(KeyCode::Down); // move local selection down
         assert_eq!(state.gist_index, 0);
+    }
+
+    fn state_with_selection() -> AppState {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/settings.json"),
+            pinned: false,
+        }];
+        state.gists = vec![GistFile {
+            gist_id: "a".into(),
+            description: "settings".into(),
+            filename: "settings.json".into(),
+            public: false,
+            updated_at: "x".into(),
+        }];
+        state.focus = FocusPane::Gist;
+        state
+    }
+
+    #[test]
+    fn enter_diff_sets_diff_screen() {
+        let mut state = initial_state();
+        state.enter_diff(
+            "the diff".into(),
+            "remote body".into(),
+            PathBuf::from("/tmp/x"),
+        );
+        assert_eq!(state.screen, Screen::Diff);
+        assert!(state.diff_previewed);
+        assert_eq!(state.preview_remote, "remote body");
+        assert_eq!(state.preview_local, PathBuf::from("/tmp/x"));
+        assert_eq!(state.diff_scroll, 0);
+    }
+
+    #[test]
+    fn back_to_list_clears_preview() {
+        let mut state = initial_state();
+        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/x"));
+        state.back_to_list();
+        assert_eq!(state.screen, Screen::List);
+        assert!(!state.diff_previewed);
+        assert!(state.diff_text.is_empty());
+        assert!(state.preview_remote.is_empty());
+        assert_eq!(state.preview_local, PathBuf::new());
+    }
+
+    #[test]
+    fn enter_in_gist_focus_with_selection_returns_preview() {
+        let mut state = state_with_selection();
+        assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::PreviewDiff);
+    }
+
+    #[test]
+    fn enter_in_local_focus_is_noop() {
+        let mut state = state_with_selection();
+        state.focus = FocusPane::Local;
+        assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
+    }
+
+    #[test]
+    fn enter_without_gists_is_noop() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/x"),
+            pinned: false,
+        }];
+        state.focus = FocusPane::Gist;
+        assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
+    }
+
+    #[test]
+    fn diff_scroll_respects_bounds() {
+        let mut state = initial_state();
+        state.enter_diff("l1\nl2\nl3".into(), "r".into(), PathBuf::from("/tmp/x"));
+        assert_eq!(state.diff_scroll, 0);
+        state.handle_key(KeyCode::Up); // stays at 0
+        assert_eq!(state.diff_scroll, 0);
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.diff_scroll, 1);
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.diff_scroll, 2);
+        state.handle_key(KeyCode::Down); // capped at lines-1 = 2
+        assert_eq!(state.diff_scroll, 2);
+        state.handle_key(KeyCode::Up);
+        assert_eq!(state.diff_scroll, 1);
+    }
+
+    #[test]
+    fn esc_in_diff_returns_to_list() {
+        let mut state = initial_state();
+        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/x"));
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+        assert!(!state.diff_previewed);
+    }
+
+    #[test]
+    fn d_in_diff_downloads_when_file_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist.json");
+        let mut state = initial_state();
+        state.enter_diff("d".into(), "r".into(), missing);
+        assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::Download);
+    }
+
+    #[test]
+    fn d_in_diff_confirms_when_file_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("exists.json");
+        std::fs::write(&existing, "old").unwrap();
+        let mut state = initial_state();
+        state.enter_diff("d".into(), "r".into(), existing);
+        assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::ConfirmOverwrite);
+    }
+
+    #[test]
+    fn confirm_y_returns_download() {
+        let mut state = initial_state();
+        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/x"));
+        state.screen = Screen::ConfirmOverwrite;
+        assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::Download);
+    }
+
+    #[test]
+    fn confirm_n_returns_to_diff() {
+        let mut state = initial_state();
+        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/x"));
+        state.screen = Screen::ConfirmOverwrite;
+        assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::Diff);
+    }
+
+    #[test]
+    fn q_in_diff_quits() {
+        let mut state = initial_state();
+        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/x"));
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
+    }
+
+    #[test]
+    fn q_in_list_quits() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
+    }
+
+    #[test]
+    fn q_in_confirm_quits() {
+        let mut state = initial_state();
+        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/x"));
+        state.screen = Screen::ConfirmOverwrite;
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
+    }
+
+    #[test]
+    fn confirm_esc_returns_to_diff() {
+        let mut state = initial_state();
+        state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/x"));
+        state.screen = Screen::ConfirmOverwrite;
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::Diff);
     }
 }
