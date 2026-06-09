@@ -46,6 +46,7 @@ Key points:
 1. Fork and create a branch (`feat/my-feature` or `fix/issue-123`).
 2. Keep commits focused; follow [Conventional Commits](https://www.conventionalcommits.org/) (`feat:`, `fix:`, `docs:`, `chore:`).
 3. Open a PR against `main`; the CI gate must be green.
+4. **Label the PR** so it lands in the right release-note section (`.github/release.yml`): `enhancement` (Features), `bug` (Bug Fixes), `documentation` (Documentation), `dependencies`, or `skip-changelog` to omit it. Unlabeled PRs fall under "Other Changes".
 
 ## Reporting Issues
 
