@@ -133,7 +133,7 @@ pub fn open_browser_command(gist_id: &str) -> CommandPlan {
     }
 }
 
-pub fn create_command(local_path: &Path, public: bool) -> CommandPlan {
+pub fn create_command(local_path: &Path, public: bool, description: &str) -> CommandPlan {
     let mut args = vec![
         "gist".into(),
         "create".into(),
@@ -141,6 +141,10 @@ pub fn create_command(local_path: &Path, public: bool) -> CommandPlan {
     ];
     if public {
         args.push("--public".into());
+    }
+    if !description.is_empty() {
+        args.push("--desc".into());
+        args.push(description.to_string());
     }
     CommandPlan {
         program: "gh".into(),
@@ -379,9 +383,31 @@ mod tests {
 
     #[test]
     fn create_command_defaults_to_secret() {
-        let plan = create_command(PathBuf::from("/tmp/settings.json").as_path(), false);
+        let plan = create_command(PathBuf::from("/tmp/settings.json").as_path(), false, "");
         assert_eq!(plan.args, vec!["gist", "create", "/tmp/settings.json"]);
         assert!(!plan.args.contains(&"--public".to_string()));
+    }
+
+    #[test]
+    fn create_command_includes_public_and_description() {
+        let plan = create_command(PathBuf::from("/tmp/notes.md").as_path(), true, "my notes");
+        assert_eq!(
+            plan.args,
+            vec![
+                "gist",
+                "create",
+                "/tmp/notes.md",
+                "--public",
+                "--desc",
+                "my notes"
+            ]
+        );
+    }
+
+    #[test]
+    fn create_command_omits_desc_flag_when_description_empty() {
+        let plan = create_command(PathBuf::from("/tmp/notes.md").as_path(), false, "");
+        assert!(!plan.args.contains(&"--desc".to_string()));
     }
 
     #[test]

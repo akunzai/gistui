@@ -809,6 +809,16 @@ impl AppState {
                     self.status = Some("select a local file to create a gist".into());
                     return KeyOutcome::None;
                 };
+                // Create is a two-step confirm: type an optional description (inline
+                // editor, shared with the gist-level view), then choose visibility.
+                self.diff_text = format!(
+                    "Create a new gist from {}.\n\nType an optional description, then choose visibility.",
+                    local.path.display()
+                );
+                self.diff_scroll = 0;
+                self.diff_hscroll = 0;
+                self.editing_description = true;
+                self.description_input.clear();
                 self.pending_action = Some(PendingAction::Create {
                     local_path: local.path,
                 });
@@ -879,12 +889,28 @@ impl AppState {
                 }
                 _ => {}
             },
+            Some(PendingAction::Create { .. }) if self.editing_description => match code {
+                // Step 1: type the optional description. Enter advances to the
+                // visibility choice; Esc cancels the whole create.
+                KeyCode::Enter => self.editing_description = false,
+                KeyCode::Esc => {
+                    self.editing_description = false;
+                    self.description_input.clear();
+                    self.back_to_list();
+                }
+                KeyCode::Backspace => {
+                    self.description_input.pop();
+                }
+                KeyCode::Char(c) => self.description_input.push(c),
+                _ => {}
+            },
             Some(PendingAction::Create { .. }) => match code {
+                // Step 2: choose visibility (the description is kept in description_input).
                 KeyCode::Char('s') => return KeyOutcome::Create(false),
                 KeyCode::Char('p') => return KeyOutcome::Create(true),
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                    self.pending_action = None;
-                    self.screen = Screen::List;
+                    self.description_input.clear();
+                    self.back_to_list();
                 }
                 _ => {}
             },
@@ -1642,7 +1668,8 @@ fn create_gist(state: &mut AppState, public: bool) {
     let Some(PendingAction::Create { local_path }) = state.pending_action.clone() else {
         return;
     };
-    let plan = crate::actions::create_command(&local_path, public);
+    let description = state.description_input.clone();
+    let plan = crate::actions::create_command(&local_path, public, &description);
     match crate::actions::execute_command(&plan) {
         Ok(_) => {
             let visibility = if public { "public" } else { "secret" };
@@ -1651,6 +1678,7 @@ fn create_gist(state: &mut AppState, public: bool) {
                 visibility,
                 local_path.display()
             ));
+            state.description_input.clear();
             state.back_to_list();
             refresh_gists(state);
         }
@@ -1658,6 +1686,7 @@ fn create_gist(state: &mut AppState, public: bool) {
             state.set_status(format!("create failed: {error}"));
             state.screen = Screen::List;
             state.pending_action = None;
+            state.description_input.clear();
         }
     }
 }
@@ -1752,7 +1781,7 @@ Actions (on the selected local file + gist)
   Space      preview the gist file's content (R in preview to force-refresh)
   d          download the gist into the cwd
   u          upload the local file into the gist
-  n          create a new gist from the local file
+  n          create a new gist from the local file (type a description, then s/p)
   p          pin / unpin the local <-> gist pair
   P          view / manage all pinned mappings (x to unpin)
   X          remove the selected file from its gist (y/n confirm)
@@ -2429,10 +2458,23 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
 
     let footer = if confirming {
         match &state.pending_action {
-            Some(PendingAction::Create { local_path }) => format!(
-                "Create gist from {}?  s secret  p public  Esc cancel",
-                local_path.display()
-            ),
+            Some(PendingAction::Create { .. }) if state.editing_description => {
+                format!(
+                    "Description (optional): {}_   ·  Enter next  ·  Esc cancel",
+                    state.description_input
+                )
+            }
+            Some(PendingAction::Create { local_path }) => {
+                let desc = if state.description_input.is_empty() {
+                    "no description".to_string()
+                } else {
+                    format!("desc: {}", state.description_input)
+                };
+                format!(
+                    "Create gist from {} ({desc})?  s secret  p public  Esc cancel",
+                    local_path.display()
+                )
+            }
             Some(PendingAction::Upload {
                 gist_id, filename, ..
             }) => {
@@ -3814,5 +3856,57 @@ mod tests {
         assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
         assert_eq!(state.screen, Screen::List);
         assert_eq!(state.pending_action, None);
+    }
+
+    fn state_ready_to_create() -> AppState {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/config.toml"),
+            pinned: false,
+        }];
+        state
+    }
+
+    #[test]
+    fn n_starts_create_in_the_description_editor() {
+        let mut state = state_ready_to_create();
+        state.handle_key(KeyCode::Char('n'));
+        assert_eq!(state.screen, Screen::Confirm);
+        assert!(state.editing_description);
+        // While editing, letters (incl. s/p) are typed into the description, not
+        // interpreted as the visibility choice.
+        for c in "notes".chars() {
+            assert_eq!(state.handle_key(KeyCode::Char(c)), KeyOutcome::None);
+        }
+        assert_eq!(state.description_input, "notes");
+    }
+
+    #[test]
+    fn create_enter_advances_to_visibility_then_s_creates() {
+        let mut state = state_ready_to_create();
+        state.handle_key(KeyCode::Char('n'));
+        state.handle_key(KeyCode::Char('h'));
+        state.handle_key(KeyCode::Char('i'));
+        // Enter ends the description step (does not create yet).
+        assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
+        assert!(!state.editing_description);
+        assert_eq!(state.description_input, "hi");
+        // Now s/p choose visibility and trigger the create.
+        assert_eq!(
+            state.handle_key(KeyCode::Char('s')),
+            KeyOutcome::Create(false)
+        );
+    }
+
+    #[test]
+    fn create_esc_while_editing_description_cancels() {
+        let mut state = state_ready_to_create();
+        state.handle_key(KeyCode::Char('n'));
+        state.handle_key(KeyCode::Char('x'));
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+        assert_eq!(state.pending_action, None);
+        assert!(!state.editing_description);
+        assert!(state.description_input.is_empty());
     }
 }
