@@ -161,6 +161,7 @@ pub struct AppState {
     pub diff_text: String,
     pub diff_scroll: u16,
     pub diff_hscroll: u16,
+    pub diff_identical: bool,
     pub preview_remote: String,
     pub preview_local: PathBuf,
     pub download_target: PathBuf,
@@ -294,6 +295,7 @@ impl AppState {
         self.diff_previewed = true;
         self.diff_scroll = 0;
         self.diff_hscroll = 0;
+        self.diff_identical = false;
         self.status = None;
         self.screen = Screen::Diff;
     }
@@ -307,6 +309,7 @@ impl AppState {
         self.download_target = PathBuf::new();
         self.diff_scroll = 0;
         self.diff_hscroll = 0;
+        self.diff_identical = false;
         self.diff_previewed = false;
     }
 
@@ -525,7 +528,8 @@ impl AppState {
             KeyCode::Up => self.scroll_diff_up(),
             KeyCode::Right => self.scroll_diff_right(),
             KeyCode::Left => self.scroll_diff_left(),
-            KeyCode::Char('d') => {
+            // Identical files have nothing to sync, so download/upload are not offered.
+            KeyCode::Char('d') if !self.diff_identical => {
                 if self.download_target.exists() {
                     self.pending_action = Some(PendingAction::Download);
                     self.screen = Screen::Confirm;
@@ -533,7 +537,7 @@ impl AppState {
                     return KeyOutcome::Download;
                 }
             }
-            KeyCode::Char('u') => return self.upload_intent(),
+            KeyCode::Char('u') if !self.diff_identical => return self.upload_intent(),
             _ => {}
         }
         KeyOutcome::None
@@ -618,6 +622,7 @@ pub fn initial_state() -> AppState {
         diff_text: String::new(),
         diff_scroll: 0,
         diff_hscroll: 0,
+        diff_identical: false,
         preview_remote: String::new(),
         preview_local: PathBuf::new(),
         download_target: PathBuf::new(),
@@ -843,7 +848,9 @@ fn preview_diff(state: &mut AppState) {
             // Download saves the gist into the current working directory under the
             // gist's own filename, leaving the compared local file untouched.
             let target = state.cwd.join(&gist.filename);
+            let identical = local_content == remote;
             state.enter_diff(diff, remote, local_path.unwrap_or_default(), target);
+            state.diff_identical = identical;
         }
         Err(error) => state.set_status(format!("fetch failed: {error}")),
     }
@@ -890,7 +897,9 @@ fn download_selected(state: &mut AppState) {
                 let (local_label, gist_label) = diff_labels(Some(&target), &gist);
                 let diff =
                     crate::diff::unified_diff(&local_label, &local_content, &gist_label, &remote);
+                let identical = local_content == remote;
                 state.enter_diff(diff, remote, target.clone(), target);
+                state.diff_identical = identical;
             } else {
                 // No collision: download straight into the cwd without forcing a diff.
                 match crate::actions::execute_download(&target, &remote, false) {
@@ -1457,13 +1466,18 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
             format!("Create gist from {}", local_path.display())
         }
         _ => {
+            let label = if state.diff_identical {
+                "Diff (identical)"
+            } else {
+                "Diff"
+            };
             if state.preview_local.as_os_str().is_empty()
                 || state.preview_local == state.download_target
             {
-                format!("Diff → {}", state.download_target.display())
+                format!("{label} → {}", state.download_target.display())
             } else {
                 format!(
-                    "Diff: {} → {}",
+                    "{label}: {} → {}",
                     state.preview_local.display(),
                     state.download_target.display()
                 )
@@ -1495,6 +1509,8 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
             }
             _ => format!("Overwrite {}? (y/n)", state.download_target.display()),
         }
+    } else if state.diff_identical {
+        "Files are identical — nothing to sync  ·  ↑↓←→ scroll  ·  Esc back  ·  q quit".to_string()
     } else {
         "↑↓←→ scroll  ·  d download  ·  u upload  ·  Esc back  ·  q quit".to_string()
     };
@@ -2149,6 +2165,23 @@ mod tests {
         assert_eq!(state.diff_scroll, 2);
         state.handle_key(KeyCode::Up);
         assert_eq!(state.diff_scroll, 1);
+    }
+
+    #[test]
+    fn identical_diff_disables_download_and_upload() {
+        let mut state = initial_state();
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
+        state.diff_identical = true;
+        assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
+        assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::None);
+        // Scrolling and leaving still work.
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
     }
 
     #[test]
