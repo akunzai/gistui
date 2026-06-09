@@ -1279,21 +1279,18 @@ fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
     }
 }
 
-/// The full command hint as one responsive line; the footer word-wraps it to the
-/// terminal width (one line when wide, more when narrow).
-fn commands_hint() -> String {
-    // Only the common keys; the full reference lives in the `?` help overlay.
-    [
-        "Tab panes",
-        "↑↓ move",
-        "Enter diff",
-        "Space preview",
-        "d download",
-        "u upload",
-        "? help",
-        "Esc/q quit",
-    ]
-    .join("  ·  ")
+/// Command hint tailored to the focused pane: local-file actions on the left, gist actions
+/// on the right, plus the always-available navigation/help/quit keys. The footer word-wraps
+/// it to the terminal width.
+fn commands_hint(focus: FocusPane) -> String {
+    // Focus-relevant common keys only; the full reference lives in the `?` help overlay.
+    let mut items = vec!["Tab panes", "↑↓ move", "Enter diff"];
+    match focus {
+        FocusPane::Local => items.extend(["e edit", "n create"]),
+        FocusPane::Gist => items.extend(["Space preview", "d download", "u upload", "o browser"]),
+    }
+    items.extend(["? help", "Esc/q quit"]);
+    items.join("  ·  ")
 }
 
 /// Greedy word-wrap line count, matching how `Paragraph` with `Wrap { trim: true }` breaks
@@ -1329,7 +1326,7 @@ fn render_list(frame: &mut Frame, state: &AppState) {
     } else {
         match &state.status {
             Some(message) => message.clone(),
-            None => commands_hint(),
+            None => commands_hint(state.focus),
         }
     };
     // Width inside the footer block: minus 2 borders and 2 horizontal padding columns.
@@ -1901,6 +1898,25 @@ mod tests {
         );
         assert_eq!(gist_time_label(""), "unknown");
         assert_eq!(gist_time_label("short"), "short");
+    }
+
+    #[test]
+    fn commands_hint_is_focus_aware() {
+        let local = commands_hint(FocusPane::Local);
+        assert!(local.contains("e edit"));
+        assert!(local.contains("n create"));
+        assert!(!local.contains("d download"));
+
+        let gist = commands_hint(FocusPane::Gist);
+        assert!(gist.contains("d download"));
+        assert!(gist.contains("o browser"));
+        assert!(!gist.contains("e edit"));
+
+        // Always-available keys appear in both.
+        for hint in [local, gist] {
+            assert!(hint.contains("? help"));
+            assert!(hint.contains("Esc/q quit"));
+        }
     }
 
     #[test]
