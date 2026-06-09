@@ -23,7 +23,7 @@ pub struct LocalCandidate {
     pub pinned: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GistFile {
     pub gist_id: String,
     pub description: String,

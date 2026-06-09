@@ -604,8 +604,19 @@ pub fn load_startup_state() -> Result<AppState> {
     state.focus = FocusPane::Gist;
     // The gist list is fetched off-thread by run_loop so the TUI appears instantly.
     state.loading = true;
+    // Show last-known gists immediately from the on-disk cache; the background fetch
+    // refreshes them once it completes.
+    if let Ok(path) = crate::cache::cache_path() {
+        state.gists = crate::cache::load_cached_gists(&path);
+    }
 
     Ok(state)
+}
+
+fn cache_gists(gists: &[GistFile]) {
+    if let Ok(path) = crate::cache::cache_path() {
+        crate::cache::save_cached_gists(&path, gists);
+    }
 }
 
 /// Fetches the gist list on a background thread so startup does not block on `gh`.
@@ -650,6 +661,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
         // Absorb the background gist list once it arrives.
         if state.loading {
             if let Ok(gists) = gist_rx.try_recv() {
+                cache_gists(&gists);
                 state.gists = gists;
                 state.loading = false;
                 if state.gist_index >= state.ranked_gists().len() {
@@ -938,6 +950,7 @@ fn refresh_gists(state: &mut AppState) {
     if let Ok(gists) =
         crate::gh::fetch_gist_list_json().and_then(|raw| crate::gh::parse_gist_list_json(&raw))
     {
+        cache_gists(&gists);
         state.gists = gists;
         if state.gist_index >= state.ranked_gists().len() {
             state.gist_index = 0;
