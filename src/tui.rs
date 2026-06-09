@@ -10,6 +10,7 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    text::{Line, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
     Frame, Terminal,
 };
@@ -1193,6 +1194,27 @@ fn render_pane(
     frame.render_stateful_widget(list, area, &mut list_state);
 }
 
+/// Renders a unified diff with per-line colour: additions green, deletions red, the
+/// `---`/`+++` file headers bold. Context lines keep the default style.
+fn colorize_diff(text: &str) -> Text<'static> {
+    let lines: Vec<Line> = text
+        .lines()
+        .map(|line| {
+            let style = if line.starts_with("+++") || line.starts_with("---") {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else if line.starts_with('+') {
+                Style::default().fg(Color::Green)
+            } else if line.starts_with('-') {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default()
+            };
+            Line::styled(line.to_string(), style)
+        })
+        .collect();
+    Text::from(lines)
+}
+
 fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -1205,7 +1227,7 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
         state.download_target.display()
     );
     frame.render_widget(
-        Paragraph::new(state.diff_text.clone())
+        Paragraph::new(colorize_diff(&state.diff_text))
             .scroll((state.diff_scroll, state.diff_hscroll))
             .block(Block::default().title(title).borders(Borders::ALL)),
         chunks[0],
