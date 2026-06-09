@@ -26,7 +26,20 @@ pub enum FocusPane {
 pub enum Screen {
     List,
     Diff,
-    ConfirmOverwrite,
+    Confirm,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PendingAction {
+    Download,
+    Upload {
+        gist_id: String,
+        filename: String,
+        local_path: PathBuf,
+    },
+    Create {
+        local_path: PathBuf,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +138,7 @@ pub struct AppState {
     pub local_hscroll: u16,
     pub gist_hscroll: u16,
     pub screen: Screen,
+    pub pending_action: Option<PendingAction>,
     pub gist_view: GistView,
     pub gist_type_filter: GistTypeFilter,
     pub gist_sort: GistSort,
@@ -232,6 +246,7 @@ impl AppState {
 
     pub fn back_to_list(&mut self) {
         self.screen = Screen::List;
+        self.pending_action = None;
         self.diff_text.clear();
         self.preview_remote.clear();
         self.preview_local = PathBuf::new();
@@ -283,7 +298,7 @@ impl AppState {
         match self.screen {
             Screen::List => self.handle_key_list(code),
             Screen::Diff => self.handle_key_diff(code),
-            Screen::ConfirmOverwrite => self.handle_key_confirm(code),
+            Screen::Confirm => self.handle_key_confirm(code),
         }
     }
 
@@ -370,7 +385,8 @@ impl AppState {
             KeyCode::Left => self.scroll_diff_left(),
             KeyCode::Char('d') => {
                 if self.download_target.exists() {
-                    self.screen = Screen::ConfirmOverwrite;
+                    self.pending_action = Some(PendingAction::Download);
+                    self.screen = Screen::Confirm;
                 } else {
                     return KeyOutcome::Download;
                 }
@@ -381,11 +397,24 @@ impl AppState {
     }
 
     fn handle_key_confirm(&mut self, code: KeyCode) -> KeyOutcome {
-        match code {
-            KeyCode::Char('q') => return KeyOutcome::Quit,
-            KeyCode::Char('y') => return KeyOutcome::Download,
-            KeyCode::Char('n') | KeyCode::Esc => self.screen = Screen::Diff,
-            _ => {}
+        if code == KeyCode::Char('q') {
+            return KeyOutcome::Quit;
+        }
+        match self.pending_action.clone() {
+            Some(PendingAction::Download) => match code {
+                KeyCode::Char('y') => return KeyOutcome::Download,
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    self.pending_action = None;
+                    self.screen = Screen::Diff;
+                }
+                _ => {}
+            },
+            _ => {
+                if matches!(code, KeyCode::Esc | KeyCode::Char('n')) {
+                    self.pending_action = None;
+                    self.screen = Screen::List;
+                }
+            }
         }
         KeyOutcome::None
     }
@@ -402,6 +431,7 @@ pub fn initial_state() -> AppState {
         local_hscroll: 0,
         gist_hscroll: 0,
         screen: Screen::List,
+        pending_action: None,
         gist_view: GistView::Description,
         gist_type_filter: GistTypeFilter::All,
         gist_sort: GistSort::Match,
@@ -564,7 +594,7 @@ fn render(frame: &mut Frame, state: &AppState) {
     match state.screen {
         Screen::List => render_list(frame, state),
         Screen::Diff => render_diff(frame, state, false),
-        Screen::ConfirmOverwrite => render_diff(frame, state, true),
+        Screen::Confirm => render_diff(frame, state, true),
     }
 }
 
@@ -732,7 +762,18 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
     );
 
     let footer = if confirming {
-        format!("Overwrite {}? (y/n)", state.download_target.display())
+        match &state.pending_action {
+            Some(PendingAction::Create { local_path }) => format!(
+                "Create gist from {}?  s secret  p public  Esc cancel",
+                local_path.display()
+            ),
+            Some(PendingAction::Upload {
+                gist_id, filename, ..
+            }) => {
+                format!("Upload {} to gist {}? (y/n)", filename, gist_id)
+            }
+            _ => format!("Overwrite {}? (y/n)", state.download_target.display()),
+        }
     } else {
         format!(
             "Up/Down/Left/Right scroll  d download -> {}  Esc back  q quit",
@@ -1269,7 +1310,7 @@ mod tests {
             existing,
         );
         assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
-        assert_eq!(state.screen, Screen::ConfirmOverwrite);
+        assert_eq!(state.screen, Screen::Confirm);
     }
 
     #[test]
@@ -1281,7 +1322,8 @@ mod tests {
             PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
-        state.screen = Screen::ConfirmOverwrite;
+        state.pending_action = Some(PendingAction::Download);
+        state.screen = Screen::Confirm;
         assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::Download);
     }
 
@@ -1294,7 +1336,8 @@ mod tests {
             PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
-        state.screen = Screen::ConfirmOverwrite;
+        state.pending_action = Some(PendingAction::Download);
+        state.screen = Screen::Confirm;
         assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
         assert_eq!(state.screen, Screen::Diff);
     }
@@ -1326,7 +1369,8 @@ mod tests {
             PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
-        state.screen = Screen::ConfirmOverwrite;
+        state.pending_action = Some(PendingAction::Download);
+        state.screen = Screen::Confirm;
         assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
     }
 
@@ -1339,8 +1383,26 @@ mod tests {
             PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
-        state.screen = Screen::ConfirmOverwrite;
+        state.pending_action = Some(PendingAction::Download);
+        state.screen = Screen::Confirm;
         assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
         assert_eq!(state.screen, Screen::Diff);
+    }
+
+    #[test]
+    fn d_in_diff_on_existing_sets_download_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("exists.json");
+        std::fs::write(&existing, "old").unwrap();
+        let mut state = initial_state();
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/local"),
+            existing,
+        );
+        assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::Confirm);
+        assert_eq!(state.pending_action, Some(PendingAction::Download));
     }
 }
