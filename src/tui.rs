@@ -8,10 +8,13 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Text},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{
+        Block, Borders, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
+        ScrollbarOrientation, ScrollbarState, Wrap,
+    },
     Frame, Terminal,
 };
 use std::io;
@@ -1148,11 +1151,15 @@ fn render_list(frame: &mut Frame, state: &AppState) {
 
     // Discovery is scoped to the cwd, so each candidate is a direct child; show just the
     // file name and put the cwd in the pane title as the shared baseline.
-    let local_items: Vec<ListItem> = state
-        .locals
-        .iter()
-        .map(|c| ListItem::new(hscroll_str(&local_row_label(&c.path), state.local_hscroll)))
-        .collect();
+    let local_items: Vec<ListItem> = if state.locals.is_empty() {
+        vec![ListItem::new("(no files in this directory)")]
+    } else {
+        state
+            .locals
+            .iter()
+            .map(|c| ListItem::new(hscroll_str(&local_row_label(&c.path), state.local_hscroll)))
+            .collect()
+    };
     let local_focused = state.focus == FocusPane::Local;
     let local_selected = (!state.locals.is_empty()).then_some(state.local_index);
     let local_title = format!("Local · {}", state.cwd.display());
@@ -1168,6 +1175,13 @@ fn render_list(frame: &mut Frame, state: &AppState) {
     let ranked = state.ranked_gists();
     let gist_items: Vec<ListItem> = if state.loading && ranked.is_empty() {
         vec![ListItem::new("Loading gists…")]
+    } else if ranked.is_empty() {
+        let message = if !state.filter_query.is_empty() {
+            "(no gists match the filter)"
+        } else {
+            "(no gists)"
+        };
+        vec![ListItem::new(message)]
     } else {
         ranked
             .iter()
@@ -1214,13 +1228,24 @@ fn render_pane(
     focused: bool,
     selected: Option<usize>,
 ) {
+    let item_count = items.len();
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
     } else {
         Style::default()
     };
+    // Dim the unfocused pane so the active side is obvious at a glance.
+    let base_style = if focused {
+        Style::default()
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    // Focused selection is a solid bar (whole row); unfocused just bolds the row.
     let highlight_style = if focused {
-        Style::default().add_modifier(Modifier::REVERSED)
+        Style::default()
+            .bg(Color::Cyan)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().add_modifier(Modifier::BOLD)
     };
@@ -1231,11 +1256,13 @@ fn render_pane(
     };
 
     let list = List::new(items)
+        .style(base_style)
         .block(
             Block::default()
                 .title(title)
                 .borders(Borders::ALL)
-                .border_style(border_style),
+                .border_style(border_style)
+                .padding(Padding::horizontal(1)),
         )
         .highlight_style(highlight_style)
         .highlight_symbol("▶ ");
@@ -1243,6 +1270,22 @@ fn render_pane(
     let mut list_state = ListState::default();
     list_state.select(selected);
     frame.render_stateful_widget(list, area, &mut list_state);
+
+    // Show a scrollbar when the list overflows its viewport.
+    let viewport = area.height.saturating_sub(2) as usize;
+    if viewport > 0 && item_count > viewport {
+        let mut scrollbar_state = ScrollbarState::new(item_count).position(selected.unwrap_or(0));
+        frame.render_stateful_widget(
+            Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                .begin_symbol(None)
+                .end_symbol(None),
+            area.inner(&Margin {
+                vertical: 1,
+                horizontal: 0,
+            }),
+            &mut scrollbar_state,
+        );
+    }
 }
 
 /// Renders a unified diff with per-line colour: additions green, deletions red, the
