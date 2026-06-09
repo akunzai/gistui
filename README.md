@@ -47,18 +47,24 @@ gists, ranked against the selected local file (stronger matches are prefixed wit
 ### Actions
 
 - `Enter` (on a gist) — preview the unified diff between the selected local file and the
-  gist, with `+`/`-` colour. From there `d` downloads or `u` uploads.
+  gist, with `+`/`-` colour and **word-level inline highlighting** of changed words. From
+  there `d` downloads or `u` uploads.
 - `d` (on a gist) — download it into the cwd as `./<gist-filename>`. A brand-new file is
   written directly; an existing one is shown as a diff and overwritten only after a `y`/`n`
   confirmation.
 - `u` (on a gist) — upload the selected local file into the gist under the local file's
   name (added directly, or diff + `y`/`n` if it would overwrite a same-named gist file).
 - `n` (on a local file) — create a new gist from it; choose `s` secret or `p` public.
+- `X` (on a gist) — delete the gist after a preview + `y`/`n` confirmation.
 - `p` (on a gist) — toggle a pin between the selected local file and gist (persisted to
   config; pinned pairs sort to the top).
+- `P` — open the **Pins view** listing all pinned pairs; `x` unpins the selected entry.
 - `o` (on a gist) — open it on gist.github.com in your browser.
 - `e` (on a local file) — open it in `$VISUAL`/`$EDITOR`.
-- `Space` (on a gist) — preview the gist's raw content in a scrollable overlay.
+- `Space` (on a gist) — preview the gist's raw content in a scrollable overlay (`R` to
+  force-refresh, bypassing the session cache).
+- `r` — toggle **recursive** local file discovery; the pane title shows `[↓]` while active
+  and scans in the background so the UI stays responsive.
 - `/` filter by text · `v` cycle visibility (all/public/secret) · `s` cycle sort · `t`
   toggle row view.
 - `Esc`/`q` — go back from an overlay; quit the app from the main list.
@@ -84,8 +90,9 @@ automatically the first time you pin a file. All fields are optional.
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `scan_depth` | `integer` | Maximum directory depth for recursive discovery (`r` key). Default `2`. |
 | `skip_dirs` | `[string]` | Directory names skipped during recursive discovery (`r` key). Defaults to common build/dependency dirs (`node_modules`, `target`, …). Hidden dirs (`.`-prefix) are always skipped. |
-| `[[pinned]]` | table array | Local-file ↔ gist mappings managed by the `p` key. Can also be edited by hand. |
+| `[[pinned]]` | table array | Local-file ↔ gist mappings managed by the `p`/`P` keys. Can also be edited by hand. |
 
 Copy [`config.example.toml`](config.example.toml) from the repo for an annotated
 starting point:

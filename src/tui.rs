@@ -10,13 +10,14 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Text},
+    text::{Line, Span, Text},
     widgets::{
         Block, Borders, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
         ScrollbarOrientation, ScrollbarState, Wrap,
     },
     Frame, Terminal,
 };
+use similar::{ChangeTag, TextDiff};
 use std::io;
 use std::path::PathBuf;
 
@@ -1811,26 +1812,142 @@ fn render_pane(
 /// `---`/`+++` headers bold). Scrolling is applied here by hand — skip `vscroll` lines and
 /// drop `hscroll` leading chars per line — rather than via `Paragraph::scroll`, whose
 /// styled-line handling leaves redraw artifacts in ratatui 0.26.
+/// Skips `hscroll` characters across an ordered list of spans, preserving styles.
+fn apply_hscroll_spans(spans: Vec<Span<'static>>, hscroll: usize) -> Line<'static> {
+    let mut skip = hscroll;
+    let visible: Vec<Span<'static>> = spans
+        .into_iter()
+        .filter_map(|span| {
+            let len = span.content.chars().count();
+            if skip >= len {
+                skip -= len;
+                None
+            } else {
+                let content: String = span.content.chars().skip(skip).collect();
+                skip = 0;
+                if content.is_empty() {
+                    None
+                } else {
+                    Some(Span::styled(content, span.style))
+                }
+            }
+        })
+        .collect();
+    Line::from(visible)
+}
+
+/// Del line with word-level highlighting: changed words bold-red, unchanged words plain red.
+fn inline_del_line(del_line: &str, ins_line: &str, hscroll: usize) -> Line<'static> {
+    let del_content = del_line.get(1..).unwrap_or("");
+    let ins_content = ins_line.get(1..).unwrap_or("");
+    let mut spans = vec![Span::styled("-", Style::default().fg(Color::Red))];
+    for change in TextDiff::from_words(del_content, ins_content).iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Delete => spans.push(Span::styled(
+                change.value().to_string(),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )),
+            ChangeTag::Equal => spans.push(Span::styled(
+                change.value().to_string(),
+                Style::default().fg(Color::Red),
+            )),
+            ChangeTag::Insert => {}
+        }
+    }
+    apply_hscroll_spans(spans, hscroll)
+}
+
+/// Ins line with word-level highlighting: changed words bold-green, unchanged words plain green.
+fn inline_ins_line(del_line: &str, ins_line: &str, hscroll: usize) -> Line<'static> {
+    let del_content = del_line.get(1..).unwrap_or("");
+    let ins_content = ins_line.get(1..).unwrap_or("");
+    let mut spans = vec![Span::styled("+", Style::default().fg(Color::Green))];
+    for change in TextDiff::from_words(del_content, ins_content).iter_all_changes() {
+        match change.tag() {
+            ChangeTag::Insert => spans.push(Span::styled(
+                change.value().to_string(),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            ChangeTag::Equal => spans.push(Span::styled(
+                change.value().to_string(),
+                Style::default().fg(Color::Green),
+            )),
+            ChangeTag::Delete => {}
+        }
+    }
+    apply_hscroll_spans(spans, hscroll)
+}
+
+/// Builds the visible, coloured slice of a unified diff. Adjacent `-`/`+` line pairs receive
+/// word-level inline highlighting (changed words bold, unchanged words dim) so small edits are
+/// easy to spot. Scrolling is applied by hand — skip `vscroll` lines and drop `hscroll` leading
+/// chars per line — rather than via `Paragraph::scroll`, whose styled-line handling leaves
+/// redraw artifacts in ratatui 0.26.
 fn diff_view(text: &str, vscroll: u16, hscroll: u16) -> Text<'static> {
-    let lines: Vec<Line> = text
-        .lines()
-        .skip(vscroll as usize)
-        .map(|line| {
-            // Colour from the original prefix even when horizontal scroll hides it.
+    let raw: Vec<&str> = text.lines().collect();
+    let hscroll = hscroll as usize;
+    let mut result: Vec<Line<'static>> = Vec::with_capacity(raw.len());
+
+    let mut i = 0;
+    while i < raw.len() {
+        let line = raw[i];
+        let is_del = line.starts_with('-') && !line.starts_with("---");
+        let is_ins = line.starts_with('+') && !line.starts_with("+++");
+
+        if is_del || is_ins {
+            // Collect the contiguous del run then ins run.
+            let del_start = i;
+            while i < raw.len() && raw[i].starts_with('-') && !raw[i].starts_with("---") {
+                i += 1;
+            }
+            let del_lines = &raw[del_start..i];
+
+            let ins_start = i;
+            while i < raw.len() && raw[i].starts_with('+') && !raw[i].starts_with("+++") {
+                i += 1;
+            }
+            let ins_lines = &raw[ins_start..i];
+
+            let pair_count = del_lines.len().min(ins_lines.len());
+
+            // Del lines: paired ones get inline highlighting, extras plain red.
+            for (j, &dl) in del_lines.iter().enumerate() {
+                if j < pair_count {
+                    result.push(inline_del_line(dl, ins_lines[j], hscroll));
+                } else {
+                    let visible: String = dl.chars().skip(hscroll).collect();
+                    result.push(Line::styled(visible, Style::default().fg(Color::Red)));
+                }
+            }
+            // Ins lines: paired ones get inline highlighting, extras plain green.
+            for (j, &il) in ins_lines.iter().enumerate() {
+                if j < pair_count {
+                    result.push(inline_ins_line(del_lines[j], il, hscroll));
+                } else {
+                    let visible: String = il.chars().skip(hscroll).collect();
+                    result.push(Line::styled(visible, Style::default().fg(Color::Green)));
+                }
+            }
+        } else {
             let style = if line.starts_with("+++") || line.starts_with("---") {
                 Style::default().add_modifier(Modifier::BOLD)
-            } else if line.starts_with('+') {
-                Style::default().fg(Color::Green)
-            } else if line.starts_with('-') {
-                Style::default().fg(Color::Red)
             } else {
                 Style::default()
             };
-            let visible: String = line.chars().skip(hscroll as usize).collect();
-            Line::styled(visible, style)
-        })
-        .collect();
-    Text::from(lines)
+            let visible: String = line.chars().skip(hscroll).collect();
+            result.push(Line::styled(visible, style));
+            i += 1;
+        }
+    }
+
+    Text::from(
+        result
+            .into_iter()
+            .skip(vscroll as usize)
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
@@ -2213,6 +2330,41 @@ mod tests {
         let v = diff_view(text, 2, 2); // skip 2 lines, drop 2 leading chars
         assert_eq!(v.lines.len(), 2);
         assert_eq!(v.lines[0].spans[0].content, "cdef");
+    }
+
+    #[test]
+    fn diff_view_inline_highlights_changed_words() {
+        // A single-line modification: "hello world" → "hello planet"
+        let text = "--- a\n+++ b\n-hello world\n+hello planet\n";
+        let v = diff_view(text, 2, 0); // skip header lines
+                                       // del line: span 0 is "-", unchanged word "hello " is plain red,
+                                       //           changed word "world" is bold red
+        assert_eq!(v.lines.len(), 2);
+        let del = &v.lines[0];
+        let sign = del.spans.iter().find(|s| s.content == "-").unwrap();
+        assert_eq!(sign.style.fg, Some(Color::Red));
+        // "world" is the changed word — should be bold
+        let world = del
+            .spans
+            .iter()
+            .find(|s| s.content.trim() == "world")
+            .unwrap();
+        assert!(world.style.add_modifier.contains(Modifier::BOLD));
+        // "hello " is unchanged — should NOT be bold
+        let hello = del
+            .spans
+            .iter()
+            .find(|s| s.content.starts_with("hello"))
+            .unwrap();
+        assert!(!hello.style.add_modifier.contains(Modifier::BOLD));
+        // ins line: "planet" should be bold green
+        let ins = &v.lines[1];
+        let planet = ins
+            .spans
+            .iter()
+            .find(|s| s.content.trim() == "planet")
+            .unwrap();
+        assert!(planet.style.add_modifier.contains(Modifier::BOLD));
     }
 
     #[test]
