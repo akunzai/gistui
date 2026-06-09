@@ -1,4 +1,4 @@
-use crate::domain::{GistFile, PinnedMapping};
+use crate::domain::{GistFile, LocalCandidate, PinnedMapping};
 use std::collections::HashSet;
 use std::path::Component;
 use std::path::Path;
@@ -73,6 +73,70 @@ pub fn rank_gist_files(
         b.score
             .cmp(&a.score)
             .then(a.file.filename.cmp(&b.file.filename))
+    });
+    ranked
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RankedLocal {
+    pub candidate: LocalCandidate,
+    pub score: u16,
+    pub reasons: Vec<MatchReason>,
+}
+
+/// The mirror of [`rank_gist_files`]: scores local files by how well they match a
+/// selected gist (used for the gist-pane-driven reverse ranking).
+pub fn rank_local_files(
+    gist: &GistFile,
+    locals: &[LocalCandidate],
+    pinned: &[PinnedMapping],
+) -> Vec<RankedLocal> {
+    let gist_tokens = text_tokens(&format!("{} {}", gist.description, gist.filename));
+
+    let mut ranked: Vec<_> = locals
+        .iter()
+        .cloned()
+        .map(|candidate| {
+            let local_filename = candidate
+                .path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or_default();
+            let mut score = 0;
+            let mut reasons = Vec::new();
+
+            if pinned.iter().any(|m| {
+                m.local_path == candidate.path
+                    && m.gist_id == gist.gist_id
+                    && m.gist_filename == gist.filename
+            }) {
+                score += 10_000;
+                reasons.push(MatchReason::Pinned);
+            }
+
+            if local_filename == gist.filename {
+                score += 1_000;
+                reasons.push(MatchReason::ExactFilename);
+            }
+
+            let local_tokens = meaningful_path_tokens(&candidate.path);
+            if local_tokens.iter().any(|token| gist_tokens.contains(token)) {
+                score += 250;
+                reasons.push(MatchReason::PathSegment);
+            }
+
+            RankedLocal {
+                candidate,
+                score,
+                reasons,
+            }
+        })
+        .collect();
+
+    ranked.sort_by(|a, b| {
+        b.score
+            .cmp(&a.score)
+            .then(a.candidate.path.cmp(&b.candidate.path))
     });
     ranked
 }
@@ -189,5 +253,47 @@ mod tests {
 
         let ranked = rank_gist_files(&local, &files, &[]);
         assert!(!ranked[0].reasons.contains(&MatchReason::PathSegment));
+    }
+
+    fn local(path: &str) -> LocalCandidate {
+        LocalCandidate {
+            path: PathBuf::from(path),
+            pinned: false,
+            modified: None,
+        }
+    }
+
+    #[test]
+    fn rank_local_files_prefers_exact_filename_match_to_the_gist() {
+        let target = gist("a", "claude config", "settings.json");
+        let locals = vec![
+            local("/Users/me/project/other.json"),
+            local("/Users/me/.claude/settings.json"),
+        ];
+
+        let ranked = rank_local_files(&target, &locals, &[]);
+        assert_eq!(
+            ranked[0].candidate.path,
+            PathBuf::from("/Users/me/.claude/settings.json")
+        );
+        assert!(ranked[0].reasons.contains(&MatchReason::ExactFilename));
+    }
+
+    #[test]
+    fn rank_local_files_pin_outranks_filename() {
+        let target = gist("b", "notes", "todo.md");
+        let pinned_local = local("/Users/me/work/scratch.txt");
+        let locals = vec![local("/Users/me/work/todo.md"), pinned_local.clone()];
+        let pinned = vec![PinnedMapping {
+            local_path: pinned_local.path.clone(),
+            gist_id: "b".into(),
+            gist_filename: "todo.md".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+
+        let ranked = rank_local_files(&target, &locals, &pinned);
+        assert_eq!(ranked[0].candidate.path, pinned_local.path);
+        assert!(ranked[0].reasons.contains(&MatchReason::Pinned));
     }
 }

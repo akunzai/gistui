@@ -36,9 +36,15 @@ pub fn discover_local_candidates(
         .into_iter()
         .map(|path| {
             let pinned_match = pinned.iter().any(|m| m.local_path == path);
+            let modified = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs());
             LocalCandidate {
                 path,
                 pinned: pinned_match,
+                modified,
             }
         })
         .collect())
