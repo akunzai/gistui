@@ -1074,7 +1074,7 @@ fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
 fn render_list(frame: &mut Frame, state: &AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(3)])
+        .constraints([Constraint::Min(5), Constraint::Length(4)])
         .split(frame.size());
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -1141,10 +1141,11 @@ fn render_list(frame: &mut Frame, state: &AppState) {
     } else {
         match &state.status {
             Some(message) => message.clone(),
-            None => {
-                "Tab  ↑↓←→  Enter diff  Space preview  d download  u upload  n create  p pin  t view  v type  s sort  / filter  q quit"
-                    .to_string()
-            }
+            None => concat!(
+                "Tab switch pane   ↑↓ move   ←→ scroll   Enter diff   Space preview\n",
+                "d download  u upload  n create  p pin   t view  v type  s sort  / filter   q quit"
+            )
+            .to_string(),
         }
     };
     frame.render_widget(
