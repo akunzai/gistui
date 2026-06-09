@@ -48,6 +48,52 @@ pub struct CommandPlan {
     pub args: Vec<String>,
 }
 
+/// The captured result of running a [`CommandPlan`], independent of how it was
+/// produced. Mirrors the fields of `std::process::Output` the app actually uses.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandOutput {
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+/// The injectable boundary for every external command (`gh`) the app shells out
+/// to. Production uses [`SystemRunner`]; tests supply a fake so integration tests
+/// exercise command planning, success/failure handling, and output parsing
+/// without touching the network or requiring `gh`.
+pub trait CommandRunner {
+    fn run(&self, plan: &CommandPlan) -> Result<CommandOutput>;
+}
+
+/// The real boundary: spawns the planned program via `std::process::Command`.
+pub struct SystemRunner;
+
+impl CommandRunner for SystemRunner {
+    fn run(&self, plan: &CommandPlan) -> Result<CommandOutput> {
+        let output = Command::new(&plan.program)
+            .args(&plan.args)
+            .output()
+            .with_context(|| format!("run {} {}", plan.program, plan.args.join(" ")))?;
+        Ok(CommandOutput {
+            success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+}
+
+/// Runs a planned command through `runner`, returning its stdout on success or
+/// the stderr as an error on a non-zero exit. This is the shared execution path
+/// for both write actions (`gh gist edit/create/delete`) and the read fetches in
+/// the `gh` module.
+pub fn run_command(runner: &dyn CommandRunner, plan: &CommandPlan) -> Result<String> {
+    let output = runner.run(plan)?;
+    if !output.success {
+        bail!("{}", output.stderr);
+    }
+    Ok(output.stdout)
+}
+
 pub fn upload_command(local_path: &Path, target: &GistFile) -> CommandPlan {
     CommandPlan {
         program: "gh".into(),
@@ -115,16 +161,7 @@ pub fn delete_command(gist_id: &str) -> CommandPlan {
 }
 
 pub fn execute_command(plan: &CommandPlan) -> Result<String> {
-    let output = Command::new(&plan.program)
-        .args(&plan.args)
-        .output()
-        .with_context(|| format!("run {} {}", plan.program, plan.args.join(" ")))?;
-
-    if !output.status.success() {
-        bail!("{}", String::from_utf8_lossy(&output.stderr));
-    }
-
-    Ok(String::from_utf8(output.stdout)?)
+    run_command(&SystemRunner, plan)
 }
 
 pub fn execute_download(local_path: &Path, content: &str, overwrite_confirmed: bool) -> Result<()> {
