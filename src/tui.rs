@@ -758,6 +758,72 @@ fn draw_loading(
     Ok(())
 }
 
+/// Civil date (year, month, day) from a day count since the Unix epoch — Howard Hinnant's
+/// algorithm. UTC, leap-second agnostic (fine for display).
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+fn format_unix_utc(secs: i64) -> String {
+    let (y, m, d) = civil_from_days(secs.div_euclid(86400));
+    let rem = secs.rem_euclid(86400);
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02} UTC",
+        rem / 3600,
+        rem % 3600 / 60
+    )
+}
+
+fn file_mtime_label(path: &std::path::Path) -> String {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| format_unix_utc(d.as_secs() as i64))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Normalises the gist API's RFC3339 `updated_at` (e.g. `2026-06-08T11:06:18Z`) to
+/// `2026-06-08 11:06 UTC` for display alongside the local file's mtime.
+fn gist_time_label(updated_at: &str) -> String {
+    if updated_at.is_empty() {
+        "unknown".to_string()
+    } else if updated_at.len() >= 16 {
+        format!("{} UTC", updated_at[..16].replace('T', " "))
+    } else {
+        updated_at.to_string()
+    }
+}
+
+/// Builds the `--- local` / `+++ gist` diff header labels showing each side's filename and
+/// last-modified time, plus the gist's id.
+fn diff_labels(local_path: Option<&std::path::Path>, gist: &GistFile) -> (String, String) {
+    let local_name = local_path
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("(none)");
+    let local_time = local_path
+        .map(file_mtime_label)
+        .unwrap_or_else(|| "—".to_string());
+    let local_label = format!("local: {local_name} ({local_time})");
+    let gist_label = format!(
+        "gist {} / {} ({})",
+        gist.gist_id,
+        gist.filename,
+        gist_time_label(&gist.updated_at)
+    );
+    (local_label, gist_label)
+}
+
 fn preview_diff(state: &mut AppState) {
     let Some(ranked) = state.selected_gist() else {
         return;
@@ -771,7 +837,9 @@ fn preview_diff(state: &mut AppState) {
                 .as_ref()
                 .map(|path| std::fs::read_to_string(path).unwrap_or_default())
                 .unwrap_or_default();
-            let diff = crate::diff::unified_diff("local", &local_content, "gist", &remote);
+            let (local_label, gist_label) = diff_labels(local_path.as_deref(), &gist);
+            let diff =
+                crate::diff::unified_diff(&local_label, &local_content, &gist_label, &remote);
             // Download saves the gist into the current working directory under the
             // gist's own filename, leaving the compared local file untouched.
             let target = state.cwd.join(&gist.filename);
@@ -819,7 +887,9 @@ fn download_selected(state: &mut AppState) {
                 // A same-named file already exists: show its diff and require a y/n
                 // overwrite confirmation before writing.
                 let local_content = std::fs::read_to_string(&target).unwrap_or_default();
-                let diff = crate::diff::unified_diff("local", &local_content, "gist", &remote);
+                let (local_label, gist_label) = diff_labels(Some(&target), &gist);
+                let diff =
+                    crate::diff::unified_diff(&local_label, &local_content, &gist_label, &remote);
                 state.enter_diff(diff, remote, target.clone(), target);
             } else {
                 // No collision: download straight into the cwd without forcing a diff.
@@ -940,7 +1010,9 @@ fn upload_preview(state: &mut AppState) {
     match crate::gh::fetch_gist_file_content(&gist.file.gist_id, &filename) {
         Ok(remote) => {
             let local_content = std::fs::read_to_string(&local.path).unwrap_or_default();
-            let diff = crate::diff::unified_diff("gist", &remote, "local", &local_content);
+            let (local_label, gist_label) = diff_labels(Some(&local.path), &gist.file);
+            let diff =
+                crate::diff::unified_diff(&gist_label, &remote, &local_label, &local_content);
             state.diff_text = diff;
             state.diff_scroll = 0;
             state.diff_hscroll = 0;
@@ -1080,13 +1152,18 @@ fn render_preview(frame: &mut Frame, state: &AppState) {
             .block(
                 Block::default()
                     .title(state.preview_title.clone())
-                    .borders(Borders::ALL),
+                    .borders(Borders::ALL)
+                    .padding(Padding::horizontal(1)),
             ),
         chunks[0],
     );
     frame.render_widget(
-        Paragraph::new("Up/Down/Left/Right scroll  Esc back  q quit")
-            .block(Block::default().title("Commands").borders(Borders::ALL)),
+        Paragraph::new("↑↓←→ scroll  ·  Esc back  ·  q quit").block(
+            Block::default()
+                .title("Commands")
+                .borders(Borders::ALL)
+                .padding(Padding::horizontal(1)),
+        ),
         chunks[1],
     );
 }
@@ -1370,15 +1447,38 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
         .constraints([Constraint::Min(5), Constraint::Length(3)])
         .split(frame.size());
 
-    let title = format!(
-        "Diff: {}  ->  {}",
-        state.preview_local.display(),
-        state.download_target.display()
-    );
+    // The gist id, filenames, and both sides' mtimes live in the diff's `--- / +++` header
+    // lines (see `diff_labels`); the title stays concise and avoids repeating a path.
+    let title = match &state.pending_action {
+        Some(PendingAction::Upload {
+            gist_id, filename, ..
+        }) => format!("Upload → gist {gist_id} / {filename}"),
+        Some(PendingAction::Create { local_path }) => {
+            format!("Create gist from {}", local_path.display())
+        }
+        _ => {
+            if state.preview_local.as_os_str().is_empty()
+                || state.preview_local == state.download_target
+            {
+                format!("Diff → {}", state.download_target.display())
+            } else {
+                format!(
+                    "Diff: {} → {}",
+                    state.preview_local.display(),
+                    state.download_target.display()
+                )
+            }
+        }
+    };
     frame.render_widget(
         Paragraph::new(colorize_diff(&state.diff_text))
             .scroll((state.diff_scroll, state.diff_hscroll))
-            .block(Block::default().title(title).borders(Borders::ALL)),
+            .block(
+                Block::default()
+                    .title(title)
+                    .borders(Borders::ALL)
+                    .padding(Padding::horizontal(1)),
+            ),
         chunks[0],
     );
 
@@ -1399,7 +1499,12 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
         "↑↓←→ scroll  ·  d download  ·  u upload  ·  Esc back  ·  q quit".to_string()
     };
     frame.render_widget(
-        Paragraph::new(footer).block(Block::default().title("Commands").borders(Borders::ALL)),
+        Paragraph::new(footer).block(
+            Block::default()
+                .title("Commands")
+                .borders(Borders::ALL)
+                .padding(Padding::horizontal(1)),
+        ),
         chunks[1],
     );
 }
@@ -1691,6 +1796,22 @@ mod tests {
         let mut state = initial_state();
         state.screen = Screen::Help;
         assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
+    }
+
+    #[test]
+    fn format_unix_utc_known_instants() {
+        assert_eq!(format_unix_utc(0), "1970-01-01 00:00 UTC");
+        assert_eq!(format_unix_utc(1_780_656_360), "2026-06-05 10:46 UTC");
+    }
+
+    #[test]
+    fn gist_time_label_normalises_rfc3339() {
+        assert_eq!(
+            gist_time_label("2026-06-08T11:06:18Z"),
+            "2026-06-08 11:06 UTC"
+        );
+        assert_eq!(gist_time_label(""), "unknown");
+        assert_eq!(gist_time_label("short"), "short");
     }
 
     #[test]
