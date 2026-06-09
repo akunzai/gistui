@@ -6,16 +6,39 @@ CLI (`gh`).
 
 ## Requirements
 
-- A Rust toolchain (to build) — <https://rustup.rs>
 - The GitHub CLI: [`gh`](https://cli.github.com), installed and on your `PATH`
 - An authenticated `gh` session: `gh auth login`
+- A Rust toolchain — **only if building from source** — <https://rustup.rs>
 
 `gistui` shells out to `gh` at runtime (it stores no GitHub token of its own), so `gh` must
 be installed and authenticated wherever you run `gistui`.
 
 ## Installation
 
-Install the binary into `~/.cargo/bin` (make sure that directory is on your `PATH`):
+### Download a prebuilt binary (recommended)
+
+Each [release](https://github.com/akunzai/gistui/releases/latest) attaches prebuilt
+binaries — no Rust toolchain required. Pick the archive for your platform:
+
+| Platform | Asset |
+|----------|-------|
+| macOS (Apple Silicon) | `gistui-<version>-aarch64-apple-darwin.tar.gz` |
+| macOS (Intel) | `gistui-<version>-x86_64-apple-darwin.tar.gz` |
+| Linux (x86-64) | `gistui-<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux (ARM64) | `gistui-<version>-aarch64-unknown-linux-gnu.tar.gz` |
+| Windows (x86-64) | `gistui-<version>-x86_64-pc-windows-msvc.zip` |
+
+Extract it and put `gistui` somewhere on your `PATH`, e.g. on macOS/Linux:
+
+```bash
+tar -xzf gistui-<version>-<target>.tar.gz
+install -m 755 gistui-<version>-<target>/gistui ~/.local/bin/gistui
+```
+
+### Build from source
+
+With a Rust toolchain, install into `~/.cargo/bin` (make sure that directory is on your
+`PATH`):
 
 ```bash
 cargo install --path .
