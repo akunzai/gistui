@@ -3,6 +3,7 @@ name = "gistui"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
+description = "A terminal UI for managing GitHub Gists"
 
 [dependencies]
 anyhow = "1"

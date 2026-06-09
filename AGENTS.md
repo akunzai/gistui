@@ -1,6 +1,6 @@
 # AGENTS.md
 
-`gistui` is a Rust 2021 TUI that pairs local config files with GitHub gist files, previews diffs, and downloads/uploads through the GitHub CLI (`gh`).
+`gistui` is a Rust 2021 TUI for managing GitHub Gists — browse/diff/download/upload/create/pin gists and pair them with files in the working directory, all through the GitHub CLI (`gh`).
 
 ## Build / Test / Run
 

@@ -1,7 +1,8 @@
 # gistui
 
-`gistui` is a Rust TUI for pairing local config files with GitHub gist files — browse,
-diff, download, upload, create, and pin, all through the GitHub CLI (`gh`).
+A terminal UI for managing GitHub Gists. Browse, diff, download, upload, create, and pin
+your gists — and pair them with files in your working directory — all through the GitHub
+CLI (`gh`).
 
 ## Requirements
 
