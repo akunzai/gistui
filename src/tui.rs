@@ -1429,12 +1429,16 @@ fn render_pane(
     }
 }
 
-/// Renders a unified diff with per-line colour: additions green, deletions red, the
-/// `---`/`+++` file headers bold. Context lines keep the default style.
-fn colorize_diff(text: &str) -> Text<'static> {
+/// Builds the visible, coloured slice of a unified diff (additions green, deletions red,
+/// `---`/`+++` headers bold). Scrolling is applied here by hand — skip `vscroll` lines and
+/// drop `hscroll` leading chars per line — rather than via `Paragraph::scroll`, whose
+/// styled-line handling leaves redraw artifacts in ratatui 0.26.
+fn diff_view(text: &str, vscroll: u16, hscroll: u16) -> Text<'static> {
     let lines: Vec<Line> = text
         .lines()
+        .skip(vscroll as usize)
         .map(|line| {
+            // Colour from the original prefix even when horizontal scroll hides it.
             let style = if line.starts_with("+++") || line.starts_with("---") {
                 Style::default().add_modifier(Modifier::BOLD)
             } else if line.starts_with('+') {
@@ -1444,7 +1448,8 @@ fn colorize_diff(text: &str) -> Text<'static> {
             } else {
                 Style::default()
             };
-            Line::styled(line.to_string(), style)
+            let visible: String = line.chars().skip(hscroll as usize).collect();
+            Line::styled(visible, style)
         })
         .collect();
     Text::from(lines)
@@ -1485,14 +1490,17 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
         }
     };
     frame.render_widget(
-        Paragraph::new(colorize_diff(&state.diff_text))
-            .scroll((state.diff_scroll, state.diff_hscroll))
-            .block(
-                Block::default()
-                    .title(title)
-                    .borders(Borders::ALL)
-                    .padding(Padding::horizontal(1)),
-            ),
+        Paragraph::new(diff_view(
+            &state.diff_text,
+            state.diff_scroll,
+            state.diff_hscroll,
+        ))
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .padding(Padding::horizontal(1)),
+        ),
         chunks[0],
     );
 
@@ -1812,6 +1820,14 @@ mod tests {
         let mut state = initial_state();
         state.screen = Screen::Help;
         assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
+    }
+
+    #[test]
+    fn diff_view_applies_vertical_and_horizontal_scroll() {
+        let text = "--- a\n+++ b\nabcdef\n more";
+        let v = diff_view(text, 2, 2); // skip 2 lines, drop 2 leading chars
+        assert_eq!(v.lines.len(), 2);
+        assert_eq!(v.lines[0].spans[0].content, "cdef");
     }
 
     #[test]
