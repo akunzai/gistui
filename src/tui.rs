@@ -1763,7 +1763,12 @@ fn render(frame: &mut Frame, state: &AppState) {
 }
 
 fn render_help(frame: &mut Frame) {
-    let text = "\
+    let about = format!(
+        "gistui v{}  ·  {}",
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_REPOSITORY")
+    );
+    let body = "\
 Navigation
   Tab        switch pane (Local / Gists)
   Up/Down    move the selection
@@ -1803,6 +1808,7 @@ General
   Esc / q    close an overlay; from the list, quit the app
   ?          show this help";
 
+    let text = format!("{about}\n\n{body}");
     frame.render_widget(
         Paragraph::new(text).block(
             Block::default()
@@ -2510,6 +2516,13 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn about_metadata_is_available_for_help() {
+        // The help/About header renders these; guard against dropping them from Cargo.toml.
+        assert!(!env!("CARGO_PKG_VERSION").is_empty());
+        assert!(env!("CARGO_PKG_REPOSITORY").contains("github.com/akunzai/gistui"));
+    }
 
     #[test]
     fn tab_switches_focus() {

@@ -73,7 +73,8 @@ gistui --check    # print gh readiness, then exit (no TUI)
 ```
 
 Run `gistui` from the directory whose files you want to pair with your gists. Inside the
-TUI press `?` for the full keymap; the footer shows the keys relevant to the focused pane.
+TUI press `?` for the full keymap (it also shows the running version and the project
+repository link); the footer shows the keys relevant to the focused pane.
 
 The left pane lists the files in your current working directory; the right pane lists your
 gists, ranked against the selected local file (stronger matches are prefixed with stars:
