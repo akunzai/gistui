@@ -130,6 +130,7 @@ pub enum KeyOutcome {
     UploadAdd,
     UploadPreview,
     Upload,
+    Create(bool),
 }
 
 #[derive(Debug, Clone)]
@@ -420,6 +421,16 @@ impl AppState {
                     KeyOutcome::UploadAdd
                 };
             }
+            KeyCode::Char('n') => {
+                let Some(local) = self.selected_local().cloned() else {
+                    self.status = Some("select a local file to create a gist".into());
+                    return KeyOutcome::None;
+                };
+                self.pending_action = Some(PendingAction::Create {
+                    local_path: local.path,
+                });
+                self.screen = Screen::Confirm;
+            }
             _ => {}
         }
         KeyOutcome::None
@@ -461,6 +472,15 @@ impl AppState {
             },
             Some(PendingAction::Upload { .. }) => match code {
                 KeyCode::Char('y') => return KeyOutcome::Upload,
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    self.pending_action = None;
+                    self.screen = Screen::List;
+                }
+                _ => {}
+            },
+            Some(PendingAction::Create { .. }) => match code {
+                KeyCode::Char('s') => return KeyOutcome::Create(false),
+                KeyCode::Char('p') => return KeyOutcome::Create(true),
                 KeyCode::Char('n') | KeyCode::Esc => {
                     self.pending_action = None;
                     self.screen = Screen::List;
@@ -561,6 +581,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                 KeyOutcome::UploadAdd => upload_add(&mut state),
                 KeyOutcome::UploadPreview => upload_preview(&mut state),
                 KeyOutcome::Upload => upload_replace(&mut state),
+                KeyOutcome::Create(public) => create_gist(&mut state, public),
                 KeyOutcome::None => {}
             }
         }
@@ -777,6 +798,30 @@ fn refresh_gists(state: &mut AppState) {
         state.gists = gists;
         if state.gist_index >= state.ranked_gists().len() {
             state.gist_index = 0;
+        }
+    }
+}
+
+fn create_gist(state: &mut AppState, public: bool) {
+    let Some(PendingAction::Create { local_path }) = state.pending_action.clone() else {
+        return;
+    };
+    let plan = crate::actions::create_command(&local_path, public);
+    match crate::actions::execute_command(&plan) {
+        Ok(_) => {
+            let visibility = if public { "public" } else { "secret" };
+            state.set_status(format!(
+                "Created {} gist from {}",
+                visibility,
+                local_path.display()
+            ));
+            state.back_to_list();
+            refresh_gists(state);
+        }
+        Err(error) => {
+            state.set_status(format!("create failed: {error}"));
+            state.screen = Screen::List;
+            state.pending_action = None;
         }
     }
 }
@@ -1672,5 +1717,63 @@ mod tests {
         });
         state.screen = Screen::Confirm;
         assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::Upload);
+    }
+
+    #[test]
+    fn n_opens_create_confirm() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/config.toml"),
+            pinned: false,
+        }];
+        assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::Confirm);
+        assert_eq!(
+            state.pending_action,
+            Some(PendingAction::Create {
+                local_path: PathBuf::from("/tmp/config.toml")
+            })
+        );
+    }
+
+    #[test]
+    fn n_without_local_is_noop() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn create_confirm_s_and_p_choose_visibility() {
+        let mut state = initial_state();
+        state.pending_action = Some(PendingAction::Create {
+            local_path: PathBuf::from("/tmp/config.toml"),
+        });
+        state.screen = Screen::Confirm;
+        assert_eq!(
+            state.handle_key(KeyCode::Char('s')),
+            KeyOutcome::Create(false)
+        );
+
+        state.pending_action = Some(PendingAction::Create {
+            local_path: PathBuf::from("/tmp/config.toml"),
+        });
+        state.screen = Screen::Confirm;
+        assert_eq!(
+            state.handle_key(KeyCode::Char('p')),
+            KeyOutcome::Create(true)
+        );
+    }
+
+    #[test]
+    fn create_confirm_esc_cancels() {
+        let mut state = initial_state();
+        state.pending_action = Some(PendingAction::Create {
+            local_path: PathBuf::from("/tmp/config.toml"),
+        });
+        state.screen = Screen::Confirm;
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+        assert_eq!(state.pending_action, None);
     }
 }
