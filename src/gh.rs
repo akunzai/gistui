@@ -1,8 +1,8 @@
+use crate::actions::{run_command, CommandPlan, CommandRunner, SystemRunner};
 use crate::domain::GistFile;
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::process::Command;
 
 #[derive(Debug, Deserialize)]
 struct GhGist {
@@ -24,23 +24,64 @@ struct GhGistFile {
     filename: String,
 }
 
+/// Plan for `gh --version` (used to confirm `gh` is installed and runnable).
+pub fn gh_version_plan() -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec!["--version".into()],
+    }
+}
+
+/// Plan for `gh auth status` (used to confirm an authenticated session).
+pub fn auth_status_plan() -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec!["auth".into(), "status".into()],
+    }
+}
+
+/// Plan for listing every gist via the REST API.
+///
+/// `gh gist list` has no `--json` flag; use the REST API with `--paginate` so
+/// accounts with more than 100 gists are fully retrieved. gh concatenates all
+/// pages into a single JSON array, which `parse_gist_list_json` already handles.
+pub fn gist_list_plan() -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "--paginate".into(),
+            "/gists?per_page=100".into(),
+        ],
+    }
+}
+
+/// Plan for fetching a single gist file's raw content.
+pub fn gist_view_plan(gist_id: &str, filename: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "gist".into(),
+            "view".into(),
+            gist_id.to_string(),
+            "--filename".into(),
+            filename.to_string(),
+            "--raw".into(),
+        ],
+    }
+}
+
 pub fn check_gh_ready() -> Result<()> {
-    let version = Command::new("gh")
-        .arg("--version")
-        .output()
-        .context("run gh --version")?;
-    if !version.status.success() {
+    check_gh_ready_with(&SystemRunner)
+}
+
+pub fn check_gh_ready_with(runner: &dyn CommandRunner) -> Result<()> {
+    if !runner.run(&gh_version_plan())?.success {
         bail!("gh is installed but did not run successfully");
     }
-
-    let auth = Command::new("gh")
-        .args(["auth", "status"])
-        .output()
-        .context("run gh auth status")?;
-    if !auth.status.success() {
+    if !runner.run(&auth_status_plan())?.success {
         bail!("gh auth status failed; run gh auth login");
     }
-
     Ok(())
 }
 
@@ -65,32 +106,23 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
 }
 
 pub fn fetch_gist_list_json() -> Result<String> {
-    // `gh gist list` has no `--json` flag; use the REST API with --paginate so
-    // accounts with more than 100 gists are fully retrieved. gh concatenates all
-    // pages into a single JSON array, which parse_gist_list_json already handles.
-    let output = Command::new("gh")
-        .args(["api", "--paginate", "/gists?per_page=100"])
-        .output()
-        .context("run gh api /gists")?;
+    fetch_gist_list_json_with(&SystemRunner)
+}
 
-    if !output.status.success() {
-        bail!("{}", String::from_utf8_lossy(&output.stderr));
-    }
-
-    Ok(String::from_utf8(output.stdout)?)
+pub fn fetch_gist_list_json_with(runner: &dyn CommandRunner) -> Result<String> {
+    run_command(runner, &gist_list_plan())
 }
 
 pub fn fetch_gist_file_content(gist_id: &str, filename: &str) -> Result<String> {
-    let output = Command::new("gh")
-        .args(["gist", "view", gist_id, "--filename", filename, "--raw"])
-        .output()
-        .context("run gh gist view")?;
+    fetch_gist_file_content_with(&SystemRunner, gist_id, filename)
+}
 
-    if !output.status.success() {
-        bail!("{}", String::from_utf8_lossy(&output.stderr));
-    }
-
-    Ok(String::from_utf8(output.stdout)?)
+pub fn fetch_gist_file_content_with(
+    runner: &dyn CommandRunner,
+    gist_id: &str,
+    filename: &str,
+) -> Result<String> {
+    run_command(runner, &gist_view_plan(gist_id, filename))
 }
 
 #[cfg(test)]
