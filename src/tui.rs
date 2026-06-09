@@ -1289,7 +1289,7 @@ General
                 .borders(Borders::ALL)
                 .padding(Padding::horizontal(1)),
         ),
-        frame.size(),
+        frame.area(),
     );
 }
 
@@ -1297,7 +1297,7 @@ fn render_preview(frame: &mut Frame, state: &AppState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(3)])
-        .split(frame.size());
+        .split(frame.area());
 
     frame.render_widget(
         Paragraph::new(state.diff_text.clone())
@@ -1405,7 +1405,7 @@ fn wrap_line_count(text: &str, width: u16) -> u16 {
 }
 
 fn render_list(frame: &mut Frame, state: &AppState) {
-    let area = frame.size();
+    let area = frame.area();
     let footer_body = if state.filtering {
         format!(
             "filter: {}_   (Enter apply · Esc clear)",
@@ -1561,7 +1561,7 @@ fn render_pane(
             Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(None)
                 .end_symbol(None),
-            area.inner(&Margin {
+            area.inner(Margin {
                 vertical: 1,
                 horizontal: 0,
             }),
@@ -1600,7 +1600,7 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(3)])
-        .split(frame.size());
+        .split(frame.area());
 
     // The gist id, filenames, and both sides' mtimes live in the diff's `--- / +++` header
     // lines (see `diff_labels`); the title stays concise and avoids repeating a path.

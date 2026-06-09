@@ -37,7 +37,8 @@ Pure, testable domain logic is kept separate from impure shell/filesystem adapte
 - Tests must never call the real `gh` or the network. `gh` JSON parsing is tested against fixtures in `tests/fixtures/gh/`; IO functions are left as thin untested boundaries.
 - Downloads only write to `cwd/<gist-filename>`. The overwrite gate is the invariant to preserve: an *existing* target is never overwritten without first showing its diff and a `y/n` confirmation (`Screen::ConfirmOverwrite`); writing a path that does not yet exist is allowed directly (no diff forced). Do not add a write path that overwrites an existing file without that diff+confirm.
 - No GitHub tokens are stored by the app, and gist *content* is never written to the config file (`~/.config/gistui/config.toml`, XDG-aware) — only path↔gist mappings.
-- `frame.size()` is correct for the pinned `ratatui` 0.26 (do not "modernize" to `frame.area()`, which is a later-version API).
+- Use `frame.area()` (not `frame.size()`, which was removed in ratatui 0.28). The project now pins ratatui 0.30.
+- `Rect::inner` takes `Margin` by value (not `&Margin`) since ratatui 0.28.
 
 ## Conventions
 
