@@ -33,6 +33,7 @@ pub enum Screen {
     Confirm,
     Preview,
     Help,
+    Pins,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +149,7 @@ pub enum KeyOutcome {
     ExecuteDelete,
     RefreshLocals,
     RefreshPreview,
+    UnpinAtPin,
 }
 
 #[derive(Debug, Clone)]
@@ -185,6 +187,7 @@ pub struct AppState {
     pub skip_dirs: Vec<String>,
     pub scan_depth: u32,
     pub local_scanning: bool,
+    pub pins_index: usize,
 }
 
 impl AppState {
@@ -374,12 +377,30 @@ impl AppState {
             Screen::Confirm => self.handle_key_confirm(code),
             Screen::Preview => self.handle_key_preview(code),
             Screen::Help => self.handle_key_help(code),
+            Screen::Pins => self.handle_key_pins(code),
         }
     }
 
     fn handle_key_help(&mut self, _code: KeyCode) -> KeyOutcome {
         // Any key (including q) just closes the help overlay back to the list.
         self.screen = Screen::List;
+        KeyOutcome::None
+    }
+
+    fn handle_key_pins(&mut self, code: KeyCode) -> KeyOutcome {
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
+            KeyCode::Down if self.pins_index + 1 < self.pinned.len() => {
+                self.pins_index += 1;
+            }
+            KeyCode::Up if self.pins_index > 0 => {
+                self.pins_index -= 1;
+            }
+            KeyCode::Char('x') | KeyCode::Char('d') if !self.pinned.is_empty() => {
+                return KeyOutcome::UnpinAtPin;
+            }
+            _ => {}
+        }
         KeyOutcome::None
     }
 
@@ -493,6 +514,10 @@ impl AppState {
             }
             KeyCode::Char('/') => self.filtering = true,
             KeyCode::Char('?') => self.screen = Screen::Help,
+            KeyCode::Char('P') => {
+                self.pins_index = 0;
+                self.screen = Screen::Pins;
+            }
             KeyCode::Char('o') => {
                 if self.selected_gist().is_some() {
                     return KeyOutcome::OpenBrowser;
@@ -681,6 +706,7 @@ pub fn initial_state() -> AppState {
         skip_dirs: crate::config::AppConfig::default().skip_dirs,
         scan_depth: crate::config::AppConfig::default().scan_depth,
         local_scanning: false,
+        pins_index: 0,
     }
 }
 
@@ -872,6 +898,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                         state.scan_depth,
                     ));
                 }
+                KeyOutcome::UnpinAtPin => unpin_at_pin_index(&mut state),
                 KeyOutcome::None => {}
             }
         }
@@ -1193,6 +1220,28 @@ fn unpin_selected(state: &mut AppState) {
     }
 }
 
+fn unpin_at_pin_index(state: &mut AppState) {
+    let Some(mapping) = state.pinned.get(state.pins_index).cloned() else {
+        return;
+    };
+    let label = mapping.local_path.display().to_string();
+    let result = crate::config::config_path().and_then(|path| {
+        let config = crate::config::load_config(&path)?;
+        crate::actions::unpin_mapping_exact(&path, config, &mapping.local_path, &mapping.gist_id)
+    });
+    match result {
+        Ok(config) => {
+            state.pinned = config.pinned;
+            state.skip_dirs = config.skip_dirs;
+            state.scan_depth = config.scan_depth;
+            state.pins_index = state.pins_index.min(state.pinned.len().saturating_sub(1));
+            refresh_locals(state);
+            state.set_status(format!("Unpinned {label}"));
+        }
+        Err(error) => state.set_status(format!("unpin failed: {error}")),
+    }
+}
+
 fn upload_local_filename(local: &std::path::Path) -> Option<String> {
     local.file_name().and_then(|n| n.to_str()).map(String::from)
 }
@@ -1363,6 +1412,7 @@ fn render(frame: &mut Frame, state: &AppState) {
         Screen::Confirm => render_diff(frame, state, true),
         Screen::Preview => render_preview(frame, state),
         Screen::Help => render_help(frame),
+        Screen::Pins => render_pins(frame, state),
     }
 }
 
@@ -1387,6 +1437,7 @@ Actions (on the selected local file + gist)
   u          upload the local file into the gist
   n          create a new gist from the local file
   p          pin / unpin the local <-> gist pair
+  P          view / manage all pinned mappings (x to unpin)
   X          delete the selected gist (y/n confirm)
   o          open the gist in your web browser
   e          edit the local file in $EDITOR
@@ -1425,6 +1476,67 @@ fn render_preview(frame: &mut Frame, state: &AppState) {
     );
     frame.render_widget(
         Paragraph::new("↑↓←→ scroll  ·  R refresh  ·  Esc/q back").block(
+            Block::default()
+                .title("Commands")
+                .borders(Borders::ALL)
+                .padding(Padding::horizontal(1)),
+        ),
+        chunks[1],
+    );
+}
+
+fn render_pins(frame: &mut Frame, state: &AppState) {
+    let area = frame.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(3)])
+        .split(area);
+
+    let items: Vec<ListItem> = if state.pinned.is_empty() {
+        vec![ListItem::new("(no pinned mappings — use p to pin a pair)")]
+    } else {
+        state
+            .pinned
+            .iter()
+            .map(|m| {
+                ListItem::new(format!(
+                    "{}  ↔  {} / {}",
+                    m.local_path.display(),
+                    m.gist_id,
+                    m.gist_filename
+                ))
+            })
+            .collect()
+    };
+
+    let selected = (!state.pinned.is_empty()).then_some(state.pins_index);
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title("Pinned Mappings [focus]")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .padding(Padding::horizontal(1)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::Cyan)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
+
+    let mut list_state = ListState::default();
+    list_state.select(selected);
+    frame.render_stateful_widget(list, chunks[0], &mut list_state);
+
+    let footer = if state.pinned.is_empty() {
+        "Esc/q back".to_string()
+    } else {
+        "↑↓ move  ·  x unpin  ·  Esc/q back".to_string()
+    };
+    frame.render_widget(
+        Paragraph::new(footer).block(
             Block::default()
                 .title("Commands")
                 .borders(Borders::ALL)
@@ -1479,7 +1591,7 @@ fn commands_hint(focus: FocusPane) -> String {
     // Focus-relevant common keys only; the full reference lives in the `?` help overlay.
     let mut items = vec!["Tab panes", "↑↓ move", "Enter diff"];
     match focus {
-        FocusPane::Local => items.extend(["r recursive", "e edit", "n create"]),
+        FocusPane::Local => items.extend(["r recursive", "e edit", "n create", "P pins"]),
         FocusPane::Gist => items.extend([
             "Space preview",
             "d download",
