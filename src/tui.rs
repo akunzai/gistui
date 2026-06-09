@@ -36,6 +36,39 @@ pub enum GistView {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GistTypeFilter {
+    All,
+    Public,
+    Secret,
+}
+
+impl GistTypeFilter {
+    fn matches(self, public: bool) -> bool {
+        match self {
+            GistTypeFilter::All => true,
+            GistTypeFilter::Public => public,
+            GistTypeFilter::Secret => !public,
+        }
+    }
+
+    fn next(self) -> Self {
+        match self {
+            GistTypeFilter::All => GistTypeFilter::Public,
+            GistTypeFilter::Public => GistTypeFilter::Secret,
+            GistTypeFilter::Secret => GistTypeFilter::All,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            GistTypeFilter::All => "all",
+            GistTypeFilter::Public => "public",
+            GistTypeFilter::Secret => "secret",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyOutcome {
     None,
     Quit,
@@ -56,6 +89,7 @@ pub struct AppState {
     pub gist_hscroll: u16,
     pub screen: Screen,
     pub gist_view: GistView,
+    pub gist_type_filter: GistTypeFilter,
     pub diff_previewed: bool,
     pub diff_text: String,
     pub diff_scroll: u16,
@@ -69,13 +103,17 @@ pub struct AppState {
 
 impl AppState {
     pub fn ranked_gists(&self) -> Vec<RankedGistFile> {
+        let gists: Vec<GistFile> = self
+            .gists
+            .iter()
+            .filter(|g| self.gist_type_filter.matches(g.public))
+            .cloned()
+            .collect();
         let Some(local) = self.locals.get(self.local_index) else {
             // No local selected (e.g. an empty directory): list every gist
             // unranked so the user can still preview and download into the cwd.
-            return self
-                .gists
-                .iter()
-                .cloned()
+            return gists
+                .into_iter()
                 .map(|file| RankedGistFile {
                     file,
                     score: 0,
@@ -83,7 +121,7 @@ impl AppState {
                 })
                 .collect();
         };
-        rank_gist_files(&local.path, &self.gists, &self.pinned)
+        rank_gist_files(&local.path, &gists, &self.pinned)
     }
 
     pub fn selected_local(&self) -> Option<&LocalCandidate> {
@@ -255,6 +293,12 @@ impl AppState {
                     GistView::Id => GistView::Description,
                 };
             }
+            KeyCode::Char('v') => {
+                // Cycle the gist visibility filter: all -> public -> secret -> all.
+                self.gist_type_filter = self.gist_type_filter.next();
+                self.gist_index = 0;
+                self.gist_hscroll = 0;
+            }
             KeyCode::Char('d')
                 if self.focus == FocusPane::Gist && self.gist_index < self.ranked_gists().len() =>
             {
@@ -313,6 +357,7 @@ pub fn initial_state() -> AppState {
         gist_hscroll: 0,
         screen: Screen::List,
         gist_view: GistView::Description,
+        gist_type_filter: GistTypeFilter::All,
         diff_previewed: false,
         diff_text: String::new(),
         diff_scroll: 0,
@@ -557,10 +602,11 @@ fn render_list(frame: &mut Frame, state: &AppState) {
         .collect();
     let gist_focused = state.focus == FocusPane::Gist;
     let gist_selected = (!ranked.is_empty()).then_some(state.gist_index);
+    let gist_title = format!("Gists · {}", state.gist_type_filter.label());
     render_pane(
         frame,
         columns[1],
-        "Gists",
+        &gist_title,
         gist_items,
         gist_focused,
         gist_selected,
@@ -568,8 +614,9 @@ fn render_list(frame: &mut Frame, state: &AppState) {
 
     let footer = match &state.status {
         Some(message) => message.clone(),
-        None => "Tab  Up/Down move  Left/Right scroll  Enter diff  d download  t view  q quit"
-            .to_string(),
+        None => {
+            "Tab  ↑↓ move  ←→ scroll  Enter diff  d download  t view  v type  q quit".to_string()
+        }
     };
     frame.render_widget(
         Paragraph::new(footer).block(Block::default().title("Commands").borders(Borders::ALL)),
@@ -710,6 +757,50 @@ mod tests {
             "⭐⭐⭐ config — cfg"
         );
         assert_eq!(gist_row_label(&g, GistView::Id), "⭐⭐⭐ abc / config");
+    }
+
+    #[test]
+    fn v_cycles_gist_type_filter() {
+        let mut state = initial_state();
+        assert_eq!(state.gist_type_filter, GistTypeFilter::All);
+        state.handle_key(KeyCode::Char('v'));
+        assert_eq!(state.gist_type_filter, GistTypeFilter::Public);
+        state.handle_key(KeyCode::Char('v'));
+        assert_eq!(state.gist_type_filter, GistTypeFilter::Secret);
+        state.handle_key(KeyCode::Char('v'));
+        assert_eq!(state.gist_type_filter, GistTypeFilter::All);
+    }
+
+    #[test]
+    fn gist_type_filter_limits_ranked_gists() {
+        let mut state = initial_state();
+        state.gists = vec![
+            GistFile {
+                gist_id: "pub".into(),
+                description: "p".into(),
+                filename: "a.json".into(),
+                public: true,
+                updated_at: "x".into(),
+            },
+            GistFile {
+                gist_id: "sec".into(),
+                description: "s".into(),
+                filename: "b.json".into(),
+                public: false,
+                updated_at: "x".into(),
+            },
+        ];
+        assert_eq!(state.ranked_gists().len(), 2);
+
+        state.gist_type_filter = GistTypeFilter::Public;
+        let only_public = state.ranked_gists();
+        assert_eq!(only_public.len(), 1);
+        assert_eq!(only_public[0].file.gist_id, "pub");
+
+        state.gist_type_filter = GistTypeFilter::Secret;
+        let only_secret = state.ranked_gists();
+        assert_eq!(only_secret.len(), 1);
+        assert_eq!(only_secret[0].file.gist_id, "sec");
     }
 
     #[test]
