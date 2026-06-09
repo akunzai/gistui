@@ -45,6 +45,7 @@ Pure, testable domain logic is kept separate from impure shell/filesystem adapte
 - Commit messages: Conventional Commits, in English (e.g. `feat:`, `docs:`, `fix:`).
 - Fold same-scope follow-up fixes into the original commit (amend) rather than adding `fix typo` / `review fix` commits.
 - Every PR MUST carry a release-note category label (`enhancement`, `bug`, `documentation`, `dependencies`, or `skip-changelog`) — GitHub groups auto-generated release notes by these via `.github/release.yml`.
+- When a change adds or alters a user-facing key, screen, or feature, update `README.md` (the Actions/keymap and Safety sections) and the `?` help text in `tui.rs` **in the same PR** — keep docs and behavior in lockstep.
 
 ## Claude Code compatibility
 
