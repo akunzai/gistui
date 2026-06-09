@@ -147,6 +147,7 @@ pub enum KeyOutcome {
     DeletePreview,
     ExecuteDelete,
     RefreshLocals,
+    RefreshPreview,
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +179,7 @@ pub struct AppState {
     pub status: Option<String>,
     pub loading: bool,
     pub preview_title: String,
+    pub preview_gist_key: Option<(String, String)>,
     pub gist_content_cache: std::collections::HashMap<(String, String), String>,
     pub local_recursive: bool,
     pub skip_dirs: Vec<String>,
@@ -388,7 +390,9 @@ impl AppState {
                 self.screen = Screen::List;
                 self.diff_text.clear();
                 self.preview_title.clear();
+                self.preview_gist_key = None;
             }
+            KeyCode::Char('R') => return KeyOutcome::RefreshPreview,
             KeyCode::Down => self.scroll_diff_down(),
             KeyCode::Up => self.scroll_diff_up(),
             KeyCode::Right => self.scroll_diff_right(),
@@ -671,6 +675,7 @@ pub fn initial_state() -> AppState {
         status: None,
         loading: false,
         preview_title: String::new(),
+        preview_gist_key: None,
         gist_content_cache: std::collections::HashMap::new(),
         local_recursive: false,
         skip_dirs: crate::config::AppConfig::default().skip_dirs,
@@ -838,6 +843,12 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                 KeyOutcome::PreviewContent => {
                     fetch_then(terminal, &mut state, "Loading preview…", preview_content)?
                 }
+                KeyOutcome::RefreshPreview => fetch_then(
+                    terminal,
+                    &mut state,
+                    "Loading preview…",
+                    refresh_preview_content,
+                )?,
                 KeyOutcome::OpenBrowser => open_browser(&mut state),
                 KeyOutcome::EditLocal => edit_local(terminal, &mut state)?,
                 KeyOutcome::DeletePreview => fetch_then(
@@ -1042,7 +1053,9 @@ fn preview_content(state: &mut AppState) {
         Some(cached) => cached.clone(),
         None => match crate::gh::fetch_gist_file_content(&gist.file.gist_id, &gist.file.filename) {
             Ok(content) => {
-                state.gist_content_cache.insert(key, content.clone());
+                state
+                    .gist_content_cache
+                    .insert(key.clone(), content.clone());
                 content
             }
             Err(error) => {
@@ -1052,11 +1065,19 @@ fn preview_content(state: &mut AppState) {
         },
     };
     state.preview_title = format!("Preview: {} / {}", gist.file.gist_id, gist.file.filename);
+    state.preview_gist_key = Some(key);
     state.diff_text = content;
     state.diff_scroll = 0;
     state.diff_hscroll = 0;
     state.status = None;
     state.screen = Screen::Preview;
+}
+
+fn refresh_preview_content(state: &mut AppState) {
+    if let Some(key) = state.preview_gist_key.clone() {
+        state.gist_content_cache.remove(&key);
+    }
+    preview_content(state);
 }
 
 fn download_selected(state: &mut AppState) {
@@ -1183,6 +1204,11 @@ fn upload_add(state: &mut AppState) {
     let plan = crate::actions::upload_add_command(&local.path, &gist.file.gist_id);
     match crate::actions::execute_command(&plan) {
         Ok(_) => {
+            if let Some(filename) = upload_local_filename(&local.path) {
+                state
+                    .gist_content_cache
+                    .remove(&(gist.file.gist_id.clone(), filename));
+            }
             state.set_status(format!(
                 "Uploaded {} to gist {}",
                 local.path.display(),
@@ -1243,6 +1269,9 @@ fn upload_replace(state: &mut AppState) {
     let plan = crate::actions::upload_command(&local_path, &target);
     match crate::actions::execute_command(&plan) {
         Ok(_) => {
+            state
+                .gist_content_cache
+                .remove(&(gist_id.clone(), filename.clone()));
             state.set_status(format!("Uploaded {} to gist {}", filename, gist_id));
             state.back_to_list();
             refresh_gists(state);
@@ -1353,7 +1382,7 @@ Gist list
 
 Actions (on the selected local file + gist)
   Enter      diff the local file against the gist
-  Space      preview the gist file's content
+  Space      preview the gist file's content (R in preview to force-refresh)
   d          download the gist into the cwd
   u          upload the local file into the gist
   n          create a new gist from the local file
@@ -1395,7 +1424,7 @@ fn render_preview(frame: &mut Frame, state: &AppState) {
         chunks[0],
     );
     frame.render_widget(
-        Paragraph::new("↑↓←→ scroll  ·  Esc/q back").block(
+        Paragraph::new("↑↓←→ scroll  ·  R refresh  ·  Esc/q back").block(
             Block::default()
                 .title("Commands")
                 .borders(Borders::ALL)
