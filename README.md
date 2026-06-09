@@ -77,9 +77,12 @@ TUI press `?` for the full keymap (it also shows the running version and the pro
 repository link); the footer shows the keys relevant to the focused pane.
 
 The left pane lists the files in your current working directory; the right pane lists your
-gists, ranked against the selected local file (stronger matches are prefixed with stars:
-⭐⭐⭐ exact-filename/pinned, ⭐⭐ path hint). Browse with `Tab` (switch pane), `Up`/`Down`
-(move), and `Left`/`Right` (scroll a long row).
+gists. Ranking is **focus-driven**: the focused pane is the driver and the other pane is
+ranked against its selection, with stronger matches prefixed by stars (⭐⭐⭐
+exact-filename/pinned, ⭐⭐ path hint). With the local pane focused, gists are ranked against
+the selected file; `Tab` to the gist pane and the local files are ranked against the
+selected gist instead. Browse with `Tab` (switch pane), `Up`/`Down` (move), and
+`Left`/`Right` (scroll a long row).
 
 ### Actions
 
@@ -106,8 +109,9 @@ gists, ranked against the selected local file (stronger matches are prefixed wit
   force-refresh, bypassing the session cache).
 - `r` — toggle **recursive** local file discovery; the pane title shows `[↓]` while active
   and scans in the background so the UI stays responsive.
-- `/` filter by text · `v` cycle visibility (all/public/secret) · `s` cycle sort · `t`
-  toggle row view.
+- `/` filter by text · `v` cycle visibility (all/public/secret) · `s` cycle the **focused
+  pane's** sort (match / name / recent — gists by name/updated, local files by
+  name/modified-time) · `t` toggle row view.
 - `Esc`/`q` — go back from an overlay; quit the app from the main list.
 
 When no local file is selected (e.g. an empty directory), the right pane lists all gists

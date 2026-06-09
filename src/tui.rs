@@ -1,5 +1,5 @@
 use crate::domain::{group_gists, GistFile, GistGroup, LocalCandidate, PinnedMapping};
-use crate::ranking::{rank_gist_files, RankedGistFile};
+use crate::ranking::{rank_gist_files, rank_local_files, RankedGistFile, RankedLocal};
 use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -134,6 +134,48 @@ impl GistSort {
     }
 }
 
+/// Sort order for the local file pane. Mirrors [`GistSort`]: `Match` keeps the
+/// incoming order (reverse-ranking score when the gist pane drives, else discovery
+/// order); the others override it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalSort {
+    Match,
+    Name,
+    Recent,
+}
+
+impl LocalSort {
+    fn next(self) -> Self {
+        match self {
+            LocalSort::Match => LocalSort::Name,
+            LocalSort::Name => LocalSort::Recent,
+            LocalSort::Recent => LocalSort::Match,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            LocalSort::Match => "match",
+            LocalSort::Name => "name",
+            LocalSort::Recent => "recent",
+        }
+    }
+
+    fn apply(self, locals: &mut [RankedLocal]) {
+        match self {
+            LocalSort::Match => {}
+            LocalSort::Name => locals.sort_by(|a, b| {
+                a.candidate
+                    .path
+                    .file_name()
+                    .cmp(&b.candidate.path.file_name())
+            }),
+            // Most-recently-modified first; unknown mtimes (None) sort last.
+            LocalSort::Recent => locals.sort_by_key(|r| std::cmp::Reverse(r.candidate.modified)),
+        }
+    }
+}
+
 impl GistTypeFilter {
     fn matches(self, public: bool) -> bool {
         match self {
@@ -199,6 +241,7 @@ pub struct AppState {
     pub gist_view: GistView,
     pub gist_type_filter: GistTypeFilter,
     pub gist_sort: GistSort,
+    pub local_sort: LocalSort,
     pub filtering: bool,
     pub filter_query: String,
     pub diff_previewed: bool,
@@ -230,6 +273,29 @@ pub struct AppState {
     pub description_input: String,
 }
 
+fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
+    gists
+        .into_iter()
+        .map(|file| RankedGistFile {
+            file,
+            score: 0,
+            reasons: Vec::new(),
+        })
+        .collect()
+}
+
+fn unranked_locals(locals: &[LocalCandidate]) -> Vec<RankedLocal> {
+    locals
+        .iter()
+        .cloned()
+        .map(|candidate| RankedLocal {
+            candidate,
+            score: 0,
+            reasons: Vec::new(),
+        })
+        .collect()
+}
+
 impl AppState {
     pub fn ranked_gists(&self) -> Vec<RankedGistFile> {
         let query = self.filter_query.to_lowercase();
@@ -244,25 +310,48 @@ impl AppState {
             })
             .cloned()
             .collect();
-        // No local selected (e.g. an empty directory): list every gist unranked so the
-        // user can still preview and download into the cwd.
-        let mut ranked = match self.locals.get(self.local_index) {
-            Some(local) => rank_gist_files(&local.path, &gists, &self.pinned),
-            None => gists
-                .into_iter()
-                .map(|file| RankedGistFile {
-                    file,
-                    score: 0,
-                    reasons: Vec::new(),
-                })
-                .collect(),
+        // Focus-driven ranking: the gist pane is ranked against the selected local file
+        // only while the LOCAL pane drives (focus == Local). When the gist pane itself is
+        // focused it is the driver and uses its own sort (no ranking), which also breaks
+        // the otherwise-mutual dependency with `visible_locals`.
+        // NOTE: only evaluate `selected_local()` inside the focus==Local branch. Computing
+        // it eagerly (e.g. in the match scrutinee) would recurse: selected_local ->
+        // visible_locals -> selected_gist -> ranked_gists.
+        let mut ranked = if self.focus == FocusPane::Local {
+            match self.selected_local() {
+                Some(local) => rank_gist_files(&local.path, &gists, &self.pinned),
+                None => unranked_gists(gists),
+            }
+        } else {
+            unranked_gists(gists)
         };
         self.gist_sort.apply(&mut ranked);
         ranked
     }
 
-    pub fn selected_local(&self) -> Option<&LocalCandidate> {
-        self.locals.get(self.local_index)
+    /// The local file list after sorting (and, while the gist pane drives, reverse ranking
+    /// against the selected gist). Single source of truth for the local pane's order,
+    /// selection, and rendering — mirrors `ranked_gists`.
+    pub fn visible_locals(&self) -> Vec<RankedLocal> {
+        // Mirror of `ranked_gists`: only evaluate `selected_gist()` in the focus==Gist
+        // branch to avoid recursing back through `ranked_gists` -> `selected_local`.
+        let mut ranked = if self.focus == FocusPane::Gist {
+            match self.selected_gist() {
+                Some(gist) => rank_local_files(&gist.file, &self.locals, &self.pinned),
+                None => unranked_locals(&self.locals),
+            }
+        } else {
+            unranked_locals(&self.locals)
+        };
+        self.local_sort.apply(&mut ranked);
+        ranked
+    }
+
+    pub fn selected_local(&self) -> Option<LocalCandidate> {
+        self.visible_locals()
+            .into_iter()
+            .nth(self.local_index)
+            .map(|r| r.candidate)
     }
 
     pub fn selected_gist(&self) -> Option<RankedGistFile> {
@@ -323,8 +412,7 @@ impl AppState {
     /// and gist, then branches on whether the gist already holds a file of the local name
     /// (case C: preview + confirm overwrite) or not (case B: add directly).
     fn upload_intent(&mut self) -> KeyOutcome {
-        let (Some(local), Some(gist)) = (self.selected_local().cloned(), self.selected_gist())
-        else {
+        let (Some(local), Some(gist)) = (self.selected_local(), self.selected_gist()) else {
             self.status = Some("select a local file and a gist to upload".into());
             return KeyOutcome::None;
         };
@@ -666,6 +754,9 @@ impl AppState {
                 FocusPane::Gist if self.gist_index + 1 < self.ranked_gists().len() => {
                     self.gist_index += 1;
                     self.gist_hscroll = 0;
+                    // The local pane reverse-ranks against the selected gist.
+                    self.local_index = 0;
+                    self.local_hscroll = 0;
                 }
                 _ => {}
             },
@@ -679,6 +770,8 @@ impl AppState {
                 FocusPane::Gist if self.gist_index > 0 => {
                     self.gist_index -= 1;
                     self.gist_hscroll = 0;
+                    self.local_index = 0;
+                    self.local_hscroll = 0;
                 }
                 _ => {}
             },
@@ -697,10 +790,19 @@ impl AppState {
                 self.gist_hscroll = 0;
             }
             KeyCode::Char('s') => {
-                // Cycle the gist sort: match -> name -> recent -> match.
-                self.gist_sort = self.gist_sort.next();
-                self.gist_index = 0;
-                self.gist_hscroll = 0;
+                // Cycle the focused pane's sort: match -> name -> recent -> match.
+                match self.focus {
+                    FocusPane::Gist => {
+                        self.gist_sort = self.gist_sort.next();
+                        self.gist_index = 0;
+                        self.gist_hscroll = 0;
+                    }
+                    FocusPane::Local => {
+                        self.local_sort = self.local_sort.next();
+                        self.local_index = 0;
+                        self.local_hscroll = 0;
+                    }
+                }
             }
             KeyCode::Char('r') => {
                 self.local_recursive = !self.local_recursive;
@@ -754,8 +856,7 @@ impl AppState {
                 return KeyOutcome::PreviewDiff;
             }
             KeyCode::Char('p') => {
-                let (Some(local), Some(gist)) =
-                    (self.selected_local().cloned(), self.selected_gist())
+                let (Some(local), Some(gist)) = (self.selected_local(), self.selected_gist())
                 else {
                     self.status = Some("select a local file and a gist to pin".into());
                     return KeyOutcome::None;
@@ -805,7 +906,7 @@ impl AppState {
                 self.screen = Screen::Confirm;
             }
             KeyCode::Char('n') => {
-                let Some(local) = self.selected_local().cloned() else {
+                let Some(local) = self.selected_local() else {
                     self.status = Some("select a local file to create a gist".into());
                     return KeyOutcome::None;
                 };
@@ -954,6 +1055,7 @@ pub fn initial_state() -> AppState {
         gist_view: GistView::Description,
         gist_type_filter: GistTypeFilter::All,
         gist_sort: GistSort::Match,
+        local_sort: LocalSort::Match,
         filtering: false,
         filter_query: String::new(),
         diff_previewed: false,
@@ -1360,7 +1462,7 @@ fn edit_local(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
 ) -> Result<()> {
-    let Some(local) = state.selected_local().cloned() else {
+    let Some(local) = state.selected_local() else {
         return Ok(());
     };
     let editor = std::env::var("VISUAL")
@@ -1498,7 +1600,7 @@ fn refresh_locals(state: &mut AppState) {
 }
 
 fn pin_selected(state: &mut AppState) {
-    let (Some(local), Some(gist)) = (state.selected_local().cloned(), state.selected_gist()) else {
+    let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist()) else {
         return;
     };
     let result = crate::config::config_path().and_then(|path| {
@@ -1521,7 +1623,7 @@ fn pin_selected(state: &mut AppState) {
 }
 
 fn unpin_selected(state: &mut AppState) {
-    let Some(local) = state.selected_local().cloned() else {
+    let Some(local) = state.selected_local() else {
         return;
     };
     let result = crate::config::config_path().and_then(|path| {
@@ -1566,7 +1668,7 @@ fn upload_local_filename(local: &std::path::Path) -> Option<String> {
 }
 
 fn upload_add(state: &mut AppState) {
-    let (Some(local), Some(gist)) = (state.selected_local().cloned(), state.selected_gist()) else {
+    let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist()) else {
         return;
     };
     let plan = crate::actions::upload_add_command(&local.path, &gist.file.gist_id);
@@ -1590,7 +1692,7 @@ fn upload_add(state: &mut AppState) {
 }
 
 fn upload_preview(state: &mut AppState) {
-    let (Some(local), Some(gist)) = (state.selected_local().cloned(), state.selected_gist()) else {
+    let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist()) else {
         return;
     };
     let Some(filename) = upload_local_filename(&local.path) else {
@@ -1774,11 +1876,12 @@ Navigation
   Up/Down    move the selection
   Left/Right scroll a long row horizontally
 
-Gist list
+List screen
   r          toggle recursive file discovery (skips hidden + configured dirs)
   /          filter by filename or description
-  v          cycle visibility: all / public / secret
-  s          cycle sort: match / name / recent
+  v          cycle gist visibility: all / public / secret
+  s          cycle the FOCUSED pane's sort: match / name / recent
+             (the unfocused pane is ranked by your selection — ★ = strong match)
   t          toggle row view: description / id
 
 Actions (on the selected local file + gist)
@@ -2115,13 +2218,17 @@ fn render_list(frame: &mut Frame, state: &AppState) {
         vec![ListItem::new("(no files in this directory)")]
     } else {
         state
-            .locals
+            .visible_locals()
             .iter()
-            .map(|c| {
-                ListItem::new(hscroll_str(
-                    &local_row_label(&c.path, &state.cwd),
-                    state.local_hscroll,
-                ))
+            .map(|r| {
+                let stars = match_stars(r.score);
+                let prefix = if stars.is_empty() {
+                    String::new()
+                } else {
+                    format!("{stars} ")
+                };
+                let label = format!("{prefix}{}", local_row_label(&r.candidate.path, &state.cwd));
+                ListItem::new(hscroll_str(&label, state.local_hscroll))
             })
             .collect()
     };
@@ -2130,10 +2237,11 @@ fn render_list(frame: &mut Frame, state: &AppState) {
     let recursive_marker = if state.local_recursive { " [↓]" } else { "" };
     let scanning_marker = if state.local_scanning { " …" } else { "" };
     let local_title = format!(
-        "Local · {}{}{}",
+        "Local · {}{}{} · sort:{}",
         state.cwd.display(),
         recursive_marker,
-        scanning_marker
+        scanning_marker,
+        state.local_sort.label()
     );
     render_pane(
         frame,
@@ -2598,8 +2706,9 @@ mod tests {
     }
 
     #[test]
-    fn s_cycles_gist_sort() {
+    fn s_cycles_gist_sort_when_gist_pane_focused() {
         let mut state = initial_state();
+        state.focus = FocusPane::Gist;
         assert_eq!(state.gist_sort, GistSort::Match);
         state.handle_key(KeyCode::Char('s'));
         assert_eq!(state.gist_sort, GistSort::Name);
@@ -2607,6 +2716,138 @@ mod tests {
         assert_eq!(state.gist_sort, GistSort::Recent);
         state.handle_key(KeyCode::Char('s'));
         assert_eq!(state.gist_sort, GistSort::Match);
+        // The local sort is untouched while the gist pane is focused.
+        assert_eq!(state.local_sort, LocalSort::Match);
+    }
+
+    #[test]
+    fn s_cycles_local_sort_when_local_pane_focused() {
+        let mut state = initial_state();
+        assert_eq!(state.focus, FocusPane::Local);
+        assert_eq!(state.local_sort, LocalSort::Match);
+        state.handle_key(KeyCode::Char('s'));
+        assert_eq!(state.local_sort, LocalSort::Name);
+        state.handle_key(KeyCode::Char('s'));
+        assert_eq!(state.local_sort, LocalSort::Recent);
+        state.handle_key(KeyCode::Char('s'));
+        assert_eq!(state.local_sort, LocalSort::Match);
+        // The gist sort is untouched while the local pane is focused.
+        assert_eq!(state.gist_sort, GistSort::Match);
+    }
+
+    #[test]
+    fn reverse_ranking_orders_locals_by_selected_gist() {
+        let mut state = initial_state();
+        state.focus = FocusPane::Gist;
+        state.gists = vec![GistFile {
+            gist_id: "a".into(),
+            description: String::new(),
+            filename: "settings.json".into(),
+            public: false,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+        }];
+        state.locals = vec![
+            LocalCandidate {
+                path: PathBuf::from("other.txt"),
+                pinned: false,
+                modified: None,
+            },
+            LocalCandidate {
+                path: PathBuf::from("settings.json"),
+                pinned: false,
+                modified: None,
+            },
+        ];
+        // The local pane reverse-ranks against the selected gist (gist_index 0).
+        let visible = state.visible_locals();
+        assert_eq!(visible[0].candidate.path, PathBuf::from("settings.json"));
+        assert!(visible[0].score > 0);
+    }
+
+    #[test]
+    fn local_sort_name_orders_by_filename() {
+        let mut state = initial_state(); // focus Local -> no reverse ranking
+        state.local_sort = LocalSort::Name;
+        state.locals = vec![
+            LocalCandidate {
+                path: PathBuf::from("zeta.txt"),
+                pinned: false,
+                modified: None,
+            },
+            LocalCandidate {
+                path: PathBuf::from("alpha.txt"),
+                pinned: false,
+                modified: None,
+            },
+        ];
+        assert_eq!(
+            state.visible_locals()[0].candidate.path,
+            PathBuf::from("alpha.txt")
+        );
+    }
+
+    #[test]
+    fn local_sort_recent_orders_by_mtime_desc_none_last() {
+        let mut state = initial_state();
+        state.local_sort = LocalSort::Recent;
+        state.locals = vec![
+            LocalCandidate {
+                path: PathBuf::from("old"),
+                pinned: false,
+                modified: Some(100),
+            },
+            LocalCandidate {
+                path: PathBuf::from("none"),
+                pinned: false,
+                modified: None,
+            },
+            LocalCandidate {
+                path: PathBuf::from("new"),
+                pinned: false,
+                modified: Some(500),
+            },
+        ];
+        let paths: Vec<_> = state
+            .visible_locals()
+            .into_iter()
+            .map(|r| r.candidate.path)
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("new"),
+                PathBuf::from("old"),
+                PathBuf::from("none")
+            ]
+        );
+    }
+
+    #[test]
+    fn ranking_helpers_terminate_in_either_focus() {
+        // Regression: eagerly evaluating the cross-pane selection caused the two
+        // focus-driven rankings to recurse into each other.
+        let mut state = initial_state();
+        state.gists = vec![GistFile {
+            gist_id: "a".into(),
+            description: String::new(),
+            filename: "f".into(),
+            public: false,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+        }];
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("f"),
+            pinned: false,
+            modified: None,
+        }];
+        for focus in [FocusPane::Local, FocusPane::Gist] {
+            state.focus = focus;
+            let _ = state.ranked_gists();
+            let _ = state.visible_locals();
+            let _ = state.selected_local();
+            let _ = state.selected_gist();
+        }
     }
 
     #[test]
@@ -3058,10 +3299,12 @@ mod tests {
             LocalCandidate {
                 path: PathBuf::from("/tmp/settings.json"),
                 pinned: false,
+                modified: None,
             },
             LocalCandidate {
                 path: PathBuf::from("/tmp/statusline.sh"),
                 pinned: false,
+                modified: None,
             },
         ];
         state.gists = vec![
@@ -3095,10 +3338,12 @@ mod tests {
             LocalCandidate {
                 path: PathBuf::from("/tmp/a.json"),
                 pinned: false,
+                modified: None,
             },
             LocalCandidate {
                 path: PathBuf::from("/tmp/b.json"),
                 pinned: false,
+                modified: None,
             },
         ];
         state.gist_index = 2;
@@ -3111,6 +3356,7 @@ mod tests {
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/settings.json"),
             pinned: false,
+            modified: None,
         }];
         state.gists = vec![GistFile {
             gist_id: "a".into(),
@@ -3178,6 +3424,7 @@ mod tests {
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/x"),
             pinned: false,
+            modified: None,
         }];
         state.focus = FocusPane::Local;
         assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
@@ -3205,6 +3452,7 @@ mod tests {
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/x"),
             pinned: false,
+            modified: None,
         }];
         state.focus = FocusPane::Gist;
         assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
@@ -3216,6 +3464,7 @@ mod tests {
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/x"),
             pinned: false,
+            modified: None,
         }];
         state.focus = FocusPane::Gist;
         assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
@@ -3447,6 +3696,7 @@ mod tests {
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/config"),
             pinned: false,
+            modified: None,
         }];
         state.gists = vec![GistFile {
             gist_id: "a".into(),
@@ -3466,6 +3716,7 @@ mod tests {
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/settings.json"),
             pinned: false,
+            modified: None,
         }];
         state.gists = vec![GistFile {
             gist_id: "a".into(),
@@ -3511,6 +3762,7 @@ mod tests {
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/config"),
             pinned: false,
+            modified: None,
         }];
         assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::EditLocal);
     }
@@ -3527,6 +3779,7 @@ mod tests {
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/config"),
             pinned: false,
+            modified: None,
         }];
         state.gists = vec![GistFile {
             gist_id: "a".into(),
@@ -3559,6 +3812,7 @@ mod tests {
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/config.toml"),
             pinned: false,
+            modified: None,
         }];
         assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
         assert_eq!(state.screen, Screen::Confirm);
@@ -3876,6 +4130,7 @@ mod tests {
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/config.toml"),
             pinned: false,
+            modified: None,
         }];
         state
     }

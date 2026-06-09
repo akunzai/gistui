@@ -21,6 +21,9 @@ pub enum SyncDirection {
 pub struct LocalCandidate {
     pub path: PathBuf,
     pub pinned: bool,
+    /// File mtime as Unix seconds, captured at discovery so the "recent" local
+    /// sort stays a pure comparison (no filesystem access in `handle_key`).
+    pub modified: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
