@@ -134,6 +134,18 @@ pub fn pin_mapping(
     Ok(config)
 }
 
+pub fn unpin_mapping(
+    config_path: &Path,
+    mut config: AppConfig,
+    local_path: &Path,
+) -> Result<AppConfig> {
+    config
+        .pinned
+        .retain(|mapping| mapping.local_path != local_path);
+    save_config(config_path, &config)?;
+    Ok(config)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,6 +231,30 @@ mod tests {
         let err = execute_download(&path, "new", false).unwrap_err();
         assert!(err.to_string().contains("refusing to overwrite"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+    }
+
+    #[test]
+    fn unpin_mapping_removes_mapping_for_local_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let local_path = dir.path().join("settings.json");
+        let target = gist_file();
+
+        let config = pin_mapping(
+            &config_path,
+            AppConfig::default(),
+            &local_path,
+            &target,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(config.pinned.len(), 1);
+
+        let config = unpin_mapping(&config_path, config, &local_path).unwrap();
+        assert!(config.pinned.is_empty());
+        let loaded = load_config(&config_path).unwrap();
+        assert!(loaded.pinned.is_empty());
     }
 
     #[test]
