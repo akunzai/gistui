@@ -125,6 +125,8 @@ pub enum KeyOutcome {
     PreviewDiff,
     Download,
     DownloadGist,
+    Pin,
+    Unpin,
 }
 
 #[derive(Debug, Clone)]
@@ -370,6 +372,24 @@ impl AppState {
             {
                 return KeyOutcome::PreviewDiff;
             }
+            KeyCode::Char('p') => {
+                let (Some(local), Some(gist)) =
+                    (self.selected_local().cloned(), self.selected_gist())
+                else {
+                    self.status = Some("select a local file and a gist to pin".into());
+                    return KeyOutcome::None;
+                };
+                let already = self.pinned.iter().any(|m| {
+                    m.local_path == local.path
+                        && m.gist_id == gist.file.gist_id
+                        && m.gist_filename == gist.file.filename
+                });
+                return if already {
+                    KeyOutcome::Unpin
+                } else {
+                    KeyOutcome::Pin
+                };
+            }
             _ => {}
         }
         KeyOutcome::None
@@ -498,6 +518,8 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                 KeyOutcome::PreviewDiff => preview_diff(&mut state),
                 KeyOutcome::Download => download(&mut state),
                 KeyOutcome::DownloadGist => download_selected(&mut state),
+                KeyOutcome::Pin => pin_selected(&mut state),
+                KeyOutcome::Unpin => unpin_selected(&mut state),
                 KeyOutcome::None => {}
             }
         }
@@ -587,6 +609,44 @@ fn refresh_locals(state: &mut AppState) {
         if state.gist_index >= state.ranked_gists().len() {
             state.gist_index = 0;
         }
+    }
+}
+
+fn pin_selected(state: &mut AppState) {
+    let (Some(local), Some(gist)) = (state.selected_local().cloned(), state.selected_gist()) else {
+        return;
+    };
+    let result = crate::config::config_path().and_then(|path| {
+        let config = crate::config::load_config(&path)?;
+        crate::actions::pin_mapping(&path, config, &local.path, &gist.file, None, None)
+    });
+    match result {
+        Ok(config) => {
+            state.pinned = config.pinned;
+            state.set_status(format!(
+                "Pinned {} <-> {}",
+                local.path.display(),
+                gist.file.filename
+            ));
+        }
+        Err(error) => state.set_status(format!("pin failed: {error}")),
+    }
+}
+
+fn unpin_selected(state: &mut AppState) {
+    let Some(local) = state.selected_local().cloned() else {
+        return;
+    };
+    let result = crate::config::config_path().and_then(|path| {
+        let config = crate::config::load_config(&path)?;
+        crate::actions::unpin_mapping(&path, config, &local.path)
+    });
+    match result {
+        Ok(config) => {
+            state.pinned = config.pinned;
+            state.set_status(format!("Unpinned {}", local.path.display()));
+        }
+        Err(error) => state.set_status(format!("unpin failed: {error}")),
     }
 }
 
@@ -1404,5 +1464,25 @@ mod tests {
         assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
         assert_eq!(state.screen, Screen::Confirm);
         assert_eq!(state.pending_action, Some(PendingAction::Download));
+    }
+
+    #[test]
+    fn p_pins_unpinned_pair_then_unpins() {
+        let mut state = state_with_selection();
+        assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::Pin);
+        state.pinned = vec![PinnedMapping {
+            local_path: PathBuf::from("/tmp/settings.json"),
+            gist_id: "a".into(),
+            gist_filename: "settings.json".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+        assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::Unpin);
+    }
+
+    #[test]
+    fn p_without_local_or_gist_is_noop() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::None);
     }
 }
