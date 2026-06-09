@@ -42,6 +42,7 @@ mod tests {
             filename: filename.into(),
             public: false,
             updated_at: "2026-06-09T00:00:00Z".into(),
+            created_at: "2026-06-09T00:00:00Z".into(),
         }
     }
 

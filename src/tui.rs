@@ -1,4 +1,4 @@
-use crate::domain::{GistFile, LocalCandidate, PinnedMapping};
+use crate::domain::{group_gists, GistFile, GistGroup, LocalCandidate, PinnedMapping};
 use crate::ranking::{rank_gist_files, RankedGistFile};
 use anyhow::Result;
 use crossterm::{
@@ -35,6 +35,7 @@ pub enum Screen {
     Preview,
     Help,
     Pins,
+    Gists,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +51,11 @@ pub enum PendingAction {
     },
     Delete {
         gist_id: String,
+        label: String,
+    },
+    RemoveFile {
+        gist_id: String,
+        filename: String,
         label: String,
     },
 }
@@ -72,6 +78,30 @@ pub enum GistSort {
     Match,
     Name,
     Recent,
+}
+
+/// Sort order for the gist-level view (`Screen::Gists`). The `gh` list already
+/// arrives updated-first, so `Updated` mirrors that; `Created` re-sorts by age.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GistGroupSort {
+    Updated,
+    Created,
+}
+
+impl GistGroupSort {
+    fn next(self) -> Self {
+        match self {
+            GistGroupSort::Updated => GistGroupSort::Created,
+            GistGroupSort::Created => GistGroupSort::Updated,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            GistGroupSort::Updated => "updated",
+            GistGroupSort::Created => "created",
+        }
+    }
 }
 
 impl GistSort {
@@ -146,8 +176,9 @@ pub enum KeyOutcome {
     PreviewContent,
     OpenBrowser,
     EditLocal,
-    DeletePreview,
     ExecuteDelete,
+    ExecuteRemoveFile,
+    ApplyDescription,
     RefreshLocals,
     RefreshPreview,
     UnpinAtPin,
@@ -189,6 +220,14 @@ pub struct AppState {
     pub scan_depth: u32,
     pub local_scanning: bool,
     pub pins_index: usize,
+    pub gists_index: usize,
+    pub gists_hscroll: u16,
+    pub gists_sort: GistGroupSort,
+    pub gists_type_filter: GistTypeFilter,
+    pub gists_filtering: bool,
+    pub gists_filter_query: String,
+    pub editing_description: bool,
+    pub description_input: String,
 }
 
 impl AppState {
@@ -228,6 +267,56 @@ impl AppState {
 
     pub fn selected_gist(&self) -> Option<RankedGistFile> {
         self.ranked_gists().into_iter().nth(self.gist_index)
+    }
+
+    /// All gists collapsed to one entry each (raw, unfiltered).
+    pub fn gist_groups(&self) -> Vec<GistGroup> {
+        group_gists(&self.gists)
+    }
+
+    /// The gist-level view's rows after the visibility filter, text filter, and sort
+    /// are applied. This is the single source of truth for navigation, selection, and
+    /// rendering in `Screen::Gists`.
+    pub fn visible_gist_groups(&self) -> Vec<GistGroup> {
+        let query = self.gists_filter_query.to_lowercase();
+        let mut groups: Vec<GistGroup> = self
+            .gist_groups()
+            .into_iter()
+            .filter(|g| self.gists_type_filter.matches(g.public))
+            .filter(|g| {
+                query.is_empty()
+                    || g.description.to_lowercase().contains(&query)
+                    || g.id.to_lowercase().contains(&query)
+            })
+            .collect();
+        match self.gists_sort {
+            GistGroupSort::Updated => groups.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)),
+            GistGroupSort::Created => groups.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
+        }
+        groups
+    }
+
+    /// The gist highlighted in the gist-level view.
+    pub fn selected_group(&self) -> Option<GistGroup> {
+        self.visible_gist_groups().into_iter().nth(self.gists_index)
+    }
+
+    /// Highest horizontal-scroll offset for the gist-level view, based on its longest
+    /// visible row (mirrors `focused_hscroll_max` for the main panes).
+    fn gists_hscroll_max(&self) -> u16 {
+        self.visible_gist_groups()
+            .iter()
+            .map(|g| gist_group_row_label(g).chars().count())
+            .max()
+            .unwrap_or(0)
+            .saturating_sub(1)
+            .min(u16::MAX as usize) as u16
+    }
+
+    /// Number of files the given gist holds in the current in-memory list. Used to guard
+    /// against removing a gist's only file (GitHub forbids a fileless gist).
+    fn gist_file_count(&self, gist_id: &str) -> usize {
+        self.gists.iter().filter(|g| g.gist_id == gist_id).count()
     }
 
     /// Upload intent shared by the list and the diff screen: requires a selected local file
@@ -379,6 +468,7 @@ impl AppState {
             Screen::Preview => self.handle_key_preview(code),
             Screen::Help => self.handle_key_help(code),
             Screen::Pins => self.handle_key_pins(code),
+            Screen::Gists => self.handle_key_gists(code),
         }
     }
 
@@ -399,6 +489,111 @@ impl AppState {
             }
             KeyCode::Char('x') | KeyCode::Char('d') if !self.pinned.is_empty() => {
                 return KeyOutcome::UnpinAtPin;
+            }
+            _ => {}
+        }
+        KeyOutcome::None
+    }
+
+    fn handle_key_gists(&mut self, code: KeyCode) -> KeyOutcome {
+        self.status = None;
+        // Inline description editor: capture text until Enter (apply) or Esc (cancel).
+        if self.editing_description {
+            match code {
+                KeyCode::Esc => {
+                    self.editing_description = false;
+                    self.description_input.clear();
+                }
+                KeyCode::Enter => return KeyOutcome::ApplyDescription,
+                KeyCode::Backspace => {
+                    self.description_input.pop();
+                }
+                KeyCode::Char(c) => self.description_input.push(c),
+                _ => {}
+            }
+            return KeyOutcome::None;
+        }
+        // Inline text filter: capture the query until Enter (keep) or Esc (clear).
+        if self.gists_filtering {
+            match code {
+                KeyCode::Esc => {
+                    self.gists_filter_query.clear();
+                    self.gists_filtering = false;
+                    self.gists_index = 0;
+                    self.gists_hscroll = 0;
+                }
+                KeyCode::Enter => self.gists_filtering = false,
+                KeyCode::Backspace => {
+                    self.gists_filter_query.pop();
+                    self.gists_index = 0;
+                    self.gists_hscroll = 0;
+                }
+                KeyCode::Char(c) => {
+                    self.gists_filter_query.push(c);
+                    self.gists_index = 0;
+                    self.gists_hscroll = 0;
+                }
+                _ => {}
+            }
+            return KeyOutcome::None;
+        }
+        let groups = self.visible_gist_groups();
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
+            KeyCode::Down if self.gists_index + 1 < groups.len() => {
+                self.gists_index += 1;
+                self.gists_hscroll = 0;
+            }
+            KeyCode::Up if self.gists_index > 0 => {
+                self.gists_index -= 1;
+                self.gists_hscroll = 0;
+            }
+            KeyCode::Right => {
+                let max = self.gists_hscroll_max();
+                if self.gists_hscroll < max {
+                    self.gists_hscroll += 1;
+                }
+            }
+            KeyCode::Left => self.gists_hscroll = self.gists_hscroll.saturating_sub(1),
+            KeyCode::Char('/') => self.gists_filtering = true,
+            KeyCode::Char('s') => {
+                self.gists_sort = self.gists_sort.next();
+                self.gists_index = 0;
+                self.gists_hscroll = 0;
+            }
+            KeyCode::Char('v') => {
+                self.gists_type_filter = self.gists_type_filter.next();
+                self.gists_index = 0;
+                self.gists_hscroll = 0;
+            }
+            KeyCode::Char('e') => {
+                if let Some(group) = groups.get(self.gists_index) {
+                    self.editing_description = true;
+                    self.description_input = group.description.clone();
+                }
+            }
+            KeyCode::Char('o') if self.gists_index < groups.len() => {
+                return KeyOutcome::OpenBrowser
+            }
+            KeyCode::Char('X') => {
+                if let Some(group) = groups.get(self.gists_index) {
+                    let label = if group.description.is_empty() {
+                        group.id.clone()
+                    } else {
+                        group.description.clone()
+                    };
+                    self.diff_text = format!(
+                        "Delete gist {} ({} file(s)): {label}.\n\nThis permanently removes the entire gist and all its files.",
+                        group.id, group.file_count
+                    );
+                    self.diff_scroll = 0;
+                    self.diff_hscroll = 0;
+                    self.pending_action = Some(PendingAction::Delete {
+                        gist_id: group.id.clone(),
+                        label,
+                    });
+                    self.screen = Screen::Confirm;
+                }
             }
             _ => {}
         }
@@ -519,11 +714,25 @@ impl AppState {
                 self.pins_index = 0;
                 self.screen = Screen::Pins;
             }
-            KeyCode::Char('o') => {
-                if self.selected_gist().is_some() {
-                    return KeyOutcome::OpenBrowser;
+            KeyCode::Char('g') => {
+                if self.gists.is_empty() {
+                    self.status = Some("no gists to manage".into());
+                    return KeyOutcome::None;
                 }
-                self.status = Some("select a gist to open in the browser".into());
+                // Reset the gist-level view's own filters so the target is always
+                // visible, then land on the gist that owns the selected file row.
+                self.gists_filtering = false;
+                self.gists_filter_query.clear();
+                self.gists_type_filter = GistTypeFilter::All;
+                self.gists_hscroll = 0;
+                self.editing_description = false;
+                self.description_input.clear();
+                let target = self.selected_gist().map(|g| g.file.gist_id);
+                let groups = self.visible_gist_groups();
+                self.gists_index = target
+                    .and_then(|id| groups.iter().position(|g| g.id == id))
+                    .unwrap_or(0);
+                self.screen = Screen::Gists;
             }
             KeyCode::Char('e') => {
                 if self.selected_local().is_some() {
@@ -564,11 +773,36 @@ impl AppState {
             }
             KeyCode::Char('u') => return self.upload_intent(),
             KeyCode::Char('X') => {
-                if self.selected_gist().is_none() {
-                    self.status = Some("select a gist to delete".into());
+                let Some(gist) = self.selected_gist() else {
+                    self.status = Some("select a gist file to remove".into());
+                    return KeyOutcome::None;
+                };
+                let gist_id = gist.file.gist_id.clone();
+                let filename = gist.file.filename.clone();
+                // A gist must keep at least one file; deleting the whole gist lives in the
+                // gist-level view (g -> X) instead.
+                if self.gist_file_count(&gist_id) <= 1 {
+                    self.status = Some(format!(
+                        "{filename} is the gist's only file — use g then X to delete the gist"
+                    ));
                     return KeyOutcome::None;
                 }
-                return KeyOutcome::DeletePreview;
+                let label = if gist.file.description.is_empty() {
+                    gist_id.clone()
+                } else {
+                    gist.file.description.clone()
+                };
+                self.diff_text = format!(
+                    "Remove file \"{filename}\" from gist {gist_id} ({label}).\n\nThe other files in this gist are kept. This cannot be undone."
+                );
+                self.diff_scroll = 0;
+                self.diff_hscroll = 0;
+                self.pending_action = Some(PendingAction::RemoveFile {
+                    gist_id,
+                    filename,
+                    label,
+                });
+                self.screen = Screen::Confirm;
             }
             KeyCode::Char('n') => {
                 let Some(local) = self.selected_local().cloned() else {
@@ -661,6 +895,13 @@ impl AppState {
                 }
                 _ => {}
             },
+            Some(PendingAction::RemoveFile { .. }) => match code {
+                KeyCode::Char('y') => return KeyOutcome::ExecuteRemoveFile,
+                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
+                    self.back_to_list();
+                }
+                _ => {}
+            },
             _ => {
                 if matches!(code, KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q')) {
                     self.pending_action = None;
@@ -708,6 +949,14 @@ pub fn initial_state() -> AppState {
         scan_depth: crate::config::AppConfig::default().scan_depth,
         local_scanning: false,
         pins_index: 0,
+        gists_index: 0,
+        gists_hscroll: 0,
+        gists_sort: GistGroupSort::Updated,
+        gists_type_filter: GistTypeFilter::All,
+        gists_filtering: false,
+        gists_filter_query: String::new(),
+        editing_description: false,
+        description_input: String::new(),
     }
 }
 
@@ -878,15 +1127,17 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                 )?,
                 KeyOutcome::OpenBrowser => open_browser(&mut state),
                 KeyOutcome::EditLocal => edit_local(terminal, &mut state)?,
-                KeyOutcome::DeletePreview => fetch_then(
-                    terminal,
-                    &mut state,
-                    "Loading preview…",
-                    delete_preview_fetch,
-                )?,
                 KeyOutcome::ExecuteDelete => {
                     draw_loading(terminal, &mut state, "Deleting gist…")?;
                     delete_gist(&mut state);
+                }
+                KeyOutcome::ExecuteRemoveFile => {
+                    draw_loading(terminal, &mut state, "Removing file…")?;
+                    remove_file(&mut state);
+                }
+                KeyOutcome::ApplyDescription => {
+                    draw_loading(terminal, &mut state, "Updating description…")?;
+                    apply_description(&mut state);
                 }
                 KeyOutcome::RefreshLocals => {
                     draw_loading(terminal, &mut state, "Scanning files…")?;
@@ -927,8 +1178,44 @@ fn draw_loading(
     msg: &str,
 ) -> Result<()> {
     state.set_status(msg);
-    terminal.draw(|frame| render(frame, state))?;
+    // A blocking `gh` call follows, so this is the last frame drawn until it returns.
+    // Render a dedicated centered overlay rather than the current screen, because the
+    // Confirm and Gists screens don't surface `status` — without it those flows would
+    // look frozen during the call.
+    terminal.draw(|frame| render_loading_overlay(frame, msg))?;
     Ok(())
+}
+
+/// A centered "Working…" box shown while a blocking `gh` action runs. Animating a
+/// spinner would require running the action off-thread (see issue #11); under the
+/// current synchronous model this is a single static frame.
+fn render_loading_overlay(frame: &mut Frame, msg: &str) {
+    let rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(45),
+            Constraint::Length(3),
+            Constraint::Min(0),
+        ])
+        .split(frame.area());
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
+        ])
+        .split(rows[1]);
+    frame.render_widget(
+        Paragraph::new(format!("⏳ {msg}")).block(
+            Block::default()
+                .title("Working…")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .padding(Padding::horizontal(1)),
+        ),
+        cols[1],
+    );
 }
 
 /// Civil date (year, month, day) from a day count since the Unix epoch — Howard Hinnant's
@@ -1025,12 +1312,17 @@ fn preview_diff(state: &mut AppState) {
 }
 
 fn open_browser(state: &mut AppState) {
-    let Some(gist) = state.selected_gist() else {
+    // The gist-level view selects by gist; the main list selects by file row.
+    let gist_id = match state.screen {
+        Screen::Gists => state.selected_group().map(|g| g.id),
+        _ => state.selected_gist().map(|g| g.file.gist_id),
+    };
+    let Some(gist_id) = gist_id else {
         return;
     };
-    let plan = crate::actions::open_browser_command(&gist.file.gist_id);
+    let plan = crate::actions::open_browser_command(&gist_id);
     match crate::actions::execute_command(&plan) {
-        Ok(_) => state.set_status(format!("Opened gist {} in the browser", gist.file.gist_id)),
+        Ok(_) => state.set_status(format!("Opened gist {gist_id} in the browser")),
         Err(error) => state.set_status(format!("open failed: {error}")),
     }
 }
@@ -1315,6 +1607,7 @@ fn upload_replace(state: &mut AppState) {
         filename: filename.clone(),
         public: false,
         updated_at: String::new(),
+        created_at: String::new(),
     };
     let plan = crate::actions::upload_command(&local_path, &target);
     match crate::actions::execute_command(&plan) {
@@ -1369,25 +1662,47 @@ fn create_gist(state: &mut AppState, public: bool) {
     }
 }
 
-fn delete_preview_fetch(state: &mut AppState) {
-    let Some(gist) = state.selected_gist() else {
+fn remove_file(state: &mut AppState) {
+    let Some(PendingAction::RemoveFile {
+        gist_id, filename, ..
+    }) = state.pending_action.clone()
+    else {
         return;
     };
-    let gist_id = gist.file.gist_id.clone();
-    let label = if gist.file.description.is_empty() {
-        gist.file.gist_id.clone()
-    } else {
-        gist.file.description.clone()
-    };
-    match crate::gh::fetch_gist_file_content(&gist_id, &gist.file.filename) {
-        Ok(content) => {
-            state.diff_text = content;
-            state.diff_scroll = 0;
-            state.diff_hscroll = 0;
-            state.pending_action = Some(PendingAction::Delete { gist_id, label });
-            state.screen = Screen::Confirm;
+    let plan = crate::actions::remove_file_command(&gist_id, &filename);
+    state.back_to_list();
+    match crate::actions::execute_command(&plan) {
+        Ok(_) => {
+            state
+                .gist_content_cache
+                .remove(&(gist_id.clone(), filename.clone()));
+            state.set_status(format!("Removed {filename} from gist {gist_id}"));
+            refresh_gists(state);
         }
-        Err(error) => state.set_status(format!("fetch failed: {error}")),
+        Err(error) => state.set_status(format!("remove failed: {error}")),
+    }
+}
+
+fn apply_description(state: &mut AppState) {
+    let Some(group) = state.selected_group() else {
+        state.editing_description = false;
+        return;
+    };
+    let gist_id = group.id.clone();
+    let description = state.description_input.clone();
+    let plan = crate::actions::edit_description_command(&gist_id, &description);
+    state.editing_description = false;
+    state.description_input.clear();
+    match crate::actions::execute_command(&plan) {
+        Ok(_) => {
+            state.set_status(format!("Updated description for gist {gist_id}"));
+            refresh_gists(state);
+            let count = state.visible_gist_groups().len();
+            if count > 0 && state.gists_index >= count {
+                state.gists_index = count - 1;
+            }
+        }
+        Err(error) => state.set_status(format!("description update failed: {error}")),
     }
 }
 
@@ -1414,6 +1729,7 @@ fn render(frame: &mut Frame, state: &AppState) {
         Screen::Preview => render_preview(frame, state),
         Screen::Help => render_help(frame),
         Screen::Pins => render_pins(frame, state),
+        Screen::Gists => render_gists(frame, state),
     }
 }
 
@@ -1439,9 +1755,20 @@ Actions (on the selected local file + gist)
   n          create a new gist from the local file
   p          pin / unpin the local <-> gist pair
   P          view / manage all pinned mappings (x to unpin)
-  X          delete the selected gist (y/n confirm)
-  o          open the gist in your web browser
+  X          remove the selected file from its gist (y/n confirm)
+  g          open the gist manager (edit description, delete gist)
   e          edit the local file in $EDITOR
+
+Gist manager (g)
+  Up/Down    move between gists
+  Left/Right scroll a long description horizontally
+  /          filter gists by description or id
+  s          cycle sort: updated / created
+  v          cycle visibility: all / public / secret
+  e          edit the gist description (Enter apply, Esc cancel)
+  o          open the gist in your web browser
+  X          delete the entire gist and all its files (y/n confirm)
+  q / Esc    back to the list
 
 General
   Esc / q    close an overlay; from the list, quit the app
@@ -1547,6 +1874,99 @@ fn render_pins(frame: &mut Frame, state: &AppState) {
     );
 }
 
+fn gist_group_row_label(g: &GistGroup) -> String {
+    let desc = if g.description.trim().is_empty() {
+        "(no description)".to_string()
+    } else {
+        g.description.clone()
+    };
+    let visibility = if g.public { "public" } else { "secret" };
+    let date: String = g.updated_at.chars().take(10).collect();
+    format!(
+        "{}  {}  [{}]  {}f  {}",
+        g.id, desc, visibility, g.file_count, date
+    )
+}
+
+fn render_gists(frame: &mut Frame, state: &AppState) {
+    let area = frame.area();
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(3)])
+        .split(area);
+
+    let groups = state.visible_gist_groups();
+    let items: Vec<ListItem> = if groups.is_empty() {
+        let msg = if state.gist_groups().is_empty() {
+            "(no gists)"
+        } else {
+            "(no gists match the current filter)"
+        };
+        vec![ListItem::new(msg)]
+    } else {
+        groups
+            .iter()
+            .map(|g| ListItem::new(hscroll_str(&gist_group_row_label(g), state.gists_hscroll)))
+            .collect()
+    };
+
+    let selected = (!groups.is_empty()).then_some(state.gists_index);
+    let mut title = format!(
+        "Gists [focus]  ·  sort:{}  ·  type:{}",
+        state.gists_sort.label(),
+        state.gists_type_filter.label()
+    );
+    if !state.gists_filter_query.is_empty() {
+        title.push_str(&format!("  ·  /{}", state.gists_filter_query));
+    }
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan))
+                .padding(Padding::horizontal(1)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::Cyan)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
+
+    let mut list_state = ListState::default();
+    list_state.select(selected);
+    frame.render_stateful_widget(list, chunks[0], &mut list_state);
+
+    let (ftitle, footer) = if state.editing_description {
+        (
+            "Edit description (Enter apply · Esc cancel)",
+            format!("{}_", state.description_input),
+        )
+    } else if state.gists_filtering {
+        (
+            "Filter (Enter keep · Esc clear)",
+            format!("/{}_", state.gists_filter_query),
+        )
+    } else {
+        (
+            "Commands",
+            "↑↓ move · ←→ scroll · / filter · s sort · v type · e desc · o browser · X delete · q back"
+                .to_string(),
+        )
+    };
+    frame.render_widget(
+        Paragraph::new(footer).block(
+            Block::default()
+                .title(ftitle)
+                .borders(Borders::ALL)
+                .padding(Padding::horizontal(1)),
+        ),
+        chunks[1],
+    );
+}
+
 fn local_row_label(path: &std::path::Path, cwd: &std::path::Path) -> String {
     path.strip_prefix(cwd).unwrap_or(path).display().to_string()
 }
@@ -1597,8 +2017,8 @@ fn commands_hint(focus: FocusPane) -> String {
             "Space preview",
             "d download",
             "u upload",
-            "X delete",
-            "o browser",
+            "X remove file",
+            "g gists",
         ]),
     }
     items.extend(["? help", "Esc/q quit"]);
@@ -1968,6 +2388,11 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
         Some(PendingAction::Delete { gist_id, .. }) => {
             format!("Delete gist {gist_id}")
         }
+        Some(PendingAction::RemoveFile {
+            gist_id, filename, ..
+        }) => {
+            format!("Remove {filename} from gist {gist_id}")
+        }
         _ => {
             let label = if state.diff_identical {
                 "Diff (identical)"
@@ -2015,6 +2440,11 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
             }
             Some(PendingAction::Delete { gist_id, label }) => {
                 format!("Permanently delete \"{label}\" ({gist_id})? (y/n)")
+            }
+            Some(PendingAction::RemoveFile {
+                gist_id, filename, ..
+            }) => {
+                format!("Remove {filename} from gist {gist_id}? (y/n)")
             }
             _ => format!("Overwrite {}? (y/n)", state.download_target.display()),
         }
@@ -2066,6 +2496,7 @@ mod tests {
                 filename: "config".into(),
                 public: true,
                 updated_at: "x".into(),
+                created_at: "x".into(),
             },
             score: 1,
             reasons: Vec::new(),
@@ -2087,6 +2518,7 @@ mod tests {
                 filename: "config".into(),
                 public: true,
                 updated_at: "x".into(),
+                created_at: "x".into(),
             },
             score: 1000,
             reasons: Vec::new(),
@@ -2132,6 +2564,7 @@ mod tests {
                 filename: "zeta.json".into(),
                 public: true,
                 updated_at: "2026-01-01T00:00:00Z".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
             },
             GistFile {
                 gist_id: "a".into(),
@@ -2139,6 +2572,7 @@ mod tests {
                 filename: "alpha.json".into(),
                 public: true,
                 updated_at: "2026-09-09T00:00:00Z".into(),
+                created_at: "2026-09-09T00:00:00Z".into(),
             },
         ];
         // No local selected -> Match keeps gh list order (zeta, alpha).
@@ -2162,6 +2596,7 @@ mod tests {
                 filename: "a.json".into(),
                 public: true,
                 updated_at: "x".into(),
+                created_at: "x".into(),
             },
             GistFile {
                 gist_id: "sec".into(),
@@ -2169,6 +2604,7 @@ mod tests {
                 filename: "b.json".into(),
                 public: false,
                 updated_at: "x".into(),
+                created_at: "x".into(),
             },
         ];
         assert_eq!(state.ranked_gists().len(), 2);
@@ -2193,6 +2629,7 @@ mod tests {
                 filename: "config.ghostty".into(),
                 public: true,
                 updated_at: "x".into(),
+                created_at: "x".into(),
             },
             GistFile {
                 gist_id: "b".into(),
@@ -2200,6 +2637,7 @@ mod tests {
                 filename: "ssh_config".into(),
                 public: false,
                 updated_at: "x".into(),
+                created_at: "x".into(),
             },
         ];
         state.focus = FocusPane::Gist;
@@ -2392,7 +2830,7 @@ mod tests {
 
         let gist = commands_hint(FocusPane::Gist);
         assert!(gist.contains("d download"));
-        assert!(gist.contains("o browser"));
+        assert!(gist.contains("g gists"));
         assert!(!gist.contains("e edit"));
 
         // Always-available keys appear in both.
@@ -2429,6 +2867,7 @@ mod tests {
                 filename: "config".into(),
                 public: true,
                 updated_at: "x".into(),
+                created_at: "x".into(),
             },
             score: 0,
             reasons: Vec::new(),
@@ -2445,6 +2884,7 @@ mod tests {
             filename: "f.json".into(),
             public: false,
             updated_at: "x".into(),
+            created_at: "x".into(),
         }];
         state.focus = FocusPane::Gist;
         assert_eq!(state.gist_hscroll, 0);
@@ -2466,6 +2906,7 @@ mod tests {
             filename: "f".into(),
             public: false,
             updated_at: "x".into(),
+            created_at: "x".into(),
         }];
         state.focus = FocusPane::Gist;
         let row = gist_row_label(&state.ranked_gists()[0], state.gist_view);
@@ -2486,6 +2927,7 @@ mod tests {
                 filename: "a.json".into(),
                 public: false,
                 updated_at: "x".into(),
+                created_at: "x".into(),
             },
             GistFile {
                 gist_id: "b".into(),
@@ -2493,6 +2935,7 @@ mod tests {
                 filename: "b.json".into(),
                 public: false,
                 updated_at: "x".into(),
+                created_at: "x".into(),
             },
         ];
         state.focus = FocusPane::Gist;
@@ -2518,6 +2961,7 @@ mod tests {
                 filename: "alpha.json".into(),
                 public: false,
                 updated_at: "x".into(),
+                created_at: "x".into(),
             },
             GistFile {
                 gist_id: "b".into(),
@@ -2525,6 +2969,7 @@ mod tests {
                 filename: "beta.json".into(),
                 public: false,
                 updated_at: "x".into(),
+                created_at: "x".into(),
             },
         ];
         let ranked = state.ranked_gists();
@@ -2544,6 +2989,7 @@ mod tests {
             filename: "alpha.json".into(),
             public: false,
             updated_at: "x".into(),
+            created_at: "x".into(),
         }];
         state.focus = FocusPane::Gist;
         assert!(state.locals.is_empty());
@@ -2570,6 +3016,7 @@ mod tests {
                 filename: "settings.json".into(),
                 public: false,
                 updated_at: "x".into(),
+                created_at: "x".into(),
             },
             GistFile {
                 gist_id: "b".into(),
@@ -2577,6 +3024,7 @@ mod tests {
                 filename: "statusline.sh".into(),
                 public: false,
                 updated_at: "x".into(),
+                created_at: "x".into(),
             },
         ];
 
@@ -2615,6 +3063,7 @@ mod tests {
             filename: "settings.json".into(),
             public: false,
             updated_at: "x".into(),
+            created_at: "x".into(),
         }];
         state.focus = FocusPane::Gist;
         state
@@ -2950,6 +3399,7 @@ mod tests {
             filename: "settings.json".into(),
             public: false,
             updated_at: "x".into(),
+            created_at: "x".into(),
         }];
         state.focus = FocusPane::Gist;
         assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::UploadAdd);
@@ -2968,6 +3418,7 @@ mod tests {
             filename: "settings.json".into(),
             public: false,
             updated_at: "x".into(),
+            created_at: "x".into(),
         }];
         state.focus = FocusPane::Gist;
         assert_eq!(
@@ -2983,8 +3434,9 @@ mod tests {
     }
 
     #[test]
-    fn o_opens_browser_with_gist_selected() {
+    fn o_in_gist_view_opens_browser() {
         let mut state = state_with_two_gists();
+        state.screen = Screen::Gists;
         assert_eq!(
             state.handle_key(KeyCode::Char('o')),
             KeyOutcome::OpenBrowser
@@ -2992,9 +3444,10 @@ mod tests {
     }
 
     #[test]
-    fn o_without_gist_is_noop() {
-        let mut state = initial_state();
+    fn o_on_main_list_is_noop_now_that_browser_moved_to_gist_view() {
+        let mut state = state_with_two_gists();
         assert_eq!(state.handle_key(KeyCode::Char('o')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
     }
 
     #[test]
@@ -3026,6 +3479,7 @@ mod tests {
             filename: "settings.json".into(),
             public: false,
             updated_at: "x".into(),
+            created_at: "x".into(),
         }];
         state.screen = Screen::Diff;
         // The gist has no "config" file -> case B -> add directly.
@@ -3077,22 +3531,72 @@ mod tests {
     }
 
     #[test]
-    fn x_with_gist_returns_delete_preview() {
+    fn x_removes_selected_file_from_a_multifile_gist() {
+        let mut state = initial_state();
+        state.focus = FocusPane::Gist;
+        state.gists = vec![
+            GistFile {
+                gist_id: "abc123".into(),
+                description: "my notes".into(),
+                filename: "a.md".into(),
+                public: false,
+                updated_at: "2026-01-01T00:00:00Z".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+            },
+            GistFile {
+                gist_id: "abc123".into(),
+                description: "my notes".into(),
+                filename: "b.md".into(),
+                public: false,
+                updated_at: "2026-01-01T00:00:00Z".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+            },
+        ];
+        // X stages a single-file removal (not a whole-gist delete) and asks to confirm.
+        assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::Confirm);
+        assert_eq!(
+            state.pending_action,
+            Some(PendingAction::RemoveFile {
+                gist_id: "abc123".into(),
+                filename: "a.md".into(),
+                label: "my notes".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn x_on_a_gists_only_file_is_blocked() {
         let mut state = initial_state();
         state.focus = FocusPane::Gist;
         state.gists = vec![GistFile {
             gist_id: "abc123".into(),
-            description: "my notes".into(),
+            description: String::new(),
             filename: "notes.md".into(),
             public: false,
             updated_at: "2026-01-01T00:00:00Z".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
         }];
-        assert_eq!(
-            state.handle_key(KeyCode::Char('X')),
-            KeyOutcome::DeletePreview
-        );
+        // Removing the only file would leave a fileless gist, which GitHub forbids.
+        assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
         assert_eq!(state.screen, Screen::List);
         assert!(state.pending_action.is_none());
+        assert!(state.status.as_deref().unwrap().contains("only file"));
+    }
+
+    #[test]
+    fn remove_file_confirm_y_returns_execute_remove_file() {
+        let mut state = initial_state();
+        state.pending_action = Some(PendingAction::RemoveFile {
+            gist_id: "abc123".into(),
+            filename: "a.md".into(),
+            label: "my notes".into(),
+        });
+        state.screen = Screen::Confirm;
+        assert_eq!(
+            state.handle_key(KeyCode::Char('y')),
+            KeyOutcome::ExecuteRemoveFile
+        );
     }
 
     #[test]
@@ -3123,20 +3627,159 @@ mod tests {
     }
 
     #[test]
-    fn x_with_no_description_still_returns_delete_preview() {
+    fn g_opens_gist_view_landing_on_the_selected_files_gist() {
+        let mut state = state_with_two_gists();
+        // Select the second gist's row in the main (file) list, then jump to the
+        // gist-level view; it should land on that same gist.
+        state.gist_index = 1;
+        assert_eq!(state.handle_key(KeyCode::Char('g')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::Gists);
+        assert_eq!(state.gists_index, 1);
+        assert_eq!(state.selected_group().unwrap().id, "b");
+    }
+
+    #[test]
+    fn g_with_no_gists_is_blocked() {
         let mut state = initial_state();
-        state.focus = FocusPane::Gist;
-        state.gists = vec![GistFile {
-            gist_id: "abc123".into(),
-            description: "".into(),
-            filename: "notes.md".into(),
-            public: false,
-            updated_at: "2026-01-01T00:00:00Z".into(),
-        }];
+        assert_eq!(state.handle_key(KeyCode::Char('g')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn gist_view_e_edits_description_with_prefill_and_enter_applies() {
+        let mut state = state_with_two_gists();
+        state.screen = Screen::Gists;
+        state.gists_index = 0;
+        state.handle_key(KeyCode::Char('e'));
+        assert!(state.editing_description);
+        // Prefilled with the current description.
+        assert_eq!(state.description_input, "My Ghostty config");
+        state.handle_key(KeyCode::Char('!'));
+        assert_eq!(state.description_input, "My Ghostty config!");
         assert_eq!(
-            state.handle_key(KeyCode::Char('X')),
-            KeyOutcome::DeletePreview
+            state.handle_key(KeyCode::Enter),
+            KeyOutcome::ApplyDescription
         );
+    }
+
+    #[test]
+    fn gist_view_esc_cancels_description_edit() {
+        let mut state = state_with_two_gists();
+        state.screen = Screen::Gists;
+        state.handle_key(KeyCode::Char('e'));
+        assert!(state.editing_description);
+        state.handle_key(KeyCode::Esc);
+        assert!(!state.editing_description);
+        assert!(state.description_input.is_empty());
+    }
+
+    #[test]
+    fn gist_view_x_stages_whole_gist_delete() {
+        let mut state = state_with_two_gists();
+        state.screen = Screen::Gists;
+        state.gists_index = 1;
+        assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::Confirm);
+        assert_eq!(
+            state.pending_action,
+            Some(PendingAction::Delete {
+                gist_id: "b".into(),
+                label: "SSH config".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn gist_view_q_returns_to_list() {
+        let mut state = state_with_two_gists();
+        state.screen = Screen::Gists;
+        state.handle_key(KeyCode::Char('q'));
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn gist_view_v_cycles_visibility_filter() {
+        // state_with_two_gists: gist "a" is public, gist "b" is secret.
+        let mut state = state_with_two_gists();
+        state.screen = Screen::Gists;
+        assert_eq!(state.visible_gist_groups().len(), 2);
+
+        state.handle_key(KeyCode::Char('v')); // -> public
+        let vis = state.visible_gist_groups();
+        assert_eq!(vis.len(), 1);
+        assert_eq!(vis[0].id, "a");
+
+        state.handle_key(KeyCode::Char('v')); // -> secret
+        let vis = state.visible_gist_groups();
+        assert_eq!(vis.len(), 1);
+        assert_eq!(vis[0].id, "b");
+
+        state.handle_key(KeyCode::Char('v')); // -> all
+        assert_eq!(state.visible_gist_groups().len(), 2);
+    }
+
+    #[test]
+    fn gist_view_filter_narrows_then_esc_clears() {
+        let mut state = state_with_two_gists();
+        state.screen = Screen::Gists;
+        state.handle_key(KeyCode::Char('/'));
+        assert!(state.gists_filtering);
+        for c in "ssh".chars() {
+            state.handle_key(KeyCode::Char(c));
+        }
+        let vis = state.visible_gist_groups();
+        assert_eq!(vis.len(), 1);
+        assert_eq!(vis[0].id, "b"); // "SSH config"
+
+        state.handle_key(KeyCode::Esc);
+        assert!(!state.gists_filtering);
+        assert!(state.gists_filter_query.is_empty());
+        assert_eq!(state.visible_gist_groups().len(), 2);
+    }
+
+    #[test]
+    fn gist_view_s_cycles_sort_updated_then_created() {
+        let mut state = initial_state();
+        state.screen = Screen::Gists;
+        state.gists = vec![
+            GistFile {
+                gist_id: "old-upd".into(),
+                description: "x".into(),
+                filename: "f".into(),
+                public: false,
+                updated_at: "2026-01-01T00:00:00Z".into(),
+                created_at: "2026-12-01T00:00:00Z".into(),
+            },
+            GistFile {
+                gist_id: "new-upd".into(),
+                description: "y".into(),
+                filename: "g".into(),
+                public: false,
+                updated_at: "2026-06-01T00:00:00Z".into(),
+                created_at: "2026-02-01T00:00:00Z".into(),
+            },
+        ];
+        // Default: sort by updated (newest first).
+        assert_eq!(state.gists_sort, GistGroupSort::Updated);
+        assert_eq!(state.visible_gist_groups()[0].id, "new-upd");
+        // s -> sort by created (newest created first).
+        state.handle_key(KeyCode::Char('s'));
+        assert_eq!(state.gists_sort, GistGroupSort::Created);
+        assert_eq!(state.visible_gist_groups()[0].id, "old-upd");
+    }
+
+    #[test]
+    fn gist_view_left_right_scrolls_horizontally() {
+        let mut state = state_with_two_gists();
+        state.screen = Screen::Gists;
+        assert_eq!(state.gists_hscroll, 0);
+        state.handle_key(KeyCode::Right);
+        assert_eq!(state.gists_hscroll, 1);
+        state.handle_key(KeyCode::Left);
+        assert_eq!(state.gists_hscroll, 0);
+        // Left at the origin saturates at 0.
+        state.handle_key(KeyCode::Left);
+        assert_eq!(state.gists_hscroll, 0);
     }
 
     #[test]

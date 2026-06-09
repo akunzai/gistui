@@ -148,6 +148,39 @@ pub fn create_command(local_path: &Path, public: bool) -> CommandPlan {
     }
 }
 
+pub fn remove_file_command(gist_id: &str, filename: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "gist".into(),
+            "edit".into(),
+            gist_id.to_string(),
+            "--remove".into(),
+            filename.to_string(),
+        ],
+    }
+}
+
+/// Updates only the gist description via the REST API.
+///
+/// `gh gist edit --desc` cannot be used here: with no `--add`/`--remove` it still
+/// drops into gh's interactive content editor ($EDITOR on a temp file), which is
+/// wrong inside the TUI. The PATCH endpoint sets the description non-interactively.
+/// `-f` (raw string field) keeps arbitrary description text from being type-coerced.
+pub fn edit_description_command(gist_id: &str, description: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "--method".into(),
+            "PATCH".into(),
+            format!("/gists/{gist_id}"),
+            "-f".into(),
+            format!("description={description}"),
+        ],
+    }
+}
+
 pub fn delete_command(gist_id: &str) -> CommandPlan {
     CommandPlan {
         program: "gh".into(),
@@ -244,6 +277,7 @@ mod tests {
             filename: "settings.json".into(),
             public: false,
             updated_at: "2026-06-08T00:00:00Z".into(),
+            created_at: "2026-06-08T00:00:00Z".into(),
         }
     }
 
@@ -313,6 +347,34 @@ mod tests {
         let plan = delete_command("abc123");
         assert_eq!(plan.program, "gh");
         assert_eq!(plan.args, vec!["gist", "delete", "--yes", "abc123"]);
+    }
+
+    #[test]
+    fn remove_file_command_removes_single_file() {
+        let plan = remove_file_command("abc123", "notes.md");
+        assert_eq!(plan.program, "gh");
+        assert_eq!(
+            plan.args,
+            vec!["gist", "edit", "abc123", "--remove", "notes.md"]
+        );
+    }
+
+    #[test]
+    fn edit_description_command_patches_via_rest_api() {
+        // Must NOT use `gh gist edit --desc`, which opens an interactive editor.
+        let plan = edit_description_command("abc123", "new desc");
+        assert_eq!(plan.program, "gh");
+        assert_eq!(
+            plan.args,
+            vec![
+                "api",
+                "--method",
+                "PATCH",
+                "/gists/abc123",
+                "-f",
+                "description=new desc"
+            ]
+        );
     }
 
     #[test]
