@@ -11,7 +11,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Text},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
 use std::io;
@@ -1072,11 +1072,69 @@ fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
     }
 }
 
+/// The full command hint as one responsive line; the footer word-wraps it to the
+/// terminal width (one line when wide, more when narrow).
+fn commands_hint() -> String {
+    [
+        "Tab switch pane",
+        "↑↓ move",
+        "←→ scroll",
+        "Enter diff",
+        "Space preview",
+        "d download",
+        "u upload",
+        "n create",
+        "p pin",
+        "t view",
+        "v type",
+        "s sort",
+        "/ filter",
+        "q quit",
+    ]
+    .join("  ·  ")
+}
+
+/// Greedy word-wrap line count, matching how `Paragraph` with `Wrap { trim: true }` breaks
+/// space-separated words at `width`. Used to size the footer block to its content.
+fn wrap_line_count(text: &str, width: u16) -> u16 {
+    if width == 0 {
+        return 1;
+    }
+    let width = width as usize;
+    let mut lines: u16 = 1;
+    let mut col = 0usize;
+    for word in text.split_whitespace() {
+        let w = word.chars().count();
+        if col == 0 {
+            col = w.min(width);
+        } else if col + 1 + w <= width {
+            col += 1 + w;
+        } else {
+            lines = lines.saturating_add(1);
+            col = w.min(width);
+        }
+    }
+    lines
+}
+
 fn render_list(frame: &mut Frame, state: &AppState) {
+    let area = frame.size();
+    let footer_body = if state.filtering {
+        format!(
+            "filter: {}_   (Enter apply · Esc clear)",
+            state.filter_query
+        )
+    } else {
+        match &state.status {
+            Some(message) => message.clone(),
+            None => commands_hint(),
+        }
+    };
+    let footer_lines = wrap_line_count(&footer_body, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(4)])
-        .split(frame.size());
+        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 2)])
+        .split(area);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
@@ -1134,23 +1192,10 @@ fn render_list(frame: &mut Frame, state: &AppState) {
         gist_selected,
     );
 
-    let footer = if state.filtering {
-        format!(
-            "filter: {}_   (Enter apply · Esc clear)",
-            state.filter_query
-        )
-    } else {
-        match &state.status {
-            Some(message) => message.clone(),
-            None => concat!(
-                "Tab switch pane   ↑↓ move   ←→ scroll   Enter diff   Space preview\n",
-                "d download  u upload  n create  p pin   t view  v type  s sort  / filter   q quit"
-            )
-            .to_string(),
-        }
-    };
     frame.render_widget(
-        Paragraph::new(footer).block(Block::default().title("Commands").borders(Borders::ALL)),
+        Paragraph::new(footer_body)
+            .wrap(Wrap { trim: true })
+            .block(Block::default().title("Commands").borders(Borders::ALL)),
         chunks[1],
     );
 }
@@ -1529,6 +1574,15 @@ mod tests {
         assert_eq!(state.diff_scroll, 1);
         state.handle_key(KeyCode::Up);
         assert_eq!(state.diff_scroll, 0);
+    }
+
+    #[test]
+    fn wrap_line_count_is_responsive_to_width() {
+        let text = "aaa bbb ccc";
+        assert_eq!(wrap_line_count(text, 100), 1);
+        assert_eq!(wrap_line_count(text, 7), 2);
+        assert_eq!(wrap_line_count(text, 3), 3);
+        assert_eq!(wrap_line_count(text, 0), 1);
     }
 
     #[test]
