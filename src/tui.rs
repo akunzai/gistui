@@ -518,8 +518,25 @@ impl AppState {
     }
 
     fn handle_key_confirm(&mut self, code: KeyCode) -> KeyOutcome {
-        if code == KeyCode::Char('q') {
-            return KeyOutcome::Quit;
+        match code {
+            KeyCode::Char('q') => return KeyOutcome::Quit,
+            KeyCode::Down => {
+                self.scroll_diff_down();
+                return KeyOutcome::None;
+            }
+            KeyCode::Up => {
+                self.scroll_diff_up();
+                return KeyOutcome::None;
+            }
+            KeyCode::Right => {
+                self.scroll_diff_right();
+                return KeyOutcome::None;
+            }
+            KeyCode::Left => {
+                self.scroll_diff_left();
+                return KeyOutcome::None;
+            }
+            _ => {}
         }
         match self.pending_action.clone() {
             Some(PendingAction::Download) => match code {
@@ -1439,6 +1456,18 @@ mod tests {
         state.handle_key(KeyCode::Char('y'));
         state.handle_key(KeyCode::Backspace);
         assert_eq!(state.filter_query, "x");
+    }
+
+    #[test]
+    fn confirm_screen_scrolls_diff() {
+        let mut state = initial_state();
+        state.pending_action = Some(PendingAction::Download);
+        state.screen = Screen::Confirm;
+        state.diff_text = "l1\nl2\nl3".into();
+        assert_eq!(state.handle_key(KeyCode::Down), KeyOutcome::None);
+        assert_eq!(state.diff_scroll, 1);
+        state.handle_key(KeyCode::Up);
+        assert_eq!(state.diff_scroll, 0);
     }
 
     #[test]
