@@ -206,6 +206,36 @@ impl AppState {
         self.ranked_gists().into_iter().nth(self.gist_index)
     }
 
+    /// Upload intent shared by the list and the diff screen: requires a selected local file
+    /// and gist, then branches on whether the gist already holds a file of the local name
+    /// (case C: preview + confirm overwrite) or not (case B: add directly).
+    fn upload_intent(&mut self) -> KeyOutcome {
+        let (Some(local), Some(gist)) = (self.selected_local().cloned(), self.selected_gist())
+        else {
+            self.status = Some("select a local file and a gist to upload".into());
+            return KeyOutcome::None;
+        };
+        let Some(local_filename) = local
+            .path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(String::from)
+        else {
+            self.status = Some("local file has no name".into());
+            return KeyOutcome::None;
+        };
+        let gist_id = gist.file.gist_id.clone();
+        let has_same_name = self
+            .gists
+            .iter()
+            .any(|g| g.gist_id == gist_id && g.filename == local_filename);
+        if has_same_name {
+            KeyOutcome::UploadPreview
+        } else {
+            KeyOutcome::UploadAdd
+        }
+    }
+
     /// Highest horizontal-scroll offset for the focused pane, based on its longest row
     /// (viewport width is unknown to the pure key logic, mirroring the diff scroll cap).
     fn focused_hscroll_max(&self) -> u16 {
@@ -455,33 +485,7 @@ impl AppState {
                     KeyOutcome::Pin
                 };
             }
-            KeyCode::Char('u') => {
-                let (Some(local), Some(gist)) =
-                    (self.selected_local().cloned(), self.selected_gist())
-                else {
-                    self.status = Some("select a local file and a gist to upload".into());
-                    return KeyOutcome::None;
-                };
-                let Some(local_filename) = local
-                    .path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(String::from)
-                else {
-                    self.status = Some("local file has no name".into());
-                    return KeyOutcome::None;
-                };
-                let gist_id = gist.file.gist_id.clone();
-                let has_same_name = self
-                    .gists
-                    .iter()
-                    .any(|g| g.gist_id == gist_id && g.filename == local_filename);
-                return if has_same_name {
-                    KeyOutcome::UploadPreview
-                } else {
-                    KeyOutcome::UploadAdd
-                };
-            }
+            KeyCode::Char('u') => return self.upload_intent(),
             KeyCode::Char('n') => {
                 let Some(local) = self.selected_local().cloned() else {
                     self.status = Some("select a local file to create a gist".into());
@@ -513,6 +517,7 @@ impl AppState {
                     return KeyOutcome::Download;
                 }
             }
+            KeyCode::Char('u') => return self.upload_intent(),
             _ => {}
         }
         KeyOutcome::None
@@ -901,6 +906,7 @@ fn upload_add(state: &mut AppState) {
                 local.path.display(),
                 gist.file.gist_id
             ));
+            state.back_to_list();
             refresh_gists(state);
         }
         Err(error) => state.set_status(format!("upload failed: {error}")),
@@ -1292,10 +1298,7 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
             _ => format!("Overwrite {}? (y/n)", state.download_target.display()),
         }
     } else {
-        format!(
-            "Up/Down/Left/Right scroll  d download -> {}  Esc back  q quit",
-            state.download_target.display()
-        )
+        "↑↓←→ scroll  ·  d download  ·  u upload  ·  Esc back  ·  q quit".to_string()
     };
     frame.render_widget(
         Paragraph::new(footer).block(Block::default().title("Commands").borders(Borders::ALL)),
@@ -2129,6 +2132,25 @@ mod tests {
     fn u_without_selection_is_noop() {
         let mut state = initial_state();
         assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn u_in_diff_screen_returns_upload_intent() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/config"),
+            pinned: false,
+        }];
+        state.gists = vec![GistFile {
+            gist_id: "a".into(),
+            description: "x".into(),
+            filename: "settings.json".into(),
+            public: false,
+            updated_at: "x".into(),
+        }];
+        state.screen = Screen::Diff;
+        // The gist has no "config" file -> case B -> add directly.
+        assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::UploadAdd);
     }
 
     #[test]
