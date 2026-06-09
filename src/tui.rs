@@ -127,6 +127,9 @@ pub enum KeyOutcome {
     DownloadGist,
     Pin,
     Unpin,
+    UploadAdd,
+    UploadPreview,
+    Upload,
 }
 
 #[derive(Debug, Clone)]
@@ -390,6 +393,33 @@ impl AppState {
                     KeyOutcome::Pin
                 };
             }
+            KeyCode::Char('u') => {
+                let (Some(local), Some(gist)) =
+                    (self.selected_local().cloned(), self.selected_gist())
+                else {
+                    self.status = Some("select a local file and a gist to upload".into());
+                    return KeyOutcome::None;
+                };
+                let Some(local_filename) = local
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(String::from)
+                else {
+                    self.status = Some("local file has no name".into());
+                    return KeyOutcome::None;
+                };
+                let gist_id = gist.file.gist_id.clone();
+                let has_same_name = self
+                    .gists
+                    .iter()
+                    .any(|g| g.gist_id == gist_id && g.filename == local_filename);
+                return if has_same_name {
+                    KeyOutcome::UploadPreview
+                } else {
+                    KeyOutcome::UploadAdd
+                };
+            }
             _ => {}
         }
         KeyOutcome::None
@@ -426,6 +456,14 @@ impl AppState {
                 KeyCode::Char('n') | KeyCode::Esc => {
                     self.pending_action = None;
                     self.screen = Screen::Diff;
+                }
+                _ => {}
+            },
+            Some(PendingAction::Upload { .. }) => match code {
+                KeyCode::Char('y') => return KeyOutcome::Upload,
+                KeyCode::Char('n') | KeyCode::Esc => {
+                    self.pending_action = None;
+                    self.screen = Screen::List;
                 }
                 _ => {}
             },
@@ -520,6 +558,9 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                 KeyOutcome::DownloadGist => download_selected(&mut state),
                 KeyOutcome::Pin => pin_selected(&mut state),
                 KeyOutcome::Unpin => unpin_selected(&mut state),
+                KeyOutcome::UploadAdd => upload_add(&mut state),
+                KeyOutcome::UploadPreview => upload_preview(&mut state),
+                KeyOutcome::Upload => upload_replace(&mut state),
                 KeyOutcome::None => {}
             }
         }
@@ -647,6 +688,96 @@ fn unpin_selected(state: &mut AppState) {
             state.set_status(format!("Unpinned {}", local.path.display()));
         }
         Err(error) => state.set_status(format!("unpin failed: {error}")),
+    }
+}
+
+fn upload_local_filename(local: &std::path::Path) -> Option<String> {
+    local.file_name().and_then(|n| n.to_str()).map(String::from)
+}
+
+fn upload_add(state: &mut AppState) {
+    let (Some(local), Some(gist)) = (state.selected_local().cloned(), state.selected_gist()) else {
+        return;
+    };
+    let plan = crate::actions::upload_add_command(&local.path, &gist.file.gist_id);
+    match crate::actions::execute_command(&plan) {
+        Ok(_) => {
+            state.set_status(format!(
+                "Uploaded {} to gist {}",
+                local.path.display(),
+                gist.file.gist_id
+            ));
+            refresh_gists(state);
+        }
+        Err(error) => state.set_status(format!("upload failed: {error}")),
+    }
+}
+
+fn upload_preview(state: &mut AppState) {
+    let (Some(local), Some(gist)) = (state.selected_local().cloned(), state.selected_gist()) else {
+        return;
+    };
+    let Some(filename) = upload_local_filename(&local.path) else {
+        state.set_status("local file has no name");
+        return;
+    };
+    match crate::gh::fetch_gist_file_content(&gist.file.gist_id, &filename) {
+        Ok(remote) => {
+            let local_content = std::fs::read_to_string(&local.path).unwrap_or_default();
+            let diff = crate::diff::unified_diff("gist", &remote, "local", &local_content);
+            state.diff_text = diff;
+            state.diff_scroll = 0;
+            state.diff_hscroll = 0;
+            state.pending_action = Some(PendingAction::Upload {
+                gist_id: gist.file.gist_id.clone(),
+                filename,
+                local_path: local.path.clone(),
+            });
+            state.status = None;
+            state.screen = Screen::Confirm;
+        }
+        Err(error) => state.set_status(format!("fetch failed: {error}")),
+    }
+}
+
+fn upload_replace(state: &mut AppState) {
+    let Some(PendingAction::Upload {
+        gist_id,
+        filename,
+        local_path,
+    }) = state.pending_action.clone()
+    else {
+        return;
+    };
+    let target = GistFile {
+        gist_id: gist_id.clone(),
+        description: String::new(),
+        filename: filename.clone(),
+        public: false,
+        updated_at: String::new(),
+    };
+    let plan = crate::actions::upload_command(&local_path, &target);
+    match crate::actions::execute_command(&plan) {
+        Ok(_) => {
+            state.set_status(format!("Uploaded {} to gist {}", filename, gist_id));
+            state.back_to_list();
+            refresh_gists(state);
+        }
+        Err(error) => {
+            state.set_status(format!("upload failed: {error}"));
+            state.screen = Screen::Confirm;
+        }
+    }
+}
+
+fn refresh_gists(state: &mut AppState) {
+    if let Ok(gists) =
+        crate::gh::fetch_gist_list_json().and_then(|raw| crate::gh::parse_gist_list_json(&raw))
+    {
+        state.gists = gists;
+        if state.gist_index >= state.ranked_gists().len() {
+            state.gist_index = 0;
+        }
     }
 }
 
@@ -1484,5 +1615,62 @@ mod tests {
     fn p_without_local_or_gist_is_noop() {
         let mut state = initial_state();
         assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn u_adds_when_gist_lacks_filename() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/config"),
+            pinned: false,
+        }];
+        state.gists = vec![GistFile {
+            gist_id: "a".into(),
+            description: "x".into(),
+            filename: "settings.json".into(),
+            public: false,
+            updated_at: "x".into(),
+        }];
+        state.focus = FocusPane::Gist;
+        assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::UploadAdd);
+    }
+
+    #[test]
+    fn u_previews_when_gist_has_same_filename() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/settings.json"),
+            pinned: false,
+        }];
+        state.gists = vec![GistFile {
+            gist_id: "a".into(),
+            description: "x".into(),
+            filename: "settings.json".into(),
+            public: false,
+            updated_at: "x".into(),
+        }];
+        state.focus = FocusPane::Gist;
+        assert_eq!(
+            state.handle_key(KeyCode::Char('u')),
+            KeyOutcome::UploadPreview
+        );
+    }
+
+    #[test]
+    fn u_without_selection_is_noop() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn confirm_upload_y_returns_upload() {
+        let mut state = initial_state();
+        state.pending_action = Some(PendingAction::Upload {
+            gist_id: "a".into(),
+            filename: "settings.json".into(),
+            local_path: PathBuf::from("/tmp/settings.json"),
+        });
+        state.screen = Screen::Confirm;
+        assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::Upload);
     }
 }
