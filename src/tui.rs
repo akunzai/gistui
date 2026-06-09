@@ -148,6 +148,8 @@ pub struct AppState {
     pub gist_view: GistView,
     pub gist_type_filter: GistTypeFilter,
     pub gist_sort: GistSort,
+    pub filtering: bool,
+    pub filter_query: String,
     pub diff_previewed: bool,
     pub diff_text: String,
     pub diff_scroll: u16,
@@ -161,10 +163,16 @@ pub struct AppState {
 
 impl AppState {
     pub fn ranked_gists(&self) -> Vec<RankedGistFile> {
+        let query = self.filter_query.to_lowercase();
         let gists: Vec<GistFile> = self
             .gists
             .iter()
             .filter(|g| self.gist_type_filter.matches(g.public))
+            .filter(|g| {
+                query.is_empty()
+                    || g.filename.to_lowercase().contains(&query)
+                    || g.description.to_lowercase().contains(&query)
+            })
             .cloned()
             .collect();
         // No local selected (e.g. an empty directory): list every gist unranked so the
@@ -302,10 +310,35 @@ impl AppState {
 
     pub fn handle_key(&mut self, code: KeyCode) -> KeyOutcome {
         match self.screen {
+            Screen::List if self.filtering => self.handle_key_filter(code),
             Screen::List => self.handle_key_list(code),
             Screen::Diff => self.handle_key_diff(code),
             Screen::Confirm => self.handle_key_confirm(code),
         }
+    }
+
+    fn handle_key_filter(&mut self, code: KeyCode) -> KeyOutcome {
+        match code {
+            KeyCode::Esc => {
+                self.filter_query.clear();
+                self.filtering = false;
+                self.gist_index = 0;
+                self.gist_hscroll = 0;
+            }
+            KeyCode::Enter => self.filtering = false,
+            KeyCode::Backspace => {
+                self.filter_query.pop();
+                self.gist_index = 0;
+                self.gist_hscroll = 0;
+            }
+            KeyCode::Char(c) => {
+                self.filter_query.push(c);
+                self.gist_index = 0;
+                self.gist_hscroll = 0;
+            }
+            _ => {}
+        }
+        KeyOutcome::None
     }
 
     fn handle_key_list(&mut self, code: KeyCode) -> KeyOutcome {
@@ -366,6 +399,7 @@ impl AppState {
                 self.gist_index = 0;
                 self.gist_hscroll = 0;
             }
+            KeyCode::Char('/') => self.filtering = true,
             KeyCode::Char('d')
                 if self.focus == FocusPane::Gist && self.gist_index < self.ranked_gists().len() =>
             {
@@ -513,6 +547,8 @@ pub fn initial_state() -> AppState {
         gist_view: GistView::Description,
         gist_type_filter: GistTypeFilter::All,
         gist_sort: GistSort::Match,
+        filtering: false,
+        filter_query: String::new(),
         diff_previewed: false,
         diff_text: String::new(),
         diff_scroll: 0,
@@ -915,11 +951,14 @@ fn render_list(frame: &mut Frame, state: &AppState) {
         .collect();
     let gist_focused = state.focus == FocusPane::Gist;
     let gist_selected = (!ranked.is_empty()).then_some(state.gist_index);
-    let gist_title = format!(
+    let mut gist_title = format!(
         "Gists · {} · {}",
         state.gist_type_filter.label(),
         state.gist_sort.label()
     );
+    if !state.filter_query.is_empty() {
+        gist_title.push_str(&format!(" · /{}", state.filter_query));
+    }
     render_pane(
         frame,
         columns[1],
@@ -929,11 +968,18 @@ fn render_list(frame: &mut Frame, state: &AppState) {
         gist_selected,
     );
 
-    let footer = match &state.status {
-        Some(message) => message.clone(),
-        None => {
-            "Tab  ↑↓ move  ←→ scroll  Enter diff  d download  u upload  n create  p pin  t view  v type  s sort  q quit"
-                .to_string()
+    let footer = if state.filtering {
+        format!(
+            "filter: {}_   (Enter apply · Esc clear)",
+            state.filter_query
+        )
+    } else {
+        match &state.status {
+            Some(message) => message.clone(),
+            None => {
+                "Tab  ↑↓ move  ←→ scroll  Enter diff  d download  u upload  n create  p pin  t view  v type  s sort  / filter  q quit"
+                    .to_string()
+            }
         }
     };
     frame.render_widget(
@@ -1172,6 +1218,79 @@ mod tests {
         let only_secret = state.ranked_gists();
         assert_eq!(only_secret.len(), 1);
         assert_eq!(only_secret[0].file.gist_id, "sec");
+    }
+
+    fn state_with_two_gists() -> AppState {
+        let mut state = initial_state();
+        state.gists = vec![
+            GistFile {
+                gist_id: "a".into(),
+                description: "My Ghostty config".into(),
+                filename: "config.ghostty".into(),
+                public: true,
+                updated_at: "x".into(),
+            },
+            GistFile {
+                gist_id: "b".into(),
+                description: "SSH config".into(),
+                filename: "ssh_config".into(),
+                public: false,
+                updated_at: "x".into(),
+            },
+        ];
+        state.focus = FocusPane::Gist;
+        state
+    }
+
+    #[test]
+    fn slash_enters_filter_mode_and_typing_filters() {
+        let mut state = state_with_two_gists();
+        assert!(!state.filtering);
+        state.handle_key(KeyCode::Char('/'));
+        assert!(state.filtering);
+        // Type "ghostty" -> matches only the first gist (by filename + description).
+        for c in "ghostty".chars() {
+            state.handle_key(KeyCode::Char(c));
+        }
+        let ranked = state.ranked_gists();
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].file.gist_id, "a");
+    }
+
+    #[test]
+    fn filter_matches_description_case_insensitively() {
+        let mut state = state_with_two_gists();
+        state.filter_query = "SSH".into();
+        let ranked = state.ranked_gists();
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].file.gist_id, "b");
+    }
+
+    #[test]
+    fn filter_enter_keeps_query_esc_clears() {
+        let mut state = state_with_two_gists();
+        state.handle_key(KeyCode::Char('/'));
+        state.handle_key(KeyCode::Char('s'));
+        state.handle_key(KeyCode::Char('s'));
+        state.handle_key(KeyCode::Char('h'));
+        state.handle_key(KeyCode::Enter);
+        assert!(!state.filtering);
+        assert_eq!(state.filter_query, "ssh");
+        // Re-enter and Esc clears.
+        state.handle_key(KeyCode::Char('/'));
+        state.handle_key(KeyCode::Esc);
+        assert!(!state.filtering);
+        assert!(state.filter_query.is_empty());
+    }
+
+    #[test]
+    fn filter_backspace_deletes_last_char() {
+        let mut state = state_with_two_gists();
+        state.handle_key(KeyCode::Char('/'));
+        state.handle_key(KeyCode::Char('x'));
+        state.handle_key(KeyCode::Char('y'));
+        state.handle_key(KeyCode::Backspace);
+        assert_eq!(state.filter_query, "x");
     }
 
     #[test]
