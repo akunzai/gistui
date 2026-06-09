@@ -20,6 +20,12 @@ horizontally). Currently wired:
   filename (`./<gist-filename>`). If no such file exists yet it is written straight away; if
   a same-named file already exists, its diff is shown first and you must confirm the
   overwrite with `y`/`n`.
+- `u` (on a gist) — upload the selected local file into that gist under the local file's
+  name. If the gist has no file of that name it is added directly; if it already has one,
+  its diff is shown and you confirm the overwrite with `y`/`n`.
+- `n` (on a local file) — create a new gist from it; choose `s` secret or `p` public.
+- `p` (on a gist) — toggle a pin between the selected local file and gist (persisted to
+  config; pinned pairs sort to the top with `⭐⭐⭐`).
 - `Enter` (on a gist) — preview the unified diff in a full-screen overlay without writing
   anything (`Up`/`Down`/`Left`/`Right` to scroll, `d` to download from there, `Esc` to go
   back).

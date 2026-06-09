@@ -931,8 +931,10 @@ fn render_list(frame: &mut Frame, state: &AppState) {
 
     let footer = match &state.status {
         Some(message) => message.clone(),
-        None => "Tab  ↑↓ move  ←→ scroll  Enter diff  d download  t view  v type  s sort  q quit"
-            .to_string(),
+        None => {
+            "Tab  ↑↓ move  ←→ scroll  Enter diff  d download  u upload  n create  p pin  t view  v type  s sort  q quit"
+                .to_string()
+        }
     };
     frame.render_widget(
         Paragraph::new(footer).block(Block::default().title("Commands").borders(Borders::ALL)),
