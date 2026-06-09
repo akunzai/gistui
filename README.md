@@ -1,8 +1,8 @@
 # gistui
 
-A terminal UI for managing GitHub Gists. Browse, diff, download, upload, create, and pin
-your gists — and pair them with files in your working directory — all through the GitHub
-CLI (`gh`).
+A terminal UI for managing GitHub Gists. Browse, diff, download, upload, create, edit, and
+pin your gists — and pair them with files in your working directory — all through the
+GitHub CLI (`gh`).
 
 ## Requirements
 
@@ -90,12 +90,16 @@ gists, ranked against the selected local file (stronger matches are prefixed wit
   confirmation.
 - `u` (on a gist) — upload the selected local file into the gist under the local file's
   name (added directly, or diff + `y`/`n` if it would overwrite a same-named gist file).
-- `n` (on a local file) — create a new gist from it; choose `s` secret or `p` public.
-- `X` (on a gist) — delete the gist after a preview + `y`/`n` confirmation.
+- `n` (on a local file) — create a new gist from it: type an optional description, then
+  choose `s` secret or `p` public.
+- `X` (on a gist) — remove the selected file from its gist after a `y`/`n` confirmation.
+  Deleting a whole gist lives in the **gist manager** (`g`); a gist's only file can't be
+  removed (delete the gist instead).
+- `g` — open the **gist manager** (gist-level view): edit descriptions, delete gists, and
+  more (see below).
 - `p` (on a gist) — toggle a pin between the selected local file and gist (persisted to
   config; pinned pairs sort to the top).
 - `P` — open the **Pins view** listing all pinned pairs; `x` unpins the selected entry.
-- `o` (on a gist) — open it on gist.github.com in your browser.
 - `e` (on a local file) — open it in `$VISUAL`/`$EDITOR`.
 - `Space` (on a gist) — preview the gist's raw content in a scrollable overlay (`R` to
   force-refresh, bypassing the session cache).
@@ -108,6 +112,18 @@ gists, ranked against the selected local file (stronger matches are prefixed wit
 When no local file is selected (e.g. an empty directory), the right pane lists all gists
 unranked so you can still preview and download into the current directory.
 
+### Gist manager (`g`)
+
+Press `g` to open the **gist manager** — a gist-level view (one row per gist) that lands on
+the gist owning the currently selected file. From here you manage gists as a whole:
+
+- `e` — edit the gist's description (type, `Enter` applies, `Esc` cancels).
+- `X` — delete the entire gist and all its files, after a `y`/`n` confirmation.
+- `o` — open the gist on gist.github.com in your browser.
+- `s` cycle sort (updated / created) · `v` cycle visibility (all/public/secret) · `/` filter
+  by description or id · `Left`/`Right` scroll a long description.
+- `q`/`Esc` — back to the list.
+
 ## Safety rules
 
 - Downloads only ever write to `./<gist-filename>` in the current working directory.
@@ -115,6 +131,8 @@ unranked so you can still preview and download into the current directory.
   first showing its diff and a `y`/`n` confirmation. Writing something that does not yet
   exist is direct.
 - Identical files are detected: when the two sides match, upload/download are disabled.
+- Destructive remote actions each require a `y`/`n` confirmation: removing a file from a
+  gist (`X` on the list) and deleting a whole gist (`X` in the gist manager).
 - No GitHub token is stored by the app, and gist content is never written to the config
   file — only path↔gist pin mappings are persisted.
 
