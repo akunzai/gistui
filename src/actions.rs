@@ -71,6 +71,18 @@ pub fn upload_add_command(local_path: &Path, gist_id: &str) -> CommandPlan {
     }
 }
 
+pub fn open_browser_command(gist_id: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "gist".into(),
+            "view".into(),
+            gist_id.to_string(),
+            "--web".into(),
+        ],
+    }
+}
+
 pub fn create_command(local_path: &Path, public: bool) -> CommandPlan {
     let mut args = vec![
         "gist".into(),
@@ -213,6 +225,13 @@ mod tests {
             plan.args,
             vec!["gist", "edit", "abc123", "--add", "/tmp/config.toml"]
         );
+    }
+
+    #[test]
+    fn open_browser_command_targets_gist_web_view() {
+        let plan = open_browser_command("abc123");
+        assert_eq!(plan.program, "gh");
+        assert_eq!(plan.args, vec!["gist", "view", "abc123", "--web"]);
     }
 
     #[test]

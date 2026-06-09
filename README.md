@@ -26,6 +26,9 @@ horizontally). Currently wired:
 - `n` (on a local file) — create a new gist from it; choose `s` secret or `p` public.
 - `p` (on a gist) — toggle a pin between the selected local file and gist (persisted to
   config; pinned pairs sort to the top with `⭐⭐⭐`).
+- `o` (on a gist) — open it on gist.github.com in your web browser.
+- `e` (on a local file) — open it in `$VISUAL`/`$EDITOR` (the TUI suspends while the editor
+  runs and restores afterwards).
 - `Enter` (on a gist) — preview the unified diff in a full-screen overlay without writing
   anything (`Up`/`Down`/`Left`/`Right` to scroll, `d` to download from there, `Esc` to go
   back).

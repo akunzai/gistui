@@ -138,6 +138,8 @@ pub enum KeyOutcome {
     Upload,
     Create(bool),
     PreviewContent,
+    OpenBrowser,
+    EditLocal,
 }
 
 #[derive(Debug, Clone)]
@@ -470,6 +472,18 @@ impl AppState {
             }
             KeyCode::Char('/') => self.filtering = true,
             KeyCode::Char('?') => self.screen = Screen::Help,
+            KeyCode::Char('o') => {
+                if self.selected_gist().is_some() {
+                    return KeyOutcome::OpenBrowser;
+                }
+                self.status = Some("select a gist to open in the browser".into());
+            }
+            KeyCode::Char('e') => {
+                if self.selected_local().is_some() {
+                    return KeyOutcome::EditLocal;
+                }
+                self.status = Some("select a local file to edit".into());
+            }
             KeyCode::Char(' ') if self.selected_gist().is_some() => {
                 return KeyOutcome::PreviewContent;
             }
@@ -730,6 +744,8 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                     create_gist(&mut state, public);
                 }
                 KeyOutcome::PreviewContent => fetch_then(terminal, &mut state, preview_content)?,
+                KeyOutcome::OpenBrowser => open_browser(&mut state),
+                KeyOutcome::EditLocal => edit_local(terminal, &mut state)?,
                 KeyOutcome::None => {}
             }
         }
@@ -850,6 +866,54 @@ fn preview_diff(state: &mut AppState) {
         }
         Err(error) => state.set_status(format!("fetch failed: {error}")),
     }
+}
+
+fn open_browser(state: &mut AppState) {
+    let Some(gist) = state.selected_gist() else {
+        return;
+    };
+    let plan = crate::actions::open_browser_command(&gist.file.gist_id);
+    match crate::actions::execute_command(&plan) {
+        Ok(_) => state.set_status(format!("Opened gist {} in the browser", gist.file.gist_id)),
+        Err(error) => state.set_status(format!("open failed: {error}")),
+    }
+}
+
+/// Opens the selected local file in `$VISUAL`/`$EDITOR` (default `vi`). A terminal editor
+/// needs the full terminal, so the TUI leaves raw mode / the alternate screen for the
+/// duration and restores afterwards. `$EDITOR` may include flags (e.g. `code --wait`).
+fn edit_local(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    state: &mut AppState,
+) -> Result<()> {
+    let Some(local) = state.selected_local().cloned() else {
+        return Ok(());
+    };
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
+    let mut parts = editor.split_whitespace();
+    let Some(program) = parts.next() else {
+        state.set_status("no editor configured (set $EDITOR)");
+        return Ok(());
+    };
+    let args: Vec<&str> = parts.collect();
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    let result = std::process::Command::new(program)
+        .args(&args)
+        .arg(&local.path)
+        .status();
+    enable_raw_mode()?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    terminal.clear()?;
+
+    match result {
+        Ok(_) => state.set_status(format!("Edited {}", local.path.display())),
+        Err(error) => state.set_status(format!("editor failed: {error}")),
+    }
+    Ok(())
 }
 
 fn preview_content(state: &mut AppState) {
@@ -1129,6 +1193,8 @@ Actions (on the selected local file + gist)
   u          upload the local file into the gist
   n          create a new gist from the local file
   p          pin / unpin the local <-> gist pair
+  o          open the gist in your web browser
+  e          edit the local file in $EDITOR
 
 General
   Esc / q    close an overlay; from the list, quit the app
@@ -1226,6 +1292,8 @@ fn commands_hint() -> String {
         "u upload",
         "n create",
         "p pin",
+        "o browser",
+        "e edit",
         "t view",
         "v type",
         "s sort",
@@ -2421,6 +2489,37 @@ mod tests {
     fn u_without_selection_is_noop() {
         let mut state = initial_state();
         assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn o_opens_browser_with_gist_selected() {
+        let mut state = state_with_two_gists();
+        assert_eq!(
+            state.handle_key(KeyCode::Char('o')),
+            KeyOutcome::OpenBrowser
+        );
+    }
+
+    #[test]
+    fn o_without_gist_is_noop() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char('o')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn e_edits_local_with_file_selected() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/config"),
+            pinned: false,
+        }];
+        assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::EditLocal);
+    }
+
+    #[test]
+    fn e_without_local_is_noop() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::None);
     }
 
     #[test]
