@@ -138,6 +138,7 @@ fn run_command_executes_planned_write_action() {
         filename: "settings.json".into(),
         public: false,
         updated_at: "2026-06-08T00:00:00Z".into(),
+        created_at: "2026-06-08T00:00:00Z".into(),
     };
     let plan = upload_command(PathBuf::from("/tmp/settings.json").as_path(), &target);
     let runner = FakeRunner::new(vec![FakeRunner::ok("https://gist.github.com/abc123\n")]);

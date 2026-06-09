@@ -13,6 +13,8 @@ struct GhGist {
     public: bool,
     #[serde(default)]
     updated_at: String,
+    #[serde(default)]
+    created_at: String,
     // The REST API returns `files` as an object keyed by filename. BTreeMap keeps
     // the order deterministic (by filename) for stable display and tests.
     #[serde(default)]
@@ -98,6 +100,7 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
                 filename: file.filename,
                 public: gist.public,
                 updated_at: gist.updated_at.clone(),
+                created_at: gist.created_at.clone(),
             });
         }
     }
