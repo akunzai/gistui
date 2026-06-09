@@ -1,10 +1,15 @@
 use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
+use std::fmt::Write;
 
 pub fn sha256_hex(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
-    format!("{:x}", hasher.finalize())
+    let mut hex = String::with_capacity(64);
+    for byte in hasher.finalize() {
+        write!(hex, "{byte:02x}").expect("writing to a String never fails");
+    }
+    hex
 }
 
 pub fn unified_diff(old_label: &str, old: &str, new_label: &str, new: &str) -> String {
