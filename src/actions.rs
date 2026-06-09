@@ -58,6 +58,19 @@ pub fn upload_command(local_path: &Path, target: &GistFile) -> CommandPlan {
     }
 }
 
+pub fn upload_add_command(local_path: &Path, gist_id: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "gist".into(),
+            "edit".into(),
+            gist_id.to_string(),
+            "--add".into(),
+            local_path.display().to_string(),
+        ],
+    }
+}
+
 pub fn create_command(local_path: &Path, public: bool) -> CommandPlan {
     let mut args = vec![
         "gist".into(),
@@ -177,6 +190,16 @@ mod tests {
                 "settings.json",
                 "/tmp/settings.json"
             ]
+        );
+    }
+
+    #[test]
+    fn upload_add_command_adds_local_file_to_gist() {
+        let plan = upload_add_command(PathBuf::from("/tmp/config.toml").as_path(), "abc123");
+        assert_eq!(plan.program, "gh");
+        assert_eq!(
+            plan.args,
+            vec!["gist", "edit", "abc123", "--add", "/tmp/config.toml"]
         );
     }
 
