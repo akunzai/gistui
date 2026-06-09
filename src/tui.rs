@@ -362,20 +362,16 @@ impl AppState {
         }
     }
 
-    fn handle_key_help(&mut self, code: KeyCode) -> KeyOutcome {
-        match code {
-            KeyCode::Char('q') => KeyOutcome::Quit,
-            _ => {
-                self.screen = Screen::List;
-                KeyOutcome::None
-            }
-        }
+    fn handle_key_help(&mut self, _code: KeyCode) -> KeyOutcome {
+        // Any key (including q) just closes the help overlay back to the list.
+        self.screen = Screen::List;
+        KeyOutcome::None
     }
 
     fn handle_key_preview(&mut self, code: KeyCode) -> KeyOutcome {
         match code {
-            KeyCode::Char('q') => return KeyOutcome::Quit,
-            KeyCode::Esc => {
+            // In the preview, q and Esc both return to the list (no accidental app exit).
+            KeyCode::Char('q') | KeyCode::Esc => {
                 self.screen = Screen::List;
                 self.diff_text.clear();
                 self.preview_title.clear();
@@ -418,7 +414,8 @@ impl AppState {
         // status may be set afterwards by the run_loop IO helper for this key.
         self.status = None;
         match code {
-            KeyCode::Char('q') => return KeyOutcome::Quit,
+            // On the main list both q and Esc exit the app.
+            KeyCode::Char('q') | KeyCode::Esc => return KeyOutcome::Quit,
             KeyCode::Tab => {
                 self.focus = match self.focus {
                     FocusPane::Local => FocusPane::Gist,
@@ -522,8 +519,8 @@ impl AppState {
 
     fn handle_key_diff(&mut self, code: KeyCode) -> KeyOutcome {
         match code {
-            KeyCode::Char('q') => return KeyOutcome::Quit,
-            KeyCode::Esc => self.back_to_list(),
+            // In the diff, q and Esc both return to the list (no accidental app exit).
+            KeyCode::Char('q') | KeyCode::Esc => self.back_to_list(),
             KeyCode::Down => self.scroll_diff_down(),
             KeyCode::Up => self.scroll_diff_up(),
             KeyCode::Right => self.scroll_diff_right(),
@@ -545,7 +542,6 @@ impl AppState {
 
     fn handle_key_confirm(&mut self, code: KeyCode) -> KeyOutcome {
         match code {
-            KeyCode::Char('q') => return KeyOutcome::Quit,
             KeyCode::Down => {
                 self.scroll_diff_down();
                 return KeyOutcome::None;
@@ -567,7 +563,7 @@ impl AppState {
         match self.pending_action.clone() {
             Some(PendingAction::Download) => match code {
                 KeyCode::Char('y') => return KeyOutcome::Download,
-                KeyCode::Char('n') | KeyCode::Esc => {
+                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     self.pending_action = None;
                     self.screen = Screen::Diff;
                 }
@@ -575,7 +571,7 @@ impl AppState {
             },
             Some(PendingAction::Upload { .. }) => match code {
                 KeyCode::Char('y') => return KeyOutcome::Upload,
-                KeyCode::Char('n') | KeyCode::Esc => {
+                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     self.pending_action = None;
                     self.screen = Screen::List;
                 }
@@ -584,14 +580,14 @@ impl AppState {
             Some(PendingAction::Create { .. }) => match code {
                 KeyCode::Char('s') => return KeyOutcome::Create(false),
                 KeyCode::Char('p') => return KeyOutcome::Create(true),
-                KeyCode::Char('n') | KeyCode::Esc => {
+                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     self.pending_action = None;
                     self.screen = Screen::List;
                 }
                 _ => {}
             },
             _ => {
-                if matches!(code, KeyCode::Esc | KeyCode::Char('n')) {
+                if matches!(code, KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q')) {
                     self.pending_action = None;
                     self.screen = Screen::List;
                 }
@@ -1135,8 +1131,8 @@ Actions (on the selected local file + gist)
   p          pin / unpin the local <-> gist pair
 
 General
-  ?          show this help
-  q          quit";
+  Esc / q    close an overlay; from the list, quit the app
+  ?          show this help";
 
     frame.render_widget(
         Paragraph::new(text).block(
@@ -1167,7 +1163,7 @@ fn render_preview(frame: &mut Frame, state: &AppState) {
         chunks[0],
     );
     frame.render_widget(
-        Paragraph::new("↑↓←→ scroll  ·  Esc back  ·  q quit").block(
+        Paragraph::new("↑↓←→ scroll  ·  Esc/q back").block(
             Block::default()
                 .title("Commands")
                 .borders(Borders::ALL)
@@ -1235,7 +1231,7 @@ fn commands_hint() -> String {
         "s sort",
         "/ filter",
         "? help",
-        "q quit",
+        "Esc/q quit",
     ]
     .join("  ·  ")
 }
@@ -1518,9 +1514,9 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
             _ => format!("Overwrite {}? (y/n)", state.download_target.display()),
         }
     } else if state.diff_identical {
-        "Files are identical — nothing to sync  ·  ↑↓←→ scroll  ·  Esc back  ·  q quit".to_string()
+        "Files are identical — nothing to sync  ·  ↑↓←→ scroll  ·  Esc/q back".to_string()
     } else {
-        "↑↓←→ scroll  ·  d download  ·  u upload  ·  Esc back  ·  q quit".to_string()
+        "↑↓←→ scroll  ·  d download  ·  u upload  ·  Esc/q back".to_string()
     };
     frame.render_widget(
         Paragraph::new(footer).block(
@@ -1816,10 +1812,11 @@ mod tests {
     }
 
     #[test]
-    fn q_in_help_quits() {
+    fn q_in_help_closes_to_list() {
         let mut state = initial_state();
         state.screen = Screen::Help;
-        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
     }
 
     #[test]
@@ -2290,7 +2287,7 @@ mod tests {
     }
 
     #[test]
-    fn q_in_diff_quits() {
+    fn q_in_diff_returns_to_list() {
         let mut state = initial_state();
         state.enter_diff(
             "d".into(),
@@ -2298,7 +2295,8 @@ mod tests {
             PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
-        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
     }
 
     #[test]
@@ -2308,7 +2306,13 @@ mod tests {
     }
 
     #[test]
-    fn q_in_confirm_quits() {
+    fn esc_in_list_quits() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::Quit);
+    }
+
+    #[test]
+    fn q_in_confirm_cancels_without_quitting() {
         let mut state = initial_state();
         state.enter_diff(
             "d".into(),
@@ -2318,7 +2322,8 @@ mod tests {
         );
         state.pending_action = Some(PendingAction::Download);
         state.screen = Screen::Confirm;
-        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::Diff);
     }
 
     #[test]
