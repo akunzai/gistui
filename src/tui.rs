@@ -431,9 +431,9 @@ impl AppState {
             {
                 return KeyOutcome::DownloadGist;
             }
-            KeyCode::Enter
-                if self.focus == FocusPane::Gist && self.gist_index < self.ranked_gists().len() =>
-            {
+            // Enter works from either pane: it diffs the selected local file against the
+            // selected gist (the top match when focus is on the local pane).
+            KeyCode::Enter if self.gist_index < self.ranked_gists().len() => {
                 return KeyOutcome::PreviewDiff;
             }
             KeyCode::Char('p') => {
@@ -1759,8 +1759,19 @@ mod tests {
     }
 
     #[test]
-    fn enter_in_local_focus_is_noop() {
+    fn enter_in_local_focus_previews_top_gist() {
         let mut state = state_with_selection();
+        state.focus = FocusPane::Local;
+        assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::PreviewDiff);
+    }
+
+    #[test]
+    fn enter_with_no_gists_is_noop_in_local_focus() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/x"),
+            pinned: false,
+        }];
         state.focus = FocusPane::Local;
         assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
     }
