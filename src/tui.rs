@@ -1190,7 +1190,8 @@ fn render_list(frame: &mut Frame, state: &AppState) {
             None => commands_hint(),
         }
     };
-    let footer_lines = wrap_line_count(&footer_body, area.width.saturating_sub(2)).max(1);
+    // Width inside the footer block: minus 2 borders and 2 horizontal padding columns.
+    let footer_lines = wrap_line_count(&footer_body, area.width.saturating_sub(4)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 2)])
@@ -1264,9 +1265,12 @@ fn render_list(frame: &mut Frame, state: &AppState) {
     );
 
     frame.render_widget(
-        Paragraph::new(footer_body)
-            .wrap(Wrap { trim: true })
-            .block(Block::default().title("Commands").borders(Borders::ALL)),
+        Paragraph::new(footer_body).wrap(Wrap { trim: true }).block(
+            Block::default()
+                .title("Commands")
+                .borders(Borders::ALL)
+                .padding(Padding::horizontal(1)),
+        ),
         chunks[1],
     );
 }
