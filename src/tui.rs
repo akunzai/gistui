@@ -32,6 +32,7 @@ pub enum Screen {
     Diff,
     Confirm,
     Preview,
+    Help,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -354,6 +355,17 @@ impl AppState {
             Screen::Diff => self.handle_key_diff(code),
             Screen::Confirm => self.handle_key_confirm(code),
             Screen::Preview => self.handle_key_preview(code),
+            Screen::Help => self.handle_key_help(code),
+        }
+    }
+
+    fn handle_key_help(&mut self, code: KeyCode) -> KeyOutcome {
+        match code {
+            KeyCode::Char('q') => KeyOutcome::Quit,
+            _ => {
+                self.screen = Screen::List;
+                KeyOutcome::None
+            }
         }
     }
 
@@ -457,6 +469,7 @@ impl AppState {
                 self.gist_hscroll = 0;
             }
             KeyCode::Char('/') => self.filtering = true,
+            KeyCode::Char('?') => self.screen = Screen::Help,
             KeyCode::Char(' ') if self.selected_gist().is_some() => {
                 return KeyOutcome::PreviewContent;
             }
@@ -1015,7 +1028,44 @@ fn render(frame: &mut Frame, state: &AppState) {
         Screen::Diff => render_diff(frame, state, false),
         Screen::Confirm => render_diff(frame, state, true),
         Screen::Preview => render_preview(frame, state),
+        Screen::Help => render_help(frame),
     }
+}
+
+fn render_help(frame: &mut Frame) {
+    let text = "\
+Navigation
+  Tab        switch pane (Local / Gists)
+  Up/Down    move the selection
+  Left/Right scroll a long row horizontally
+
+Gist list
+  /          filter by filename or description
+  v          cycle visibility: all / public / secret
+  s          cycle sort: match / name / recent
+  t          toggle row view: description / id
+
+Actions (on the selected local file + gist)
+  Enter      diff the local file against the gist
+  Space      preview the gist file's content
+  d          download the gist into the cwd
+  u          upload the local file into the gist
+  n          create a new gist from the local file
+  p          pin / unpin the local <-> gist pair
+
+General
+  ?          show this help
+  q          quit";
+
+    frame.render_widget(
+        Paragraph::new(text).block(
+            Block::default()
+                .title("Help — press any key to close")
+                .borders(Borders::ALL)
+                .padding(Padding::horizontal(1)),
+        ),
+        frame.size(),
+    );
 }
 
 fn render_preview(frame: &mut Frame, state: &AppState) {
@@ -1098,6 +1148,7 @@ fn commands_hint() -> String {
         "v type",
         "s sort",
         "/ filter",
+        "? help",
         "q quit",
     ]
     .join("  ·  ")
@@ -1620,6 +1671,22 @@ mod tests {
         assert_eq!(state.diff_scroll, 1);
         state.handle_key(KeyCode::Up);
         assert_eq!(state.diff_scroll, 0);
+    }
+
+    #[test]
+    fn question_opens_help_and_any_key_closes_it() {
+        let mut state = initial_state();
+        state.handle_key(KeyCode::Char('?'));
+        assert_eq!(state.screen, Screen::Help);
+        assert_eq!(state.handle_key(KeyCode::Char('x')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn q_in_help_quits() {
+        let mut state = initial_state();
+        state.screen = Screen::Help;
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
     }
 
     #[test]
