@@ -20,6 +20,10 @@ pub enum PendingAction {
         filename: String,
         public: bool,
     },
+    Delete {
+        gist_id: String,
+        label: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +99,18 @@ pub fn create_command(local_path: &Path, public: bool) -> CommandPlan {
     CommandPlan {
         program: "gh".into(),
         args,
+    }
+}
+
+pub fn delete_command(gist_id: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "gist".into(),
+            "delete".into(),
+            "--yes".into(),
+            gist_id.to_string(),
+        ],
     }
 }
 
@@ -232,6 +248,13 @@ mod tests {
         let plan = open_browser_command("abc123");
         assert_eq!(plan.program, "gh");
         assert_eq!(plan.args, vec!["gist", "view", "abc123", "--web"]);
+    }
+
+    #[test]
+    fn delete_command_targets_gist_delete() {
+        let plan = delete_command("abc123");
+        assert_eq!(plan.program, "gh");
+        assert_eq!(plan.args, vec!["gist", "delete", "--yes", "abc123"]);
     }
 
     #[test]

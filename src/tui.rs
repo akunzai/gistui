@@ -46,6 +46,10 @@ pub enum PendingAction {
     Create {
         local_path: PathBuf,
     },
+    Delete {
+        gist_id: String,
+        label: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -140,6 +144,8 @@ pub enum KeyOutcome {
     PreviewContent,
     OpenBrowser,
     EditLocal,
+    DeletePreview,
+    ExecuteDelete,
 }
 
 #[derive(Debug, Clone)]
@@ -516,6 +522,13 @@ impl AppState {
                 };
             }
             KeyCode::Char('u') => return self.upload_intent(),
+            KeyCode::Char('X') => {
+                if self.selected_gist().is_none() {
+                    self.status = Some("select a gist to delete".into());
+                    return KeyOutcome::None;
+                }
+                return KeyOutcome::DeletePreview;
+            }
             KeyCode::Char('n') => {
                 let Some(local) = self.selected_local().cloned() else {
                     self.status = Some("select a local file to create a gist".into());
@@ -597,6 +610,13 @@ impl AppState {
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     self.pending_action = None;
                     self.screen = Screen::List;
+                }
+                _ => {}
+            },
+            Some(PendingAction::Delete { .. }) => match code {
+                KeyCode::Char('y') => return KeyOutcome::ExecuteDelete,
+                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
+                    self.back_to_list();
                 }
                 _ => {}
             },
@@ -731,21 +751,43 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
         if let Event::Key(key) = event::read()? {
             match state.handle_key(key.code) {
                 KeyOutcome::Quit => break,
-                KeyOutcome::PreviewDiff => fetch_then(terminal, &mut state, preview_diff)?,
+                KeyOutcome::PreviewDiff => {
+                    fetch_then(terminal, &mut state, "Loading diff…", preview_diff)?
+                }
                 KeyOutcome::Download => download(&mut state),
-                KeyOutcome::DownloadGist => fetch_then(terminal, &mut state, download_selected)?,
+                KeyOutcome::DownloadGist => {
+                    fetch_then(terminal, &mut state, "Downloading…", download_selected)?
+                }
                 KeyOutcome::Pin => pin_selected(&mut state),
                 KeyOutcome::Unpin => unpin_selected(&mut state),
-                KeyOutcome::UploadAdd => fetch_then(terminal, &mut state, upload_add)?,
-                KeyOutcome::UploadPreview => fetch_then(terminal, &mut state, upload_preview)?,
-                KeyOutcome::Upload => fetch_then(terminal, &mut state, upload_replace)?,
+                KeyOutcome::UploadAdd => {
+                    fetch_then(terminal, &mut state, "Uploading…", upload_add)?
+                }
+                KeyOutcome::UploadPreview => {
+                    fetch_then(terminal, &mut state, "Loading diff…", upload_preview)?
+                }
+                KeyOutcome::Upload => {
+                    fetch_then(terminal, &mut state, "Uploading…", upload_replace)?
+                }
                 KeyOutcome::Create(public) => {
-                    draw_loading(terminal, &mut state)?;
+                    draw_loading(terminal, &mut state, "Creating gist…")?;
                     create_gist(&mut state, public);
                 }
-                KeyOutcome::PreviewContent => fetch_then(terminal, &mut state, preview_content)?,
+                KeyOutcome::PreviewContent => {
+                    fetch_then(terminal, &mut state, "Loading preview…", preview_content)?
+                }
                 KeyOutcome::OpenBrowser => open_browser(&mut state),
                 KeyOutcome::EditLocal => edit_local(terminal, &mut state)?,
+                KeyOutcome::DeletePreview => fetch_then(
+                    terminal,
+                    &mut state,
+                    "Loading preview…",
+                    delete_preview_fetch,
+                )?,
+                KeyOutcome::ExecuteDelete => {
+                    draw_loading(terminal, &mut state, "Deleting gist…")?;
+                    delete_gist(&mut state);
+                }
                 KeyOutcome::None => {}
             }
         }
@@ -759,9 +801,10 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
 fn fetch_then(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
+    msg: &str,
     action: fn(&mut AppState),
 ) -> Result<()> {
-    draw_loading(terminal, state)?;
+    draw_loading(terminal, state, msg)?;
     action(state);
     Ok(())
 }
@@ -769,8 +812,9 @@ fn fetch_then(
 fn draw_loading(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
+    msg: &str,
 ) -> Result<()> {
-    state.set_status("Loading…");
+    state.set_status(msg);
     terminal.draw(|frame| render(frame, state))?;
     Ok(())
 }
@@ -1163,6 +1207,43 @@ fn create_gist(state: &mut AppState, public: bool) {
     }
 }
 
+fn delete_preview_fetch(state: &mut AppState) {
+    let Some(gist) = state.selected_gist() else {
+        return;
+    };
+    let gist_id = gist.file.gist_id.clone();
+    let label = if gist.file.description.is_empty() {
+        gist.file.gist_id.clone()
+    } else {
+        gist.file.description.clone()
+    };
+    match crate::gh::fetch_gist_file_content(&gist_id, &gist.file.filename) {
+        Ok(content) => {
+            state.diff_text = content;
+            state.diff_scroll = 0;
+            state.diff_hscroll = 0;
+            state.pending_action = Some(PendingAction::Delete { gist_id, label });
+            state.screen = Screen::Confirm;
+        }
+        Err(error) => state.set_status(format!("fetch failed: {error}")),
+    }
+}
+
+fn delete_gist(state: &mut AppState) {
+    let Some(PendingAction::Delete { gist_id, .. }) = state.pending_action.clone() else {
+        return;
+    };
+    let plan = crate::actions::delete_command(&gist_id);
+    state.back_to_list();
+    match crate::actions::execute_command(&plan) {
+        Ok(_) => {
+            state.set_status(format!("Deleted gist {gist_id}"));
+            refresh_gists(state);
+        }
+        Err(error) => state.set_status(format!("delete failed: {error}")),
+    }
+}
+
 fn render(frame: &mut Frame, state: &AppState) {
     match state.screen {
         Screen::List => render_list(frame, state),
@@ -1193,6 +1274,7 @@ Actions (on the selected local file + gist)
   u          upload the local file into the gist
   n          create a new gist from the local file
   p          pin / unpin the local <-> gist pair
+  X          delete the selected gist (y/n confirm)
   o          open the gist in your web browser
   e          edit the local file in $EDITOR
 
@@ -1287,7 +1369,13 @@ fn commands_hint(focus: FocusPane) -> String {
     let mut items = vec!["Tab panes", "↑↓ move", "Enter diff"];
     match focus {
         FocusPane::Local => items.extend(["e edit", "n create"]),
-        FocusPane::Gist => items.extend(["Space preview", "d download", "u upload", "o browser"]),
+        FocusPane::Gist => items.extend([
+            "Space preview",
+            "d download",
+            "u upload",
+            "X delete",
+            "o browser",
+        ]),
     }
     items.extend(["? help", "Esc/q quit"]);
     items.join("  ·  ")
@@ -1523,6 +1611,9 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
         Some(PendingAction::Create { local_path }) => {
             format!("Create gist from {}", local_path.display())
         }
+        Some(PendingAction::Delete { gist_id, .. }) => {
+            format!("Delete gist {gist_id}")
+        }
         _ => {
             let label = if state.diff_identical {
                 "Diff (identical)"
@@ -1567,6 +1658,9 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
                 gist_id, filename, ..
             }) => {
                 format!("Upload {} to gist {}? (y/n)", filename, gist_id)
+            }
+            Some(PendingAction::Delete { gist_id, label }) => {
+                format!("Permanently delete \"{label}\" ({gist_id})? (y/n)")
             }
             _ => format!("Overwrite {}? (y/n)", state.download_target.display()),
         }
@@ -2583,6 +2677,77 @@ mod tests {
         let mut state = initial_state();
         assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
         assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn x_without_gist_is_noop() {
+        let mut state = initial_state();
+        state.focus = FocusPane::Gist;
+        assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn x_with_gist_returns_delete_preview() {
+        let mut state = initial_state();
+        state.focus = FocusPane::Gist;
+        state.gists = vec![GistFile {
+            gist_id: "abc123".into(),
+            description: "my notes".into(),
+            filename: "notes.md".into(),
+            public: false,
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        }];
+        assert_eq!(
+            state.handle_key(KeyCode::Char('X')),
+            KeyOutcome::DeletePreview
+        );
+        assert_eq!(state.screen, Screen::List);
+        assert!(state.pending_action.is_none());
+    }
+
+    #[test]
+    fn delete_confirm_y_returns_execute_delete() {
+        let mut state = initial_state();
+        state.pending_action = Some(PendingAction::Delete {
+            gist_id: "abc123".into(),
+            label: "my notes".into(),
+        });
+        state.screen = Screen::Confirm;
+        assert_eq!(
+            state.handle_key(KeyCode::Char('y')),
+            KeyOutcome::ExecuteDelete
+        );
+    }
+
+    #[test]
+    fn delete_confirm_n_returns_to_list() {
+        let mut state = initial_state();
+        state.pending_action = Some(PendingAction::Delete {
+            gist_id: "abc123".into(),
+            label: "my notes".into(),
+        });
+        state.screen = Screen::Confirm;
+        assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+        assert!(state.pending_action.is_none());
+    }
+
+    #[test]
+    fn x_with_no_description_still_returns_delete_preview() {
+        let mut state = initial_state();
+        state.focus = FocusPane::Gist;
+        state.gists = vec![GistFile {
+            gist_id: "abc123".into(),
+            description: "".into(),
+            filename: "notes.md".into(),
+            public: false,
+            updated_at: "2026-01-01T00:00:00Z".into(),
+        }];
+        assert_eq!(
+            state.handle_key(KeyCode::Char('X')),
+            KeyOutcome::DeletePreview
+        );
     }
 
     #[test]
