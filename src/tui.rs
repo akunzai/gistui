@@ -146,6 +146,7 @@ pub enum KeyOutcome {
     EditLocal,
     DeletePreview,
     ExecuteDelete,
+    RefreshLocals,
 }
 
 #[derive(Debug, Clone)]
@@ -178,6 +179,10 @@ pub struct AppState {
     pub loading: bool,
     pub preview_title: String,
     pub gist_content_cache: std::collections::HashMap<(String, String), String>,
+    pub local_recursive: bool,
+    pub skip_dirs: Vec<String>,
+    pub scan_depth: u32,
+    pub local_scanning: bool,
 }
 
 impl AppState {
@@ -256,7 +261,7 @@ impl AppState {
             FocusPane::Local => self
                 .locals
                 .iter()
-                .map(|c| local_row_label(&c.path).chars().count())
+                .map(|c| local_row_label(&c.path, &self.cwd).chars().count())
                 .max(),
             FocusPane::Gist => self
                 .ranked_gists()
@@ -476,6 +481,12 @@ impl AppState {
                 self.gist_index = 0;
                 self.gist_hscroll = 0;
             }
+            KeyCode::Char('r') => {
+                self.local_recursive = !self.local_recursive;
+                self.local_index = 0;
+                self.local_hscroll = 0;
+                return KeyOutcome::RefreshLocals;
+            }
             KeyCode::Char('/') => self.filtering = true,
             KeyCode::Char('?') => self.screen = Screen::Help,
             KeyCode::Char('o') => {
@@ -661,6 +672,10 @@ pub fn initial_state() -> AppState {
         loading: false,
         preview_title: String::new(),
         gist_content_cache: std::collections::HashMap::new(),
+        local_recursive: false,
+        skip_dirs: crate::config::AppConfig::default().skip_dirs,
+        scan_depth: crate::config::AppConfig::default().scan_depth,
+        local_scanning: false,
     }
 }
 
@@ -671,7 +686,15 @@ pub fn load_startup_state() -> Result<AppState> {
     let cwd = std::env::current_dir()?;
 
     state.pinned = config.pinned;
-    state.locals = crate::local::discover_local_candidates(&cwd, &state.pinned)?;
+    state.skip_dirs = config.skip_dirs;
+    state.scan_depth = config.scan_depth;
+    state.locals = crate::local::discover_local_candidates(
+        &cwd,
+        &state.pinned,
+        false,
+        &state.skip_dirs,
+        state.scan_depth,
+    )?;
     state.cwd = cwd;
     // Start focused on the gist pane: the common flow is to pick a gist and pull it
     // into the cwd, and the gist list is shown even when no local file is selected.
@@ -710,6 +733,24 @@ fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<Vec<GistFile>> {
     rx
 }
 
+fn spawn_local_scan(
+    cwd: std::path::PathBuf,
+    pinned: Vec<crate::domain::PinnedMapping>,
+    recursive: bool,
+    skip_dirs: Vec<String>,
+    max_depth: u32,
+) -> std::sync::mpsc::Receiver<Vec<LocalCandidate>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let candidates = crate::local::discover_local_candidates(
+            &cwd, &pinned, recursive, &skip_dirs, max_depth,
+        )
+        .unwrap_or_default();
+        let _ = tx.send(candidates);
+    });
+    rx
+}
+
 pub fn run() -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -728,6 +769,7 @@ pub fn run() -> Result<()> {
 fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut state = load_startup_state()?;
     let gist_rx = spawn_gist_fetch();
+    let mut local_rx: Option<std::sync::mpsc::Receiver<Vec<LocalCandidate>>> = None;
 
     loop {
         terminal.draw(|frame| render(frame, &state))?;
@@ -744,7 +786,27 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
             }
         }
 
-        // Poll so the loop also wakes to check the background fetch, not only on input.
+        // Absorb a completed background local scan.
+        if state.local_scanning {
+            if let Some(ref rx) = local_rx {
+                if let Ok(locals) = rx.try_recv() {
+                    let selected = state.selected_local().map(|c| c.path.clone());
+                    state.locals = locals;
+                    state.local_index = selected
+                        .and_then(|path| state.locals.iter().position(|c| c.path == path))
+                        .unwrap_or(0)
+                        .min(state.locals.len().saturating_sub(1));
+                    if state.gist_index >= state.ranked_gists().len() {
+                        state.gist_index = 0;
+                    }
+                    state.local_scanning = false;
+                    state.status = None;
+                    local_rx = None;
+                }
+            }
+        }
+
+        // Poll so the loop also wakes to check the background fetches, not only on input.
         if !event::poll(std::time::Duration::from_millis(150))? {
             continue;
         }
@@ -787,6 +849,17 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                 KeyOutcome::ExecuteDelete => {
                     draw_loading(terminal, &mut state, "Deleting gist…")?;
                     delete_gist(&mut state);
+                }
+                KeyOutcome::RefreshLocals => {
+                    draw_loading(terminal, &mut state, "Scanning files…")?;
+                    state.local_scanning = true;
+                    local_rx = Some(spawn_local_scan(
+                        state.cwd.clone(),
+                        state.pinned.clone(),
+                        state.local_recursive,
+                        state.skip_dirs.clone(),
+                        state.scan_depth,
+                    ));
                 }
                 KeyOutcome::None => {}
             }
@@ -1035,11 +1108,17 @@ fn download(state: &mut AppState) {
     }
 }
 
-/// Re-discovers the cwd file list after a write so a freshly downloaded file appears in the
-/// Local pane. The current selection is preserved by path when still present.
+/// Quick flat re-scan used after a download/upload to make the new file visible immediately.
+/// Always non-recursive since downloads only write to cwd root.
 fn refresh_locals(state: &mut AppState) {
     let selected = state.selected_local().map(|c| c.path.clone());
-    if let Ok(locals) = crate::local::discover_local_candidates(&state.cwd, &state.pinned) {
+    if let Ok(locals) = crate::local::discover_local_candidates(
+        &state.cwd,
+        &state.pinned,
+        false,
+        &state.skip_dirs,
+        state.scan_depth,
+    ) {
         state.locals = locals;
         state.local_index = selected
             .and_then(|path| state.locals.iter().position(|c| c.path == path))
@@ -1062,6 +1141,8 @@ fn pin_selected(state: &mut AppState) {
     match result {
         Ok(config) => {
             state.pinned = config.pinned;
+            state.skip_dirs = config.skip_dirs;
+            state.scan_depth = config.scan_depth;
             state.set_status(format!(
                 "Pinned {} <-> {}",
                 local.path.display(),
@@ -1083,6 +1164,8 @@ fn unpin_selected(state: &mut AppState) {
     match result {
         Ok(config) => {
             state.pinned = config.pinned;
+            state.skip_dirs = config.skip_dirs;
+            state.scan_depth = config.scan_depth;
             state.set_status(format!("Unpinned {}", local.path.display()));
         }
         Err(error) => state.set_status(format!("unpin failed: {error}")),
@@ -1262,6 +1345,7 @@ Navigation
   Left/Right scroll a long row horizontally
 
 Gist list
+  r          toggle recursive file discovery (skips hidden + configured dirs)
   /          filter by filename or description
   v          cycle visibility: all / public / secret
   s          cycle sort: match / name / recent
@@ -1321,10 +1405,8 @@ fn render_preview(frame: &mut Frame, state: &AppState) {
     );
 }
 
-fn local_row_label(path: &std::path::Path) -> String {
-    path.file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string())
+fn local_row_label(path: &std::path::Path, cwd: &std::path::Path) -> String {
+    path.strip_prefix(cwd).unwrap_or(path).display().to_string()
 }
 
 fn hscroll_str(text: &str, offset: u16) -> String {
@@ -1368,7 +1450,7 @@ fn commands_hint(focus: FocusPane) -> String {
     // Focus-relevant common keys only; the full reference lives in the `?` help overlay.
     let mut items = vec!["Tab panes", "↑↓ move", "Enter diff"];
     match focus {
-        FocusPane::Local => items.extend(["e edit", "n create"]),
+        FocusPane::Local => items.extend(["r recursive", "e edit", "n create"]),
         FocusPane::Gist => items.extend([
             "Space preview",
             "d download",
@@ -1428,20 +1510,34 @@ fn render_list(frame: &mut Frame, state: &AppState) {
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(chunks[0]);
 
-    // Discovery is scoped to the cwd, so each candidate is a direct child; show just the
-    // file name and put the cwd in the pane title as the shared baseline.
-    let local_items: Vec<ListItem> = if state.locals.is_empty() {
+    // Show each candidate's path relative to cwd; in flat mode this is just the filename,
+    // in recursive mode it includes the subdirectory (e.g. src/utils/helpers.rs).
+    let local_items: Vec<ListItem> = if state.local_scanning && state.locals.is_empty() {
+        vec![ListItem::new("(scanning…)")]
+    } else if state.locals.is_empty() {
         vec![ListItem::new("(no files in this directory)")]
     } else {
         state
             .locals
             .iter()
-            .map(|c| ListItem::new(hscroll_str(&local_row_label(&c.path), state.local_hscroll)))
+            .map(|c| {
+                ListItem::new(hscroll_str(
+                    &local_row_label(&c.path, &state.cwd),
+                    state.local_hscroll,
+                ))
+            })
             .collect()
     };
     let local_focused = state.focus == FocusPane::Local;
     let local_selected = (!state.locals.is_empty()).then_some(state.local_index);
-    let local_title = format!("Local · {}", state.cwd.display());
+    let recursive_marker = if state.local_recursive { " [↓]" } else { "" };
+    let scanning_marker = if state.local_scanning { " …" } else { "" };
+    let local_title = format!(
+        "Local · {}{}{}",
+        state.cwd.display(),
+        recursive_marker,
+        scanning_marker
+    );
     render_pane(
         frame,
         columns[0],

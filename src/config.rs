@@ -4,10 +4,51 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+fn default_scan_depth() -> u32 {
+    2
+}
+
+fn default_skip_dirs() -> Vec<String> {
+    [
+        "node_modules",
+        "target",
+        "dist",
+        "build",
+        ".next",
+        "__pycache__",
+        "vendor",
+        ".cache",
+        "venv",
+        ".venv",
+        "env",
+        ".tox",
+        "coverage",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AppConfig {
     #[serde(default)]
     pub pinned: Vec<PinnedMapping>,
+    /// Directory names skipped during recursive local file discovery.
+    #[serde(default = "default_skip_dirs")]
+    pub skip_dirs: Vec<String>,
+    /// Maximum directory depth for recursive local file discovery (r key).
+    #[serde(default = "default_scan_depth")]
+    pub scan_depth: u32,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            pinned: Vec::new(),
+            skip_dirs: default_skip_dirs(),
+            scan_depth: default_scan_depth(),
+        }
+    }
 }
 
 pub fn normalize_path(path: &Path) -> Result<PathBuf> {
@@ -107,6 +148,8 @@ mod tests {
                 direction: Some(SyncDirection::Upload),
                 last_seen_hash: Some("hash".into()),
             }],
+            skip_dirs: default_skip_dirs(),
+            scan_depth: default_scan_depth(),
         };
 
         save_config(&path, &config).unwrap();
