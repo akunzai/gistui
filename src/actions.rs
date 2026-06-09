@@ -174,6 +174,27 @@ pub fn unpin_mapping(
     Ok(config)
 }
 
+/// Removes exactly the first entry whose `local_path` and `gist_id` both match.
+/// Used by the pins view to unpin a single row without affecting sibling entries.
+pub fn unpin_mapping_exact(
+    config_path: &Path,
+    mut config: AppConfig,
+    local_path: &Path,
+    gist_id: &str,
+) -> Result<AppConfig> {
+    let mut removed = false;
+    config.pinned.retain(|m| {
+        if !removed && m.local_path == local_path && m.gist_id == gist_id {
+            removed = true;
+            false
+        } else {
+            true
+        }
+    });
+    save_config(config_path, &config)?;
+    Ok(config)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
