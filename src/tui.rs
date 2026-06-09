@@ -159,6 +159,7 @@ pub struct AppState {
     pub download_target: PathBuf,
     pub cwd: PathBuf,
     pub status: Option<String>,
+    pub loading: bool,
 }
 
 impl AppState {
@@ -558,6 +559,7 @@ pub fn initial_state() -> AppState {
         download_target: PathBuf::new(),
         cwd: PathBuf::from("."),
         status: None,
+        loading: false,
     }
 }
 
@@ -573,16 +575,27 @@ pub fn load_startup_state() -> Result<AppState> {
     // Start focused on the gist pane: the common flow is to pick a gist and pull it
     // into the cwd, and the gist list is shown even when no local file is selected.
     state.focus = FocusPane::Gist;
-
-    if crate::gh::check_gh_ready().is_ok() {
-        if let Ok(gists) =
-            crate::gh::fetch_gist_list_json().and_then(|raw| crate::gh::parse_gist_list_json(&raw))
-        {
-            state.gists = gists;
-        }
-    }
+    // The gist list is fetched off-thread by run_loop so the TUI appears instantly.
+    state.loading = true;
 
     Ok(state)
+}
+
+/// Fetches the gist list on a background thread so startup does not block on `gh`.
+/// Mirrors the previous graceful degradation: an empty list on any error.
+fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<Vec<GistFile>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let gists = if crate::gh::check_gh_ready().is_ok() {
+            crate::gh::fetch_gist_list_json()
+                .and_then(|raw| crate::gh::parse_gist_list_json(&raw))
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let _ = tx.send(gists);
+    });
+    rx
 }
 
 pub fn run() -> Result<()> {
@@ -602,27 +615,67 @@ pub fn run() -> Result<()> {
 
 fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut state = load_startup_state()?;
+    let gist_rx = spawn_gist_fetch();
 
     loop {
         terminal.draw(|frame| render(frame, &state))?;
 
+        // Absorb the background gist list once it arrives.
+        if state.loading {
+            if let Ok(gists) = gist_rx.try_recv() {
+                state.gists = gists;
+                state.loading = false;
+                if state.gist_index >= state.ranked_gists().len() {
+                    state.gist_index = 0;
+                }
+            }
+        }
+
+        // Poll so the loop also wakes to check the background fetch, not only on input.
+        if !event::poll(std::time::Duration::from_millis(150))? {
+            continue;
+        }
         if let Event::Key(key) = event::read()? {
             match state.handle_key(key.code) {
                 KeyOutcome::Quit => break,
-                KeyOutcome::PreviewDiff => preview_diff(&mut state),
+                KeyOutcome::PreviewDiff => fetch_then(terminal, &mut state, preview_diff)?,
                 KeyOutcome::Download => download(&mut state),
-                KeyOutcome::DownloadGist => download_selected(&mut state),
+                KeyOutcome::DownloadGist => fetch_then(terminal, &mut state, download_selected)?,
                 KeyOutcome::Pin => pin_selected(&mut state),
                 KeyOutcome::Unpin => unpin_selected(&mut state),
-                KeyOutcome::UploadAdd => upload_add(&mut state),
-                KeyOutcome::UploadPreview => upload_preview(&mut state),
-                KeyOutcome::Upload => upload_replace(&mut state),
-                KeyOutcome::Create(public) => create_gist(&mut state, public),
+                KeyOutcome::UploadAdd => fetch_then(terminal, &mut state, upload_add)?,
+                KeyOutcome::UploadPreview => fetch_then(terminal, &mut state, upload_preview)?,
+                KeyOutcome::Upload => fetch_then(terminal, &mut state, upload_replace)?,
+                KeyOutcome::Create(public) => {
+                    draw_loading(terminal, &mut state)?;
+                    create_gist(&mut state, public);
+                }
                 KeyOutcome::None => {}
             }
         }
     }
 
+    Ok(())
+}
+
+/// Draws a "Loading…" frame, then runs a blocking `gh` action. The action overwrites the
+/// status with its result, which the next loop iteration draws.
+fn fetch_then(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    state: &mut AppState,
+    action: fn(&mut AppState),
+) -> Result<()> {
+    draw_loading(terminal, state)?;
+    action(state);
+    Ok(())
+}
+
+fn draw_loading(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    state: &mut AppState,
+) -> Result<()> {
+    state.set_status("Loading…");
+    terminal.draw(|frame| render(frame, state))?;
     Ok(())
 }
 
@@ -940,15 +993,19 @@ fn render_list(frame: &mut Frame, state: &AppState) {
     );
 
     let ranked = state.ranked_gists();
-    let gist_items: Vec<ListItem> = ranked
-        .iter()
-        .map(|g| {
-            ListItem::new(hscroll_str(
-                &gist_row_label(g, state.gist_view),
-                state.gist_hscroll,
-            ))
-        })
-        .collect();
+    let gist_items: Vec<ListItem> = if state.loading && ranked.is_empty() {
+        vec![ListItem::new("Loading gists…")]
+    } else {
+        ranked
+            .iter()
+            .map(|g| {
+                ListItem::new(hscroll_str(
+                    &gist_row_label(g, state.gist_view),
+                    state.gist_hscroll,
+                ))
+            })
+            .collect()
+    };
     let gist_focused = state.focus == FocusPane::Gist;
     let gist_selected = (!ranked.is_empty()).then_some(state.gist_index);
     let mut gist_title = format!(
