@@ -27,6 +27,7 @@ pub enum Screen {
     List,
     Diff,
     Confirm,
+    Preview,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,6 +132,7 @@ pub enum KeyOutcome {
     UploadPreview,
     Upload,
     Create(bool),
+    PreviewContent,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +162,8 @@ pub struct AppState {
     pub cwd: PathBuf,
     pub status: Option<String>,
     pub loading: bool,
+    pub preview_title: String,
+    pub gist_content_cache: std::collections::HashMap<(String, String), String>,
 }
 
 impl AppState {
@@ -315,7 +319,25 @@ impl AppState {
             Screen::List => self.handle_key_list(code),
             Screen::Diff => self.handle_key_diff(code),
             Screen::Confirm => self.handle_key_confirm(code),
+            Screen::Preview => self.handle_key_preview(code),
         }
+    }
+
+    fn handle_key_preview(&mut self, code: KeyCode) -> KeyOutcome {
+        match code {
+            KeyCode::Char('q') => return KeyOutcome::Quit,
+            KeyCode::Esc => {
+                self.screen = Screen::List;
+                self.diff_text.clear();
+                self.preview_title.clear();
+            }
+            KeyCode::Down => self.scroll_diff_down(),
+            KeyCode::Up => self.scroll_diff_up(),
+            KeyCode::Right => self.scroll_diff_right(),
+            KeyCode::Left => self.scroll_diff_left(),
+            _ => {}
+        }
+        KeyOutcome::None
     }
 
     fn handle_key_filter(&mut self, code: KeyCode) -> KeyOutcome {
@@ -401,6 +423,9 @@ impl AppState {
                 self.gist_hscroll = 0;
             }
             KeyCode::Char('/') => self.filtering = true,
+            KeyCode::Char(' ') if self.selected_gist().is_some() => {
+                return KeyOutcome::PreviewContent;
+            }
             KeyCode::Char('d')
                 if self.focus == FocusPane::Gist && self.gist_index < self.ranked_gists().len() =>
             {
@@ -560,6 +585,8 @@ pub fn initial_state() -> AppState {
         cwd: PathBuf::from("."),
         status: None,
         loading: false,
+        preview_title: String::new(),
+        gist_content_cache: std::collections::HashMap::new(),
     }
 }
 
@@ -650,6 +677,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                     draw_loading(terminal, &mut state)?;
                     create_gist(&mut state, public);
                 }
+                KeyOutcome::PreviewContent => fetch_then(terminal, &mut state, preview_content)?,
                 KeyOutcome::None => {}
             }
         }
@@ -700,6 +728,32 @@ fn preview_diff(state: &mut AppState) {
         }
         Err(error) => state.set_status(format!("fetch failed: {error}")),
     }
+}
+
+fn preview_content(state: &mut AppState) {
+    let Some(gist) = state.selected_gist() else {
+        return;
+    };
+    let key = (gist.file.gist_id.clone(), gist.file.filename.clone());
+    let content = match state.gist_content_cache.get(&key) {
+        Some(cached) => cached.clone(),
+        None => match crate::gh::fetch_gist_file_content(&gist.file.gist_id, &gist.file.filename) {
+            Ok(content) => {
+                state.gist_content_cache.insert(key, content.clone());
+                content
+            }
+            Err(error) => {
+                state.set_status(format!("fetch failed: {error}"));
+                return;
+            }
+        },
+    };
+    state.preview_title = format!("Preview: {} / {}", gist.file.gist_id, gist.file.filename);
+    state.diff_text = content;
+    state.diff_scroll = 0;
+    state.diff_hscroll = 0;
+    state.status = None;
+    state.screen = Screen::Preview;
 }
 
 fn download_selected(state: &mut AppState) {
@@ -920,7 +974,31 @@ fn render(frame: &mut Frame, state: &AppState) {
         Screen::List => render_list(frame, state),
         Screen::Diff => render_diff(frame, state, false),
         Screen::Confirm => render_diff(frame, state, true),
+        Screen::Preview => render_preview(frame, state),
     }
+}
+
+fn render_preview(frame: &mut Frame, state: &AppState) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(3)])
+        .split(frame.size());
+
+    frame.render_widget(
+        Paragraph::new(state.diff_text.clone())
+            .scroll((state.diff_scroll, state.diff_hscroll))
+            .block(
+                Block::default()
+                    .title(state.preview_title.clone())
+                    .borders(Borders::ALL),
+            ),
+        chunks[0],
+    );
+    frame.render_widget(
+        Paragraph::new("Up/Down/Left/Right scroll  Esc back  q quit")
+            .block(Block::default().title("Commands").borders(Borders::ALL)),
+        chunks[1],
+    );
 }
 
 fn local_row_label(path: &std::path::Path) -> String {
@@ -1034,7 +1112,7 @@ fn render_list(frame: &mut Frame, state: &AppState) {
         match &state.status {
             Some(message) => message.clone(),
             None => {
-                "Tab  ↑↓ move  ←→ scroll  Enter diff  d download  u upload  n create  p pin  t view  v type  s sort  / filter  q quit"
+                "Tab  ↑↓←→  Enter diff  Space preview  d download  u upload  n create  p pin  t view  v type  s sort  / filter  q quit"
                     .to_string()
             }
         }
@@ -1348,6 +1426,44 @@ mod tests {
         state.handle_key(KeyCode::Char('y'));
         state.handle_key(KeyCode::Backspace);
         assert_eq!(state.filter_query, "x");
+    }
+
+    #[test]
+    fn space_on_selected_gist_returns_preview_content() {
+        let mut state = state_with_two_gists();
+        assert_eq!(
+            state.handle_key(KeyCode::Char(' ')),
+            KeyOutcome::PreviewContent
+        );
+    }
+
+    #[test]
+    fn space_without_gist_is_noop() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char(' ')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn esc_in_preview_returns_to_list_and_clears() {
+        let mut state = initial_state();
+        state.screen = Screen::Preview;
+        state.diff_text = "raw content".into();
+        state.preview_title = "Preview: a / x".into();
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+        assert!(state.diff_text.is_empty());
+        assert!(state.preview_title.is_empty());
+    }
+
+    #[test]
+    fn preview_scrolls_with_arrows() {
+        let mut state = initial_state();
+        state.screen = Screen::Preview;
+        state.diff_text = "l1\nl2\nl3".into();
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.diff_scroll, 1);
+        state.handle_key(KeyCode::Up);
+        assert_eq!(state.diff_scroll, 0);
     }
 
     #[test]
