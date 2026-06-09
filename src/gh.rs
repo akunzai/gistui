@@ -65,10 +65,11 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
 }
 
 pub fn fetch_gist_list_json() -> Result<String> {
-    // `gh gist list` has no `--json` flag; the REST API returns the structured
-    // shape parsed by `parse_gist_list_json` (files keyed by name, snake_case fields).
+    // `gh gist list` has no `--json` flag; use the REST API with --paginate so
+    // accounts with more than 100 gists are fully retrieved. gh concatenates all
+    // pages into a single JSON array, which parse_gist_list_json already handles.
     let output = Command::new("gh")
-        .args(["api", "/gists?per_page=100"])
+        .args(["api", "--paginate", "/gists?per_page=100"])
         .output()
         .context("run gh api /gists")?;
 
