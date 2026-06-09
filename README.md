@@ -17,8 +17,21 @@ be installed and authenticated wherever you run `gistui`.
 
 ### Download a prebuilt binary (recommended)
 
-Each [release](https://github.com/akunzai/gistui/releases/latest) attaches prebuilt
-binaries — no Rust toolchain required. Pick the archive for your platform:
+Each [release](https://github.com/akunzai/gistui/releases/latest) attaches prebuilt,
+checksummed binaries — no Rust toolchain required.
+
+The install script detects your platform, downloads the matching release asset, verifies
+its SHA-256 checksum, and installs it into `~/.local/bin`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/akunzai/gistui/main/install.sh | bash
+```
+
+It supports Linux (x86-64/ARM64), macOS (Intel/Apple Silicon), and Windows (x86-64) under
+[Git Bash](https://gitforwindows.org)/MSYS2. Pass `--version <tag>` to pin a release or
+`--bin-dir <dir>` to change the install location.
+
+Prefer to install by hand? Grab the archive for your platform from the releases page:
 
 | Platform | Asset |
 |----------|-------|
@@ -28,7 +41,7 @@ binaries — no Rust toolchain required. Pick the archive for your platform:
 | Linux (ARM64) | `gistui-<version>-aarch64-unknown-linux-gnu.tar.gz` |
 | Windows (x86-64) | `gistui-<version>-x86_64-pc-windows-msvc.zip` |
 
-Extract it and put `gistui` somewhere on your `PATH`, e.g. on macOS/Linux:
+Then extract it and put `gistui` somewhere on your `PATH`, e.g. on macOS/Linux:
 
 ```bash
 tar -xzf gistui-<version>-<target>.tar.gz

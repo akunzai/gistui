@@ -68,6 +68,7 @@ jobs:
           cp "$BIN" "$PKG/"
           cp README.md LICENSE "$PKG/"
           tar -czf "${PKG}.tar.gz" "$PKG"
+          shasum -a 256 "${PKG}.tar.gz" > "${PKG}.tar.gz.sha256"
           echo "ASSET=${PKG}.tar.gz" >> "$GITHUB_ENV"
 
       - name: Package (Windows)
@@ -82,13 +83,17 @@ jobs:
           New-Item -ItemType Directory $pkg
           Copy-Item $bin, README.md, LICENSE $pkg\
           Compress-Archive -Path $pkg -DestinationPath "${pkg}.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 "${pkg}.zip").Hash.ToLower()
+          "$hash  ${pkg}.zip" | Out-File -Encoding ascii "${pkg}.zip.sha256"
           "ASSET=${pkg}.zip" | Out-File -Append $env:GITHUB_ENV
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.target }}
-          path: ${{ env.ASSET }}
+          path: |
+            ${{ env.ASSET }}
+            ${{ env.ASSET }}.sha256
 
   release:
     name: Create GitHub Release
