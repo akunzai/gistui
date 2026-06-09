@@ -42,6 +42,43 @@ pub enum GistTypeFilter {
     Secret,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GistSort {
+    Match,
+    Name,
+    Recent,
+}
+
+impl GistSort {
+    fn next(self) -> Self {
+        match self {
+            GistSort::Match => GistSort::Name,
+            GistSort::Name => GistSort::Recent,
+            GistSort::Recent => GistSort::Match,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            GistSort::Match => "match",
+            GistSort::Name => "name",
+            GistSort::Recent => "recent",
+        }
+    }
+
+    /// Re-orders ranked gists. `Match` keeps the incoming order (ranking score, or the
+    /// gh list order when no local is selected); the others override it.
+    fn apply(self, gists: &mut [RankedGistFile]) {
+        match self {
+            GistSort::Match => {}
+            GistSort::Name => gists.sort_by(|a, b| a.file.filename.cmp(&b.file.filename)),
+            GistSort::Recent => {
+                gists.sort_by(|a, b| b.file.updated_at.cmp(&a.file.updated_at));
+            }
+        }
+    }
+}
+
 impl GistTypeFilter {
     fn matches(self, public: bool) -> bool {
         match self {
@@ -90,6 +127,7 @@ pub struct AppState {
     pub screen: Screen,
     pub gist_view: GistView,
     pub gist_type_filter: GistTypeFilter,
+    pub gist_sort: GistSort,
     pub diff_previewed: bool,
     pub diff_text: String,
     pub diff_scroll: u16,
@@ -109,19 +147,21 @@ impl AppState {
             .filter(|g| self.gist_type_filter.matches(g.public))
             .cloned()
             .collect();
-        let Some(local) = self.locals.get(self.local_index) else {
-            // No local selected (e.g. an empty directory): list every gist
-            // unranked so the user can still preview and download into the cwd.
-            return gists
+        // No local selected (e.g. an empty directory): list every gist unranked so the
+        // user can still preview and download into the cwd.
+        let mut ranked = match self.locals.get(self.local_index) {
+            Some(local) => rank_gist_files(&local.path, &gists, &self.pinned),
+            None => gists
                 .into_iter()
                 .map(|file| RankedGistFile {
                     file,
                     score: 0,
                     reasons: Vec::new(),
                 })
-                .collect();
+                .collect(),
         };
-        rank_gist_files(&local.path, &gists, &self.pinned)
+        self.gist_sort.apply(&mut ranked);
+        ranked
     }
 
     pub fn selected_local(&self) -> Option<&LocalCandidate> {
@@ -299,6 +339,12 @@ impl AppState {
                 self.gist_index = 0;
                 self.gist_hscroll = 0;
             }
+            KeyCode::Char('s') => {
+                // Cycle the gist sort: match -> name -> recent -> match.
+                self.gist_sort = self.gist_sort.next();
+                self.gist_index = 0;
+                self.gist_hscroll = 0;
+            }
             KeyCode::Char('d')
                 if self.focus == FocusPane::Gist && self.gist_index < self.ranked_gists().len() =>
             {
@@ -358,6 +404,7 @@ pub fn initial_state() -> AppState {
         screen: Screen::List,
         gist_view: GistView::Description,
         gist_type_filter: GistTypeFilter::All,
+        gist_sort: GistSort::Match,
         diff_previewed: false,
         diff_text: String::new(),
         diff_scroll: 0,
@@ -602,7 +649,11 @@ fn render_list(frame: &mut Frame, state: &AppState) {
         .collect();
     let gist_focused = state.focus == FocusPane::Gist;
     let gist_selected = (!ranked.is_empty()).then_some(state.gist_index);
-    let gist_title = format!("Gists · {}", state.gist_type_filter.label());
+    let gist_title = format!(
+        "Gists · {} · {}",
+        state.gist_type_filter.label(),
+        state.gist_sort.label()
+    );
     render_pane(
         frame,
         columns[1],
@@ -614,9 +665,8 @@ fn render_list(frame: &mut Frame, state: &AppState) {
 
     let footer = match &state.status {
         Some(message) => message.clone(),
-        None => {
-            "Tab  ↑↓ move  ←→ scroll  Enter diff  d download  t view  v type  q quit".to_string()
-        }
+        None => "Tab  ↑↓ move  ←→ scroll  Enter diff  d download  t view  v type  s sort  q quit"
+            .to_string(),
     };
     frame.render_widget(
         Paragraph::new(footer).block(Block::default().title("Commands").borders(Borders::ALL)),
@@ -769,6 +819,48 @@ mod tests {
         assert_eq!(state.gist_type_filter, GistTypeFilter::Secret);
         state.handle_key(KeyCode::Char('v'));
         assert_eq!(state.gist_type_filter, GistTypeFilter::All);
+    }
+
+    #[test]
+    fn s_cycles_gist_sort() {
+        let mut state = initial_state();
+        assert_eq!(state.gist_sort, GistSort::Match);
+        state.handle_key(KeyCode::Char('s'));
+        assert_eq!(state.gist_sort, GistSort::Name);
+        state.handle_key(KeyCode::Char('s'));
+        assert_eq!(state.gist_sort, GistSort::Recent);
+        state.handle_key(KeyCode::Char('s'));
+        assert_eq!(state.gist_sort, GistSort::Match);
+    }
+
+    #[test]
+    fn sort_by_name_and_recent_reorders_gists() {
+        let mut state = initial_state();
+        state.gists = vec![
+            GistFile {
+                gist_id: "z".into(),
+                description: "".into(),
+                filename: "zeta.json".into(),
+                public: true,
+                updated_at: "2026-01-01T00:00:00Z".into(),
+            },
+            GistFile {
+                gist_id: "a".into(),
+                description: "".into(),
+                filename: "alpha.json".into(),
+                public: true,
+                updated_at: "2026-09-09T00:00:00Z".into(),
+            },
+        ];
+        // No local selected -> Match keeps gh list order (zeta, alpha).
+        assert_eq!(state.ranked_gists()[0].file.filename, "zeta.json");
+
+        state.gist_sort = GistSort::Name;
+        assert_eq!(state.ranked_gists()[0].file.filename, "alpha.json");
+
+        state.gist_sort = GistSort::Recent;
+        assert_eq!(state.ranked_gists()[0].file.filename, "alpha.json");
+        assert_eq!(state.ranked_gists()[1].file.filename, "zeta.json");
     }
 
     #[test]
