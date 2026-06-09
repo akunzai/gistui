@@ -1282,22 +1282,14 @@ fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
 /// The full command hint as one responsive line; the footer word-wraps it to the
 /// terminal width (one line when wide, more when narrow).
 fn commands_hint() -> String {
+    // Only the common keys; the full reference lives in the `?` help overlay.
     [
-        "Tab switch pane",
+        "Tab panes",
         "↑↓ move",
-        "←→ scroll",
         "Enter diff",
         "Space preview",
         "d download",
         "u upload",
-        "n create",
-        "p pin",
-        "o browser",
-        "e edit",
-        "t view",
-        "v type",
-        "s sort",
-        "/ filter",
         "? help",
         "Esc/q quit",
     ]
