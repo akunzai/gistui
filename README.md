@@ -76,6 +76,25 @@ unranked so you can still preview and download into the current directory.
 - No GitHub token is stored by the app, and gist content is never written to the config
   file — only path↔gist pin mappings are persisted.
 
+## Configuration
+
+The config file lives at `~/.config/gistui/config.toml` (or
+`$XDG_CONFIG_HOME/gistui/config.toml` if that variable is set). It is created
+automatically the first time you pin a file. All fields are optional.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `skip_dirs` | `[string]` | Directory names skipped during recursive discovery (`r` key). Defaults to common build/dependency dirs (`node_modules`, `target`, …). Hidden dirs (`.`-prefix) are always skipped. |
+| `[[pinned]]` | table array | Local-file ↔ gist mappings managed by the `p` key. Can also be edited by hand. |
+
+Copy [`config.example.toml`](config.example.toml) from the repo for an annotated
+starting point:
+
+```bash
+mkdir -p ~/.config/gistui
+cp config.example.toml ~/.config/gistui/config.toml
+```
+
 ## Building a release
 
 ```bash
