@@ -2582,10 +2582,19 @@ Actions (on the selected local file + gist)
   u          upload the local file into the gist
   n          create a new gist from the local file (type a description, then s/p)
   p          pin / unpin the local <-> gist pair
-  P          view / manage all pinned mappings (x to unpin)
+  P          view / manage all pinned mappings (sync status + s/u/d/x)
+  S          smart-sync the selected pinned pair (push/pull by modified time)
   X          remove the selected file from its gist (y/n confirm)
   g          open the gist manager (edit description, delete gist)
   e          edit the local file in $EDITOR
+
+Pinned Mappings screen (P)
+  Up/Down    move between pins
+  s          smart-sync (newer side wins; skips if already identical)
+  u          force push  (upload local → gist)
+  d          force pull  (download gist → local, diff + y/n confirm)
+  x          unpin the selected pair
+  status     ✓ synced · ↑ local newer · ↓ remote newer · ? unknown
 
 Upload Confirmation screen (u)
   y          confirm and execute the upload

@@ -106,7 +106,15 @@ selected gist instead. Browse with `Tab` (switch pane), `Up`/`Down` (move), and
   more (see below).
 - `p` (on a gist) — toggle a pin between the selected local file and gist (persisted to
   config; pinned pairs sort to the top).
-- `P` — open the **Pins view** listing all pinned pairs; `x` unpins the selected entry.
+- `P` — open the **Pins view** listing all pinned pairs with sync-status icons.
+  Each row shows one of: `✓` synced · `↑` local newer · `↓` remote newer · `?` unknown.
+  Keys inside the Pins view:
+  - `s` — smart-sync (newer side wins by modified time; skips if already identical).
+  - `u` — force push (upload local → gist).
+  - `d` — force pull (download gist → local, diff + `y`/`n` confirm).
+  - `x` — unpin the selected pair.
+- `S` (on a pinned pair) — smart-sync the selected local↔gist pair from the list screen
+  (push/pull by modified time; only available when the pair is pinned).
 - `e` (on a local file) — open it in `$VISUAL`/`$EDITOR`.
 - `Space` (on a gist) — preview the gist's raw content in a scrollable overlay (`R` to
   force-refresh, bypassing the session cache).
@@ -140,6 +148,8 @@ the gist owning the currently selected file. From here you manage gists as a who
   first showing its diff and confirmation.
 - Uploads allow editing/redacting a temporary buffer in `$EDITOR` before sending, ensuring sensitive local content or credentials are not accidentally pushed to GitHub.
 - Identical files are detected: when the two sides match, upload/download are disabled.
+- Pulling a gist over an existing local file still goes through the diff + `y`/`n`
+  confirmation — one-key sync never overwrites a local file silently.
 - Destructive remote actions each require a `y`/`n` confirmation: removing a file from a
   gist (`X` on the list) and deleting a whole gist (`X` in the gist manager).
 - No GitHub token is stored by the app, and gist content is never written to the config
