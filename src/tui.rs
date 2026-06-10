@@ -1190,6 +1190,9 @@ enum BgTaskOutcome {
         local_label: String,
         gist_label: String,
         target: PathBuf,
+        // True when the local pane was focused at trigger time: frame the preview as an
+        // upload (old = gist, new = local) instead of a download.
+        upload_orientation: bool,
     },
     DownloadSelected {
         result: std::result::Result<String, String>,
@@ -1448,13 +1451,15 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                         local_label,
                         gist_label,
                         target,
+                        upload_orientation,
                     } => match result {
                         Ok(remote) => {
                             let local_content = local_path
                                 .as_ref()
                                 .map(|path| std::fs::read_to_string(path).unwrap_or_default())
                                 .unwrap_or_default();
-                            let diff = crate::diff::unified_diff(
+                            let diff = preview_diff_text(
+                                upload_orientation,
                                 &local_label,
                                 &local_content,
                                 &gist_label,
@@ -1678,6 +1683,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                     let filename = gist.filename.clone();
                     let (local_label, gist_label) = diff_labels(local_path.as_deref(), &gist);
                     let target = state.cwd.join(&filename);
+                    let upload_orientation = state.focus == FocusPane::Local;
 
                     state.bg_task_msg = Some("Loading diff…".to_string());
                     let (tx, rx) = std::sync::mpsc::channel();
@@ -1691,6 +1697,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                             local_label,
                             gist_label,
                             target,
+                            upload_orientation,
                         });
                     });
                 }
@@ -2329,6 +2336,9 @@ fn spawn_pin_diff(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
             local_label,
             gist_label,
             target,
+            // Pin diffs originate from the Pins screen (no focused pane); keep the
+            // historical download orientation (old = local, new = gist).
+            upload_orientation: false,
         });
     });
 }
@@ -2388,6 +2398,24 @@ fn diff_labels(local_path: Option<&std::path::Path>, gist: &GistFile) -> (String
         gist_time_label(&gist.updated_at)
     );
     (local_label, gist_label)
+}
+
+/// Orientation for the `Enter` diff preview, driven by the focused pane: focusing the gist
+/// pane frames it as a *download* (old = local, new = gist), focusing the local pane frames
+/// it as an *upload* (old = gist, new = local). The dedicated `d`/`u` actions keep their own
+/// fixed orientation; this only affects the read-only preview.
+fn preview_diff_text(
+    upload_orientation: bool,
+    local_label: &str,
+    local_content: &str,
+    gist_label: &str,
+    remote: &str,
+) -> String {
+    if upload_orientation {
+        crate::diff::unified_diff(gist_label, remote, local_label, local_content)
+    } else {
+        crate::diff::unified_diff(local_label, local_content, gist_label, remote)
+    }
 }
 
 fn open_browser(state: &mut AppState) {
@@ -2684,7 +2712,9 @@ List screen
   t          toggle row view: description / id
 
 Actions (on the selected local file + gist)
-  Enter      diff the local file against the gist
+  Enter      diff the local file against the gist; direction follows the focused
+             pane — Gist pane = download view, Local pane = upload view
+             (--- old / +++ new; local label = yellow, gist label = blue)
   Space      preview the gist file's content (R in preview to force-refresh)
   d          download the gist into the cwd
   u          upload the local file into the gist
@@ -3295,6 +3325,42 @@ fn inline_ins_line(del_line: &str, ins_line: &str, hscroll: usize) -> Line<'stat
     apply_hscroll_spans(spans, hscroll)
 }
 
+/// Renders a `--- /+++` header line, tinting the leading `local`/`gist` keyword (yellow/blue)
+/// so each side's identity is readable regardless of which way the diff is oriented — the
+/// `Enter` preview flips direction with focus (see `preview_diff_text`). The side is classified
+/// from the un-scrolled line (anchored right after the marker), then the keyword is coloured in
+/// the horizontally-scrolled slice; the rest stays bold.
+fn header_line(line: &str, hscroll: usize) -> Line<'static> {
+    let visible: String = line.chars().skip(hscroll).collect();
+    let bold = Style::default().add_modifier(Modifier::BOLD);
+
+    let body = line
+        .strip_prefix("--- ")
+        .or_else(|| line.strip_prefix("+++ "))
+        .unwrap_or(line);
+    let (keyword, color) = if body.starts_with("local") {
+        ("local", Color::Yellow)
+    } else if body.starts_with("gist") {
+        ("gist", Color::Blue)
+    } else {
+        return Line::styled(visible, bold);
+    };
+
+    // The marker is dashes/pluses with no letters, so the first hit of the keyword in the
+    // visible slice is the real label keyword (not a substring of a filename).
+    match visible.find(keyword) {
+        Some(idx) => Line::from(vec![
+            Span::styled(visible[..idx].to_string(), bold),
+            Span::styled(
+                visible[idx..idx + keyword.len()].to_string(),
+                bold.fg(color),
+            ),
+            Span::styled(visible[idx + keyword.len()..].to_string(), bold),
+        ]),
+        None => Line::styled(visible, bold),
+    }
+}
+
 /// Builds the visible, coloured slice of a unified diff. Adjacent `-`/`+` line pairs receive
 /// word-level inline highlighting (changed words bold, unchanged words dim) so small edits are
 /// easy to spot. Scrolling is applied by hand — skip `vscroll` lines and drop `hscroll` leading
@@ -3345,14 +3411,12 @@ fn diff_view(text: &str, vscroll: u16, hscroll: u16) -> Text<'static> {
                     result.push(Line::styled(visible, Style::default().fg(Color::Green)));
                 }
             }
+        } else if line.starts_with("+++") || line.starts_with("---") {
+            result.push(header_line(line, hscroll));
+            i += 1;
         } else {
-            let style = if line.starts_with("+++") || line.starts_with("---") {
-                Style::default().add_modifier(Modifier::BOLD)
-            } else {
-                Style::default()
-            };
             let visible: String = line.chars().skip(hscroll).collect();
-            result.push(Line::styled(visible, style));
+            result.push(Line::styled(visible, Style::default()));
             i += 1;
         }
     }
@@ -4061,6 +4125,28 @@ mod tests {
             .find(|s| s.content.trim() == "planet")
             .unwrap();
         assert!(planet.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn header_line_tints_local_yellow_and_gist_blue() {
+        let local = header_line("--- local: notes.txt (2026-06-10 14:25 UTC)", 0);
+        let kw = local.spans.iter().find(|s| s.content == "local").unwrap();
+        assert_eq!(kw.style.fg, Some(Color::Yellow));
+
+        let gist = header_line("+++ gist abc123 / notes.txt (2026-06-10 13:10 UTC)", 0);
+        let kw = gist.spans.iter().find(|s| s.content == "gist").unwrap();
+        assert_eq!(kw.style.fg, Some(Color::Blue));
+    }
+
+    #[test]
+    fn preview_diff_text_flips_with_focus() {
+        // Download orientation (gist pane focused): old = local, new = gist.
+        let dl = preview_diff_text(false, "local: a", "old\n", "gist b", "new\n");
+        assert!(dl.starts_with("--- local: a\n+++ gist b\n"));
+
+        // Upload orientation (local pane focused): old = gist, new = local.
+        let ul = preview_diff_text(true, "local: a", "old\n", "gist b", "new\n");
+        assert!(ul.starts_with("--- gist b\n+++ local: a\n"));
     }
 
     #[test]
