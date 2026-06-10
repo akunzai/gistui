@@ -226,6 +226,12 @@ pub enum KeyOutcome {
     RefreshLocals,
     RefreshPreview,
     UnpinAtPin,
+    /// Smart-sync the selected Pins-screen pair (direction from mtime).
+    SyncPinAuto,
+    /// Force push the selected Pins-screen pair (upload local → gist).
+    SyncPinPush,
+    /// Force pull the selected Pins-screen pair (download gist → local).
+    SyncPinPull,
 }
 
 #[derive(Debug, Clone)]
@@ -657,9 +663,10 @@ impl AppState {
             KeyCode::Up if self.pins_index > 0 => {
                 self.pins_index -= 1;
             }
-            KeyCode::Char('x') | KeyCode::Char('d') if !self.pinned.is_empty() => {
-                return KeyOutcome::UnpinAtPin;
-            }
+            KeyCode::Char('x') if !self.pinned.is_empty() => return KeyOutcome::UnpinAtPin,
+            KeyCode::Char('s') if !self.pinned.is_empty() => return KeyOutcome::SyncPinAuto,
+            KeyCode::Char('u') if !self.pinned.is_empty() => return KeyOutcome::SyncPinPush,
+            KeyCode::Char('d') if !self.pinned.is_empty() => return KeyOutcome::SyncPinPull,
             _ => {}
         }
         KeyOutcome::None
@@ -1914,6 +1921,8 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                     ));
                 }
                 KeyOutcome::UnpinAtPin => unpin_at_pin_index(&mut state),
+                // Placeholder: wired in Task 9.
+                KeyOutcome::SyncPinAuto | KeyOutcome::SyncPinPush | KeyOutcome::SyncPinPull => {}
                 KeyOutcome::None => {}
             }
         }
@@ -4710,5 +4719,31 @@ mod tests {
         assert_eq!(state.pending_action, None);
         assert!(!state.editing_description);
         assert!(state.description_input.is_empty());
+    }
+
+    #[test]
+    fn pins_screen_sync_keys_emit_outcomes() {
+        let mut state = initial_state();
+        state.screen = Screen::Pins;
+        state.pinned = vec![PinnedMapping {
+            local_path: PathBuf::from("/tmp/a.txt"),
+            gist_id: "g1".into(),
+            gist_filename: "a.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+        assert_eq!(
+            state.handle_key(KeyCode::Char('s')),
+            KeyOutcome::SyncPinAuto
+        );
+        assert_eq!(
+            state.handle_key(KeyCode::Char('u')),
+            KeyOutcome::SyncPinPush
+        );
+        assert_eq!(
+            state.handle_key(KeyCode::Char('d')),
+            KeyOutcome::SyncPinPull
+        );
+        assert_eq!(state.handle_key(KeyCode::Char('x')), KeyOutcome::UnpinAtPin);
     }
 }
