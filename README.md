@@ -107,8 +107,10 @@ selected gist instead. Browse with `Tab` (switch pane), `Up`/`Down` (move), and
 - `p` (on a gist) — toggle a pin between the selected local file and gist (persisted to
   config; pinned pairs sort to the top).
 - `P` — open the **Pins view** listing all pinned pairs with sync-status icons.
-  Each row shows one of: `✓` synced · `↑` local newer · `↓` remote newer · `?` unknown.
+  Each row shows one of: `✓` synced · `↑` local newer · `↓` remote newer · `?` unknown,
+  plus `(local <age> · gist <age>)` relative modification times.
   Keys inside the Pins view:
+  - `Enter` — diff the selected pair (read-only; `d`/`u` from the diff to pull/push; `Esc`/`q` returns to the Pins view).
   - `s` — smart-sync (newer side wins by modified time; skips if already identical).
   - `u` — force push (upload local → gist).
   - `d` — force pull (download gist → local, diff + `y`/`n` confirm).

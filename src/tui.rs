@@ -2644,11 +2644,13 @@ Actions (on the selected local file + gist)
 
 Pinned Mappings screen (P)
   Up/Down    move between pins
+  Enter      diff the selected pair (then d pull / u push from the diff)
   s          smart-sync (newer side wins; skips if already identical)
   u          force push  (upload local → gist)
   d          force pull  (download gist → local, diff + y/n confirm)
   x          unpin the selected pair
   status     ✓ synced · ↑ local newer · ↓ remote newer · ? unknown
+  Each row shows (local <age> · gist <age>) relative modification times.
 
 Upload Confirmation screen (u)
   y          confirm and execute the upload
@@ -2722,7 +2724,7 @@ fn render_pins(frame: &mut Frame, state: &AppState) {
     let footer = if state.pinned.is_empty() {
         "Esc/q back".to_string()
     } else {
-        "↑↓ move  ·  s sync · u push · d pull · x unpin  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back".to_string()
+        "↑↓ move  ·  Enter diff · s sync · u push · d pull · x unpin  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back".to_string()
     };
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(4)).max(1);
     let chunks = Layout::default()
