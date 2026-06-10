@@ -18,6 +18,43 @@ pub enum SyncDirection {
     Download,
 }
 
+/// Suggested sync action for a pinned pair, decided by comparing modification
+/// times. Pure; derived by [`sync_status`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncStatus {
+    /// Both sides carry the same modification time.
+    InSync,
+    /// Local is newer → upload local into the gist.
+    Push,
+    /// Remote is newer → download the gist into the local file.
+    Pull,
+    /// A timestamp is unavailable — direction cannot be suggested.
+    Unknown,
+}
+
+impl SyncStatus {
+    /// Single-glyph indicator shown in the Pins list.
+    pub fn icon(self) -> &'static str {
+        match self {
+            SyncStatus::InSync => "✓",
+            SyncStatus::Push => "↑",
+            SyncStatus::Pull => "↓",
+            SyncStatus::Unknown => "?",
+        }
+    }
+}
+
+/// Pure decision: which side is newer? `local_ts`/`remote_ts` are Unix seconds;
+/// `None` means the timestamp was unavailable.
+pub fn sync_status(local_ts: Option<u64>, remote_ts: Option<u64>) -> SyncStatus {
+    match (local_ts, remote_ts) {
+        (Some(l), Some(r)) if l > r => SyncStatus::Push,
+        (Some(l), Some(r)) if r > l => SyncStatus::Pull,
+        (Some(_), Some(_)) => SyncStatus::InSync,
+        _ => SyncStatus::Unknown,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalCandidate {
     pub path: PathBuf,
@@ -124,6 +161,24 @@ pub fn group_gists(files: &[GistFile]) -> Vec<GistGroup> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sync_status_from_mtime() {
+        assert_eq!(sync_status(Some(20), Some(10)), SyncStatus::Push); // local newer
+        assert_eq!(sync_status(Some(10), Some(20)), SyncStatus::Pull); // remote newer
+        assert_eq!(sync_status(Some(15), Some(15)), SyncStatus::InSync);
+        assert_eq!(sync_status(None, Some(10)), SyncStatus::Unknown);
+        assert_eq!(sync_status(Some(10), None), SyncStatus::Unknown);
+        assert_eq!(sync_status(None, None), SyncStatus::Unknown);
+    }
+
+    #[test]
+    fn sync_status_icons() {
+        assert_eq!(SyncStatus::InSync.icon(), "✓");
+        assert_eq!(SyncStatus::Push.icon(), "↑");
+        assert_eq!(SyncStatus::Pull.icon(), "↓");
+        assert_eq!(SyncStatus::Unknown.icon(), "?");
+    }
 
     #[test]
     fn parse_rfc3339_to_unix_known_values() {
