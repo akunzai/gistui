@@ -2044,12 +2044,10 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
 }
 
 impl AppState {
-    /// Derive the [`SyncStatus`] for `pinned[index]` from in-memory mtimes.
-    /// Local mtime comes from the matching local candidate (if discovered);
-    /// remote mtime from the matching gist's `updated_at`.
-    pub fn pin_sync_status(&self, index: usize) -> crate::domain::SyncStatus {
+    /// `(local_ts, remote_ts)` Unix-seconds for `pinned[index]`, from in-memory data.
+    pub fn pin_mtimes(&self, index: usize) -> (Option<u64>, Option<u64>) {
         let Some(m) = self.pinned.get(index) else {
-            return crate::domain::SyncStatus::Unknown;
+            return (None, None);
         };
         let local_abs = if m.local_path.is_absolute() {
             m.local_path.clone()
@@ -2069,6 +2067,14 @@ impl AppState {
                 .then(|| crate::domain::parse_rfc3339_to_unix(&g.updated_at))
                 .flatten()
         });
+        (local_ts, remote_ts)
+    }
+
+    /// Derive the [`SyncStatus`] for `pinned[index]` from in-memory mtimes.
+    /// Local mtime comes from the matching local candidate (if discovered);
+    /// remote mtime from the matching gist's `updated_at`.
+    pub fn pin_sync_status(&self, index: usize) -> crate::domain::SyncStatus {
+        let (local_ts, remote_ts) = self.pin_mtimes(index);
         crate::domain::sync_status(local_ts, remote_ts)
     }
 }
@@ -2676,6 +2682,10 @@ fn render_pins(frame: &mut Frame, state: &AppState) {
         .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 2)])
         .split(area);
 
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     let items: Vec<ListItem> = if state.pinned.is_empty() {
         vec![
             ListItem::new("  📌 No pinned mappings found (use p to pin a pair)")
@@ -2687,12 +2697,19 @@ fn render_pins(frame: &mut Frame, state: &AppState) {
             .iter()
             .enumerate()
             .map(|(i, m)| {
+                let (lts, rts) = state.pin_mtimes(i);
+                let age = |ts: Option<u64>| {
+                    ts.map(|t| crate::domain::humanize_age(now - t as i64))
+                        .unwrap_or_else(|| "?".to_string())
+                };
                 ListItem::new(format!(
-                    "{}  {}  ↔  {} / {}",
+                    "{}  {}  ↔  {} / {}   (local {} · gist {})",
                     state.pin_sync_status(i).icon(),
                     m.local_path.display(),
                     m.gist_id,
-                    m.gist_filename
+                    m.gist_filename,
+                    age(lts),
+                    age(rts),
                 ))
             })
             .collect()
