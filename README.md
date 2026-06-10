@@ -93,7 +93,10 @@ selected gist instead. Browse with `Tab` (switch pane), `Up`/`Down` (move), and
   written directly; an existing one is shown as a diff and overwritten only after a `y`/`n`
   confirmation.
 - `u` (on a gist) — upload the selected local file into the gist under the local file's
-  name (added directly, or diff + `y`/`n` if it would overwrite a same-named gist file).
+  name (shows a confirmation screen with unified diff). From there:
+  - `y` / `n` / `Esc` — confirm and upload / cancel.
+  - `e` — edit / redact the upload content in `$EDITOR` before upload (does NOT mutate the local file).
+  - `p` / `s` — (JSON only) toggle pretty-print / recursive key sorting on the upload buffer.
 - `n` (on a local file) — create a new gist from it: type an optional description, then
   choose `s` secret or `p` public.
 - `X` (on a gist) — remove the selected file from its gist after a `y`/`n` confirmation.
@@ -134,8 +137,8 @@ the gist owning the currently selected file. From here you manage gists as a who
 
 - Downloads only ever write to `./<gist-filename>` in the current working directory.
 - An existing file (local download target or remote gist file) is never overwritten without
-  first showing its diff and a `y`/`n` confirmation. Writing something that does not yet
-  exist is direct.
+  first showing its diff and confirmation.
+- Uploads allow editing/redacting a temporary buffer in `$EDITOR` before sending, ensuring sensitive local content or credentials are not accidentally pushed to GitHub.
 - Identical files are detected: when the two sides match, upload/download are disabled.
 - Destructive remote actions each require a `y`/`n` confirmation: removing a file from a
   gist (`X` on the list) and deleting a whole gist (`X` in the gist manager).
