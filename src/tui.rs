@@ -12,7 +12,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
-        Block, Borders, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
+        Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
         ScrollbarOrientation, ScrollbarState, Wrap,
     },
     Frame, Terminal,
@@ -217,6 +217,7 @@ pub enum KeyOutcome {
     Create(bool),
     PreviewContent,
     OpenBrowser,
+    OpenRepoBrowser,
     EditLocal,
     ExecuteDelete,
     ExecuteRemoveFile,
@@ -272,6 +273,7 @@ pub struct AppState {
     pub editing_description: bool,
     pub description_input: String,
     pub bg_task_msg: Option<String>,
+    pub help_scroll: u16,
 }
 
 fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
@@ -561,10 +563,24 @@ impl AppState {
         }
     }
 
-    fn handle_key_help(&mut self, _code: KeyCode) -> KeyOutcome {
-        // Any key (including q) just closes the help overlay back to the list.
-        self.screen = Screen::List;
-        KeyOutcome::None
+    fn handle_key_help(&mut self, code: KeyCode) -> KeyOutcome {
+        match code {
+            KeyCode::Char('o') => KeyOutcome::OpenRepoBrowser,
+            KeyCode::Down => {
+                self.help_scroll = self.help_scroll.saturating_add(1);
+                KeyOutcome::None
+            }
+            KeyCode::Up => {
+                self.help_scroll = self.help_scroll.saturating_sub(1);
+                KeyOutcome::None
+            }
+            _ => {
+                // Any other key just closes the help overlay back to the list.
+                self.screen = Screen::List;
+                self.help_scroll = 0;
+                KeyOutcome::None
+            }
+        }
     }
 
     fn handle_key_pins(&mut self, code: KeyCode) -> KeyOutcome {
@@ -1144,6 +1160,7 @@ pub fn initial_state() -> AppState {
         editing_description: false,
         description_input: String::new(),
         bg_task_msg: None,
+        help_scroll: 0,
     }
 }
 
@@ -1726,6 +1743,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                     }
                 }
                 KeyOutcome::OpenBrowser => open_browser(&mut state),
+                KeyOutcome::OpenRepoBrowser => open_repo_browser(&mut state),
                 KeyOutcome::EditLocal => edit_local(terminal, &mut state)?,
                 KeyOutcome::ExecuteDelete => {
                     let Some(PendingAction::Delete { gist_id, .. }) = state.pending_action.clone()
@@ -1830,6 +1848,7 @@ fn render_loading_overlay(frame: &mut Frame, msg: &str) {
             Constraint::Percentage(20),
         ])
         .split(rows[1]);
+    frame.render_widget(Clear, cols[1]);
     frame.render_widget(
         Paragraph::new(format!("⏳ {msg}")).block(
             Block::default()
@@ -1920,6 +1939,14 @@ fn open_browser(state: &mut AppState) {
     let plan = crate::actions::open_browser_command(&gist_id);
     match crate::actions::execute_command(&plan) {
         Ok(_) => state.set_status(format!("Opened gist {gist_id} in the browser")),
+        Err(error) => state.set_status(format!("open failed: {error}")),
+    }
+}
+
+fn open_repo_browser(state: &mut AppState) {
+    let plan = crate::actions::open_repo_browser_command();
+    match crate::actions::execute_command(&plan) {
+        Ok(_) => state.set_status("Opened GitHub repository in browser".to_string()),
         Err(error) => state.set_status(format!("open failed: {error}")),
     }
 }
@@ -2073,7 +2100,7 @@ fn render(frame: &mut Frame, state: &AppState) {
         Screen::Diff => render_diff(frame, state, false),
         Screen::Confirm => render_diff(frame, state, true),
         Screen::Preview => render_preview(frame, state),
-        Screen::Help => render_help(frame),
+        Screen::Help => render_help(frame, state),
         Screen::Pins => render_pins(frame, state),
         Screen::Gists => render_gists(frame, state),
     }
@@ -2082,7 +2109,7 @@ fn render(frame: &mut Frame, state: &AppState) {
     }
 }
 
-fn render_help(frame: &mut Frame) {
+fn render_help(frame: &mut Frame, state: &AppState) {
     let about = format!(
         "gistui v{}  ·  {}",
         env!("CARGO_PKG_VERSION"),
@@ -2127,13 +2154,15 @@ Gist manager (g)
 
 General
   Esc / q    close an overlay; from the list, quit the app
-  ?          show this help";
+  ?          show this help
+  o          open this repository in your web browser
+  Up/Down    scroll this help text";
 
     let text = format!("{about}\n\n{body}");
     frame.render_widget(
-        Paragraph::new(text).block(
+        Paragraph::new(text).scroll((state.help_scroll, 0)).block(
             Block::default()
-                .title("Help — press any key to close")
+                .title("Help (Up/Down scroll) — press o to open repository, other key to close")
                 .borders(Borders::ALL)
                 .padding(Padding::horizontal(1)),
         ),
@@ -2142,10 +2171,13 @@ General
 }
 
 fn render_preview(frame: &mut Frame, state: &AppState) {
+    let area = frame.area();
+    let footer = "↑↓←→ scroll  ·  R refresh  ·  Esc/q back";
+    let footer_lines = wrap_line_count(footer, area.width.saturating_sub(4)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(3)])
-        .split(frame.area());
+        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 2)])
+        .split(area);
 
     frame.render_widget(
         Paragraph::new(state.diff_text.clone())
@@ -2159,7 +2191,7 @@ fn render_preview(frame: &mut Frame, state: &AppState) {
         chunks[0],
     );
     frame.render_widget(
-        Paragraph::new("↑↓←→ scroll  ·  R refresh  ·  Esc/q back").block(
+        Paragraph::new(footer).wrap(Wrap { trim: true }).block(
             Block::default()
                 .title("Commands")
                 .borders(Borders::ALL)
@@ -2171,13 +2203,22 @@ fn render_preview(frame: &mut Frame, state: &AppState) {
 
 fn render_pins(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
+    let footer = if state.pinned.is_empty() {
+        "Esc/q back".to_string()
+    } else {
+        "↑↓ move  ·  x unpin  ·  Esc/q back".to_string()
+    };
+    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(4)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(3)])
+        .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 2)])
         .split(area);
 
     let items: Vec<ListItem> = if state.pinned.is_empty() {
-        vec![ListItem::new("(no pinned mappings — use p to pin a pair)")]
+        vec![
+            ListItem::new("  📌 No pinned mappings found (use p to pin a pair)")
+                .style(Style::default().fg(Color::DarkGray)),
+        ]
     } else {
         state
             .pinned
@@ -2214,13 +2255,8 @@ fn render_pins(frame: &mut Frame, state: &AppState) {
     list_state.select(selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
 
-    let footer = if state.pinned.is_empty() {
-        "Esc/q back".to_string()
-    } else {
-        "↑↓ move  ·  x unpin  ·  Esc/q back".to_string()
-    };
     frame.render_widget(
-        Paragraph::new(footer).block(
+        Paragraph::new(footer).wrap(Wrap { trim: true }).block(
             Block::default()
                 .title("Commands")
                 .borders(Borders::ALL)
@@ -2246,19 +2282,38 @@ fn gist_group_row_label(g: &GistGroup) -> String {
 
 fn render_gists(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
+    let (ftitle, footer) = if state.editing_description {
+        (
+            "Edit description (Enter apply · Esc cancel)",
+            format!("{}_", state.description_input),
+        )
+    } else if state.gists_filtering {
+        (
+            "Filter (Enter keep · Esc clear)",
+            format!("/{}_", state.gists_filter_query),
+        )
+    } else {
+        (
+            "Commands",
+            "↑↓ move · ←→ scroll · / filter · s sort · v type · e desc · o browser · X delete · q back"
+                .to_string(),
+        )
+    };
+    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(4)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(3)])
+        .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 2)])
         .split(area);
 
     let groups = state.visible_gist_groups();
     let items: Vec<ListItem> = if groups.is_empty() {
         let msg = if state.gist_groups().is_empty() {
-            "(no gists)"
+            ListItem::new("  📭 No gists found").style(Style::default().fg(Color::DarkGray))
         } else {
-            "(no gists match the current filter)"
+            ListItem::new("  🔍 No gists match the filter")
+                .style(Style::default().fg(Color::DarkGray))
         };
-        vec![ListItem::new(msg)]
+        vec![msg]
     } else {
         groups
             .iter()
@@ -2295,25 +2350,8 @@ fn render_gists(frame: &mut Frame, state: &AppState) {
     list_state.select(selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
 
-    let (ftitle, footer) = if state.editing_description {
-        (
-            "Edit description (Enter apply · Esc cancel)",
-            format!("{}_", state.description_input),
-        )
-    } else if state.gists_filtering {
-        (
-            "Filter (Enter keep · Esc clear)",
-            format!("/{}_", state.gists_filter_query),
-        )
-    } else {
-        (
-            "Commands",
-            "↑↓ move · ←→ scroll · / filter · s sort · v type · e desc · o browser · X delete · q back"
-                .to_string(),
-        )
-    };
     frame.render_widget(
-        Paragraph::new(footer).block(
+        Paragraph::new(footer).wrap(Wrap { trim: true }).block(
             Block::default()
                 .title(ftitle)
                 .borders(Borders::ALL)
@@ -2431,9 +2469,9 @@ fn render_list(frame: &mut Frame, state: &AppState) {
     // Show each candidate's path relative to cwd; in flat mode this is just the filename,
     // in recursive mode it includes the subdirectory (e.g. src/utils/helpers.rs).
     let local_items: Vec<ListItem> = if state.local_scanning && state.locals.is_empty() {
-        vec![ListItem::new("(scanning…)")]
+        vec![ListItem::new("  ⏳ Scanning files…").style(Style::default().fg(Color::DarkGray))]
     } else if state.locals.is_empty() {
-        vec![ListItem::new("(no files in this directory)")]
+        vec![ListItem::new("  📭 No local files found").style(Style::default().fg(Color::DarkGray))]
     } else {
         state
             .visible_locals()
@@ -2472,14 +2510,15 @@ fn render_list(frame: &mut Frame, state: &AppState) {
 
     let ranked = state.ranked_gists();
     let gist_items: Vec<ListItem> = if state.loading && ranked.is_empty() {
-        vec![ListItem::new("Loading gists…")]
+        vec![ListItem::new("  ⏳ Loading gists…").style(Style::default().fg(Color::DarkGray))]
     } else if ranked.is_empty() {
         let message = if !state.filter_query.is_empty() {
-            "(no gists match the filter)"
+            ListItem::new("  🔍 No gists match the filter")
+                .style(Style::default().fg(Color::DarkGray))
         } else {
-            "(no gists)"
+            ListItem::new("  📭 No gists found").style(Style::default().fg(Color::DarkGray))
         };
-        vec![ListItem::new(message)]
+        vec![message]
     } else {
         ranked
             .iter()
@@ -2533,7 +2572,7 @@ fn render_pane(
     let border_style = if focused {
         Style::default().fg(Color::Cyan)
     } else {
-        Style::default()
+        Style::default().fg(Color::DarkGray)
     };
     // Dim the unfocused pane so the active side is obvious at a glance.
     let base_style = if focused {
@@ -2732,10 +2771,52 @@ fn diff_view(text: &str, vscroll: u16, hscroll: u16) -> Text<'static> {
 }
 
 fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
+    let footer = if confirming {
+        match &state.pending_action {
+            Some(PendingAction::Create { .. }) if state.editing_description => {
+                format!(
+                    "Description (optional): {}_   ·  Enter next  ·  Esc cancel",
+                    state.description_input
+                )
+            }
+            Some(PendingAction::Create { local_path }) => {
+                let desc = if state.description_input.is_empty() {
+                    "no description".to_string()
+                } else {
+                    format!("desc: {}", state.description_input)
+                };
+                format!(
+                    "Create gist from {} ({desc})?  s secret  p public  Esc cancel",
+                    local_path.display()
+                )
+            }
+            Some(PendingAction::Upload {
+                gist_id, filename, ..
+            }) => {
+                format!("Upload {} to gist {}? (y/n)", filename, gist_id)
+            }
+            Some(PendingAction::Delete { gist_id, label }) => {
+                format!("Permanently delete \"{label}\" ({gist_id})? (y/n)")
+            }
+            Some(PendingAction::RemoveFile {
+                gist_id, filename, ..
+            }) => {
+                format!("Remove {filename} from gist {gist_id}? (y/n)")
+            }
+            _ => format!("Overwrite {}? (y/n)", state.download_target.display()),
+        }
+    } else if state.diff_identical {
+        "Files are identical — nothing to sync  ·  ↑↓←→ scroll  ·  Esc/q back".to_string()
+    } else {
+        "↑↓←→ scroll  ·  d download  ·  u upload  ·  Esc/q back".to_string()
+    };
+
+    let area = frame.area();
+    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(4)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(3)])
-        .split(frame.area());
+        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 2)])
+        .split(area);
 
     // The gist id, filenames, and both sides' mtimes live in the diff's `--- / +++` header
     // lines (see `diff_labels`); the title stays concise and avoids repeating a path.
@@ -2788,47 +2869,8 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
         chunks[0],
     );
 
-    let footer = if confirming {
-        match &state.pending_action {
-            Some(PendingAction::Create { .. }) if state.editing_description => {
-                format!(
-                    "Description (optional): {}_   ·  Enter next  ·  Esc cancel",
-                    state.description_input
-                )
-            }
-            Some(PendingAction::Create { local_path }) => {
-                let desc = if state.description_input.is_empty() {
-                    "no description".to_string()
-                } else {
-                    format!("desc: {}", state.description_input)
-                };
-                format!(
-                    "Create gist from {} ({desc})?  s secret  p public  Esc cancel",
-                    local_path.display()
-                )
-            }
-            Some(PendingAction::Upload {
-                gist_id, filename, ..
-            }) => {
-                format!("Upload {} to gist {}? (y/n)", filename, gist_id)
-            }
-            Some(PendingAction::Delete { gist_id, label }) => {
-                format!("Permanently delete \"{label}\" ({gist_id})? (y/n)")
-            }
-            Some(PendingAction::RemoveFile {
-                gist_id, filename, ..
-            }) => {
-                format!("Remove {filename} from gist {gist_id}? (y/n)")
-            }
-            _ => format!("Overwrite {}? (y/n)", state.download_target.display()),
-        }
-    } else if state.diff_identical {
-        "Files are identical — nothing to sync  ·  ↑↓←→ scroll  ·  Esc/q back".to_string()
-    } else {
-        "↑↓←→ scroll  ·  d download  ·  u upload  ·  Esc/q back".to_string()
-    };
     frame.render_widget(
-        Paragraph::new(footer).block(
+        Paragraph::new(footer).wrap(Wrap { trim: true }).block(
             Block::default()
                 .title("Commands")
                 .borders(Borders::ALL)
@@ -3264,8 +3306,22 @@ mod tests {
         let mut state = initial_state();
         state.handle_key(KeyCode::Char('?'));
         assert_eq!(state.screen, Screen::Help);
+        // Arrow keys scroll help instead of closing
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.screen, Screen::Help);
+        assert_eq!(state.help_scroll, 1);
+        state.handle_key(KeyCode::Up);
+        assert_eq!(state.screen, Screen::Help);
+        assert_eq!(state.help_scroll, 0);
+        // Other keys close help
         assert_eq!(state.handle_key(KeyCode::Char('x')), KeyOutcome::None);
         assert_eq!(state.screen, Screen::List);
+        // Closing resets scroll
+        state.screen = Screen::Help;
+        state.help_scroll = 5;
+        state.handle_key(KeyCode::Char('q'));
+        assert_eq!(state.screen, Screen::List);
+        assert_eq!(state.help_scroll, 0);
     }
 
     #[test]
