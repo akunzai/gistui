@@ -1,4 +1,7 @@
 /target/
 .superpowers/
+# Python bytecode from the demo recording harness (scripts/demo/)
+__pycache__/
+*.pyc
 # Superpowers workflow artifacts (brainstorm specs / implementation plans) — kept local only
 /docs/superpowers/
