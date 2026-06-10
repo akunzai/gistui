@@ -1,2 +1,4 @@
 /target/
 .superpowers/
+# Superpowers workflow artifacts (brainstorm specs / implementation plans) — kept local only
+/docs/superpowers/
