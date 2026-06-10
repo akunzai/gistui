@@ -271,6 +271,7 @@ pub struct AppState {
     pub gists_filter_query: String,
     pub editing_description: bool,
     pub description_input: String,
+    pub bg_task_msg: Option<String>,
 }
 
 fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
@@ -1040,6 +1041,63 @@ impl AppState {
     }
 }
 
+enum BgTaskOutcome {
+    PreviewDiff {
+        result: std::result::Result<String, String>,
+        local_path: Option<PathBuf>,
+        local_label: String,
+        gist_label: String,
+        target: PathBuf,
+    },
+    DownloadSelected {
+        result: std::result::Result<String, String>,
+        target: PathBuf,
+        local_label: String,
+        gist_label: String,
+    },
+    UploadAdd {
+        result: std::result::Result<(), String>,
+        local_path: PathBuf,
+        gist_id: String,
+    },
+    UploadPreview {
+        result: std::result::Result<String, String>,
+        gist_id: String,
+        filename: String,
+        local_path: PathBuf,
+        local_label: String,
+        gist_label: String,
+    },
+    UploadReplace {
+        result: std::result::Result<(), String>,
+        gist_id: String,
+        filename: String,
+    },
+    CreateGist {
+        result: std::result::Result<(), String>,
+        local_path: PathBuf,
+        public: bool,
+    },
+    PreviewContent {
+        result: std::result::Result<String, String>,
+        key: (String, String),
+        preview_title: String,
+    },
+    DeleteGist {
+        result: std::result::Result<(), String>,
+        gist_id: String,
+    },
+    RemoveFile {
+        result: std::result::Result<(), String>,
+        gist_id: String,
+        filename: String,
+    },
+    ApplyDescription {
+        result: std::result::Result<(), String>,
+        gist_id: String,
+    },
+}
+
 pub fn initial_state() -> AppState {
     AppState {
         locals: Vec::new(),
@@ -1085,6 +1143,7 @@ pub fn initial_state() -> AppState {
         gists_filter_query: String::new(),
         editing_description: false,
         description_input: String::new(),
+        bg_task_msg: None,
     }
 }
 
@@ -1177,20 +1236,28 @@ pub fn run() -> Result<()> {
 
 fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut state = load_startup_state()?;
-    let gist_rx = spawn_gist_fetch();
+    let mut gist_rx = Some(spawn_gist_fetch());
     let mut local_rx: Option<std::sync::mpsc::Receiver<Vec<LocalCandidate>>> = None;
+    let mut bg_rx: Option<std::sync::mpsc::Receiver<BgTaskOutcome>> = None;
 
     loop {
         terminal.draw(|frame| render(frame, &state))?;
 
         // Absorb the background gist list once it arrives.
         if state.loading {
-            if let Ok(gists) = gist_rx.try_recv() {
-                cache_gists(&gists);
-                state.gists = gists;
-                state.loading = false;
-                if state.gist_index >= state.ranked_gists().len() {
-                    state.gist_index = 0;
+            if let Some(ref rx) = gist_rx {
+                if let Ok(gists) = rx.try_recv() {
+                    cache_gists(&gists);
+                    state.gists = gists;
+                    state.loading = false;
+                    if state.gist_index >= state.ranked_gists().len() {
+                        state.gist_index = 0;
+                    }
+                    let count = state.visible_gist_groups().len();
+                    if count > 0 && state.gists_index >= count {
+                        state.gists_index = count - 1;
+                    }
+                    gist_rx = None;
                 }
             }
         }
@@ -1215,60 +1282,516 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
             }
         }
 
+        // Absorb a completed background per-action task.
+        if let Some(ref rx) = bg_rx {
+            if let Ok(outcome) = rx.try_recv() {
+                state.bg_task_msg = None;
+                bg_rx = None;
+                match outcome {
+                    BgTaskOutcome::PreviewDiff {
+                        result,
+                        local_path,
+                        local_label,
+                        gist_label,
+                        target,
+                    } => match result {
+                        Ok(remote) => {
+                            let local_content = local_path
+                                .as_ref()
+                                .map(|path| std::fs::read_to_string(path).unwrap_or_default())
+                                .unwrap_or_default();
+                            let diff = crate::diff::unified_diff(
+                                &local_label,
+                                &local_content,
+                                &gist_label,
+                                &remote,
+                            );
+                            let identical = local_content == remote;
+                            state.enter_diff(diff, remote, local_path.unwrap_or_default(), target);
+                            state.diff_identical = identical;
+                        }
+                        Err(error) => state.set_status(format!("fetch failed: {error}")),
+                    },
+                    BgTaskOutcome::DownloadSelected {
+                        result,
+                        target,
+                        local_label,
+                        gist_label,
+                    } => match result {
+                        Ok(remote) => {
+                            if target.exists() {
+                                let local_content =
+                                    std::fs::read_to_string(&target).unwrap_or_default();
+                                let diff = crate::diff::unified_diff(
+                                    &local_label,
+                                    &local_content,
+                                    &gist_label,
+                                    &remote,
+                                );
+                                let identical = local_content == remote;
+                                state.enter_diff(diff, remote, target.clone(), target);
+                                state.diff_identical = identical;
+                            } else {
+                                match crate::actions::execute_download(&target, &remote, false) {
+                                    Ok(()) => {
+                                        state
+                                            .set_status(format!("Downloaded {}", target.display()));
+                                        refresh_locals(&mut state);
+                                    }
+                                    Err(error) => {
+                                        state.set_status(format!("download failed: {error}"))
+                                    }
+                                }
+                            }
+                        }
+                        Err(error) => state.set_status(format!("fetch failed: {error}")),
+                    },
+                    BgTaskOutcome::UploadAdd {
+                        result,
+                        local_path,
+                        gist_id,
+                    } => match result {
+                        Ok(_) => {
+                            if let Some(filename) = upload_local_filename(&local_path) {
+                                state
+                                    .gist_content_cache
+                                    .remove(&(gist_id.clone(), filename));
+                            }
+                            state.set_status(format!(
+                                "Uploaded {} to gist {}",
+                                local_path.display(),
+                                gist_id
+                            ));
+                            state.back_to_list();
+                            state.loading = true;
+                            gist_rx = Some(spawn_gist_fetch());
+                        }
+                        Err(error) => state.set_status(format!("upload failed: {error}")),
+                    },
+                    BgTaskOutcome::UploadPreview {
+                        result,
+                        gist_id,
+                        filename,
+                        local_path,
+                        local_label,
+                        gist_label,
+                    } => match result {
+                        Ok(remote) => {
+                            let local_content =
+                                std::fs::read_to_string(&local_path).unwrap_or_default();
+                            let diff = crate::diff::unified_diff(
+                                &gist_label,
+                                &remote,
+                                &local_label,
+                                &local_content,
+                            );
+                            state.diff_text = diff;
+                            state.diff_scroll = 0;
+                            state.diff_hscroll = 0;
+                            state.pending_action = Some(PendingAction::Upload {
+                                gist_id,
+                                filename,
+                                local_path,
+                            });
+                            state.status = None;
+                            state.screen = Screen::Confirm;
+                        }
+                        Err(error) => state.set_status(format!("fetch failed: {error}")),
+                    },
+                    BgTaskOutcome::UploadReplace {
+                        result,
+                        gist_id,
+                        filename,
+                    } => match result {
+                        Ok(_) => {
+                            state
+                                .gist_content_cache
+                                .remove(&(gist_id.clone(), filename.clone()));
+                            state.set_status(format!("Uploaded {} to gist {}", filename, gist_id));
+                            state.back_to_list();
+                            state.loading = true;
+                            gist_rx = Some(spawn_gist_fetch());
+                        }
+                        Err(error) => {
+                            state.set_status(format!("upload failed: {error}"));
+                            state.screen = Screen::Confirm;
+                        }
+                    },
+                    BgTaskOutcome::CreateGist {
+                        result,
+                        local_path,
+                        public,
+                    } => match result {
+                        Ok(_) => {
+                            let visibility = if public { "public" } else { "secret" };
+                            state.set_status(format!(
+                                "Created {} gist from {}",
+                                visibility,
+                                local_path.display()
+                            ));
+                            state.description_input.clear();
+                            state.back_to_list();
+                            state.loading = true;
+                            gist_rx = Some(spawn_gist_fetch());
+                        }
+                        Err(error) => {
+                            state.set_status(format!("create failed: {error}"));
+                            state.screen = Screen::List;
+                            state.pending_action = None;
+                            state.description_input.clear();
+                        }
+                    },
+                    BgTaskOutcome::PreviewContent {
+                        result,
+                        key,
+                        preview_title,
+                    } => match result {
+                        Ok(content) => {
+                            state
+                                .gist_content_cache
+                                .insert(key.clone(), content.clone());
+                            state.preview_title = preview_title;
+                            state.preview_gist_key = Some(key);
+                            state.diff_text = content;
+                            state.diff_scroll = 0;
+                            state.diff_hscroll = 0;
+                            state.status = None;
+                            state.screen = Screen::Preview;
+                        }
+                        Err(error) => state.set_status(format!("fetch failed: {error}")),
+                    },
+                    BgTaskOutcome::DeleteGist { result, gist_id } => match result {
+                        Ok(_) => {
+                            state.set_status(format!("Deleted gist {gist_id}"));
+                            state.loading = true;
+                            gist_rx = Some(spawn_gist_fetch());
+                        }
+                        Err(error) => state.set_status(format!("delete failed: {error}")),
+                    },
+                    BgTaskOutcome::RemoveFile {
+                        result,
+                        gist_id,
+                        filename,
+                    } => match result {
+                        Ok(_) => {
+                            state
+                                .gist_content_cache
+                                .remove(&(gist_id.clone(), filename.clone()));
+                            state.set_status(format!("Removed {filename} from gist {gist_id}"));
+                            state.loading = true;
+                            gist_rx = Some(spawn_gist_fetch());
+                        }
+                        Err(error) => state.set_status(format!("remove failed: {error}")),
+                    },
+                    BgTaskOutcome::ApplyDescription { result, gist_id } => match result {
+                        Ok(_) => {
+                            state.set_status(format!("Updated description for gist {gist_id}"));
+                            state.loading = true;
+                            gist_rx = Some(spawn_gist_fetch());
+                        }
+                        Err(error) => {
+                            state.set_status(format!("description update failed: {error}"))
+                        }
+                    },
+                }
+            }
+        }
+
         // Poll so the loop also wakes to check the background fetches, not only on input.
         if !event::poll(std::time::Duration::from_millis(150))? {
             continue;
         }
         if let Event::Key(key) = event::read()? {
+            if state.bg_task_msg.is_some() {
+                if key.code == KeyCode::Esc {
+                    state.bg_task_msg = None;
+                    bg_rx = None;
+                    state.set_status("Cancelled");
+                }
+                continue;
+            }
+
             match state.handle_key(key.code) {
                 KeyOutcome::Quit => break,
                 KeyOutcome::PreviewDiff => {
-                    fetch_then(terminal, &mut state, "Loading diff…", preview_diff)?
+                    let Some(ranked) = state.selected_gist() else {
+                        continue;
+                    };
+                    let local_path = state.selected_local().map(|local| local.path.clone());
+                    let gist = ranked.file.clone();
+                    let gist_id = gist.gist_id.clone();
+                    let filename = gist.filename.clone();
+                    let (local_label, gist_label) = diff_labels(local_path.as_deref(), &gist);
+                    let target = state.cwd.join(&filename);
+
+                    state.bg_task_msg = Some("Loading diff…".to_string());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    bg_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(BgTaskOutcome::PreviewDiff {
+                            result,
+                            local_path,
+                            local_label,
+                            gist_label,
+                            target,
+                        });
+                    });
                 }
                 KeyOutcome::Download => download(&mut state),
                 KeyOutcome::DownloadGist => {
-                    fetch_then(terminal, &mut state, "Downloading…", download_selected)?
+                    let Some(ranked) = state.selected_gist() else {
+                        continue;
+                    };
+                    let gist = ranked.file.clone();
+                    let gist_id = gist.gist_id.clone();
+                    let filename = gist.filename.clone();
+                    let target = state.cwd.join(&filename);
+                    let (local_label, gist_label) = diff_labels(Some(&target), &gist);
+
+                    state.bg_task_msg = Some("Downloading…".to_string());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    bg_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(BgTaskOutcome::DownloadSelected {
+                            result,
+                            target,
+                            local_label,
+                            gist_label,
+                        });
+                    });
                 }
                 KeyOutcome::Pin => pin_selected(&mut state),
                 KeyOutcome::Unpin => unpin_selected(&mut state),
                 KeyOutcome::UploadAdd => {
-                    fetch_then(terminal, &mut state, "Uploading…", upload_add)?
+                    let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist())
+                    else {
+                        continue;
+                    };
+                    let local_path = local.path.clone();
+                    let gist_id = gist.file.gist_id.clone();
+                    let plan = crate::actions::upload_add_command(&local_path, &gist_id);
+
+                    state.bg_task_msg = Some("Uploading…".to_string());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    bg_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(BgTaskOutcome::UploadAdd {
+                            result,
+                            local_path,
+                            gist_id,
+                        });
+                    });
                 }
                 KeyOutcome::UploadPreview => {
-                    fetch_then(terminal, &mut state, "Loading diff…", upload_preview)?
+                    let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist())
+                    else {
+                        continue;
+                    };
+                    let Some(filename) = upload_local_filename(&local.path) else {
+                        state.set_status("local file has no name");
+                        continue;
+                    };
+                    let gist_id = gist.file.gist_id.clone();
+                    let gist_file = gist.file.clone();
+                    let local_path = local.path.clone();
+                    let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
+
+                    state.bg_task_msg = Some("Loading diff…".to_string());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    bg_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(BgTaskOutcome::UploadPreview {
+                            result,
+                            gist_id,
+                            filename,
+                            local_path,
+                            local_label,
+                            gist_label,
+                        });
+                    });
                 }
                 KeyOutcome::Upload => {
-                    fetch_then(terminal, &mut state, "Uploading…", upload_replace)?
+                    let Some(PendingAction::Upload {
+                        gist_id,
+                        filename,
+                        local_path,
+                    }) = state.pending_action.clone()
+                    else {
+                        continue;
+                    };
+                    let target = GistFile {
+                        gist_id: gist_id.clone(),
+                        description: String::new(),
+                        filename: filename.clone(),
+                        public: false,
+                        updated_at: String::new(),
+                        created_at: String::new(),
+                    };
+                    let plan = crate::actions::upload_command(&local_path, &target);
+
+                    state.bg_task_msg = Some("Uploading…".to_string());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    bg_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(BgTaskOutcome::UploadReplace {
+                            result,
+                            gist_id,
+                            filename,
+                        });
+                    });
                 }
                 KeyOutcome::Create(public) => {
-                    draw_loading(terminal, &mut state, "Creating gist…")?;
-                    create_gist(&mut state, public);
+                    let Some(PendingAction::Create { local_path }) = state.pending_action.clone()
+                    else {
+                        continue;
+                    };
+                    let description = state.description_input.clone();
+                    let plan = crate::actions::create_command(&local_path, public, &description);
+
+                    state.bg_task_msg = Some("Creating gist…".to_string());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    bg_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(BgTaskOutcome::CreateGist {
+                            result,
+                            local_path,
+                            public,
+                        });
+                    });
                 }
                 KeyOutcome::PreviewContent => {
-                    fetch_then(terminal, &mut state, "Loading preview…", preview_content)?
+                    let Some(gist) = state.selected_gist() else {
+                        continue;
+                    };
+                    let key = (gist.file.gist_id.clone(), gist.file.filename.clone());
+                    if let Some(cached) = state.gist_content_cache.get(&key) {
+                        state.preview_title = format!("Preview: {} / {}", key.0, key.1);
+                        state.preview_gist_key = Some(key);
+                        state.diff_text = cached.clone();
+                        state.diff_scroll = 0;
+                        state.diff_hscroll = 0;
+                        state.status = None;
+                        state.screen = Screen::Preview;
+                    } else {
+                        let gist_id = key.0.clone();
+                        let filename = key.1.clone();
+                        let preview_title = format!("Preview: {gist_id} / {filename}");
+                        state.bg_task_msg = Some("Loading preview…".to_string());
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        bg_rx = Some(rx);
+                        std::thread::spawn(move || {
+                            let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
+                                .map_err(|e| e.to_string());
+                            let _ = tx.send(BgTaskOutcome::PreviewContent {
+                                result,
+                                key,
+                                preview_title,
+                            });
+                        });
+                    }
                 }
-                KeyOutcome::RefreshPreview => fetch_then(
-                    terminal,
-                    &mut state,
-                    "Loading preview…",
-                    refresh_preview_content,
-                )?,
+                KeyOutcome::RefreshPreview => {
+                    if let Some(key) = state.preview_gist_key.clone() {
+                        state.gist_content_cache.remove(&key);
+                        let gist_id = key.0.clone();
+                        let filename = key.1.clone();
+                        let preview_title = format!("Preview: {gist_id} / {filename}");
+                        state.bg_task_msg = Some("Loading preview…".to_string());
+                        let (tx, rx) = std::sync::mpsc::channel();
+                        bg_rx = Some(rx);
+                        std::thread::spawn(move || {
+                            let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
+                                .map_err(|e| e.to_string());
+                            let _ = tx.send(BgTaskOutcome::PreviewContent {
+                                result,
+                                key,
+                                preview_title,
+                            });
+                        });
+                    }
+                }
                 KeyOutcome::OpenBrowser => open_browser(&mut state),
                 KeyOutcome::EditLocal => edit_local(terminal, &mut state)?,
                 KeyOutcome::ExecuteDelete => {
-                    draw_loading(terminal, &mut state, "Deleting gist…")?;
-                    delete_gist(&mut state);
+                    let Some(PendingAction::Delete { gist_id, .. }) = state.pending_action.clone()
+                    else {
+                        continue;
+                    };
+                    let plan = crate::actions::delete_command(&gist_id);
+                    state.back_to_list();
+
+                    state.bg_task_msg = Some("Deleting gist…".to_string());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    bg_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(BgTaskOutcome::DeleteGist { result, gist_id });
+                    });
                 }
                 KeyOutcome::ExecuteRemoveFile => {
-                    draw_loading(terminal, &mut state, "Removing file…")?;
-                    remove_file(&mut state);
+                    let Some(PendingAction::RemoveFile {
+                        gist_id, filename, ..
+                    }) = state.pending_action.clone()
+                    else {
+                        continue;
+                    };
+                    let plan = crate::actions::remove_file_command(&gist_id, &filename);
+                    state.back_to_list();
+
+                    state.bg_task_msg = Some("Removing file…".to_string());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    bg_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(BgTaskOutcome::RemoveFile {
+                            result,
+                            gist_id,
+                            filename,
+                        });
+                    });
                 }
                 KeyOutcome::ApplyDescription => {
-                    draw_loading(terminal, &mut state, "Updating description…")?;
-                    apply_description(&mut state);
+                    let Some(group) = state.selected_group() else {
+                        state.editing_description = false;
+                        continue;
+                    };
+                    let gist_id = group.id.clone();
+                    let description = state.description_input.clone();
+                    let plan = crate::actions::edit_description_command(&gist_id, &description);
+                    state.editing_description = false;
+                    state.description_input.clear();
+
+                    state.bg_task_msg = Some("Updating description…".to_string());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    bg_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(BgTaskOutcome::ApplyDescription { result, gist_id });
+                    });
                 }
                 KeyOutcome::RefreshLocals => {
-                    draw_loading(terminal, &mut state, "Scanning files…")?;
+                    state.set_status("Scanning files…");
                     state.local_scanning = true;
                     local_rx = Some(spawn_local_scan(
                         state.cwd.clone(),
@@ -1284,33 +1807,6 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
         }
     }
 
-    Ok(())
-}
-
-/// Draws a "Loading…" frame, then runs a blocking `gh` action. The action overwrites the
-/// status with its result, which the next loop iteration draws.
-fn fetch_then(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    state: &mut AppState,
-    msg: &str,
-    action: fn(&mut AppState),
-) -> Result<()> {
-    draw_loading(terminal, state, msg)?;
-    action(state);
-    Ok(())
-}
-
-fn draw_loading(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    state: &mut AppState,
-    msg: &str,
-) -> Result<()> {
-    state.set_status(msg);
-    // A blocking `gh` call follows, so this is the last frame drawn until it returns.
-    // Render a dedicated centered overlay rather than the current screen, because the
-    // Confirm and Gists screens don't surface `status` — without it those flows would
-    // look frozen during the call.
-    terminal.draw(|frame| render_loading_overlay(frame, msg))?;
     Ok(())
 }
 
@@ -1412,33 +1908,6 @@ fn diff_labels(local_path: Option<&std::path::Path>, gist: &GistFile) -> (String
     (local_label, gist_label)
 }
 
-fn preview_diff(state: &mut AppState) {
-    let Some(ranked) = state.selected_gist() else {
-        return;
-    };
-    // A local file may not be selected (empty cwd); diff against empty content then.
-    let local_path = state.selected_local().map(|local| local.path.clone());
-    let gist = ranked.file;
-    match crate::gh::fetch_gist_file_content(&gist.gist_id, &gist.filename) {
-        Ok(remote) => {
-            let local_content = local_path
-                .as_ref()
-                .map(|path| std::fs::read_to_string(path).unwrap_or_default())
-                .unwrap_or_default();
-            let (local_label, gist_label) = diff_labels(local_path.as_deref(), &gist);
-            let diff =
-                crate::diff::unified_diff(&local_label, &local_content, &gist_label, &remote);
-            // Download saves the gist into the current working directory under the
-            // gist's own filename, leaving the compared local file untouched.
-            let target = state.cwd.join(&gist.filename);
-            let identical = local_content == remote;
-            state.enter_diff(diff, remote, local_path.unwrap_or_default(), target);
-            state.diff_identical = identical;
-        }
-        Err(error) => state.set_status(format!("fetch failed: {error}")),
-    }
-}
-
 fn open_browser(state: &mut AppState) {
     // The gist-level view selects by gist; the main list selects by file row.
     let gist_id = match state.screen {
@@ -1490,75 +1959,6 @@ fn edit_local(
         Err(error) => state.set_status(format!("editor failed: {error}")),
     }
     Ok(())
-}
-
-fn preview_content(state: &mut AppState) {
-    let Some(gist) = state.selected_gist() else {
-        return;
-    };
-    let key = (gist.file.gist_id.clone(), gist.file.filename.clone());
-    let content = match state.gist_content_cache.get(&key) {
-        Some(cached) => cached.clone(),
-        None => match crate::gh::fetch_gist_file_content(&gist.file.gist_id, &gist.file.filename) {
-            Ok(content) => {
-                state
-                    .gist_content_cache
-                    .insert(key.clone(), content.clone());
-                content
-            }
-            Err(error) => {
-                state.set_status(format!("fetch failed: {error}"));
-                return;
-            }
-        },
-    };
-    state.preview_title = format!("Preview: {} / {}", gist.file.gist_id, gist.file.filename);
-    state.preview_gist_key = Some(key);
-    state.diff_text = content;
-    state.diff_scroll = 0;
-    state.diff_hscroll = 0;
-    state.status = None;
-    state.screen = Screen::Preview;
-}
-
-fn refresh_preview_content(state: &mut AppState) {
-    if let Some(key) = state.preview_gist_key.clone() {
-        state.gist_content_cache.remove(&key);
-    }
-    preview_content(state);
-}
-
-fn download_selected(state: &mut AppState) {
-    let Some(ranked) = state.selected_gist() else {
-        return;
-    };
-    let gist = ranked.file;
-    let target = state.cwd.join(&gist.filename);
-    match crate::gh::fetch_gist_file_content(&gist.gist_id, &gist.filename) {
-        Ok(remote) => {
-            if target.exists() {
-                // A same-named file already exists: show its diff and require a y/n
-                // overwrite confirmation before writing.
-                let local_content = std::fs::read_to_string(&target).unwrap_or_default();
-                let (local_label, gist_label) = diff_labels(Some(&target), &gist);
-                let diff =
-                    crate::diff::unified_diff(&local_label, &local_content, &gist_label, &remote);
-                let identical = local_content == remote;
-                state.enter_diff(diff, remote, target.clone(), target);
-                state.diff_identical = identical;
-            } else {
-                // No collision: download straight into the cwd without forcing a diff.
-                match crate::actions::execute_download(&target, &remote, false) {
-                    Ok(()) => {
-                        state.set_status(format!("Downloaded {}", target.display()));
-                        refresh_locals(state);
-                    }
-                    Err(error) => state.set_status(format!("download failed: {error}")),
-                }
-            }
-        }
-        Err(error) => state.set_status(format!("fetch failed: {error}")),
-    }
 }
 
 fn download(state: &mut AppState) {
@@ -1667,191 +2067,6 @@ fn upload_local_filename(local: &std::path::Path) -> Option<String> {
     local.file_name().and_then(|n| n.to_str()).map(String::from)
 }
 
-fn upload_add(state: &mut AppState) {
-    let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist()) else {
-        return;
-    };
-    let plan = crate::actions::upload_add_command(&local.path, &gist.file.gist_id);
-    match crate::actions::execute_command(&plan) {
-        Ok(_) => {
-            if let Some(filename) = upload_local_filename(&local.path) {
-                state
-                    .gist_content_cache
-                    .remove(&(gist.file.gist_id.clone(), filename));
-            }
-            state.set_status(format!(
-                "Uploaded {} to gist {}",
-                local.path.display(),
-                gist.file.gist_id
-            ));
-            state.back_to_list();
-            refresh_gists(state);
-        }
-        Err(error) => state.set_status(format!("upload failed: {error}")),
-    }
-}
-
-fn upload_preview(state: &mut AppState) {
-    let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist()) else {
-        return;
-    };
-    let Some(filename) = upload_local_filename(&local.path) else {
-        state.set_status("local file has no name");
-        return;
-    };
-    match crate::gh::fetch_gist_file_content(&gist.file.gist_id, &filename) {
-        Ok(remote) => {
-            let local_content = std::fs::read_to_string(&local.path).unwrap_or_default();
-            let (local_label, gist_label) = diff_labels(Some(&local.path), &gist.file);
-            let diff =
-                crate::diff::unified_diff(&gist_label, &remote, &local_label, &local_content);
-            state.diff_text = diff;
-            state.diff_scroll = 0;
-            state.diff_hscroll = 0;
-            state.pending_action = Some(PendingAction::Upload {
-                gist_id: gist.file.gist_id.clone(),
-                filename,
-                local_path: local.path.clone(),
-            });
-            state.status = None;
-            state.screen = Screen::Confirm;
-        }
-        Err(error) => state.set_status(format!("fetch failed: {error}")),
-    }
-}
-
-fn upload_replace(state: &mut AppState) {
-    let Some(PendingAction::Upload {
-        gist_id,
-        filename,
-        local_path,
-    }) = state.pending_action.clone()
-    else {
-        return;
-    };
-    let target = GistFile {
-        gist_id: gist_id.clone(),
-        description: String::new(),
-        filename: filename.clone(),
-        public: false,
-        updated_at: String::new(),
-        created_at: String::new(),
-    };
-    let plan = crate::actions::upload_command(&local_path, &target);
-    match crate::actions::execute_command(&plan) {
-        Ok(_) => {
-            state
-                .gist_content_cache
-                .remove(&(gist_id.clone(), filename.clone()));
-            state.set_status(format!("Uploaded {} to gist {}", filename, gist_id));
-            state.back_to_list();
-            refresh_gists(state);
-        }
-        Err(error) => {
-            state.set_status(format!("upload failed: {error}"));
-            state.screen = Screen::Confirm;
-        }
-    }
-}
-
-fn refresh_gists(state: &mut AppState) {
-    if let Ok(gists) =
-        crate::gh::fetch_gist_list_json().and_then(|raw| crate::gh::parse_gist_list_json(&raw))
-    {
-        cache_gists(&gists);
-        state.gists = gists;
-        if state.gist_index >= state.ranked_gists().len() {
-            state.gist_index = 0;
-        }
-    }
-}
-
-fn create_gist(state: &mut AppState, public: bool) {
-    let Some(PendingAction::Create { local_path }) = state.pending_action.clone() else {
-        return;
-    };
-    let description = state.description_input.clone();
-    let plan = crate::actions::create_command(&local_path, public, &description);
-    match crate::actions::execute_command(&plan) {
-        Ok(_) => {
-            let visibility = if public { "public" } else { "secret" };
-            state.set_status(format!(
-                "Created {} gist from {}",
-                visibility,
-                local_path.display()
-            ));
-            state.description_input.clear();
-            state.back_to_list();
-            refresh_gists(state);
-        }
-        Err(error) => {
-            state.set_status(format!("create failed: {error}"));
-            state.screen = Screen::List;
-            state.pending_action = None;
-            state.description_input.clear();
-        }
-    }
-}
-
-fn remove_file(state: &mut AppState) {
-    let Some(PendingAction::RemoveFile {
-        gist_id, filename, ..
-    }) = state.pending_action.clone()
-    else {
-        return;
-    };
-    let plan = crate::actions::remove_file_command(&gist_id, &filename);
-    state.back_to_list();
-    match crate::actions::execute_command(&plan) {
-        Ok(_) => {
-            state
-                .gist_content_cache
-                .remove(&(gist_id.clone(), filename.clone()));
-            state.set_status(format!("Removed {filename} from gist {gist_id}"));
-            refresh_gists(state);
-        }
-        Err(error) => state.set_status(format!("remove failed: {error}")),
-    }
-}
-
-fn apply_description(state: &mut AppState) {
-    let Some(group) = state.selected_group() else {
-        state.editing_description = false;
-        return;
-    };
-    let gist_id = group.id.clone();
-    let description = state.description_input.clone();
-    let plan = crate::actions::edit_description_command(&gist_id, &description);
-    state.editing_description = false;
-    state.description_input.clear();
-    match crate::actions::execute_command(&plan) {
-        Ok(_) => {
-            state.set_status(format!("Updated description for gist {gist_id}"));
-            refresh_gists(state);
-            let count = state.visible_gist_groups().len();
-            if count > 0 && state.gists_index >= count {
-                state.gists_index = count - 1;
-            }
-        }
-        Err(error) => state.set_status(format!("description update failed: {error}")),
-    }
-}
-
-fn delete_gist(state: &mut AppState) {
-    let Some(PendingAction::Delete { gist_id, .. }) = state.pending_action.clone() else {
-        return;
-    };
-    let plan = crate::actions::delete_command(&gist_id);
-    state.back_to_list();
-    match crate::actions::execute_command(&plan) {
-        Ok(_) => {
-            state.set_status(format!("Deleted gist {gist_id}"));
-            refresh_gists(state);
-        }
-        Err(error) => state.set_status(format!("delete failed: {error}")),
-    }
-}
-
 fn render(frame: &mut Frame, state: &AppState) {
     match state.screen {
         Screen::List => render_list(frame, state),
@@ -1861,6 +2076,9 @@ fn render(frame: &mut Frame, state: &AppState) {
         Screen::Help => render_help(frame),
         Screen::Pins => render_pins(frame, state),
         Screen::Gists => render_gists(frame, state),
+    }
+    if let Some(ref msg) = state.bg_task_msg {
+        render_loading_overlay(frame, msg);
     }
 }
 
