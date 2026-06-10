@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[command(
     name = "gistui",
     version,
-    about = "Manage local config files and GitHub gist files"
+    about = "A terminal UI for managing GitHub Gists"
 )]
 struct Cli {
     #[arg(long, help = "Print startup checks without launching the TUI")]
