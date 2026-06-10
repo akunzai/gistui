@@ -234,6 +234,8 @@ pub enum KeyOutcome {
     SyncPinPull,
     /// Smart-sync the selected local↔gist pair from the List screen (if pinned).
     SyncSelectedPair,
+    /// Diff the selected pinned pair (read-only, lands on Screen::Diff; q/Esc returns to Pins).
+    PreviewPinDiff,
 }
 
 #[derive(Debug, Clone)]
@@ -294,6 +296,8 @@ pub struct AppState {
     pub download_gist_id: Option<String>,
     /// filename of the active download (set when entering the diff Confirm for a pull).
     pub download_gist_filename: Option<String>,
+    /// Screen to return to when leaving the diff (default: List; set to Pins for pin diffs).
+    pub diff_return: Screen,
 }
 
 fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
@@ -673,6 +677,7 @@ impl AppState {
             KeyCode::Up if self.pins_index > 0 => {
                 self.pins_index -= 1;
             }
+            KeyCode::Enter if !self.pinned.is_empty() => return KeyOutcome::PreviewPinDiff,
             KeyCode::Char('x') if !self.pinned.is_empty() => return KeyOutcome::UnpinAtPin,
             KeyCode::Char('s') if !self.pinned.is_empty() => return KeyOutcome::SyncPinAuto,
             KeyCode::Char('u') if !self.pinned.is_empty() => return KeyOutcome::SyncPinPush,
@@ -1032,8 +1037,13 @@ impl AppState {
 
     fn handle_key_diff(&mut self, code: KeyCode) -> KeyOutcome {
         match code {
-            // In the diff, q and Esc both return to the list (no accidental app exit).
-            KeyCode::Char('q') | KeyCode::Esc => self.back_to_list(),
+            // In the diff, q and Esc return to diff_return (normally List; Pins for pin diffs).
+            KeyCode::Char('q') | KeyCode::Esc => {
+                let ret = self.diff_return;
+                self.back_to_list();
+                self.screen = ret;
+                self.diff_return = Screen::List;
+            }
             KeyCode::Down => self.scroll_diff_down(),
             KeyCode::Up => self.scroll_diff_up(),
             KeyCode::Right => self.scroll_diff_right(),
@@ -1259,6 +1269,7 @@ pub fn initial_state() -> AppState {
         upload_gist_label: None,
         download_gist_id: None,
         download_gist_filename: None,
+        diff_return: Screen::List,
     }
 }
 
@@ -2035,6 +2046,12 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                         ),
                     }
                 }
+                KeyOutcome::PreviewPinDiff => {
+                    if let Some(m) = selected_pin(&state) {
+                        state.diff_return = Screen::Pins;
+                        spawn_pin_diff(&mut state, &mut bg_rx, &m);
+                    }
+                }
                 KeyOutcome::None => {}
             }
         }
@@ -2243,6 +2260,37 @@ fn spawn_pin_pull(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
             gist_label,
             gist_id,
             filename,
+        });
+    });
+}
+
+/// Spawn a read-only diff (gist vs local) for a pin, landing on `Screen::Diff`.
+fn spawn_pin_diff(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::PinnedMapping) {
+    let local_abs = pin_local_abs(state, m);
+    let gist_id = m.gist_id.clone();
+    let filename = m.gist_filename.clone();
+    let gist_file = GistFile {
+        gist_id: gist_id.clone(),
+        description: String::new(),
+        filename: filename.clone(),
+        public: false,
+        updated_at: String::new(),
+        created_at: String::new(),
+    };
+    let (local_label, gist_label) = diff_labels(Some(&local_abs), &gist_file);
+    state.bg_task_msg = Some("Loading diff…".to_string());
+    let (tx, rx) = std::sync::mpsc::channel();
+    *bg_rx = Some(rx);
+    let target = local_abs.clone();
+    std::thread::spawn(move || {
+        let result =
+            crate::gh::fetch_gist_file_content(&gist_id, &filename).map_err(|e| e.to_string());
+        let _ = tx.send(BgTaskOutcome::PreviewDiff {
+            result,
+            local_path: Some(local_abs),
+            local_label,
+            gist_label,
+            target,
         });
     });
 }
@@ -5022,6 +5070,20 @@ mod tests {
             KeyOutcome::SyncPinPull
         );
         assert_eq!(state.handle_key(KeyCode::Char('x')), KeyOutcome::UnpinAtPin);
+    }
+
+    #[test]
+    fn pins_screen_enter_emits_preview_pin_diff() {
+        let mut state = initial_state();
+        state.screen = Screen::Pins;
+        state.pinned = vec![PinnedMapping {
+            local_path: PathBuf::from("/tmp/a.txt"),
+            gist_id: "g1".into(),
+            gist_filename: "a.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+        assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::PreviewPinDiff);
     }
 
     #[test]
