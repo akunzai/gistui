@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +49,20 @@ pub struct GistGroup {
     pub file_count: usize,
 }
 
+/// Lowercase hex SHA-256 of `bytes`. Used as the stable, content-only digest
+/// persisted in `PinnedMapping.last_seen_hash` (the config never stores content).
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
 /// Collapses the flat per-file rows into one [`GistGroup`] per gist, preserving
 /// the first-seen order of `files` (which mirrors the `gh` list order).
 pub fn group_gists(files: &[GistFile]) -> Vec<GistGroup> {
@@ -72,6 +87,18 @@ pub fn group_gists(files: &[GistFile]) -> Vec<GistGroup> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sha256_hex_matches_known_vector() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
 
     fn file(gist_id: &str, filename: &str, desc: &str, public: bool) -> GistFile {
         GistFile {

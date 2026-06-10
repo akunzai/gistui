@@ -1,16 +1,4 @@
-use sha2::{Digest, Sha256};
 use similar::{ChangeTag, TextDiff};
-use std::fmt::Write;
-
-pub fn sha256_hex(content: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(content.as_bytes());
-    let mut hex = String::with_capacity(64);
-    for byte in hasher.finalize() {
-        write!(hex, "{byte:02x}").expect("writing to a String never fails");
-    }
-    hex
-}
 
 pub fn unified_diff(old_label: &str, old: &str, new_label: &str, new: &str) -> String {
     let diff = TextDiff::from_lines(old, new);
@@ -32,12 +20,6 @@ pub fn unified_diff(old_label: &str, old: &str, new_label: &str, new: &str) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hash_is_stable() {
-        assert_eq!(sha256_hex("abc"), sha256_hex("abc"));
-        assert_ne!(sha256_hex("abc"), sha256_hex("abcd"));
-    }
 
     #[test]
     fn diff_shows_insert_and_delete() {
