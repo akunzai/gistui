@@ -6,6 +6,14 @@
 # Depth 0 = cwd only, 1 = one level deep, 2 = two levels deep, etc.
 scan_depth = 2
 
+# Unchanged context lines kept around each change in the diff view. The `c` key
+# in the diff toggles between this radius and the full file. Default 3.
+diff_context = 3
+
+# Remembered state of the diff view's `c` toggle: true shows the full file,
+# false collapses to diff_context lines. The app rewrites this when you press `c`.
+diff_show_full = false
+
 # Directories skipped when recursive local file discovery is active (r key).
 # Hidden directories (names starting with ".") are always skipped regardless
 # of this list. Add project-specific build output dirs here as needed.

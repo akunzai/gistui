@@ -236,6 +236,8 @@ pub enum KeyOutcome {
     SyncSelectedPair,
     /// Diff the selected pinned pair (read-only, lands on Screen::Diff; q/Esc returns to Pins).
     PreviewPinDiff,
+    /// Persist the diff-context toggle (`diff_show_full`) to config after pressing `c`.
+    PersistDiffContext,
 }
 
 #[derive(Debug, Clone)]
@@ -261,6 +263,11 @@ pub struct AppState {
     pub diff_scroll: u16,
     pub diff_hscroll: u16,
     pub diff_identical: bool,
+    /// Unchanged context lines kept around each change in the diff view (from config).
+    pub diff_context: u32,
+    /// When true the diff view shows the full file; when false it collapses to
+    /// `diff_context` lines. Toggled with `c` and persisted to config.
+    pub diff_show_full: bool,
     pub preview_remote: String,
     pub preview_local: PathBuf,
     pub download_target: PathBuf,
@@ -633,6 +640,16 @@ impl AppState {
 
     pub fn scroll_diff_left(&mut self) {
         self.diff_hscroll = self.diff_hscroll.saturating_sub(1);
+    }
+
+    /// Context radius to render the diff with: `None` shows the full file, `Some(n)`
+    /// collapses unchanged regions to `n` lines around each change.
+    pub fn effective_diff_context(&self) -> Option<usize> {
+        if self.diff_show_full {
+            None
+        } else {
+            Some(self.diff_context as usize)
+        }
     }
 
     pub fn handle_key(&mut self, code: KeyCode) -> KeyOutcome {
@@ -1058,6 +1075,13 @@ impl AppState {
                 }
             }
             KeyCode::Char('u') if !self.diff_identical => return self.upload_intent(),
+            // Toggle between the configured context radius and the full file; the line
+            // count changes, so reset the vertical scroll. The choice is persisted.
+            KeyCode::Char('c') => {
+                self.diff_show_full = !self.diff_show_full;
+                self.diff_scroll = 0;
+                return KeyOutcome::PersistDiffContext;
+            }
             _ => {}
         }
         KeyOutcome::None
@@ -1236,6 +1260,8 @@ pub fn initial_state() -> AppState {
         diff_scroll: 0,
         diff_hscroll: 0,
         diff_identical: false,
+        diff_context: 3,
+        diff_show_full: false,
         preview_remote: String::new(),
         preview_local: PathBuf::new(),
         download_target: PathBuf::new(),
@@ -1282,6 +1308,8 @@ pub fn load_startup_state() -> Result<AppState> {
     state.pinned = config.pinned;
     state.skip_dirs = config.skip_dirs;
     state.scan_depth = config.scan_depth;
+    state.diff_context = config.diff_context;
+    state.diff_show_full = config.diff_show_full;
     state.locals = crate::local::discover_local_candidates(
         &cwd,
         &state.pinned,
@@ -2055,6 +2083,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                         spawn_pin_diff(&mut state, &mut bg_rx, &m);
                     }
                 }
+                KeyOutcome::PersistDiffContext => persist_diff_context(&mut state),
                 KeyOutcome::None => {}
             }
         }
@@ -2535,6 +2564,22 @@ fn refresh_locals(state: &mut AppState) {
     }
 }
 
+/// Persist the diff-context toggle (`diff_show_full`) to the config file, leaving the
+/// configured `diff_context` radius untouched. IO boundary, called from `run_loop`.
+fn persist_diff_context(state: &mut AppState) {
+    let result = crate::config::config_path().and_then(|path| {
+        let mut config = crate::config::load_config(&path)?;
+        config.diff_show_full = state.diff_show_full;
+        crate::config::save_config(&path, &config)?;
+        Ok(())
+    });
+    match result {
+        Ok(()) if state.diff_show_full => state.set_status("Diff context: full file"),
+        Ok(()) => state.set_status(format!("Diff context: {} lines", state.diff_context)),
+        Err(error) => state.set_status(format!("save config failed: {error}")),
+    }
+}
+
 fn pin_selected(state: &mut AppState) {
     let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist()) else {
         return;
@@ -2660,6 +2705,12 @@ Pinned Mappings screen (P)
   x          unpin the selected pair
   status     ✓ synced · ↑ local newer · ↓ remote newer · ? unknown
   Each row shows (local <age> · gist <age>) relative modification times.
+
+Diff view (Enter / d / u)
+  Up/Down/Left/Right  scroll the diff
+  c          toggle context: configured radius <-> full file (remembered)
+  d / u      download / upload from the diff
+  Esc / q    back
 
 Upload Confirmation screen (u)
   y          confirm and execute the upload
@@ -3430,13 +3481,13 @@ fn confirm_modal_style(state: &AppState) -> (&'static str, Color) {
 
 /// Render just the diff content pane (no footer) into `area`.
 fn render_diff_pane(frame: &mut Frame, area: Rect, state: &AppState) {
+    // Collapse unchanged context to the configured radius unless the user toggled full view.
+    let diff_body = match state.effective_diff_context() {
+        Some(radius) => crate::diff::collapse_context(&state.diff_text, radius),
+        None => state.diff_text.clone(),
+    };
     frame.render_widget(
-        Paragraph::new(diff_view(
-            &state.diff_text,
-            state.diff_scroll,
-            state.diff_hscroll,
-        ))
-        .block(
+        Paragraph::new(diff_view(&diff_body, state.diff_scroll, state.diff_hscroll)).block(
             Block::default()
                 .title(diff_title(state))
                 .borders(Borders::ALL)
@@ -3448,10 +3499,17 @@ fn render_diff_pane(frame: &mut Frame, area: Rect, state: &AppState) {
 
 /// The `Screen::Diff` preview: the diff pane plus a scroll/commands footer.
 fn render_diff(frame: &mut Frame, state: &AppState) {
-    let footer = if state.diff_identical {
-        "Files are identical — nothing to sync  ·  ↑↓←→ scroll  ·  Esc/q back".to_string()
+    let context = if state.diff_show_full {
+        "c context [full]".to_string()
     } else {
-        "↑↓←→ scroll  ·  d download  ·  u upload  ·  Esc/q back".to_string()
+        format!("c context [{}]", state.diff_context)
+    };
+    let footer = if state.diff_identical {
+        format!(
+            "Files are identical — nothing to sync  ·  ↑↓←→ scroll  ·  {context}  ·  Esc/q back"
+        )
+    } else {
+        format!("↑↓←→ scroll  ·  d download  ·  u upload  ·  {context}  ·  Esc/q back")
     };
 
     let area = frame.area();
@@ -3939,6 +3997,27 @@ mod tests {
         state.screen = Screen::Help;
         assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
         assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn diff_context_toggle_flips_effective_radius() {
+        let mut state = initial_state();
+        state.diff_context = 3;
+        assert_eq!(state.effective_diff_context(), Some(3));
+
+        // Pressing `c` in the diff view flips to full view and resets the scroll.
+        state.screen = Screen::Diff;
+        state.diff_scroll = 12;
+        let outcome = state.handle_key(KeyCode::Char('c'));
+        assert_eq!(outcome, KeyOutcome::PersistDiffContext);
+        assert!(state.diff_show_full);
+        assert_eq!(state.diff_scroll, 0);
+        assert_eq!(state.effective_diff_context(), None);
+
+        // Pressing it again returns to the configured radius.
+        state.handle_key(KeyCode::Char('c'));
+        assert!(!state.diff_show_full);
+        assert_eq!(state.effective_diff_context(), Some(3));
     }
 
     #[test]
