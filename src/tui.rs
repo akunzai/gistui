@@ -232,6 +232,8 @@ pub enum KeyOutcome {
     SyncPinPush,
     /// Force pull the selected Pins-screen pair (download gist → local).
     SyncPinPull,
+    /// Smart-sync the selected local↔gist pair from the List screen (if pinned).
+    SyncSelectedPair,
 }
 
 #[derive(Debug, Clone)]
@@ -288,6 +290,10 @@ pub struct AppState {
     pub upload_remote_content: Option<String>,
     pub upload_local_label: Option<String>,
     pub upload_gist_label: Option<String>,
+    /// gist_id of the active download (set when entering the diff Confirm for a pull).
+    pub download_gist_id: Option<String>,
+    /// filename of the active download (set when entering the diff Confirm for a pull).
+    pub download_gist_filename: Option<String>,
 }
 
 fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
@@ -577,6 +583,10 @@ impl AppState {
         self.preview_remote.clear();
         self.preview_local = PathBuf::new();
         self.download_target = PathBuf::new();
+        // Clear the pull's pinned-pair identity so a later non-pinned download
+        // can't be mis-attributed to a pin via a stale gist id/filename.
+        self.download_gist_id = None;
+        self.download_gist_filename = None;
         self.diff_scroll = 0;
         self.diff_hscroll = 0;
         self.diff_identical = false;
@@ -905,6 +915,7 @@ impl AppState {
                 self.pins_index = 0;
                 self.screen = Screen::Pins;
             }
+            KeyCode::Char('S') => return KeyOutcome::SyncSelectedPair,
             KeyCode::Char('g') => {
                 if self.gists.is_empty() {
                     self.status = Some("no gists to manage".into());
@@ -1151,6 +1162,8 @@ enum BgTaskOutcome {
         target: PathBuf,
         local_label: String,
         gist_label: String,
+        gist_id: String,
+        filename: String,
     },
     UploadPreview {
         result: std::result::Result<String, String>,
@@ -1244,6 +1257,8 @@ pub fn initial_state() -> AppState {
         upload_remote_content: None,
         upload_local_label: None,
         upload_gist_label: None,
+        download_gist_id: None,
+        download_gist_filename: None,
     }
 }
 
@@ -1417,6 +1432,8 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                         target,
                         local_label,
                         gist_label,
+                        gist_id,
+                        filename,
                     } => match result {
                         Ok(remote) => {
                             if target.exists() {
@@ -1429,6 +1446,8 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                                     &remote,
                                 );
                                 let identical = local_content == remote;
+                                state.download_gist_id = Some(gist_id);
+                                state.download_gist_filename = Some(filename);
                                 state.enter_diff(diff, remote, target.clone(), target);
                                 state.diff_identical = identical;
                             } else {
@@ -1436,6 +1455,14 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                                     Ok(()) => {
                                         state
                                             .set_status(format!("Downloaded {}", target.display()));
+                                        record_pin_sync(
+                                            &mut state,
+                                            &target,
+                                            &gist_id,
+                                            &filename,
+                                            &remote,
+                                            crate::domain::SyncDirection::Download,
+                                        );
                                         refresh_locals(&mut state);
                                     }
                                     Err(error) => {
@@ -1483,6 +1510,17 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                                 .gist_content_cache
                                 .remove(&(gist_id.clone(), filename.clone()));
                             state.set_status(format!("Uploaded {} to gist {}", filename, gist_id));
+                            if let Some(local_path) = state.upload_local_path() {
+                                let content = state.content_to_upload();
+                                record_pin_sync(
+                                    &mut state,
+                                    &local_path,
+                                    &gist_id,
+                                    &filename,
+                                    &content,
+                                    crate::domain::SyncDirection::Upload,
+                                );
+                            }
                             state.back_to_list();
                             state.loading = true;
                             gist_rx = Some(spawn_gist_fetch());
@@ -1636,6 +1674,8 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                             target,
                             local_label,
                             gist_label,
+                            gist_id,
+                            filename,
                         });
                     });
                 }
@@ -1921,8 +1961,80 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                     ));
                 }
                 KeyOutcome::UnpinAtPin => unpin_at_pin_index(&mut state),
-                // Placeholder: wired in Task 9.
-                KeyOutcome::SyncPinAuto | KeyOutcome::SyncPinPush | KeyOutcome::SyncPinPull => {}
+                KeyOutcome::SyncSelectedPair => {
+                    let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist())
+                    else {
+                        continue;
+                    };
+                    let local_abs = state.cwd.join(&local.path);
+                    let gist_id = gist.file.gist_id.clone();
+                    let filename = gist.file.filename.clone();
+                    let idx = state.pinned.iter().position(|m| {
+                        pin_local_abs(&state, m) == local_abs
+                            && m.gist_id == gist_id
+                            && m.gist_filename == filename
+                    });
+                    let Some(idx) = idx else {
+                        state.set_status("pair is not pinned — press p to pin first");
+                        continue;
+                    };
+                    let m = state.pinned[idx].clone();
+                    match state.pin_sync_status(idx) {
+                        crate::domain::SyncStatus::Push => {
+                            spawn_pin_push(&mut state, &mut bg_rx, &m)
+                        }
+                        crate::domain::SyncStatus::Pull => {
+                            spawn_pin_pull(&mut state, &mut bg_rx, &m)
+                        }
+                        crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
+                        crate::domain::SyncStatus::Unknown => state.set_status(
+                            "can't tell which side is newer — use u to push or d to pull",
+                        ),
+                    }
+                }
+                KeyOutcome::SyncPinPush => {
+                    if let Some(m) = selected_pin(&state) {
+                        spawn_pin_push(&mut state, &mut bg_rx, &m);
+                    }
+                }
+                KeyOutcome::SyncPinPull => {
+                    if let Some(m) = selected_pin(&state) {
+                        spawn_pin_pull(&mut state, &mut bg_rx, &m);
+                    }
+                }
+                KeyOutcome::SyncPinAuto => {
+                    let Some(m) = selected_pin(&state) else {
+                        continue;
+                    };
+                    match state.pin_sync_status(state.pins_index) {
+                        crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
+                        crate::domain::SyncStatus::Pull => {
+                            spawn_pin_pull(&mut state, &mut bg_rx, &m)
+                        }
+                        crate::domain::SyncStatus::Push => {
+                            // Cheap, network-free no-op check: if the local file still
+                            // hashes to last_seen_hash, the newer mtime is a touch with
+                            // no content change. Note: only fires for plain pushes — a
+                            // push whose baseline was a JSON-transformed/redacted upload
+                            // won't match the raw file, so it harmlessly falls through to
+                            // a full push.
+                            let local_abs = pin_local_abs(&state, &m);
+                            let unchanged = m.last_seen_hash.as_deref().is_some_and(|baseline| {
+                                std::fs::read(&local_abs)
+                                    .map(|b| crate::domain::sha256_hex(&b) == baseline)
+                                    .unwrap_or(false)
+                            });
+                            if unchanged {
+                                state.set_status("already in sync");
+                            } else {
+                                spawn_pin_push(&mut state, &mut bg_rx, &m);
+                            }
+                        }
+                        crate::domain::SyncStatus::Unknown => state.set_status(
+                            "can't tell which side is newer — use u to push or d to pull",
+                        ),
+                    }
+                }
                 KeyOutcome::None => {}
             }
         }
@@ -2037,6 +2149,132 @@ fn gist_time_label(updated_at: &str) -> String {
         format!("{} UTC", updated_at[..16].replace('T', " "))
     } else {
         updated_at.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pinned-sync helpers (Task 9 + Task 10)
+// ---------------------------------------------------------------------------
+
+type BgRx = Option<std::sync::mpsc::Receiver<BgTaskOutcome>>;
+
+/// The pin currently selected in the Pins screen, if any.
+fn selected_pin(state: &AppState) -> Option<crate::domain::PinnedMapping> {
+    state.pinned.get(state.pins_index).cloned()
+}
+
+/// Resolve a pin's absolute local path against cwd.
+fn pin_local_abs(state: &AppState, m: &crate::domain::PinnedMapping) -> PathBuf {
+    if m.local_path.is_absolute() {
+        m.local_path.clone()
+    } else {
+        state.cwd.join(&m.local_path)
+    }
+}
+
+/// Spawn the push (upload local → gist) flow for a pin: lands in the existing
+/// upload `Screen::Confirm` diff.
+fn spawn_pin_push(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::PinnedMapping) {
+    let local_path = pin_local_abs(state, m);
+    let gist_id = m.gist_id.clone();
+    let filename = m.gist_filename.clone();
+    state.pending_action = Some(PendingAction::Upload {
+        gist_id: gist_id.clone(),
+        filename: filename.clone(),
+        local_path: local_path.clone(),
+    });
+    let gist_file = GistFile {
+        gist_id: gist_id.clone(),
+        description: String::new(),
+        filename: filename.clone(),
+        public: false,
+        updated_at: String::new(),
+        created_at: String::new(),
+    };
+    let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
+    state.bg_task_msg = Some("Loading diff…".to_string());
+    let (tx, rx) = std::sync::mpsc::channel();
+    *bg_rx = Some(rx);
+    std::thread::spawn(move || {
+        let result =
+            crate::gh::fetch_gist_file_content(&gist_id, &filename).map_err(|e| e.to_string());
+        let _ = tx.send(BgTaskOutcome::UploadPreview {
+            result,
+            gist_id,
+            filename,
+            local_path,
+            local_label,
+            gist_label,
+        });
+    });
+}
+
+/// Spawn the pull (download gist → local) flow for a pin: lands in the existing
+/// download `Screen::Confirm` diff when the local file exists.
+fn spawn_pin_pull(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::PinnedMapping) {
+    let target = pin_local_abs(state, m);
+    let gist_id = m.gist_id.clone();
+    let filename = m.gist_filename.clone();
+    let gist_file = GistFile {
+        gist_id: gist_id.clone(),
+        description: String::new(),
+        filename: filename.clone(),
+        public: false,
+        updated_at: String::new(),
+        created_at: String::new(),
+    };
+    let (local_label, gist_label) = diff_labels(Some(&target), &gist_file);
+    state.bg_task_msg = Some("Downloading…".to_string());
+    let (tx, rx) = std::sync::mpsc::channel();
+    *bg_rx = Some(rx);
+    std::thread::spawn(move || {
+        let result =
+            crate::gh::fetch_gist_file_content(&gist_id, &filename).map_err(|e| e.to_string());
+        let _ = tx.send(BgTaskOutcome::DownloadSelected {
+            result,
+            target,
+            local_label,
+            gist_label,
+            gist_id,
+            filename,
+        });
+    });
+}
+
+/// If `(local_abs, gist_id, filename)` is a pinned pair, record the sync result
+/// (hash of `content` + `direction`) to config and update `state.pinned`.
+fn record_pin_sync(
+    state: &mut AppState,
+    local_abs: &std::path::Path,
+    gist_id: &str,
+    filename: &str,
+    content: &str,
+    direction: crate::domain::SyncDirection,
+) {
+    // Find the pin using its STORED (possibly relative) local_path form.
+    let stored_local = state.pinned.iter().find_map(|m| {
+        let mabs = pin_local_abs(state, m);
+        (mabs == local_abs && m.gist_id == gist_id && m.gist_filename == filename)
+            .then(|| m.local_path.clone())
+    });
+    let Some(stored_local) = stored_local else {
+        return;
+    };
+    let hash = crate::domain::sha256_hex(content.as_bytes());
+    if let Ok(path) = crate::config::config_path() {
+        if let Ok(config) = crate::config::load_config(&path) {
+            if let Ok(updated) = crate::actions::record_sync(
+                &path,
+                config,
+                &stored_local,
+                gist_id,
+                filename,
+                &hash,
+                direction,
+            ) {
+                state.pinned = updated.pinned;
+            }
+        }
     }
 }
 
@@ -2189,6 +2427,19 @@ fn download(state: &mut AppState) {
     match crate::actions::execute_download(&target, &content, true) {
         Ok(()) => {
             state.set_status(format!("Downloaded {}", target.display()));
+            if let (Some(gid), Some(fname)) = (
+                state.download_gist_id.clone(),
+                state.download_gist_filename.clone(),
+            ) {
+                record_pin_sync(
+                    state,
+                    &target,
+                    &gid,
+                    &fname,
+                    &content,
+                    crate::domain::SyncDirection::Download,
+                );
+            }
             state.back_to_list();
             refresh_locals(state);
         }
@@ -4745,5 +4996,27 @@ mod tests {
             KeyOutcome::SyncPinPull
         );
         assert_eq!(state.handle_key(KeyCode::Char('x')), KeyOutcome::UnpinAtPin);
+    }
+
+    #[test]
+    fn list_screen_capital_s_syncs_selected_pair() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("a.txt"),
+            pinned: true,
+            modified: None,
+        }];
+        state.gists = vec![GistFile {
+            gist_id: "g1".into(),
+            description: String::new(),
+            filename: "a.txt".into(),
+            public: false,
+            updated_at: String::new(),
+            created_at: String::new(),
+        }];
+        assert_eq!(
+            state.handle_key(KeyCode::Char('S')),
+            KeyOutcome::SyncSelectedPair
+        );
     }
 }
