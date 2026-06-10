@@ -113,6 +113,7 @@ selected gist instead. Browse with `Tab` (switch pane), `Up`/`Down` (move), and
   pane's** sort (match / name / recent — gists by name/updated, local files by
   name/modified-time) · `t` toggle row view.
 - `Esc`/`q` — go back from an overlay; quit the app from the main list.
+- `?` — show the help overlay; from there, `o` opens this repository in your web browser.
 
 When no local file is selected (e.g. an empty directory), the right pane lists all gists
 unranked so you can still preview and download into the current directory.

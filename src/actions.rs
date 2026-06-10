@@ -133,6 +133,18 @@ pub fn open_browser_command(gist_id: &str) -> CommandPlan {
     }
 }
 
+pub fn open_repo_browser_command() -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "repo".into(),
+            "view".into(),
+            "akunzai/gistui".into(),
+            "--web".into(),
+        ],
+    }
+}
+
 pub fn create_command(local_path: &Path, public: bool, description: &str) -> CommandPlan {
     let mut args = vec![
         "gist".into(),
@@ -344,6 +356,13 @@ mod tests {
         let plan = open_browser_command("abc123");
         assert_eq!(plan.program, "gh");
         assert_eq!(plan.args, vec!["gist", "view", "abc123", "--web"]);
+    }
+
+    #[test]
+    fn open_repo_browser_command_targets_repo_view() {
+        let plan = open_repo_browser_command();
+        assert_eq!(plan.program, "gh");
+        assert_eq!(plan.args, vec!["repo", "view", "akunzai/gistui", "--web"]);
     }
 
     #[test]
