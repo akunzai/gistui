@@ -2099,37 +2099,43 @@ impl AppState {
     }
 }
 
-/// A centered "Working…" box shown while a blocking `gh` action runs. Animating a
-/// spinner would require running the action off-thread (see issue #11); under the
-/// current synchronous model this is a single static frame.
-fn render_loading_overlay(frame: &mut Frame, msg: &str) {
-    let rows = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(45),
-            Constraint::Length(3),
-            Constraint::Min(0),
-        ])
-        .split(frame.area());
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(20),
-            Constraint::Percentage(60),
-            Constraint::Percentage(20),
-        ])
-        .split(rows[1]);
-    frame.render_widget(Clear, cols[1]);
+/// Draw a centered, bordered box over the current frame, sized to fit `body` (clamped to
+/// the frame) and wiped clean with `Clear` so whatever is behind it doesn't bleed through.
+/// This is the shared "centered window" primitive behind both the loading overlay and the
+/// confirm prompt.
+fn render_centered_modal(frame: &mut Frame, title: &str, body: &str, border: Color) {
+    let area = frame.area();
+    let max_width = area.width.saturating_sub(2).max(1);
+    let width = ((area.width as u32 * 60 / 100) as u16).clamp(max_width.min(20), max_width);
+    // Inner text width = box width minus the two border columns and the horizontal padding.
+    let inner_width = width.saturating_sub(4);
+    let body_lines = wrap_line_count(body, inner_width).max(1);
+    let max_height = area.height.saturating_sub(2).max(1);
+    let height = (body_lines + 2).clamp(max_height.min(3), max_height);
+    let rect = Rect {
+        x: area.width.saturating_sub(width) / 2,
+        y: area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
     frame.render_widget(
-        Paragraph::new(format!("⏳ {msg}")).block(
-            Block::default()
-                .title("Working…")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan))
-                .padding(Padding::horizontal(1)),
-        ),
-        cols[1],
+        Paragraph::new(body.to_string())
+            .wrap(Wrap { trim: true })
+            .block(
+                Block::default()
+                    .title(title.to_string())
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(border))
+                    .padding(Padding::horizontal(1)),
+            ),
+        rect,
     );
+}
+
+/// A centered "Working…" box shown while a blocking `gh` action runs.
+fn render_loading_overlay(frame: &mut Frame, msg: &str) {
+    render_centered_modal(frame, "Working…", &format!("⏳ {msg}"), Color::Cyan);
 }
 
 /// Civil date (year, month, day) from a day count since the Unix epoch — Howard Hinnant's
@@ -2600,8 +2606,8 @@ fn upload_local_filename(local: &std::path::Path) -> Option<String> {
 fn render(frame: &mut Frame, state: &AppState) {
     match state.screen {
         Screen::List => render_list(frame, state),
-        Screen::Diff => render_diff(frame, state, false),
-        Screen::Confirm => render_diff(frame, state, true),
+        Screen::Diff => render_diff(frame, state),
+        Screen::Confirm => render_confirm(frame, state),
         Screen::Preview => render_preview(frame, state),
         Screen::Help => render_help(frame, state),
         Screen::Pins => render_pins(frame, state),
@@ -2816,12 +2822,7 @@ fn gist_group_row_label(g: &GistGroup) -> String {
 
 fn render_gists(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
-    let (ftitle, footer) = if state.editing_description {
-        (
-            "Edit description (Enter apply · Esc cancel)",
-            format!("{}_", state.description_input),
-        )
-    } else if state.gists_filtering {
+    let (ftitle, footer) = if state.gists_filtering {
         (
             "Filter (Enter keep · Esc clear)",
             format!("/{}_", state.gists_filter_query),
@@ -2893,6 +2894,15 @@ fn render_gists(frame: &mut Frame, state: &AppState) {
         ),
         chunks[1],
     );
+
+    if state.editing_description {
+        render_centered_modal(
+            frame,
+            "Edit description (Enter apply · Esc cancel)",
+            &format!("{}_", state.description_input),
+            Color::Cyan,
+        );
+    }
 }
 
 fn local_row_label(path: &std::path::Path, cwd: &std::path::Path) -> String {
@@ -3304,78 +3314,11 @@ fn diff_view(text: &str, vscroll: u16, hscroll: u16) -> Text<'static> {
     )
 }
 
-fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
-    let footer = if confirming {
-        match &state.pending_action {
-            Some(PendingAction::Create { .. }) if state.editing_description => {
-                format!(
-                    "Description (optional): {}_   ·  Enter next  ·  Esc cancel",
-                    state.description_input
-                )
-            }
-            Some(PendingAction::Create { local_path }) => {
-                let desc = if state.description_input.is_empty() {
-                    "no description".to_string()
-                } else {
-                    format!("desc: {}", state.description_input)
-                };
-                format!(
-                    "Create gist from {} ({desc})?  s secret  p public  Esc cancel",
-                    local_path.display()
-                )
-            }
-            Some(PendingAction::Upload {
-                gist_id,
-                filename,
-                local_path,
-            }) => {
-                let edited_status = if state.upload_edited_content.is_some() {
-                    " [edited]"
-                } else {
-                    ""
-                };
-                let mut opts = format!("y yes  n/Esc cancel  e edit{edited_status}");
-                if is_json_file(local_path) {
-                    let pretty_status = if state.upload_json_pretty {
-                        " [on]"
-                    } else {
-                        " [off]"
-                    };
-                    let sort_status = if state.upload_json_sort {
-                        " [on]"
-                    } else {
-                        " [off]"
-                    };
-                    opts.push_str(&format!("  p pretty{pretty_status}  s sort{sort_status}"));
-                }
-                format!("Upload {filename} to gist {gist_id}?  ·  {opts}")
-            }
-            Some(PendingAction::Delete { gist_id, label }) => {
-                format!("Permanently delete \"{label}\" ({gist_id})? (y/n)")
-            }
-            Some(PendingAction::RemoveFile {
-                gist_id, filename, ..
-            }) => {
-                format!("Remove {filename} from gist {gist_id}? (y/n)")
-            }
-            _ => format!("Overwrite {}? (y/n)", state.download_target.display()),
-        }
-    } else if state.diff_identical {
-        "Files are identical — nothing to sync  ·  ↑↓←→ scroll  ·  Esc/q back".to_string()
-    } else {
-        "↑↓←→ scroll  ·  d download  ·  u upload  ·  Esc/q back".to_string()
-    };
-
-    let area = frame.area();
-    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(4)).max(1);
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 2)])
-        .split(area);
-
-    // The gist id, filenames, and both sides' mtimes live in the diff's `--- / +++` header
-    // lines (see `diff_labels`); the title stays concise and avoids repeating a path.
-    let title = match &state.pending_action {
+/// The diff pane title. The gist id, filenames, and both sides' mtimes live in the diff's
+/// `--- / +++` header lines (see `diff_labels`); the title stays concise and avoids
+/// repeating a path.
+fn diff_title(state: &AppState) -> String {
+    match &state.pending_action {
         Some(PendingAction::Upload {
             gist_id, filename, ..
         }) => format!("Upload → gist {gist_id} / {filename}"),
@@ -3408,7 +3351,85 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
                 )
             }
         }
-    };
+    }
+}
+
+/// The prompt shown inside the centered confirm modal — one line per pending action,
+/// listing the keys that resolve it. Pure so it can be unit-tested.
+fn confirm_prompt(state: &AppState) -> String {
+    match &state.pending_action {
+        Some(PendingAction::Create { .. }) if state.editing_description => {
+            format!(
+                "Description (optional): {}_   ·  Enter next  ·  Esc cancel",
+                state.description_input
+            )
+        }
+        Some(PendingAction::Create { local_path }) => {
+            let desc = if state.description_input.is_empty() {
+                "no description".to_string()
+            } else {
+                format!("desc: {}", state.description_input)
+            };
+            format!(
+                "Create gist from {} ({desc})?  s secret  p public  Esc cancel",
+                local_path.display()
+            )
+        }
+        Some(PendingAction::Upload {
+            gist_id,
+            filename,
+            local_path,
+        }) => {
+            let edited_status = if state.upload_edited_content.is_some() {
+                " [edited]"
+            } else {
+                ""
+            };
+            let mut opts = format!("y yes  n/Esc cancel  e edit{edited_status}");
+            if is_json_file(local_path) {
+                let pretty_status = if state.upload_json_pretty {
+                    " [on]"
+                } else {
+                    " [off]"
+                };
+                let sort_status = if state.upload_json_sort {
+                    " [on]"
+                } else {
+                    " [off]"
+                };
+                opts.push_str(&format!("  p pretty{pretty_status}  s sort{sort_status}"));
+            }
+            format!("Upload {filename} to gist {gist_id}?  ·  {opts}")
+        }
+        Some(PendingAction::Delete { gist_id, label }) => {
+            format!("Permanently delete \"{label}\" ({gist_id})? (y/n)")
+        }
+        Some(PendingAction::RemoveFile {
+            gist_id, filename, ..
+        }) => {
+            format!("Remove {filename} from gist {gist_id}? (y/n)")
+        }
+        _ => format!("Overwrite {}? (y/n)", state.download_target.display()),
+    }
+}
+
+/// Title and border colour for the confirm modal. Destructive actions are tinted red so the
+/// stakes read at a glance; everything else is a neutral yellow prompt.
+fn confirm_modal_style(state: &AppState) -> (&'static str, Color) {
+    match &state.pending_action {
+        Some(PendingAction::Create { .. }) if state.editing_description => {
+            ("Description", Color::Cyan)
+        }
+        Some(PendingAction::Create { .. }) => ("Create gist", Color::Yellow),
+        Some(PendingAction::Upload { .. }) => ("Upload", Color::Yellow),
+        Some(PendingAction::Delete { .. }) => ("Delete", Color::Red),
+        Some(PendingAction::RemoveFile { .. }) => ("Remove file", Color::Red),
+        _ => ("Overwrite", Color::Red),
+    }
+}
+
+/// Render just the diff content pane (no footer) into `area`.
+fn render_diff_pane(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(
         Paragraph::new(diff_view(
             &state.diff_text,
@@ -3417,12 +3438,30 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
         ))
         .block(
             Block::default()
-                .title(title)
+                .title(diff_title(state))
                 .borders(Borders::ALL)
                 .padding(Padding::horizontal(1)),
         ),
-        chunks[0],
+        area,
     );
+}
+
+/// The `Screen::Diff` preview: the diff pane plus a scroll/commands footer.
+fn render_diff(frame: &mut Frame, state: &AppState) {
+    let footer = if state.diff_identical {
+        "Files are identical — nothing to sync  ·  ↑↓←→ scroll  ·  Esc/q back".to_string()
+    } else {
+        "↑↓←→ scroll  ·  d download  ·  u upload  ·  Esc/q back".to_string()
+    };
+
+    let area = frame.area();
+    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(4)).max(1);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 2)])
+        .split(area);
+
+    render_diff_pane(frame, chunks[0], state);
 
     frame.render_widget(
         Paragraph::new(footer).wrap(Wrap { trim: true }).block(
@@ -3433,6 +3472,14 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
         ),
         chunks[1],
     );
+}
+
+/// `Screen::Confirm`: the diff fills the screen as context behind a centered prompt modal,
+/// keeping the overwrite gate's diff visible while the question is asked front-and-centre.
+fn render_confirm(frame: &mut Frame, state: &AppState) {
+    render_diff_pane(frame, frame.area(), state);
+    let (title, border) = confirm_modal_style(state);
+    render_centered_modal(frame, title, &confirm_prompt(state), border);
 }
 
 fn is_json_file(path: &std::path::Path) -> bool {
@@ -3979,6 +4026,49 @@ mod tests {
         assert_eq!(wrap_line_count(text, 7), 2);
         assert_eq!(wrap_line_count(text, 3), 3);
         assert_eq!(wrap_line_count(text, 0), 1);
+    }
+
+    #[test]
+    fn confirm_prompt_covers_each_pending_action() {
+        let mut state = initial_state();
+
+        state.download_target = PathBuf::from("notes.txt");
+        state.pending_action = Some(PendingAction::Download);
+        assert_eq!(confirm_prompt(&state), "Overwrite notes.txt? (y/n)");
+        assert_eq!(confirm_modal_style(&state), ("Overwrite", Color::Red));
+
+        state.pending_action = Some(PendingAction::Delete {
+            gist_id: "abc".into(),
+            label: "my config".into(),
+        });
+        assert_eq!(
+            confirm_prompt(&state),
+            "Permanently delete \"my config\" (abc)? (y/n)"
+        );
+        assert_eq!(confirm_modal_style(&state), ("Delete", Color::Red));
+
+        state.pending_action = Some(PendingAction::Upload {
+            gist_id: "g1".into(),
+            filename: "main.rs".into(),
+            local_path: PathBuf::from("main.rs"),
+        });
+        assert!(confirm_prompt(&state).starts_with("Upload main.rs to gist g1?"));
+        assert_eq!(confirm_modal_style(&state), ("Upload", Color::Yellow));
+    }
+
+    #[test]
+    fn confirm_prompt_shows_description_editor_for_create() {
+        let mut state = initial_state();
+        state.pending_action = Some(PendingAction::Create {
+            local_path: PathBuf::from("notes.txt"),
+        });
+        state.editing_description = true;
+        state.description_input = "hello".into();
+        assert_eq!(
+            confirm_prompt(&state),
+            "Description (optional): hello_   ·  Enter next  ·  Esc cancel"
+        );
+        assert_eq!(confirm_modal_style(&state), ("Description", Color::Cyan));
     }
 
     #[test]

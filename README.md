@@ -147,7 +147,8 @@ the gist owning the currently selected file. From here you manage gists as a who
 
 - Downloads only ever write to `./<gist-filename>` in the current working directory.
 - An existing file (local download target or remote gist file) is never overwritten without
-  first showing its diff and confirmation.
+  first showing its diff and confirmation. Confirmations appear as a centered prompt over
+  the full-screen diff, so the change you are approving stays visible while you decide.
 - Uploads allow editing/redacting a temporary buffer in `$EDITOR` before sending, ensuring sensitive local content or credentials are not accidentally pushed to GitHub.
 - Identical files are detected: when the two sides match, upload/download are disabled.
 - Pulling a gist over an existing local file still goes through the diff + `y`/`n`
