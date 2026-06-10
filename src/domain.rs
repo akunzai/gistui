@@ -110,3 +110,88 @@ mod tests {
         assert!(group_gists(&[]).is_empty());
     }
 }
+
+pub fn transform_json(
+    content: &str,
+    pretty: bool,
+    sort: bool,
+) -> Result<String, serde_json::Error> {
+    if !pretty && !sort {
+        return Ok(content.to_string());
+    }
+    let mut val: serde_json::Value = serde_json::from_str(content)?;
+    if sort {
+        val = sort_json_value(val);
+    }
+    if pretty {
+        serde_json::to_string_pretty(&val)
+    } else {
+        serde_json::to_string(&val)
+    }
+}
+
+pub fn sort_json_value(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<(String, serde_json::Value)> = map
+                .into_iter()
+                .map(|(k, v)| (k, sort_json_value(v)))
+                .collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut sorted_map = serde_json::Map::new();
+            for (k, v) in entries {
+                sorted_map.insert(k, v);
+            }
+            serde_json::Value::Object(sorted_map)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.into_iter().map(sort_json_value).collect())
+        }
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod json_tests {
+    use super::*;
+
+    #[test]
+    fn test_transform_json_noop() {
+        let input = r#"{"z":1,"a":2}"#;
+        let output = transform_json(input, false, false).unwrap();
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    fn test_transform_json_pretty_only() {
+        let input = r#"{"z":1,"a":2}"#;
+        let output = transform_json(input, true, false).unwrap();
+        // Should be formatted, but preserve original key order ("z" then "a")
+        let expected = "{\n  \"z\": 1,\n  \"a\": 2\n}";
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_transform_json_sort_only() {
+        let input = r#"{"z":1,"a":2}"#;
+        let output = transform_json(input, false, true).unwrap();
+        // Should be compact, but sorted keys ("a" then "z")
+        assert_eq!(output, r#"{"a":2,"z":1}"#);
+    }
+
+    #[test]
+    fn test_transform_json_pretty_and_sort() {
+        let input = r#"{"z":1,"a":{"y":3,"x":4}}"#;
+        let output = transform_json(input, true, true).unwrap();
+        // Should be formatted, and keys sorted recursively ("a" then "z", and "x" then "y")
+        let expected = "{\n  \"a\": {\n    \"x\": 4,\n    \"y\": 3\n  },\n  \"z\": 1\n}";
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_transform_json_invalid() {
+        let input = r#"{"z":1,"a":}"#;
+        let result = transform_json(input, true, true);
+        assert!(result.is_err());
+    }
+}

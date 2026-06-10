@@ -219,6 +219,7 @@ pub enum KeyOutcome {
     OpenBrowser,
     OpenRepoBrowser,
     EditLocal,
+    EditUpload,
     ExecuteDelete,
     ExecuteRemoveFile,
     ApplyDescription,
@@ -274,6 +275,13 @@ pub struct AppState {
     pub description_input: String,
     pub bg_task_msg: Option<String>,
     pub help_scroll: u16,
+    pub upload_original_content: String,
+    pub upload_edited_content: Option<String>,
+    pub upload_json_pretty: bool,
+    pub upload_json_sort: bool,
+    pub upload_remote_content: Option<String>,
+    pub upload_local_label: Option<String>,
+    pub upload_gist_label: Option<String>,
 }
 
 fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
@@ -300,6 +308,63 @@ fn unranked_locals(locals: &[LocalCandidate]) -> Vec<RankedLocal> {
 }
 
 impl AppState {
+    pub fn upload_local_path(&self) -> Option<std::path::PathBuf> {
+        match &self.pending_action {
+            Some(PendingAction::Upload { local_path, .. }) => Some(local_path.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn content_to_upload(&self) -> String {
+        let base = self
+            .upload_edited_content
+            .as_ref()
+            .unwrap_or(&self.upload_original_content);
+        if let Some(local_path) = self.upload_local_path() {
+            if is_json_file(&local_path) {
+                if let Ok(transformed) = crate::domain::transform_json(
+                    base,
+                    self.upload_json_pretty,
+                    self.upload_json_sort,
+                ) {
+                    return transformed;
+                }
+            }
+        }
+        base.clone()
+    }
+
+    pub fn update_upload_diff(&mut self) {
+        let local_content = self.content_to_upload();
+        let remote = self
+            .upload_remote_content
+            .as_ref()
+            .cloned()
+            .unwrap_or_default();
+        let local_label = self.upload_local_label.clone().unwrap_or_default();
+        let gist_label = self.upload_gist_label.clone().unwrap_or_default();
+
+        let diff = crate::diff::unified_diff(&gist_label, &remote, &local_label, &local_content);
+        self.diff_text = diff;
+    }
+
+    pub fn init_upload_state(
+        &mut self,
+        local_path: &std::path::Path,
+        remote_content: Option<String>,
+        local_label: String,
+        gist_label: String,
+    ) {
+        self.upload_original_content = std::fs::read_to_string(local_path).unwrap_or_default();
+        self.upload_edited_content = None;
+        self.upload_json_pretty = false;
+        self.upload_json_sort = false;
+        self.upload_remote_content = remote_content;
+        self.upload_local_label = Some(local_label);
+        self.upload_gist_label = Some(gist_label);
+        self.update_upload_diff();
+    }
+
     pub fn ranked_gists(&self) -> Vec<RankedGistFile> {
         let query = self.filter_query.to_lowercase();
         let gists: Vec<GistFile> = self
@@ -999,11 +1064,20 @@ impl AppState {
                 }
                 _ => {}
             },
-            Some(PendingAction::Upload { .. }) => match code {
+            Some(PendingAction::Upload { ref local_path, .. }) => match code {
                 KeyCode::Char('y') => return KeyOutcome::Upload,
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     self.pending_action = None;
                     self.screen = Screen::List;
+                }
+                KeyCode::Char('e') => return KeyOutcome::EditUpload,
+                KeyCode::Char('p') if is_json_file(local_path) => {
+                    self.upload_json_pretty = !self.upload_json_pretty;
+                    self.update_upload_diff();
+                }
+                KeyCode::Char('s') if is_json_file(local_path) => {
+                    self.upload_json_sort = !self.upload_json_sort;
+                    self.update_upload_diff();
                 }
                 _ => {}
             },
@@ -1070,11 +1144,6 @@ enum BgTaskOutcome {
         target: PathBuf,
         local_label: String,
         gist_label: String,
-    },
-    UploadAdd {
-        result: std::result::Result<(), String>,
-        local_path: PathBuf,
-        gist_id: String,
     },
     UploadPreview {
         result: std::result::Result<String, String>,
@@ -1161,6 +1230,13 @@ pub fn initial_state() -> AppState {
         description_input: String::new(),
         bg_task_msg: None,
         help_scroll: 0,
+        upload_original_content: String::new(),
+        upload_edited_content: None,
+        upload_json_pretty: false,
+        upload_json_sort: false,
+        upload_remote_content: None,
+        upload_local_label: None,
+        upload_gist_label: None,
     }
 }
 
@@ -1363,28 +1439,6 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                         }
                         Err(error) => state.set_status(format!("fetch failed: {error}")),
                     },
-                    BgTaskOutcome::UploadAdd {
-                        result,
-                        local_path,
-                        gist_id,
-                    } => match result {
-                        Ok(_) => {
-                            if let Some(filename) = upload_local_filename(&local_path) {
-                                state
-                                    .gist_content_cache
-                                    .remove(&(gist_id.clone(), filename));
-                            }
-                            state.set_status(format!(
-                                "Uploaded {} to gist {}",
-                                local_path.display(),
-                                gist_id
-                            ));
-                            state.back_to_list();
-                            state.loading = true;
-                            gist_rx = Some(spawn_gist_fetch());
-                        }
-                        Err(error) => state.set_status(format!("upload failed: {error}")),
-                    },
                     BgTaskOutcome::UploadPreview {
                         result,
                         gist_id,
@@ -1394,22 +1448,19 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                         gist_label,
                     } => match result {
                         Ok(remote) => {
-                            let local_content =
-                                std::fs::read_to_string(&local_path).unwrap_or_default();
-                            let diff = crate::diff::unified_diff(
-                                &gist_label,
-                                &remote,
-                                &local_label,
-                                &local_content,
-                            );
-                            state.diff_text = diff;
-                            state.diff_scroll = 0;
-                            state.diff_hscroll = 0;
                             state.pending_action = Some(PendingAction::Upload {
                                 gist_id,
                                 filename,
-                                local_path,
+                                local_path: local_path.clone(),
                             });
+                            state.init_upload_state(
+                                &local_path,
+                                Some(remote),
+                                local_label,
+                                gist_label,
+                            );
+                            state.diff_scroll = 0;
+                            state.diff_hscroll = 0;
                             state.status = None;
                             state.screen = Screen::Confirm;
                         }
@@ -1590,21 +1641,26 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                     };
                     let local_path = local.path.clone();
                     let gist_id = gist.file.gist_id.clone();
-                    let plan = crate::actions::upload_add_command(&local_path, &gist_id);
+                    let Some(filename) = upload_local_filename(&local_path) else {
+                        state.set_status("local file has no name");
+                        continue;
+                    };
 
-                    state.bg_task_msg = Some("Uploading…".to_string());
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    bg_rx = Some(rx);
-                    std::thread::spawn(move || {
-                        let result = crate::actions::execute_command(&plan)
-                            .map(|_| ())
-                            .map_err(|e| e.to_string());
-                        let _ = tx.send(BgTaskOutcome::UploadAdd {
-                            result,
-                            local_path,
-                            gist_id,
-                        });
+                    state.pending_action = Some(PendingAction::Upload {
+                        gist_id,
+                        filename: filename.clone(),
+                        local_path: local_path.clone(),
                     });
+
+                    let local_label = format!("local: {}", local_path.display());
+                    let gist_label = "(new file)".to_string();
+                    state.init_upload_state(
+                        &local_path,
+                        Some(String::new()),
+                        local_label,
+                        gist_label,
+                    );
+                    state.screen = Screen::Confirm;
                 }
                 KeyOutcome::UploadPreview => {
                     let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist())
@@ -1640,21 +1696,53 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                     let Some(PendingAction::Upload {
                         gist_id,
                         filename,
-                        local_path,
+                        local_path: _,
                     }) = state.pending_action.clone()
                     else {
                         continue;
                     };
-                    let target = GistFile {
-                        gist_id: gist_id.clone(),
-                        description: String::new(),
-                        filename: filename.clone(),
-                        public: false,
-                        updated_at: String::new(),
-                        created_at: String::new(),
-                    };
-                    let plan = crate::actions::upload_command(&local_path, &target);
 
+                    let upload_content = state.content_to_upload();
+
+                    // Generate unique temp directory in workspace
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0);
+                    let temp_dir = state.cwd.join(format!(".gistui_upload_{timestamp}"));
+
+                    if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+                        state.set_status(format!("failed to create temp dir: {e}"));
+                        continue;
+                    }
+
+                    let temp_file_path = temp_dir.join(&filename);
+                    if let Err(e) = std::fs::write(&temp_file_path, &upload_content) {
+                        state.set_status(format!("failed to write temp file: {e}"));
+                        let _ = std::fs::remove_dir_all(&temp_dir);
+                        continue;
+                    }
+
+                    let has_same_name = state
+                        .gists
+                        .iter()
+                        .any(|g| g.gist_id == gist_id && g.filename == filename);
+
+                    let plan = if has_same_name {
+                        let target = GistFile {
+                            gist_id: gist_id.clone(),
+                            description: String::new(),
+                            filename: filename.clone(),
+                            public: false,
+                            updated_at: String::new(),
+                            created_at: String::new(),
+                        };
+                        crate::actions::upload_command(&temp_file_path, &target)
+                    } else {
+                        crate::actions::upload_add_command(&temp_file_path, &gist_id)
+                    };
+
+                    state.back_to_list();
                     state.bg_task_msg = Some("Uploading…".to_string());
                     let (tx, rx) = std::sync::mpsc::channel();
                     bg_rx = Some(rx);
@@ -1662,12 +1750,18 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                         let result = crate::actions::execute_command(&plan)
                             .map(|_| ())
                             .map_err(|e| e.to_string());
+
+                        let _ = std::fs::remove_dir_all(&temp_dir);
+
                         let _ = tx.send(BgTaskOutcome::UploadReplace {
                             result,
                             gist_id,
                             filename,
                         });
                     });
+                }
+                KeyOutcome::EditUpload => {
+                    edit_upload_buffer(terminal, &mut state)?;
                 }
                 KeyOutcome::Create(public) => {
                     let Some(PendingAction::Create { local_path }) = state.pending_action.clone()
@@ -1988,6 +2082,68 @@ fn edit_local(
     Ok(())
 }
 
+fn edit_upload_buffer(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    state: &mut AppState,
+) -> Result<()> {
+    let Some(local_path) = state.upload_local_path() else {
+        return Ok(());
+    };
+    let Some(filename) = local_path.file_name().and_then(|n| n.to_str()) else {
+        return Ok(());
+    };
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let temp_file_path = state
+        .cwd
+        .join(format!(".gistui_redact_{timestamp}_{filename}"));
+
+    let current_content = state.content_to_upload();
+    if let Err(e) = std::fs::write(&temp_file_path, &current_content) {
+        state.set_status(format!("failed to write temp file: {e}"));
+        return Ok(());
+    }
+
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
+    let mut parts = editor.split_whitespace();
+    let Some(program) = parts.next() else {
+        state.set_status("no editor configured (set $EDITOR)");
+        let _ = std::fs::remove_file(&temp_file_path);
+        return Ok(());
+    };
+    let args: Vec<&str> = parts.collect();
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    let result = std::process::Command::new(program)
+        .args(&args)
+        .arg(&temp_file_path)
+        .status();
+    enable_raw_mode()?;
+    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+    terminal.clear()?;
+
+    match result {
+        Ok(_) => match std::fs::read_to_string(&temp_file_path) {
+            Ok(edited_content) => {
+                state.upload_edited_content = Some(edited_content);
+                state.update_upload_diff();
+                state.set_status("Edited redact buffer");
+            }
+            Err(e) => state.set_status(format!("failed to read edited file: {e}")),
+        },
+        Err(error) => state.set_status(format!("editor failed: {error}")),
+    }
+
+    let _ = std::fs::remove_file(&temp_file_path);
+    Ok(())
+}
+
 fn download(state: &mut AppState) {
     let target = state.download_target.clone();
     let content = state.preview_remote.clone();
@@ -2140,6 +2296,13 @@ Actions (on the selected local file + gist)
   X          remove the selected file from its gist (y/n confirm)
   g          open the gist manager (edit description, delete gist)
   e          edit the local file in $EDITOR
+
+Upload Confirmation screen (u)
+  y          confirm and execute the upload
+  n / Esc    cancel the upload
+  e          edit / redact the upload content in $EDITOR before upload
+  p          (JSON only) toggle pretty-print formatting
+  s          (JSON only) toggle recursive key sorting
 
 Gist manager (g)
   Up/Down    move between gists
@@ -2791,9 +2954,30 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
                 )
             }
             Some(PendingAction::Upload {
-                gist_id, filename, ..
+                gist_id,
+                filename,
+                local_path,
             }) => {
-                format!("Upload {} to gist {}? (y/n)", filename, gist_id)
+                let edited_status = if state.upload_edited_content.is_some() {
+                    " [edited]"
+                } else {
+                    ""
+                };
+                let mut opts = format!("y yes  n/Esc cancel  e edit{edited_status}");
+                if is_json_file(local_path) {
+                    let pretty_status = if state.upload_json_pretty {
+                        " [on]"
+                    } else {
+                        " [off]"
+                    };
+                    let sort_status = if state.upload_json_sort {
+                        " [on]"
+                    } else {
+                        " [off]"
+                    };
+                    opts.push_str(&format!("  p pretty{pretty_status}  s sort{sort_status}"));
+                }
+                format!("Upload {filename} to gist {gist_id}?  ·  {opts}")
             }
             Some(PendingAction::Delete { gist_id, label }) => {
                 format!("Permanently delete \"{label}\" ({gist_id})? (y/n)")
@@ -2878,6 +3062,13 @@ fn render_diff(frame: &mut Frame, state: &AppState, confirming: bool) {
         ),
         chunks[1],
     );
+}
+
+fn is_json_file(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("json"))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -4078,6 +4269,43 @@ mod tests {
         });
         state.screen = Screen::Confirm;
         assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::Upload);
+    }
+
+    #[test]
+    fn confirm_upload_e_returns_edit_upload() {
+        let mut state = initial_state();
+        state.pending_action = Some(PendingAction::Upload {
+            gist_id: "a".into(),
+            filename: "settings.json".into(),
+            local_path: PathBuf::from("/tmp/settings.json"),
+        });
+        state.screen = Screen::Confirm;
+        assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::EditUpload);
+    }
+
+    #[test]
+    fn confirm_upload_json_toggles() {
+        let mut state = initial_state();
+        state.pending_action = Some(PendingAction::Upload {
+            gist_id: "a".into(),
+            filename: "settings.json".into(),
+            local_path: PathBuf::from("/tmp/settings.json"),
+        });
+        state.screen = Screen::Confirm;
+        assert!(!state.upload_json_pretty);
+        assert!(!state.upload_json_sort);
+
+        // Toggle pretty
+        assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::None);
+        assert!(state.upload_json_pretty);
+
+        // Toggle sort
+        assert_eq!(state.handle_key(KeyCode::Char('s')), KeyOutcome::None);
+        assert!(state.upload_json_sort);
+
+        // Toggle pretty off
+        assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::None);
+        assert!(!state.upload_json_pretty);
     }
 
     #[test]
