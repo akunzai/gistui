@@ -1641,6 +1641,9 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                     let Some(ranked) = state.selected_gist() else {
                         continue;
                     };
+                    // List-originated diff returns to the List on Esc (reset any
+                    // leftover Pins origin from an earlier pin diff).
+                    state.diff_return = Screen::List;
                     let local_path = state.selected_local().map(|local| local.path.clone());
                     let gist = ranked.file.clone();
                     let gist_id = gist.gist_id.clone();
