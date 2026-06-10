@@ -81,6 +81,25 @@ pub fn normalize_path(path: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Resolve the working directory to operate in. `None` keeps the current directory;
+/// `Some(path)` must point at an existing directory (a `~` prefix is expanded) — a missing
+/// path or a non-directory is an error, so the caller can report it and exit before the TUI.
+pub fn resolve_working_dir(path: Option<PathBuf>) -> Result<PathBuf> {
+    match path {
+        None => std::env::current_dir().context("could not determine the current directory"),
+        Some(path) => {
+            let path = normalize_path(&path)?;
+            if !path.exists() {
+                anyhow::bail!("path does not exist: {}", path.display());
+            }
+            if !path.is_dir() {
+                anyhow::bail!("not a directory: {}", path.display());
+            }
+            Ok(path)
+        }
+    }
+}
+
 pub fn config_path() -> Result<PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .filter(|value| !value.is_empty())
@@ -247,5 +266,39 @@ mod tests {
     fn normalize_path_preserves_absolute_path() {
         let absolute = PathBuf::from("/tmp/settings.json");
         assert_eq!(normalize_path(&absolute).unwrap(), absolute);
+    }
+
+    #[test]
+    fn resolve_working_dir_defaults_to_current_dir_when_none() {
+        assert_eq!(
+            resolve_working_dir(None).unwrap(),
+            env::current_dir().unwrap()
+        );
+    }
+
+    #[test]
+    fn resolve_working_dir_accepts_an_existing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            resolve_working_dir(Some(dir.path().to_path_buf())).unwrap(),
+            dir.path()
+        );
+    }
+
+    #[test]
+    fn resolve_working_dir_rejects_a_missing_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("nope");
+        let err = resolve_working_dir(Some(missing)).unwrap_err();
+        assert!(err.to_string().contains("does not exist"));
+    }
+
+    #[test]
+    fn resolve_working_dir_rejects_a_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, "x").unwrap();
+        let err = resolve_working_dir(Some(file)).unwrap_err();
+        assert!(err.to_string().contains("not a directory"));
     }
 }
