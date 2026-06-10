@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -15,6 +16,43 @@ pub struct PinnedMapping {
 pub enum SyncDirection {
     Upload,
     Download,
+}
+
+/// Suggested sync action for a pinned pair, decided by comparing modification
+/// times. Pure; derived by [`sync_status`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncStatus {
+    /// Both sides carry the same modification time.
+    InSync,
+    /// Local is newer → upload local into the gist.
+    Push,
+    /// Remote is newer → download the gist into the local file.
+    Pull,
+    /// A timestamp is unavailable — direction cannot be suggested.
+    Unknown,
+}
+
+impl SyncStatus {
+    /// Single-glyph indicator shown in the Pins list.
+    pub fn icon(self) -> &'static str {
+        match self {
+            SyncStatus::InSync => "✓",
+            SyncStatus::Push => "↑",
+            SyncStatus::Pull => "↓",
+            SyncStatus::Unknown => "?",
+        }
+    }
+}
+
+/// Pure decision: which side is newer? `local_ts`/`remote_ts` are Unix seconds;
+/// `None` means the timestamp was unavailable.
+pub fn sync_status(local_ts: Option<u64>, remote_ts: Option<u64>) -> SyncStatus {
+    match (local_ts, remote_ts) {
+        (Some(l), Some(r)) if l > r => SyncStatus::Push,
+        (Some(l), Some(r)) if r > l => SyncStatus::Pull,
+        (Some(_), Some(_)) => SyncStatus::InSync,
+        _ => SyncStatus::Unknown,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -48,6 +86,82 @@ pub struct GistGroup {
     pub file_count: usize,
 }
 
+/// Lowercase hex SHA-256 of `bytes`. Used as the stable, content-only digest
+/// persisted in `PinnedMapping.last_seen_hash` (the config never stores content).
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    let digest = hasher.finalize();
+    let mut out = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
+}
+
+/// Parse the `YYYY-MM-DDThh:mm:ssZ` UTC form GitHub returns into Unix seconds.
+/// Returns `None` on any malformed component. No external date crate (days-from-civil).
+pub fn parse_rfc3339_to_unix(s: &str) -> Option<u64> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 20 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' {
+        return None;
+    }
+    if bytes[13] != b':' || bytes[16] != b':' {
+        return None;
+    }
+    let num = |slice: &str| slice.parse::<i64>().ok();
+    let year = num(&s[0..4])?;
+    let month = num(&s[5..7])?;
+    let day = num(&s[8..10])?;
+    let hour = num(&s[11..13])?;
+    let min = num(&s[14..16])?;
+    let sec = num(&s[17..19])?;
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&min)
+        || !(0..=60).contains(&sec)
+    {
+        return None;
+    }
+    // days_from_civil (Howard Hinnant): days since 1970-01-01 for a proleptic
+    // Gregorian (y, m, d).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1; // [0,365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    let days = era * 146097 + doe - 719468;
+    let total = days * 86400 + hour * 3600 + min * 60 + sec;
+    u64::try_from(total).ok()
+}
+
+/// Compact relative-age label for `secs_ago` seconds in the past.
+/// Approximate (month = 30d, year = 365d); a staleness hint, not calendar-exact.
+/// Zero or negative (now/future) renders as "now".
+pub fn humanize_age(secs_ago: i64) -> String {
+    if secs_ago <= 0 {
+        return "now".to_string();
+    }
+    let s = secs_ago;
+    if s < 60 {
+        format!("{s}s")
+    } else if s < 3600 {
+        format!("{}m", s / 60)
+    } else if s < 86_400 {
+        format!("{}h", s / 3600)
+    } else if s < 7 * 86_400 {
+        format!("{}d", s / 86_400)
+    } else if s < 35 * 86_400 {
+        format!("{}w", s / (7 * 86_400))
+    } else if s < 365 * 86_400 {
+        format!("{}mo", s / (30 * 86_400))
+    } else {
+        format!("{}y", s / (365 * 86_400))
+    }
+}
+
 /// Collapses the flat per-file rows into one [`GistGroup`] per gist, preserving
 /// the first-seen order of `files` (which mirrors the `gh` list order).
 pub fn group_gists(files: &[GistFile]) -> Vec<GistGroup> {
@@ -72,6 +186,54 @@ pub fn group_gists(files: &[GistFile]) -> Vec<GistGroup> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sync_status_from_mtime() {
+        assert_eq!(sync_status(Some(20), Some(10)), SyncStatus::Push); // local newer
+        assert_eq!(sync_status(Some(10), Some(20)), SyncStatus::Pull); // remote newer
+        assert_eq!(sync_status(Some(15), Some(15)), SyncStatus::InSync);
+        assert_eq!(sync_status(None, Some(10)), SyncStatus::Unknown);
+        assert_eq!(sync_status(Some(10), None), SyncStatus::Unknown);
+        assert_eq!(sync_status(None, None), SyncStatus::Unknown);
+    }
+
+    #[test]
+    fn sync_status_icons() {
+        assert_eq!(SyncStatus::InSync.icon(), "✓");
+        assert_eq!(SyncStatus::Push.icon(), "↑");
+        assert_eq!(SyncStatus::Pull.icon(), "↓");
+        assert_eq!(SyncStatus::Unknown.icon(), "?");
+    }
+
+    #[test]
+    fn parse_rfc3339_to_unix_known_values() {
+        // 1970-01-01T00:00:00Z == 0
+        assert_eq!(parse_rfc3339_to_unix("1970-01-01T00:00:00Z"), Some(0));
+        // 2024-01-02T03:04:05Z == 1704164645
+        assert_eq!(
+            parse_rfc3339_to_unix("2024-01-02T03:04:05Z"),
+            Some(1704164645)
+        );
+    }
+
+    #[test]
+    fn parse_rfc3339_to_unix_rejects_garbage() {
+        assert_eq!(parse_rfc3339_to_unix(""), None);
+        assert_eq!(parse_rfc3339_to_unix("not-a-date"), None);
+        assert_eq!(parse_rfc3339_to_unix("2024-13-99T99:99:99Z"), None);
+    }
+
+    #[test]
+    fn sha256_hex_matches_known_vector() {
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
 
     fn file(gist_id: &str, filename: &str, desc: &str, public: bool) -> GistFile {
         GistFile {
@@ -108,6 +270,25 @@ mod tests {
     #[test]
     fn empty_input_yields_no_groups() {
         assert!(group_gists(&[]).is_empty());
+    }
+
+    #[test]
+    fn humanize_age_buckets() {
+        assert_eq!(humanize_age(0), "now");
+        assert_eq!(humanize_age(-5), "now");
+        assert_eq!(humanize_age(5), "5s");
+        assert_eq!(humanize_age(59), "59s");
+        assert_eq!(humanize_age(60), "1m");
+        assert_eq!(humanize_age(59 * 60), "59m");
+        assert_eq!(humanize_age(60 * 60), "1h");
+        assert_eq!(humanize_age(23 * 3600), "23h");
+        assert_eq!(humanize_age(24 * 3600), "1d");
+        assert_eq!(humanize_age(6 * 86400), "6d");
+        assert_eq!(humanize_age(7 * 86400), "1w");
+        assert_eq!(humanize_age(34 * 86400), "4w");
+        assert_eq!(humanize_age(35 * 86400), "1mo");
+        assert_eq!(humanize_age(359 * 86400), "11mo");
+        assert_eq!(humanize_age(365 * 86400), "1y");
     }
 }
 
