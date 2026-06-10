@@ -137,6 +137,31 @@ pub fn parse_rfc3339_to_unix(s: &str) -> Option<u64> {
     u64::try_from(total).ok()
 }
 
+/// Compact relative-age label for `secs_ago` seconds in the past.
+/// Approximate (month = 30d, year = 365d); a staleness hint, not calendar-exact.
+/// Zero or negative (now/future) renders as "now".
+pub fn humanize_age(secs_ago: i64) -> String {
+    if secs_ago <= 0 {
+        return "now".to_string();
+    }
+    let s = secs_ago;
+    if s < 60 {
+        format!("{s}s")
+    } else if s < 3600 {
+        format!("{}m", s / 60)
+    } else if s < 86_400 {
+        format!("{}h", s / 3600)
+    } else if s < 7 * 86_400 {
+        format!("{}d", s / 86_400)
+    } else if s < 35 * 86_400 {
+        format!("{}w", s / (7 * 86_400))
+    } else if s < 365 * 86_400 {
+        format!("{}mo", s / (30 * 86_400))
+    } else {
+        format!("{}y", s / (365 * 86_400))
+    }
+}
+
 /// Collapses the flat per-file rows into one [`GistGroup`] per gist, preserving
 /// the first-seen order of `files` (which mirrors the `gh` list order).
 pub fn group_gists(files: &[GistFile]) -> Vec<GistGroup> {
@@ -245,6 +270,25 @@ mod tests {
     #[test]
     fn empty_input_yields_no_groups() {
         assert!(group_gists(&[]).is_empty());
+    }
+
+    #[test]
+    fn humanize_age_buckets() {
+        assert_eq!(humanize_age(0), "now");
+        assert_eq!(humanize_age(-5), "now");
+        assert_eq!(humanize_age(5), "5s");
+        assert_eq!(humanize_age(59), "59s");
+        assert_eq!(humanize_age(60), "1m");
+        assert_eq!(humanize_age(59 * 60), "59m");
+        assert_eq!(humanize_age(60 * 60), "1h");
+        assert_eq!(humanize_age(23 * 3600), "23h");
+        assert_eq!(humanize_age(24 * 3600), "1d");
+        assert_eq!(humanize_age(6 * 86400), "6d");
+        assert_eq!(humanize_age(7 * 86400), "1w");
+        assert_eq!(humanize_age(34 * 86400), "4w");
+        assert_eq!(humanize_age(35 * 86400), "1mo");
+        assert_eq!(humanize_age(359 * 86400), "11mo");
+        assert_eq!(humanize_age(365 * 86400), "1y");
     }
 }
 
