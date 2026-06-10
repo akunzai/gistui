@@ -248,6 +248,29 @@ pub fn pin_mapping(
     Ok(config)
 }
 
+/// Record the result of a successful sync for the pin identified by
+/// `(local_path, gist_id, gist_filename)`: set `last_seen_hash` to the agreed
+/// content hash and `direction` to the direction performed, then persist.
+/// No-op if the pin is not found.
+pub fn record_sync(
+    config_path: &Path,
+    mut config: AppConfig,
+    local_path: &Path,
+    gist_id: &str,
+    gist_filename: &str,
+    hash: &str,
+    direction: SyncDirection,
+) -> Result<AppConfig> {
+    if let Some(mapping) = config.pinned.iter_mut().find(|m| {
+        m.local_path == local_path && m.gist_id == gist_id && m.gist_filename == gist_filename
+    }) {
+        mapping.last_seen_hash = Some(hash.to_string());
+        mapping.direction = Some(direction);
+        save_config(config_path, &config)?;
+    }
+    Ok(config)
+}
+
 pub fn unpin_mapping(
     config_path: &Path,
     mut config: AppConfig,
@@ -462,6 +485,35 @@ mod tests {
         assert!(config.pinned.is_empty());
         let loaded = load_config(&config_path).unwrap();
         assert!(loaded.pinned.is_empty());
+    }
+
+    #[test]
+    fn record_sync_updates_hash_and_direction() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        let mut config = AppConfig::default();
+        config.pinned.push(PinnedMapping {
+            local_path: PathBuf::from("/tmp/a.txt"),
+            gist_id: "g1".into(),
+            gist_filename: "a.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+        });
+
+        let updated = record_sync(
+            &cfg_path,
+            config,
+            Path::new("/tmp/a.txt"),
+            "g1",
+            "a.txt",
+            "deadbeef",
+            SyncDirection::Upload,
+        )
+        .unwrap();
+
+        let m = &updated.pinned[0];
+        assert_eq!(m.last_seen_hash.as_deref(), Some("deadbeef"));
+        assert_eq!(m.direction, Some(SyncDirection::Upload));
     }
 
     #[test]
