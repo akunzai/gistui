@@ -8,6 +8,10 @@ fn default_scan_depth() -> u32 {
     2
 }
 
+fn default_diff_context() -> u32 {
+    3
+}
+
 fn default_skip_dirs() -> Vec<String> {
     [
         "node_modules",
@@ -39,6 +43,14 @@ pub struct AppConfig {
     /// Maximum directory depth for recursive local file discovery (r key).
     #[serde(default = "default_scan_depth")]
     pub scan_depth: u32,
+    /// Unchanged context lines kept around each change in the diff view (`c` toggles
+    /// between this radius and the full file).
+    #[serde(default = "default_diff_context")]
+    pub diff_context: u32,
+    /// Remembered state of the diff view's context toggle: `true` shows the full file,
+    /// `false` collapses to `diff_context` lines. Persisted when the user presses `c`.
+    #[serde(default)]
+    pub diff_show_full: bool,
 }
 
 impl Default for AppConfig {
@@ -47,6 +59,8 @@ impl Default for AppConfig {
             pinned: Vec::new(),
             skip_dirs: default_skip_dirs(),
             scan_depth: default_scan_depth(),
+            diff_context: default_diff_context(),
+            diff_show_full: false,
         }
     }
 }
@@ -150,6 +164,8 @@ mod tests {
             }],
             skip_dirs: default_skip_dirs(),
             scan_depth: default_scan_depth(),
+            diff_context: default_diff_context(),
+            diff_show_full: false,
         };
 
         save_config(&path, &config).unwrap();

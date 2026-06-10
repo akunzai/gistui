@@ -88,7 +88,9 @@ selected gist instead. Browse with `Tab` (switch pane), `Up`/`Down` (move), and
 
 - `Enter` (on a gist) — preview the unified diff between the selected local file and the
   gist, with `+`/`-` colour and **word-level inline highlighting** of changed words. From
-  there `d` downloads or `u` uploads.
+  there `d` downloads or `u` uploads, and `c` toggles between showing a few context lines
+  around each change (the `diff_context` config, default 3) and the full file. The choice
+  is remembered (persisted to config).
 - `d` (on a gist) — download it into the cwd as `./<gist-filename>`. A brand-new file is
   written directly; an existing one is shown as a diff and overwritten only after a `y`/`n`
   confirmation.
