@@ -1922,6 +1922,36 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
     Ok(())
 }
 
+impl AppState {
+    /// Derive the [`SyncStatus`] for `pinned[index]` from in-memory mtimes.
+    /// Local mtime comes from the matching local candidate (if discovered);
+    /// remote mtime from the matching gist's `updated_at`.
+    pub fn pin_sync_status(&self, index: usize) -> crate::domain::SyncStatus {
+        let Some(m) = self.pinned.get(index) else {
+            return crate::domain::SyncStatus::Unknown;
+        };
+        let local_abs = if m.local_path.is_absolute() {
+            m.local_path.clone()
+        } else {
+            self.cwd.join(&m.local_path)
+        };
+        let local_ts = self.locals.iter().find_map(|c| {
+            let cabs = if c.path.is_absolute() {
+                c.path.clone()
+            } else {
+                self.cwd.join(&c.path)
+            };
+            (cabs == local_abs).then_some(c.modified).flatten()
+        });
+        let remote_ts = self.gists.iter().find_map(|g| {
+            (g.gist_id == m.gist_id && g.filename == m.gist_filename)
+                .then(|| crate::domain::parse_rfc3339_to_unix(&g.updated_at))
+                .flatten()
+        });
+        crate::domain::sync_status(local_ts, remote_ts)
+    }
+}
+
 /// A centered "Working…" box shown while a blocking `gh` action runs. Animating a
 /// spinner would require running the action off-thread (see issue #11); under the
 /// current synchronous model this is a single static frame.
