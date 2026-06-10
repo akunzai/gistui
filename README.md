@@ -68,13 +68,16 @@ ln -sf "$PWD/target/release/gistui" ~/.local/bin/gistui
 ## Usage
 
 ```bash
-gistui            # launch the TUI (needs a TTY)
+gistui            # launch the TUI in the current directory (needs a TTY)
+gistui ~/dotfiles # launch against a specific working directory
 gistui --check    # print gh readiness, then exit (no TUI)
 ```
 
-Run `gistui` from the directory whose files you want to pair with your gists. Inside the
-TUI press `?` for the full keymap (it also shows the running version and the project
-repository link); the footer shows the keys relevant to the focused pane.
+Run `gistui` from the directory whose files you want to pair with your gists, or pass that
+directory as an argument. The path defaults to the current directory; if you pass one that
+does not exist (or is not a directory) `gistui` prints an error and exits without launching.
+Inside the TUI press `?` for the full keymap (it also shows the running version and the
+project repository link); the footer shows the keys relevant to the focused pane.
 
 The left pane lists the files in your current working directory; the right pane lists your
 gists. Ranking is **focus-driven**: the focused pane is the driver and the other pane is
