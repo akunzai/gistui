@@ -63,6 +63,43 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     out
 }
 
+/// Parse the `YYYY-MM-DDThh:mm:ssZ` UTC form GitHub returns into Unix seconds.
+/// Returns `None` on any malformed component. No external date crate (days-from-civil).
+pub fn parse_rfc3339_to_unix(s: &str) -> Option<u64> {
+    let bytes = s.as_bytes();
+    if bytes.len() < 20 || bytes[4] != b'-' || bytes[7] != b'-' || bytes[10] != b'T' {
+        return None;
+    }
+    if bytes[13] != b':' || bytes[16] != b':' {
+        return None;
+    }
+    let num = |slice: &str| slice.parse::<i64>().ok();
+    let year = num(&s[0..4])?;
+    let month = num(&s[5..7])?;
+    let day = num(&s[8..10])?;
+    let hour = num(&s[11..13])?;
+    let min = num(&s[14..16])?;
+    let sec = num(&s[17..19])?;
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || !(0..=23).contains(&hour)
+        || !(0..=59).contains(&min)
+        || !(0..=60).contains(&sec)
+    {
+        return None;
+    }
+    // days_from_civil (Howard Hinnant): days since 1970-01-01 for a proleptic
+    // Gregorian (y, m, d).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400; // [0, 399]
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1; // [0,365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    let days = era * 146097 + doe - 719468;
+    let total = days * 86400 + hour * 3600 + min * 60 + sec;
+    u64::try_from(total).ok()
+}
+
 /// Collapses the flat per-file rows into one [`GistGroup`] per gist, preserving
 /// the first-seen order of `files` (which mirrors the `gh` list order).
 pub fn group_gists(files: &[GistFile]) -> Vec<GistGroup> {
@@ -87,6 +124,24 @@ pub fn group_gists(files: &[GistFile]) -> Vec<GistGroup> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_rfc3339_to_unix_known_values() {
+        // 1970-01-01T00:00:00Z == 0
+        assert_eq!(parse_rfc3339_to_unix("1970-01-01T00:00:00Z"), Some(0));
+        // 2024-01-02T03:04:05Z == 1704164645
+        assert_eq!(
+            parse_rfc3339_to_unix("2024-01-02T03:04:05Z"),
+            Some(1704164645)
+        );
+    }
+
+    #[test]
+    fn parse_rfc3339_to_unix_rejects_garbage() {
+        assert_eq!(parse_rfc3339_to_unix(""), None);
+        assert_eq!(parse_rfc3339_to_unix("not-a-date"), None);
+        assert_eq!(parse_rfc3339_to_unix("2024-13-99T99:99:99Z"), None);
+    }
 
     #[test]
     fn sha256_hex_matches_known_vector() {
