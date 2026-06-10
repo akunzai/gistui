@@ -2399,7 +2399,7 @@ fn render_pins(frame: &mut Frame, state: &AppState) {
     let footer = if state.pinned.is_empty() {
         "Esc/q back".to_string()
     } else {
-        "↑↓ move  ·  x unpin  ·  Esc/q back".to_string()
+        "↑↓ move  ·  s sync · u push · d pull · x unpin  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back".to_string()
     };
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(4)).max(1);
     let chunks = Layout::default()
@@ -2416,9 +2416,11 @@ fn render_pins(frame: &mut Frame, state: &AppState) {
         state
             .pinned
             .iter()
-            .map(|m| {
+            .enumerate()
+            .map(|(i, m)| {
                 ListItem::new(format!(
-                    "{}  ↔  {} / {}",
+                    "{}  {}  ↔  {} / {}",
+                    state.pin_sync_status(i).icon(),
                     m.local_path.display(),
                     m.gist_id,
                     m.gist_filename
