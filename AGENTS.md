@@ -8,7 +8,10 @@
 cargo run               # launch the TUI (needs a TTY)
 cargo run -- --check    # print gh readiness, then exit (no TUI)
 cargo test              # full suite; must NOT touch the network or require gh auth
+scripts/demo/record.sh  # regenerate the README demo GIF; re-run after any UI change
 ```
+
+The demo recording harness (`scripts/demo/`) drives the **real** binary in a pseudo-tty against a **fake `gh`** over fake data, then renders `docs/demo.gif` with `agg`. Only the GIF is versioned (the cast is a throwaway intermediate). Edit `storyboard.json` to change what the demo shows; see `scripts/demo/README.md`.
 
 ## Verification Gate (run before every commit)
 
@@ -34,7 +37,7 @@ Pure, testable domain logic is kept separate from impure shell/filesystem adapte
 
 ## Non-Obvious Rules
 
-- Tests must never call the real `gh` or the network. `gh` JSON parsing is tested against fixtures in `tests/fixtures/gh/`; IO functions are left as thin untested boundaries.
+- Tests must never call the real `gh` or the network. `gh` JSON parsing is tested against fixtures in `tests/fixtures/gh/`; IO functions are left as thin untested boundaries. End-to-end TUI exercising (driving the real binary, asserting on rendered frames) belongs to the `scripts/demo/` harness — which fakes `gh` and the working dir — not to the unit suite.
 - Downloads only write to `cwd/<gist-filename>`. The overwrite gate is the invariant to preserve: an *existing* target is never overwritten without first showing its diff and a `y/n` confirmation (`Screen::Confirm`); writing a path that does not yet exist is allowed directly (no diff forced). Do not add a write path that overwrites an existing file without that diff+confirm.
 - No GitHub tokens are stored by the app, and gist *content* is never written to the config file (`~/.config/gistui/config.toml`, XDG-aware). The config holds only `pinned` mappings and `skip_dirs`. See `config.example.toml` for the annotated schema.
 - Use `frame.area()` (not `frame.size()`, which was removed in ratatui 0.28). The project now pins ratatui 0.30.
@@ -46,6 +49,7 @@ Pure, testable domain logic is kept separate from impure shell/filesystem adapte
 - Fold same-scope follow-up fixes into the original commit (amend) rather than adding `fix typo` / `review fix` commits.
 - Every PR MUST carry a release-note category label (`enhancement`, `bug`, `documentation`, `dependencies`, or `skip-changelog`) — GitHub groups auto-generated release notes by these via `.github/release.yml`.
 - When a change adds or alters a user-facing key, screen, or feature, update `README.md` (the Actions/keymap and Safety sections) and the `?` help text in `tui.rs` **in the same PR** — keep docs and behavior in lockstep.
+- Versioning (SemVer): stay on `0.x` while the keymap/feature surface is still evolving; only cut `1.0.0` once it has gone several releases without a breaking UX change. A release is a `vX.Y.Z` tag matching `Cargo.toml`, which triggers `.github/workflows/release.yml` to build and attach the platform binaries the README `install.sh` expects.
 
 ## Claude Code compatibility
 
