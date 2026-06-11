@@ -2993,9 +2993,11 @@ List screen
   r          toggle recursive file discovery (skips hidden + configured dirs)
   /          filter by filename or description
   v          cycle gist visibility: all / public / secret
-  s          cycle the FOCUSED pane's sort: match / name / recent
-             (the unfocused pane is ranked by your selection — ★ = strong match)
+  s          cycle the focused pane's sort: match / name / recent
   t          toggle row view: description / id
+  a          flip which pane drives match ranking (anchor); the other pane
+             re-ranks against the anchor's selection (focus stays put)
+             (📌 = pinned pair · bold = same filename)
 
 Actions (on the selected local file + gist)
   Enter      diff the local file against the gist; direction follows the focused
@@ -3469,7 +3471,7 @@ fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
 /// it to the terminal width.
 fn commands_hint(focus: FocusPane) -> String {
     // Focus-relevant common keys only; the full reference lives in the `?` help overlay.
-    let mut items = vec!["Tab panes", "↑↓ move", "Enter diff"];
+    let mut items = vec!["Tab panes", "↑↓ move", "Enter diff", "a anchor"];
     match focus {
         FocusPane::Local => items.extend(["r recursive", "e edit", "n create", "P pins"]),
         FocusPane::Gist => items.extend([
@@ -3652,6 +3654,12 @@ fn render_list(frame: &mut Frame, state: &AppState) {
         scanning_marker,
         state.local_sort.label()
     );
+    // Mark the pane that currently drives the match ranking (the anchor).
+    let local_title = if state.anchor == FocusPane::Local {
+        format!("{local_title} · ⚓")
+    } else {
+        local_title
+    };
     render_pane(
         frame,
         columns[0],
@@ -3691,6 +3699,11 @@ fn render_list(frame: &mut Frame, state: &AppState) {
     if !state.filter_query.is_empty() {
         gist_title.push_str(&format!(" · /{}", state.filter_query));
     }
+    let gist_title = if state.anchor == FocusPane::Gist {
+        format!("{gist_title} · ⚓")
+    } else {
+        gist_title
+    };
     render_pane(
         frame,
         columns[1],
