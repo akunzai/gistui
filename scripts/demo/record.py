@@ -109,8 +109,11 @@ def main():
             alive = drain(0.35)  # let the frame settle / redraw
     drain(0.8)
 
-    # quit and reap
+    # quit and reap. The main list quits on a two-step tap (first q arms, second confirms),
+    # so send q twice; SIGTERM remains a fallback if the process is elsewhere.
     try:
+        os.write(master, b"q")
+        drain(0.35)
         os.write(master, b"q")
         drain(0.6)
         os.kill(pid, signal.SIGTERM)

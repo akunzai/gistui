@@ -86,8 +86,8 @@ gists. Ranking is **focus-driven**: the focused pane is the driver and the other
 ranked against its selection, with stronger matches prefixed by stars (⭐⭐⭐
 exact-filename/pinned, ⭐⭐ path hint). With the local pane focused, gists are ranked against
 the selected file; `Tab` to the gist pane and the local files are ranked against the
-selected gist instead. Browse with `Tab` (switch pane), `Up`/`Down` (move), and
-`Left`/`Right` (scroll a long row).
+selected gist instead. Browse with `Tab` (switch pane) or `1`/`2` (jump to the Local /
+Gist pane), `Up`/`Down` (move), and `Left`/`Right` (scroll a long row).
 
 ### Actions
 
@@ -136,8 +136,9 @@ selected gist instead. Browse with `Tab` (switch pane), `Up`/`Down` (move), and
 - `/` filter by text · `v` cycle visibility (all/public/secret) · `s` cycle the **focused
   pane's** sort (match / name / recent — gists by name/updated, local files by
   name/modified-time) · `t` toggle row view.
-- `Esc`/`q` — go back from an overlay; quit the app from the main list.
-- `?` — show the help overlay; from there, `o` opens this repository in your web browser.
+- `Esc`/`q` — go back from an overlay; on the main list, press twice to quit (the first press
+  arms the quit, any other key cancels) so a stray key never exits the app.
+- `?` — show the help overlay.
 
 When no local file is selected (e.g. an empty directory), the right pane lists all gists
 unranked so you can still preview and download into the current directory.
@@ -150,6 +151,9 @@ the gist owning the currently selected file. From here you manage gists as a who
 - `e` — edit the gist's description (type, `Enter` applies, `Esc` cancels).
 - `X` — delete the entire gist and all its files, after a `y`/`n` confirmation.
 - `o` — open the gist on gist.github.com in your browser.
+- `c` — compact revisions: after showing the revision count and a `y`/`n` confirmation, the
+  gist is cloned to a temp dir, its history squashed to a single commit, and force-pushed —
+  collapsing all older revisions. Irreversible.
 - `s` cycle sort (updated / created) · `v` cycle visibility (all/public/secret) · `/` filter
   by description or id · `Left`/`Right` scroll a long description.
 - `q`/`Esc` — back to the list.
@@ -165,7 +169,8 @@ the gist owning the currently selected file. From here you manage gists as a who
 - Pulling a gist over an existing local file still goes through the diff + `y`/`n`
   confirmation — one-key sync never overwrites a local file silently.
 - Destructive remote actions each require a `y`/`n` confirmation: removing a file from a
-  gist (`X` on the list) and deleting a whole gist (`X` in the gist manager).
+  gist (`X` on the list), deleting a whole gist (`X` in the gist manager), and compacting a
+  gist's revisions (`c` in the gist manager — a history-rewriting force-push).
 - No GitHub token is stored by the app, and gist content is never written to the config
   file — only path↔gist pin mappings are persisted.
 
