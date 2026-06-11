@@ -86,6 +86,15 @@ pub struct GistGroup {
     pub file_count: usize,
 }
 
+/// A single gist comment, mirroring one object from `gh api /gists/{id}/comments`.
+/// The body is kept as raw plain text; the TUI wraps it to width (no markdown rendering).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GistComment {
+    pub author: String,
+    pub created_at: String,
+    pub body: String,
+}
+
 /// Lowercase hex SHA-256 of `bytes`. Used as the stable, content-only digest
 /// persisted in `PinnedMapping.last_seen_hash` (the config never stores content).
 pub fn sha256_hex(bytes: &[u8]) -> String {

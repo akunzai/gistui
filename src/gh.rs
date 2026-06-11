@@ -1,5 +1,5 @@
 use crate::actions::{run_command, CommandPlan, CommandRunner, SystemRunner};
-use crate::domain::GistFile;
+use crate::domain::{GistComment, GistFile};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
@@ -73,6 +73,26 @@ pub fn gist_view_plan(gist_id: &str, filename: &str) -> CommandPlan {
     }
 }
 
+/// Plan for fetching a gist's comments via the REST API.
+pub fn gist_comments_plan(gist_id: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "--paginate".into(),
+            format!("/gists/{gist_id}/comments?per_page=100"),
+        ],
+    }
+}
+
+pub fn fetch_gist_comments_json(gist_id: &str) -> Result<String> {
+    fetch_gist_comments_json_with(&SystemRunner, gist_id)
+}
+
+pub fn fetch_gist_comments_json_with(runner: &dyn CommandRunner, gist_id: &str) -> Result<String> {
+    run_command(runner, &gist_comments_plan(gist_id))
+}
+
 pub fn check_gh_ready() -> Result<()> {
     check_gh_ready_with(&SystemRunner)
 }
@@ -106,6 +126,39 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
     }
 
     Ok(files)
+}
+
+#[derive(Debug, Deserialize)]
+struct GhComment {
+    #[serde(default)]
+    user: Option<GhCommentUser>,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhCommentUser {
+    #[serde(default)]
+    login: String,
+}
+
+pub fn parse_gist_comments_json(raw: &str) -> Result<Vec<GistComment>> {
+    let comments: Vec<GhComment> =
+        serde_json::from_str(raw).context("parse gh gist comments JSON")?;
+    Ok(comments
+        .into_iter()
+        .map(|c| GistComment {
+            author: c
+                .user
+                .map(|u| u.login)
+                .filter(|l| !l.is_empty())
+                .unwrap_or_else(|| "(unknown)".to_string()),
+            created_at: c.created_at,
+            body: c.body,
+        })
+        .collect())
 }
 
 pub fn fetch_gist_list_json() -> Result<String> {

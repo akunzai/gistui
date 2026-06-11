@@ -1,4 +1,4 @@
-use crate::domain::{group_gists, GistFile, GistGroup, LocalCandidate, PinnedMapping};
+use crate::domain::{group_gists, GistComment, GistFile, GistGroup, LocalCandidate, PinnedMapping};
 use crate::ranking::{rank_gist_files, rank_local_files, RankedGistFile, RankedLocal};
 use anyhow::Result;
 use crossterm::{
@@ -36,6 +36,8 @@ pub enum Screen {
     Help,
     Pins,
     Gists,
+    /// Single-gist detail: basic info + file list + comments (entered from Gists with Enter).
+    GistDetail,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,6 +228,8 @@ pub enum KeyOutcome {
     EditUpload,
     ExecuteDelete,
     ExecuteRemoveFile,
+    /// Open the selected gist's detail screen and fetch its comments in the background.
+    OpenGistDetail,
     /// Analyse the selected Gist-manager gist's revision count, then ask to confirm a compaction.
     CompactGist,
     /// Run the confirmed compaction (clone → squash → force-push) on the pending gist.
@@ -316,6 +320,16 @@ pub struct AppState {
     pub download_gist_filename: Option<String>,
     /// Screen to return to when leaving the diff (default: List; set to Pins for pin diffs).
     pub diff_return: Screen,
+    /// The gist currently shown in `Screen::GistDetail`; also guards stale comment responses.
+    pub detail_gist_id: Option<String>,
+    /// Comments: `None` means loading, `Some` is the fetched result.
+    pub detail_comments: Option<Vec<GistComment>>,
+    /// Comment-fetch error message, if any.
+    pub detail_comments_error: Option<String>,
+    /// Comment-pane scroll offset.
+    pub detail_scroll: u16,
+    /// Screen to return to after a compaction confirm is cancelled/finished (Gists or GistDetail).
+    pub compact_return_screen: Screen,
 }
 
 fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
@@ -497,7 +511,7 @@ impl AppState {
     fn gists_hscroll_max(&self) -> u16 {
         self.visible_gist_groups()
             .iter()
-            .map(|g| gist_group_row_label(g).chars().count())
+            .map(|g| gist_group_row_label(g, unix_now()).chars().count())
             .max()
             .unwrap_or(0)
             .saturating_sub(1)
@@ -508,6 +522,31 @@ impl AppState {
     /// against removing a gist's only file (GitHub forbids a fileless gist).
     fn gist_file_count(&self, gist_id: &str) -> usize {
         self.gists.iter().filter(|g| g.gist_id == gist_id).count()
+    }
+
+    /// Filenames the given gist holds in the current in-memory list (gh order).
+    pub fn gist_filenames(&self, gist_id: &str) -> Vec<String> {
+        self.gists
+            .iter()
+            .filter(|g| g.gist_id == gist_id)
+            .map(|g| g.filename.clone())
+            .collect()
+    }
+
+    /// Look up a gist group by id (unaffected by filtering); used by detail + confirm background.
+    pub fn group_by_id(&self, gist_id: &str) -> Option<GistGroup> {
+        self.gist_groups().into_iter().find(|g| g.id == gist_id)
+    }
+
+    /// The gist the current screen acts on: the gist-level cursor on `Gists`, the
+    /// viewed gist on `GistDetail`, otherwise the gist owning the selected file row.
+    /// Screen-aware so IO actions (open-in-browser, compact) target what the user sees.
+    pub fn context_gist_id(&self) -> Option<String> {
+        match self.screen {
+            Screen::Gists => self.selected_group().map(|g| g.id),
+            Screen::GistDetail => self.detail_gist_id.clone(),
+            _ => self.selected_gist().map(|g| g.file.gist_id),
+        }
     }
 
     /// Upload intent shared by the list and the diff screen: requires a selected local file
@@ -673,6 +712,7 @@ impl AppState {
             Screen::Help => self.handle_key_help(code),
             Screen::Pins => self.handle_key_pins(code),
             Screen::Gists => self.handle_key_gists(code),
+            Screen::GistDetail => self.handle_key_detail(code),
         }
     }
 
@@ -791,12 +831,16 @@ impl AppState {
                     self.description_input = group.description.clone();
                 }
             }
+            KeyCode::Enter if self.gists_index < groups.len() => {
+                return KeyOutcome::OpenGistDetail;
+            }
             KeyCode::Char('o') if self.gists_index < groups.len() => {
                 return KeyOutcome::OpenBrowser
             }
             KeyCode::Char('c') if self.gists_index < groups.len() => {
                 // The revision count needs a network call, so analysis happens in run_loop;
                 // the confirm prompt is raised once the count is back.
+                self.compact_return_screen = Screen::Gists;
                 return KeyOutcome::CompactGist;
             }
             KeyCode::Char('X') => {
@@ -822,6 +866,50 @@ impl AppState {
             _ => {}
         }
         KeyOutcome::None
+    }
+
+    /// Pure key handling for `Screen::GistDetail`: scroll comments, compact, browser, back.
+    fn handle_key_detail(&mut self, code: KeyCode) -> KeyOutcome {
+        self.status = None;
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.screen = Screen::Gists;
+            }
+            KeyCode::Down => self.detail_scroll = self.detail_scroll.saturating_add(1),
+            KeyCode::Up => self.detail_scroll = self.detail_scroll.saturating_sub(1),
+            KeyCode::PageDown => self.detail_scroll = self.detail_scroll.saturating_add(10),
+            KeyCode::PageUp => self.detail_scroll = self.detail_scroll.saturating_sub(10),
+            KeyCode::Char('o') => return KeyOutcome::OpenBrowser,
+            KeyCode::Char('c') => {
+                self.compact_return_screen = Screen::GistDetail;
+                return KeyOutcome::CompactGist;
+            }
+            _ => {}
+        }
+        KeyOutcome::None
+    }
+
+    /// Apply a finished comment fetch, ignoring it if the user has since navigated to a
+    /// different gist (stale response). On error, comments become an empty list and the
+    /// error message is retained so the detail view can surface it.
+    pub fn apply_fetched_comments(
+        &mut self,
+        gist_id: &str,
+        result: Result<Vec<GistComment>, String>,
+    ) {
+        if self.detail_gist_id.as_deref() != Some(gist_id) {
+            return;
+        }
+        match result {
+            Ok(comments) => {
+                self.detail_comments = Some(comments);
+                self.detail_comments_error = None;
+            }
+            Err(error) => {
+                self.detail_comments = Some(Vec::new());
+                self.detail_comments_error = Some(error);
+            }
+        }
     }
 
     fn handle_key_preview(&mut self, code: KeyCode) -> KeyOutcome {
@@ -1201,9 +1289,9 @@ impl AppState {
             Some(PendingAction::CompactGist { .. }) => match code {
                 KeyCode::Char('y') => return KeyOutcome::ExecuteCompactGist,
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                    // Compaction is launched from the gist manager; return there, not the list.
+                    // Return to whichever screen launched the compaction (Gists or GistDetail).
                     self.pending_action = None;
-                    self.screen = Screen::Gists;
+                    self.screen = self.compact_return_screen;
                 }
                 _ => {}
             },
@@ -1283,6 +1371,10 @@ enum BgTaskOutcome {
         label: String,
         count: usize,
     },
+    CommentsFetched {
+        gist_id: String,
+        result: Result<Vec<GistComment>, String>,
+    },
 }
 
 pub fn initial_state() -> AppState {
@@ -1345,6 +1437,11 @@ pub fn initial_state() -> AppState {
         download_gist_id: None,
         download_gist_filename: None,
         diff_return: Screen::List,
+        detail_gist_id: None,
+        detail_comments: None,
+        detail_comments_error: None,
+        detail_scroll: 0,
+        compact_return_screen: Screen::Gists,
     }
 }
 
@@ -1734,6 +1831,9 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                         }
                         Err(error) => state.set_status(format!("compact failed: {error}")),
                     },
+                    BgTaskOutcome::CommentsFetched { gist_id, result } => {
+                        state.apply_fetched_comments(&gist_id, result);
+                    }
                 }
             }
         }
@@ -1812,11 +1912,40 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                         });
                     });
                 }
-                KeyOutcome::CompactGist => {
+                KeyOutcome::OpenGistDetail => {
                     let Some(group) = state.selected_group() else {
                         continue;
                     };
                     let gist_id = group.id.clone();
+                    state.screen = Screen::GistDetail;
+                    state.detail_gist_id = Some(gist_id.clone());
+                    state.detail_comments = None;
+                    state.detail_comments_error = None;
+                    state.detail_scroll = 0;
+
+                    state.bg_task_msg = Some("Loading comments…".to_string());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    bg_rx = Some(rx);
+                    let fetch_id = gist_id.clone();
+                    std::thread::spawn(move || {
+                        let result = crate::gh::fetch_gist_comments_json(&fetch_id)
+                            .map_err(|e| e.to_string())
+                            .and_then(|raw| {
+                                crate::gh::parse_gist_comments_json(&raw).map_err(|e| e.to_string())
+                            });
+                        let _ = tx.send(BgTaskOutcome::CommentsFetched {
+                            gist_id: fetch_id,
+                            result,
+                        });
+                    });
+                }
+                KeyOutcome::CompactGist => {
+                    let Some(gist_id) = state.context_gist_id() else {
+                        continue;
+                    };
+                    let Some(group) = state.group_by_id(&gist_id) else {
+                        continue;
+                    };
                     let label = if group.description.trim().is_empty() {
                         group.id.clone()
                     } else {
@@ -2100,7 +2229,7 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                         continue;
                     };
                     state.pending_action = None;
-                    state.screen = Screen::Gists;
+                    state.screen = state.compact_return_screen;
 
                     state.bg_task_msg = Some("Compacting revisions…".to_string());
                     let (tx, rx) = std::sync::mpsc::channel();
@@ -2558,11 +2687,7 @@ fn preview_diff_text(
 }
 
 fn open_browser(state: &mut AppState) {
-    // The gist-level view selects by gist; the main list selects by file row.
-    let gist_id = match state.screen {
-        Screen::Gists => state.selected_group().map(|g| g.id),
-        _ => state.selected_gist().map(|g| g.file.gist_id),
-    };
+    let gist_id = state.context_gist_id();
     let Some(gist_id) = gist_id else {
         return;
     };
@@ -2816,6 +2941,7 @@ fn render(frame: &mut Frame, state: &AppState) {
         Screen::Help => render_help(frame, state),
         Screen::Pins => render_pins(frame, state),
         Screen::Gists => render_gists(frame, state),
+        Screen::GistDetail => render_gist_detail(frame, state),
     }
     if let Some(ref msg) = state.bg_task_msg {
         render_loading_overlay(frame, msg);
@@ -2884,10 +3010,18 @@ Gist manager (g)
   s          cycle sort: updated / created
   v          cycle visibility: all / public / secret
   e          edit the gist description (Enter apply, Esc cancel)
+  Enter      open the gist detail view (info, file list, comments)
   o          open the gist in your web browser
   c          compact revisions: squash history to one commit (force-push, y/n confirm)
   X          delete the entire gist and all its files (y/n confirm)
   q / Esc    back to the list
+
+Gist detail (Enter from gist manager)
+  Up/Down    scroll comments
+  PageUp/Dn  page through comments
+  c          compact revisions (y/n confirm; gist info shown as context)
+  o          open the gist in your web browser
+  q / Esc    back to the gist manager
 
 General
   Esc / q    close an overlay; from the list, press twice to quit the app
@@ -3001,18 +3135,19 @@ fn render_pins(frame: &mut Frame, state: &AppState) {
     render_footer(frame, chunks[1], "", &footer, true);
 }
 
-fn gist_group_row_label(g: &GistGroup) -> String {
+fn gist_group_row_label(g: &GistGroup, now: u64) -> String {
     let desc = if g.description.trim().is_empty() {
         "(no description)".to_string()
     } else {
         g.description.clone()
     };
-    let visibility = if g.public { "public" } else { "secret" };
-    let date: String = g.updated_at.chars().take(10).collect();
-    format!(
-        "{}  {}  [{}]  {}f  {}",
-        g.id, desc, visibility, g.file_count, date
-    )
+    // Visibility is dropped from the row — it's surfaced by the `v` filter, the title's
+    // `type:` label, and the detail view. 📄 / 🕒 distinguish file count from last-updated age.
+    // The date is shown as a relative age (single largest unit), matching the detail view.
+    let updated = crate::domain::parse_rfc3339_to_unix(&g.updated_at)
+        .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
+        .unwrap_or_else(|| "?".into());
+    format!("{}  {}  📄 {}  🕒 {}", g.id, desc, g.file_count, updated)
 }
 
 fn render_gists(frame: &mut Frame, state: &AppState) {
@@ -3030,7 +3165,7 @@ fn render_gists(frame: &mut Frame, state: &AppState) {
     } else {
         (
             String::new(),
-            "↑↓ move · ←→ scroll · / filter · s sort · v type · e desc · o browser · c compact · X delete · q back"
+            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · e desc · o browser · c compact · X delete · q back"
                 .to_string(),
             true,
         )
@@ -3042,6 +3177,7 @@ fn render_gists(frame: &mut Frame, state: &AppState) {
         .split(area);
 
     let groups = state.visible_gist_groups();
+    let now = unix_now();
     let items: Vec<ListItem> = if groups.is_empty() {
         let msg = if state.gist_groups().is_empty() {
             ListItem::new("  📭 No gists found").style(Style::default().fg(Color::DarkGray))
@@ -3053,7 +3189,12 @@ fn render_gists(frame: &mut Frame, state: &AppState) {
     } else {
         groups
             .iter()
-            .map(|g| ListItem::new(hscroll_str(&gist_group_row_label(g), state.gists_hscroll)))
+            .map(|g| {
+                ListItem::new(hscroll_str(
+                    &gist_group_row_label(g, now),
+                    state.gists_hscroll,
+                ))
+            })
             .collect()
     };
 
@@ -3097,6 +3238,148 @@ fn render_gists(frame: &mut Frame, state: &AppState) {
             Color::Cyan,
         );
     }
+}
+
+/// One-line info summary for the detail header.
+fn gist_info_line(group: &GistGroup, now: u64) -> String {
+    let vis = if group.public { "public" } else { "secret" };
+    let created = crate::domain::parse_rfc3339_to_unix(&group.created_at)
+        .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
+        .unwrap_or_else(|| "?".into());
+    let updated = crate::domain::parse_rfc3339_to_unix(&group.updated_at)
+        .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
+        .unwrap_or_else(|| "?".into());
+    // The file count lives in the "Files (N)" section header below, so it's omitted here.
+    // The detail view has room, so show the full gist id (not a truncated prefix).
+    format!(
+        "{vis} · created {created} · updated {updated} · {}",
+        group.id
+    )
+}
+
+/// Current Unix time in seconds (saturating to 0 before the epoch); used for relative-age labels.
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Info + file-list block for a gist (reused as the compaction-confirm background).
+fn render_gist_info_and_files(frame: &mut Frame, area: Rect, state: &AppState, gist_id: &str) {
+    let Some(group) = state.group_by_id(gist_id) else {
+        return;
+    };
+    let now = unix_now();
+    let title = if group.description.trim().is_empty() {
+        format!("Gist {}", group.id)
+    } else {
+        format!("Gist: {}", group.description)
+    };
+    let files = state.gist_filenames(gist_id);
+    let mut lines: Vec<Line> = vec![
+        Line::from(gist_info_line(&group, now)),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("Files ({})", files.len()),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+    ];
+    for f in &files {
+        lines.push(Line::from(format!("  {f}")));
+    }
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Cyan))
+                .padding(Padding::horizontal(1)),
+        ),
+        area,
+    );
+}
+
+/// Comments pane: loading / error / empty / list (plain text wrapped to width, scrollable).
+fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppState) {
+    let now = unix_now();
+    let body: Vec<Line> = match (&state.detail_comments, &state.detail_comments_error) {
+        (None, _) => vec![Line::from(Span::styled(
+            "Loading comments…",
+            Style::default().fg(Color::DarkGray),
+        ))],
+        (Some(_), Some(err)) => vec![Line::from(Span::styled(
+            format!("comments error: {err}"),
+            Style::default().fg(Color::Red),
+        ))],
+        (Some(comments), None) if comments.is_empty() => vec![Line::from(Span::styled(
+            "No comments",
+            Style::default().fg(Color::DarkGray),
+        ))],
+        (Some(comments), None) => {
+            let mut lines = Vec::new();
+            for c in comments {
+                let age = crate::domain::parse_rfc3339_to_unix(&c.created_at)
+                    .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
+                    .unwrap_or_else(|| "?".into());
+                lines.push(Line::from(Span::styled(
+                    format!("{} · {age}", c.author),
+                    Style::default().fg(Color::Cyan),
+                )));
+                for raw in c.body.lines() {
+                    lines.push(Line::from(format!("  {raw}")));
+                }
+                lines.push(Line::from(""));
+            }
+            lines
+        }
+    };
+    let title = match &state.detail_comments {
+        Some(c) if state.detail_comments_error.is_none() => format!("Comments ({})", c.len()),
+        _ => "Comments".to_string(),
+    };
+    frame.render_widget(
+        Paragraph::new(body)
+            .scroll((state.detail_scroll, 0))
+            .wrap(Wrap { trim: false })
+            .block(
+                Block::default()
+                    .title(title)
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .padding(Padding::horizontal(1)),
+            ),
+        area,
+    );
+}
+
+fn render_gist_detail(frame: &mut Frame, state: &AppState) {
+    let area = frame.area();
+    let footer = "↑↓ scroll · c compact · o browser · q back";
+    let footer_lines = wrap_line_count(footer, area.width.saturating_sub(2)).max(1);
+    let files = state
+        .detail_gist_id
+        .as_deref()
+        .map(|id| state.gist_filenames(id).len())
+        .unwrap_or(0);
+    // Scale to the file count, but never exceed half the screen nor drop below 5 rows.
+    let info_height = (files as u16)
+        .saturating_add(5)
+        .clamp(5, (area.height / 2).max(5));
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(info_height),
+            Constraint::Min(3),
+            Constraint::Length(footer_lines + 1),
+        ])
+        .split(area);
+    if let Some(id) = state.detail_gist_id.as_deref() {
+        render_gist_info_and_files(frame, chunks[0], state, id);
+    }
+    render_gist_comments(frame, chunks[1], state);
+    render_footer(frame, chunks[2], "", footer, true);
 }
 
 fn local_row_label(path: &std::path::Path, cwd: &std::path::Path) -> String {
@@ -3409,12 +3692,6 @@ fn render_pane(
     } else {
         Style::default().add_modifier(Modifier::BOLD)
     };
-    let title = if focused {
-        format!("{title} [focus]")
-    } else {
-        title.to_string()
-    };
-
     let list = List::new(items)
         .block(
             Block::default()
@@ -3797,7 +4074,12 @@ fn render_diff(frame: &mut Frame, state: &AppState) {
 /// `Screen::Confirm`: the diff fills the screen as context behind a centered prompt modal,
 /// keeping the overwrite gate's diff visible while the question is asked front-and-centre.
 fn render_confirm(frame: &mut Frame, state: &AppState) {
-    render_diff_pane(frame, frame.area(), state);
+    match &state.pending_action {
+        Some(PendingAction::CompactGist { gist_id, .. }) => {
+            render_gist_info_and_files(frame, frame.area(), state, gist_id);
+        }
+        _ => render_diff_pane(frame, frame.area(), state),
+    }
     let (title, border) = confirm_modal_style(state);
     render_centered_modal(frame, title, &confirm_prompt(state), border);
 }
@@ -3813,6 +4095,85 @@ fn is_json_file(path: &std::path::Path) -> bool {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    fn state_with_gists() -> AppState {
+        let mut state = initial_state();
+        state.gists = vec![
+            GistFile {
+                gist_id: "g1".into(),
+                description: "demo".into(),
+                filename: "a.txt".into(),
+                public: false,
+                updated_at: "2026-06-10T00:00:00Z".into(),
+                created_at: "2026-06-01T00:00:00Z".into(),
+            },
+            GistFile {
+                gist_id: "g1".into(),
+                description: "demo".into(),
+                filename: "b.txt".into(),
+                public: false,
+                updated_at: "2026-06-10T00:00:00Z".into(),
+                created_at: "2026-06-01T00:00:00Z".into(),
+            },
+        ];
+        state.gists_index = 0;
+        state
+    }
+
+    #[test]
+    fn enter_on_gist_opens_detail() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Gists;
+        let outcome = state.handle_key(KeyCode::Enter);
+        assert!(matches!(outcome, KeyOutcome::OpenGistDetail));
+    }
+
+    #[test]
+    fn detail_q_returns_to_gists() {
+        let mut state = state_with_gists();
+        state.screen = Screen::GistDetail;
+        state.handle_key(KeyCode::Char('q'));
+        assert_eq!(state.screen, Screen::Gists);
+    }
+
+    #[test]
+    fn detail_scroll_saturates_at_zero() {
+        let mut state = state_with_gists();
+        state.screen = Screen::GistDetail;
+        state.detail_scroll = 0;
+        state.handle_key(KeyCode::Up);
+        assert_eq!(state.detail_scroll, 0);
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.detail_scroll, 1);
+    }
+
+    #[test]
+    fn detail_c_triggers_compaction_and_records_origin() {
+        let mut state = state_with_gists();
+        state.screen = Screen::GistDetail;
+        let outcome = state.handle_key(KeyCode::Char('c'));
+        assert!(matches!(outcome, KeyOutcome::CompactGist));
+        assert_eq!(state.compact_return_screen, Screen::GistDetail);
+    }
+
+    #[test]
+    fn context_gist_id_uses_detail_id_on_detail_screen() {
+        let mut state = state_with_gists();
+        state.screen = Screen::GistDetail;
+        state.detail_gist_id = Some("g1".into());
+        assert_eq!(state.context_gist_id().as_deref(), Some("g1"));
+    }
+
+    #[test]
+    fn context_gist_id_uses_group_cursor_on_gists_screen() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Gists;
+        state.gists_index = 0;
+        assert_eq!(
+            state.context_gist_id(),
+            state.selected_group().map(|g| g.id)
+        );
+    }
 
     #[test]
     fn about_metadata_is_available_for_help() {
@@ -5683,5 +6044,47 @@ mod tests {
             state.handle_key(KeyCode::Char('S')),
             KeyOutcome::SyncSelectedPair
         );
+    }
+
+    #[test]
+    fn fetched_comments_apply_when_viewing_same_gist() {
+        let mut state = initial_state();
+        state.detail_gist_id = Some("g1".into());
+        state.apply_fetched_comments(
+            "g1",
+            Ok(vec![GistComment {
+                author: "alice".into(),
+                created_at: "2026-06-10T00:00:00Z".into(),
+                body: "hi".into(),
+            }]),
+        );
+        assert_eq!(state.detail_comments.as_ref().unwrap().len(), 1);
+        assert!(state.detail_comments_error.is_none());
+    }
+
+    #[test]
+    fn fetched_comments_ignored_when_gist_changed() {
+        let mut state = initial_state();
+        state.detail_gist_id = Some("g2".into());
+        state.detail_comments = None;
+        state.apply_fetched_comments(
+            "g1",
+            Ok(vec![GistComment {
+                author: "alice".into(),
+                created_at: "2026-06-10T00:00:00Z".into(),
+                body: "stale".into(),
+            }]),
+        );
+        // Result was for g1 but user is on g2 → ignored.
+        assert!(state.detail_comments.is_none());
+    }
+
+    #[test]
+    fn fetched_comments_error_sets_empty_list_and_message() {
+        let mut state = initial_state();
+        state.detail_gist_id = Some("g1".into());
+        state.apply_fetched_comments("g1", Err("boom".into()));
+        assert_eq!(state.detail_comments.as_ref().unwrap().len(), 0);
+        assert_eq!(state.detail_comments_error.as_deref(), Some("boom"));
     }
 }
