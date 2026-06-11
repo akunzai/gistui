@@ -84,7 +84,9 @@ jobs:
           Copy-Item $bin, README.md, LICENSE $pkg\
           Compress-Archive -Path $pkg -DestinationPath "${pkg}.zip"
           $hash = (Get-FileHash -Algorithm SHA256 "${pkg}.zip").Hash.ToLower()
-          "$hash  ${pkg}.zip" | Out-File -Encoding ascii "${pkg}.zip.sha256"
+          # Write LF-terminated (no CRLF, no BOM) so `sha256sum -c` under Git Bash
+          # doesn't see a trailing CR glued to the filename.
+          [System.IO.File]::WriteAllText("$pwd/${pkg}.zip.sha256", "$hash  ${pkg}.zip`n")
           "ASSET=${pkg}.zip" | Out-File -Append $env:GITHUB_ENV
 
       - name: Upload artifact

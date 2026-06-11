@@ -94,6 +94,10 @@ curl -fsSL "$base_url/$archive" -o "$tmp/$archive" \
   || err "download failed; is $VERSION published for $target?"
 curl -fsSL "$base_url/$archive.sha256" -o "$tmp/$archive.sha256" \
   || err "checksum download failed for $archive"
+# Strip CR so checksum files written with CRLF (e.g. older Windows releases)
+# don't leave a trailing carriage return glued to the filename.
+tr -d '\r' < "$tmp/$archive.sha256" > "$tmp/$archive.sha256.tmp" \
+  && mv "$tmp/$archive.sha256.tmp" "$tmp/$archive.sha256"
 
 echo "verifying checksum..."
 (
