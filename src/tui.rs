@@ -511,7 +511,7 @@ impl AppState {
     fn gists_hscroll_max(&self) -> u16 {
         self.visible_gist_groups()
             .iter()
-            .map(|g| gist_group_row_label(g).chars().count())
+            .map(|g| gist_group_row_label(g, unix_now()).chars().count())
             .max()
             .unwrap_or(0)
             .saturating_sub(1)
@@ -3135,18 +3135,19 @@ fn render_pins(frame: &mut Frame, state: &AppState) {
     render_footer(frame, chunks[1], "", &footer, true);
 }
 
-fn gist_group_row_label(g: &GistGroup) -> String {
+fn gist_group_row_label(g: &GistGroup, now: u64) -> String {
     let desc = if g.description.trim().is_empty() {
         "(no description)".to_string()
     } else {
         g.description.clone()
     };
-    let visibility = if g.public { "public" } else { "secret" };
-    let date: String = g.updated_at.chars().take(10).collect();
-    format!(
-        "{}  {}  [{}]  {}f  {}",
-        g.id, desc, visibility, g.file_count, date
-    )
+    // Visibility is dropped from the row — it's surfaced by the `v` filter, the title's
+    // `type:` label, and the detail view. 📄 / 🕒 distinguish file count from last-updated age.
+    // The date is shown as a relative age (single largest unit), matching the detail view.
+    let updated = crate::domain::parse_rfc3339_to_unix(&g.updated_at)
+        .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
+        .unwrap_or_else(|| "?".into());
+    format!("{}  {}  📄 {}  🕒 {}", g.id, desc, g.file_count, updated)
 }
 
 fn render_gists(frame: &mut Frame, state: &AppState) {
@@ -3176,6 +3177,7 @@ fn render_gists(frame: &mut Frame, state: &AppState) {
         .split(area);
 
     let groups = state.visible_gist_groups();
+    let now = unix_now();
     let items: Vec<ListItem> = if groups.is_empty() {
         let msg = if state.gist_groups().is_empty() {
             ListItem::new("  📭 No gists found").style(Style::default().fg(Color::DarkGray))
@@ -3187,7 +3189,12 @@ fn render_gists(frame: &mut Frame, state: &AppState) {
     } else {
         groups
             .iter()
-            .map(|g| ListItem::new(hscroll_str(&gist_group_row_label(g), state.gists_hscroll)))
+            .map(|g| {
+                ListItem::new(hscroll_str(
+                    &gist_group_row_label(g, now),
+                    state.gists_hscroll,
+                ))
+            })
             .collect()
     };
 
