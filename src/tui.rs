@@ -1,5 +1,5 @@
 use crate::domain::{group_gists, GistComment, GistFile, GistGroup, LocalCandidate, PinnedMapping};
-use crate::ranking::{rank_gist_files, rank_local_files, RankedGistFile, RankedLocal};
+use crate::ranking::{rank_gist_files, rank_local_files, MatchReason, RankedGistFile, RankedLocal};
 use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -3390,33 +3390,45 @@ fn hscroll_str(text: &str, offset: u16) -> String {
     text.chars().skip(offset as usize).collect()
 }
 
-/// Match strength as stars. Mirrors the ranking tiers (exact-filename/pinned = 1000+,
-/// path hint = 250+); a recent-only score of 1 is too weak to be worth a star.
-fn match_stars(score: u16) -> &'static str {
-    match score {
-        s if s >= 1000 => "⭐⭐⭐",
-        s if s >= 250 => "⭐⭐",
-        s if s >= 2 => "⭐",
-        _ => "",
+/// How a file-list row should be flagged: 📌 = an existing pinned pair; same-name = bold; else none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowMark {
+    Pinned,
+    SameName,
+    None,
+}
+
+fn row_mark(reasons: &[MatchReason]) -> RowMark {
+    if reasons.contains(&MatchReason::Pinned) {
+        RowMark::Pinned
+    } else if reasons.contains(&MatchReason::ExactFilename) {
+        RowMark::SameName
+    } else {
+        RowMark::None
+    }
+}
+
+/// Build a file-list row from its base text and match mark: 📌 prefix for a pinned pair,
+/// bold for a same-name match, plain otherwise. Shared by both panes in `render_list`.
+fn marked_item(base: String, mark: RowMark, hscroll: u16) -> ListItem<'static> {
+    match mark {
+        RowMark::Pinned => ListItem::new(hscroll_str(&format!("📌 {base}"), hscroll)),
+        RowMark::SameName => ListItem::new(hscroll_str(&base, hscroll))
+            .style(Style::default().add_modifier(Modifier::BOLD)),
+        RowMark::None => ListItem::new(hscroll_str(&base, hscroll)),
     }
 }
 
 fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
-    let stars = match_stars(g.score);
-    let prefix = if stars.is_empty() {
-        String::new()
-    } else {
-        format!("{stars} ")
-    };
     match view {
         GistView::Description => {
             if g.file.description.trim().is_empty() {
-                format!("{prefix}{}", g.file.filename)
+                g.file.filename.clone()
             } else {
-                format!("{prefix}{} — {}", g.file.filename, g.file.description)
+                format!("{} — {}", g.file.filename, g.file.description)
             }
         }
-        GistView::Id => format!("{prefix}{} / {}", g.file.gist_id, g.file.filename),
+        GistView::Id => format!("{} / {}", g.file.gist_id, g.file.filename),
     }
 }
 
@@ -3592,14 +3604,8 @@ fn render_list(frame: &mut Frame, state: &AppState) {
             .visible_locals()
             .iter()
             .map(|r| {
-                let stars = match_stars(r.score);
-                let prefix = if stars.is_empty() {
-                    String::new()
-                } else {
-                    format!("{stars} ")
-                };
-                let label = format!("{prefix}{}", local_row_label(&r.candidate.path, &state.cwd));
-                ListItem::new(hscroll_str(&label, state.local_hscroll))
+                let base = local_row_label(&r.candidate.path, &state.cwd);
+                marked_item(base, row_mark(&r.reasons), state.local_hscroll)
             })
             .collect()
     };
@@ -3638,10 +3644,8 @@ fn render_list(frame: &mut Frame, state: &AppState) {
         ranked
             .iter()
             .map(|g| {
-                ListItem::new(hscroll_str(
-                    &gist_row_label(g, state.gist_view),
-                    state.gist_hscroll,
-                ))
+                let base = gist_row_label(g, state.gist_view);
+                marked_item(base, row_mark(&g.reasons), state.gist_hscroll)
             })
             .collect()
     };
@@ -4269,33 +4273,11 @@ mod tests {
             score: 1,
             reasons: Vec::new(),
         };
-        // A recent-only score of 1 is too weak to earn a star.
         assert_eq!(
             gist_row_label(&g, GistView::Description),
             "config — My Ghostty config"
         );
         assert_eq!(gist_row_label(&g, GistView::Id), "abc / config");
-    }
-
-    #[test]
-    fn strong_match_prefixes_stars() {
-        let g = RankedGistFile {
-            file: GistFile {
-                gist_id: "abc".into(),
-                description: "cfg".into(),
-                filename: "config".into(),
-                public: true,
-                updated_at: "x".into(),
-                created_at: "x".into(),
-            },
-            score: 1000,
-            reasons: Vec::new(),
-        };
-        assert_eq!(
-            gist_row_label(&g, GistView::Description),
-            "⭐⭐⭐ config — cfg"
-        );
-        assert_eq!(gist_row_label(&g, GistView::Id), "⭐⭐⭐ abc / config");
     }
 
     #[test]
@@ -4865,12 +4847,21 @@ mod tests {
     }
 
     #[test]
-    fn match_stars_tiers() {
-        assert_eq!(match_stars(0), "");
-        assert_eq!(match_stars(1), "");
-        assert_eq!(match_stars(250), "⭐⭐");
-        assert_eq!(match_stars(1000), "⭐⭐⭐");
-        assert_eq!(match_stars(10_001), "⭐⭐⭐");
+    fn row_mark_pinned_beats_same_name() {
+        assert_eq!(
+            row_mark(&[MatchReason::Pinned, MatchReason::ExactFilename]),
+            RowMark::Pinned
+        );
+    }
+    #[test]
+    fn row_mark_same_name_when_exact_filename_only() {
+        assert_eq!(row_mark(&[MatchReason::ExactFilename]), RowMark::SameName);
+    }
+    #[test]
+    fn row_mark_none_for_weak_matches() {
+        assert_eq!(row_mark(&[MatchReason::PathSegment]), RowMark::None);
+        assert_eq!(row_mark(&[MatchReason::Recent]), RowMark::None);
+        assert_eq!(row_mark(&[]), RowMark::None);
     }
 
     #[test]
