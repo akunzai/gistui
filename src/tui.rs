@@ -2,7 +2,7 @@ use crate::domain::{group_gists, GistComment, GistFile, GistGroup, LocalCandidat
 use crate::ranking::{rank_gist_files, rank_local_files, MatchReason, RankedGistFile, RankedLocal};
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -1875,6 +1875,13 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
             continue;
         }
         if let Event::Key(key) = event::read()? {
+            // Windows reports both Press and Release (and Repeat) for each
+            // keystroke, while Unix terminals report only Press. Without this
+            // filter every key fires twice on Windows — Tab toggles focus back
+            // to where it started and Up/Down jump two rows. See ratatui#347.
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
             if state.bg_task_msg.is_some() {
                 if key.code == KeyCode::Esc {
                     state.bg_task_msg = None;
