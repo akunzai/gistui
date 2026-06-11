@@ -3409,12 +3409,6 @@ fn render_pane(
     } else {
         Style::default().add_modifier(Modifier::BOLD)
     };
-    let title = if focused {
-        format!("{title} [focus]")
-    } else {
-        title.to_string()
-    };
-
     let list = List::new(items)
         .block(
             Block::default()
