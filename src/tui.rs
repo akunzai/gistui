@@ -12,8 +12,8 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
-        Block, Borders, Clear, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
-        ScrollbarOrientation, ScrollbarState, Wrap,
+        Block, BorderType, Borders, Clear, List, ListItem, ListState, Padding, Paragraph,
+        Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap,
     },
     Frame, Terminal,
 };
@@ -57,6 +57,11 @@ pub enum PendingAction {
         gist_id: String,
         filename: String,
         label: String,
+    },
+    CompactGist {
+        gist_id: String,
+        label: String,
+        count: usize,
     },
 }
 
@@ -217,11 +222,14 @@ pub enum KeyOutcome {
     Create(bool),
     PreviewContent,
     OpenBrowser,
-    OpenRepoBrowser,
     EditLocal,
     EditUpload,
     ExecuteDelete,
     ExecuteRemoveFile,
+    /// Analyse the selected Gist-manager gist's revision count, then ask to confirm a compaction.
+    CompactGist,
+    /// Run the confirmed compaction (clone → squash → force-push) on the pending gist.
+    ExecuteCompactGist,
     ApplyDescription,
     RefreshLocals,
     RefreshPreview,
@@ -291,6 +299,9 @@ pub struct AppState {
     pub editing_description: bool,
     pub description_input: String,
     pub bg_task_msg: Option<String>,
+    /// Set after the first `q`/`Esc` on the main list; a second press confirms the quit. Any
+    /// other key clears it. Prevents an accidental single-key exit.
+    pub quit_armed: bool,
     pub help_scroll: u16,
     pub upload_original_content: String,
     pub upload_edited_content: Option<String>,
@@ -667,7 +678,6 @@ impl AppState {
 
     fn handle_key_help(&mut self, code: KeyCode) -> KeyOutcome {
         match code {
-            KeyCode::Char('o') => KeyOutcome::OpenRepoBrowser,
             KeyCode::Down => {
                 self.help_scroll = self.help_scroll.saturating_add(1);
                 KeyOutcome::None
@@ -784,6 +794,11 @@ impl AppState {
             KeyCode::Char('o') if self.gists_index < groups.len() => {
                 return KeyOutcome::OpenBrowser
             }
+            KeyCode::Char('c') if self.gists_index < groups.len() => {
+                // The revision count needs a network call, so analysis happens in run_loop;
+                // the confirm prompt is raised once the count is back.
+                return KeyOutcome::CompactGist;
+            }
             KeyCode::Char('X') => {
                 if let Some(group) = groups.get(self.gists_index) {
                     let label = if group.description.is_empty() {
@@ -856,15 +871,26 @@ impl AppState {
         // Any key dismisses a lingering status message (e.g. "Downloaded …"). A new
         // status may be set afterwards by the run_loop IO helper for this key.
         self.status = None;
+        // Any key disarms the pending quit; the quit arm below re-arms on the first q/Esc.
+        let quit_armed = std::mem::take(&mut self.quit_armed);
         match code {
-            // On the main list both q and Esc exit the app.
-            KeyCode::Char('q') | KeyCode::Esc => return KeyOutcome::Quit,
+            // Quitting the app is a two-step tap so a stray q/Esc on the list does not exit.
+            KeyCode::Char('q') | KeyCode::Esc => {
+                if quit_armed {
+                    return KeyOutcome::Quit;
+                }
+                self.quit_armed = true;
+                self.status = Some("Press q again to quit (any other key cancels)".into());
+            }
             KeyCode::Tab => {
                 self.focus = match self.focus {
                     FocusPane::Local => FocusPane::Gist,
                     FocusPane::Gist => FocusPane::Local,
                 };
             }
+            // 1/2 jump straight to a pane (mirrors Tab; selection indices are untouched).
+            KeyCode::Char('1') => self.focus = FocusPane::Local,
+            KeyCode::Char('2') => self.focus = FocusPane::Gist,
             KeyCode::Down => match self.focus {
                 FocusPane::Local if self.local_index + 1 < self.locals.len() => {
                     self.local_index += 1;
@@ -1172,6 +1198,15 @@ impl AppState {
                 }
                 _ => {}
             },
+            Some(PendingAction::CompactGist { .. }) => match code {
+                KeyCode::Char('y') => return KeyOutcome::ExecuteCompactGist,
+                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
+                    // Compaction is launched from the gist manager; return there, not the list.
+                    self.pending_action = None;
+                    self.screen = Screen::Gists;
+                }
+                _ => {}
+            },
             _ => {
                 if matches!(code, KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q')) {
                     self.pending_action = None;
@@ -1238,6 +1273,16 @@ enum BgTaskOutcome {
         result: std::result::Result<(), String>,
         gist_id: String,
     },
+    CompactAnalyze {
+        result: std::result::Result<usize, String>,
+        gist_id: String,
+        label: String,
+    },
+    CompactGist {
+        result: std::result::Result<(), String>,
+        label: String,
+        count: usize,
+    },
 }
 
 pub fn initial_state() -> AppState {
@@ -1288,6 +1333,7 @@ pub fn initial_state() -> AppState {
         editing_description: false,
         description_input: String::new(),
         bg_task_msg: None,
+        quit_armed: false,
         help_scroll: 0,
         upload_original_content: String::new(),
         upload_edited_content: None,
@@ -1650,6 +1696,44 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                             state.set_status(format!("description update failed: {error}"))
                         }
                     },
+                    BgTaskOutcome::CompactAnalyze {
+                        result,
+                        gist_id,
+                        label,
+                    } => match result {
+                        Ok(count) if count <= 1 => state.set_status(format!(
+                            "\"{label}\" already has a single revision — nothing to compact"
+                        )),
+                        Ok(count) => {
+                            state.diff_text = format!(
+                                "Compact gist {gist_id} (\"{label}\").\n\nIt has {count} revisions. Compacting clones it to a temp dir, squashes the history to a single commit, and force-pushes — the {} older revisions are gone for good.",
+                                count - 1
+                            );
+                            state.diff_scroll = 0;
+                            state.diff_hscroll = 0;
+                            state.pending_action = Some(PendingAction::CompactGist {
+                                gist_id,
+                                label,
+                                count,
+                            });
+                            state.screen = Screen::Confirm;
+                        }
+                        Err(error) => state.set_status(format!("revision check failed: {error}")),
+                    },
+                    BgTaskOutcome::CompactGist {
+                        result,
+                        label,
+                        count,
+                    } => match result {
+                        Ok(_) => {
+                            state.set_status(format!(
+                                "Compacted \"{label}\" ({count} → 1 revision)"
+                            ));
+                            state.loading = true;
+                            gist_rx = Some(spawn_gist_fetch());
+                        }
+                        Err(error) => state.set_status(format!("compact failed: {error}")),
+                    },
                 }
             }
         }
@@ -1725,6 +1809,36 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                             gist_label,
                             gist_id,
                             filename,
+                        });
+                    });
+                }
+                KeyOutcome::CompactGist => {
+                    let Some(group) = state.selected_group() else {
+                        continue;
+                    };
+                    let gist_id = group.id.clone();
+                    let label = if group.description.trim().is_empty() {
+                        group.id.clone()
+                    } else {
+                        group.description.clone()
+                    };
+
+                    state.bg_task_msg = Some("Checking revisions…".to_string());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    bg_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let result = crate::actions::execute_command(
+                            &crate::actions::gist_revision_count_command(&gist_id),
+                        )
+                        .map_err(|e| e.to_string())
+                        .and_then(|out| {
+                            crate::actions::parse_revision_count(&out)
+                                .ok_or_else(|| "could not parse revision count".to_string())
+                        });
+                        let _ = tx.send(BgTaskOutcome::CompactAnalyze {
+                            result,
+                            gist_id,
+                            label,
                         });
                     });
                 }
@@ -1933,7 +2047,6 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                     }
                 }
                 KeyOutcome::OpenBrowser => open_browser(&mut state),
-                KeyOutcome::OpenRepoBrowser => open_repo_browser(&mut state),
                 KeyOutcome::EditLocal => edit_local(terminal, &mut state)?,
                 KeyOutcome::ExecuteDelete => {
                     let Some(PendingAction::Delete { gist_id, .. }) = state.pending_action.clone()
@@ -1974,6 +2087,31 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                             result,
                             gist_id,
                             filename,
+                        });
+                    });
+                }
+                KeyOutcome::ExecuteCompactGist => {
+                    let Some(PendingAction::CompactGist {
+                        gist_id,
+                        label,
+                        count,
+                    }) = state.pending_action.clone()
+                    else {
+                        continue;
+                    };
+                    state.pending_action = None;
+                    state.screen = Screen::Gists;
+
+                    state.bg_task_msg = Some("Compacting revisions…".to_string());
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    bg_rx = Some(rx);
+                    std::thread::spawn(move || {
+                        let result = crate::actions::execute_compact_gist(&gist_id)
+                            .map_err(|e| e.to_string());
+                        let _ = tx.send(BgTaskOutcome::CompactGist {
+                            result,
+                            label,
+                            count,
                         });
                     });
                 }
@@ -2162,6 +2300,7 @@ fn render_centered_modal(frame: &mut Frame, title: &str, body: &str, border: Col
                 Block::default()
                     .title(title.to_string())
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .border_style(Style::default().fg(border))
                     .padding(Padding::horizontal(1)),
             ),
@@ -2434,14 +2573,6 @@ fn open_browser(state: &mut AppState) {
     }
 }
 
-fn open_repo_browser(state: &mut AppState) {
-    let plan = crate::actions::open_repo_browser_command();
-    match crate::actions::execute_command(&plan) {
-        Ok(_) => state.set_status("Opened GitHub repository in browser".to_string()),
-        Err(error) => state.set_status(format!("open failed: {error}")),
-    }
-}
-
 /// Opens the selected local file in `$VISUAL`/`$EDITOR` (default `vi`). A terminal editor
 /// needs the full terminal, so the TUI leaves raw mode / the alternate screen for the
 /// duration and restores afterwards. `$EDITOR` may include flags (e.g. `code --wait`).
@@ -2692,14 +2823,11 @@ fn render(frame: &mut Frame, state: &AppState) {
 }
 
 fn render_help(frame: &mut Frame, state: &AppState) {
-    let about = format!(
-        "gistui v{}  ·  {}",
-        env!("CARGO_PKG_VERSION"),
-        env!("CARGO_PKG_REPOSITORY")
-    );
+    // The repo URL and version live in the footer on every screen, so help is keys only.
     let body = "\
 Navigation
   Tab        switch pane (Local / Gists)
+  1 / 2      jump to the Local / Gist pane
   Up/Down    move the selection
   Left/Right scroll a long row horizontally
 
@@ -2757,21 +2885,21 @@ Gist manager (g)
   v          cycle visibility: all / public / secret
   e          edit the gist description (Enter apply, Esc cancel)
   o          open the gist in your web browser
+  c          compact revisions: squash history to one commit (force-push, y/n confirm)
   X          delete the entire gist and all its files (y/n confirm)
   q / Esc    back to the list
 
 General
-  Esc / q    close an overlay; from the list, quit the app
+  Esc / q    close an overlay; from the list, press twice to quit the app
   ?          show this help
-  o          open this repository in your web browser
   Up/Down    scroll this help text";
 
-    let text = format!("{about}\n\n{body}");
     frame.render_widget(
-        Paragraph::new(text).scroll((state.help_scroll, 0)).block(
+        Paragraph::new(body).scroll((state.help_scroll, 0)).block(
             Block::default()
-                .title("Help (Up/Down scroll) — press o to open repository, other key to close")
+                .title("Help (Up/Down scroll) — press any other key to close")
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .padding(Padding::horizontal(1)),
         ),
         frame.area(),
@@ -2781,10 +2909,10 @@ General
 fn render_preview(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
     let footer = "↑↓←→ scroll  ·  R refresh  ·  Esc/q back";
-    let footer_lines = wrap_line_count(footer, area.width.saturating_sub(4)).max(1);
+    let footer_lines = wrap_line_count(footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 2)])
+        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 1)])
         .split(area);
 
     frame.render_widget(
@@ -2794,19 +2922,12 @@ fn render_preview(frame: &mut Frame, state: &AppState) {
                 Block::default()
                     .title(state.preview_title.clone())
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .padding(Padding::horizontal(1)),
             ),
         chunks[0],
     );
-    frame.render_widget(
-        Paragraph::new(footer).wrap(Wrap { trim: true }).block(
-            Block::default()
-                .title("Commands")
-                .borders(Borders::ALL)
-                .padding(Padding::horizontal(1)),
-        ),
-        chunks[1],
-    );
+    render_footer(frame, chunks[1], "", footer, true);
 }
 
 fn render_pins(frame: &mut Frame, state: &AppState) {
@@ -2816,10 +2937,10 @@ fn render_pins(frame: &mut Frame, state: &AppState) {
     } else {
         "↑↓ move  ·  Enter diff · s sync · u push · d pull · x unpin  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back".to_string()
     };
-    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(4)).max(1);
+    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 2)])
+        .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 1)])
         .split(area);
 
     let now = std::time::SystemTime::now()
@@ -2859,8 +2980,9 @@ fn render_pins(frame: &mut Frame, state: &AppState) {
     let list = List::new(items)
         .block(
             Block::default()
-                .title("Pinned Mappings [focus]")
+                .title("Pinned Mappings")
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::Cyan))
                 .padding(Padding::horizontal(1)),
         )
@@ -2876,15 +2998,7 @@ fn render_pins(frame: &mut Frame, state: &AppState) {
     list_state.select(selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
 
-    frame.render_widget(
-        Paragraph::new(footer).wrap(Wrap { trim: true }).block(
-            Block::default()
-                .title("Commands")
-                .borders(Borders::ALL)
-                .padding(Padding::horizontal(1)),
-        ),
-        chunks[1],
-    );
+    render_footer(frame, chunks[1], "", &footer, true);
 }
 
 fn gist_group_row_label(g: &GistGroup) -> String {
@@ -2903,22 +3017,28 @@ fn gist_group_row_label(g: &GistGroup) -> String {
 
 fn render_gists(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
-    let (ftitle, footer) = if state.gists_filtering {
+    // Footer: filter input while filtering, else a one-shot status message (e.g. the compaction
+    // result) when present, else the command hints. Only the hints get key colouring.
+    let (ftitle, footer, colored) = if state.gists_filtering {
         (
-            "Filter (Enter keep · Esc clear)",
+            "Filter (Enter keep · Esc clear)".to_string(),
             format!("/{}_", state.gists_filter_query),
+            false,
         )
+    } else if let Some(message) = &state.status {
+        (String::new(), message.clone(), false)
     } else {
         (
-            "Commands",
-            "↑↓ move · ←→ scroll · / filter · s sort · v type · e desc · o browser · X delete · q back"
+            String::new(),
+            "↑↓ move · ←→ scroll · / filter · s sort · v type · e desc · o browser · c compact · X delete · q back"
                 .to_string(),
+            true,
         )
     };
-    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(4)).max(1);
+    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 2)])
+        .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 1)])
         .split(area);
 
     let groups = state.visible_gist_groups();
@@ -2939,7 +3059,7 @@ fn render_gists(frame: &mut Frame, state: &AppState) {
 
     let selected = (!groups.is_empty()).then_some(state.gists_index);
     let mut title = format!(
-        "Gists [focus]  ·  sort:{}  ·  type:{}",
+        "Gists  ·  sort:{}  ·  type:{}",
         state.gists_sort.label(),
         state.gists_type_filter.label()
     );
@@ -2951,6 +3071,7 @@ fn render_gists(frame: &mut Frame, state: &AppState) {
             Block::default()
                 .title(title)
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::Cyan))
                 .padding(Padding::horizontal(1)),
         )
@@ -2966,15 +3087,7 @@ fn render_gists(frame: &mut Frame, state: &AppState) {
     list_state.select(selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
 
-    frame.render_widget(
-        Paragraph::new(footer).wrap(Wrap { trim: true }).block(
-            Block::default()
-                .title(ftitle)
-                .borders(Borders::ALL)
-                .padding(Padding::horizontal(1)),
-        ),
-        chunks[1],
-    );
+    render_footer(frame, chunks[1], &ftitle, &footer, colored);
 
     if state.editing_description {
         render_centered_modal(
@@ -3067,6 +3180,98 @@ fn wrap_line_count(text: &str, width: u16) -> u16 {
     lines
 }
 
+/// Colour a command key by what its action does, so destructive and mutating keys stand apart
+/// from plain navigation at a glance: destructive (delete/remove/unpin) → Red, write/sync
+/// (download/upload/create/sync/…) → Green, everything else (navigation/view) → Cyan. Matched on
+/// whole label words so e.g. `pins` does not read as the `pin` action.
+fn action_color(label: &str) -> Color {
+    const DESTRUCTIVE: [&str; 3] = ["delete", "remove", "unpin"];
+    const WRITE: [&str; 10] = [
+        "download", "upload", "create", "new", "sync", "push", "pull", "pin", "edit", "desc",
+    ];
+    let mut color = Color::Cyan;
+    for word in label.split_whitespace() {
+        let word = word.to_ascii_lowercase();
+        if DESTRUCTIVE.contains(&word.as_str()) {
+            return Color::Red;
+        }
+        if WRITE.contains(&word.as_str()) {
+            color = Color::Green;
+        }
+    }
+    color
+}
+
+/// Style a footer command string: the leading key token of each `·`-separated item is accented by
+/// its action category (see [`action_color`]); the descriptive label keeps the terminal's default
+/// brightness so it stays legible, and only the separators are dimmed. Every input character is
+/// preserved verbatim so `wrap_line_count` sizing stays exact.
+fn hint_line(text: &str) -> Line<'static> {
+    let dim = Style::default().fg(Color::DarkGray);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (i, seg) in text.split('·').enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("·", dim));
+        }
+        let lead = seg.len() - seg.trim_start().len();
+        let (indent, rest) = seg.split_at(lead);
+        if !indent.is_empty() {
+            spans.push(Span::styled(indent.to_string(), dim));
+        }
+        if rest.is_empty() {
+            continue;
+        }
+        match rest.find(char::is_whitespace) {
+            Some(pos) => {
+                let (k, label) = rest.split_at(pos);
+                let key = Style::default().fg(action_color(label));
+                spans.push(Span::styled(k.to_string(), key));
+                spans.push(Span::raw(label.to_string()));
+            }
+            None => spans.push(Span::styled(
+                rest.to_string(),
+                Style::default().fg(action_color("")),
+            )),
+        }
+    }
+    Line::from(spans)
+}
+
+/// The shared borderless footer block: a single dim top divider that carries the left `title` and
+/// the app version pinned to the bottom-right corner of every screen.
+fn footer_block(title: &str) -> Block<'static> {
+    // Repo URL (scheme stripped — the host/path already names the project) plus the version.
+    let repo = env!("CARGO_PKG_REPOSITORY")
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let label = format!(" {} v{} ", repo, env!("CARGO_PKG_VERSION"));
+    Block::default()
+        .title(title.to_string())
+        .title_top(
+            // Reset (not the dim divider colour) so it reads at full brightness.
+            Line::from(label)
+                .right_aligned()
+                .style(Style::default().fg(Color::Reset)),
+        )
+        .borders(Borders::TOP)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .padding(Padding::horizontal(1))
+}
+
+/// Render a command footer into `area`. `colored` accents the command keys; pass `false` for
+/// plain text (filter input, status messages) that is not a key/label list.
+fn render_footer(frame: &mut Frame, area: Rect, title: &str, text: &str, colored: bool) {
+    let para = if colored {
+        Paragraph::new(hint_line(text))
+    } else {
+        Paragraph::new(text.to_string())
+    };
+    frame.render_widget(
+        para.wrap(Wrap { trim: true }).block(footer_block(title)),
+        area,
+    );
+}
+
 fn render_list(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
     let footer_body = if state.filtering {
@@ -3080,11 +3285,13 @@ fn render_list(frame: &mut Frame, state: &AppState) {
             None => commands_hint(state.focus),
         }
     };
-    // Width inside the footer block: minus 2 borders and 2 horizontal padding columns.
-    let footer_lines = wrap_line_count(&footer_body, area.width.saturating_sub(4)).max(1);
+    // Only the command-hint variant gets key colouring; filter input and status stay plain.
+    let footer_is_command = !state.filtering && state.status.is_none();
+    // Width inside the footer block: minus the 2 horizontal padding columns (no side borders).
+    let footer_lines = wrap_line_count(&footer_body, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 2)])
+        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 1)])
         .split(area);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -3118,7 +3325,7 @@ fn render_list(frame: &mut Frame, state: &AppState) {
     let recursive_marker = if state.local_recursive { " [↓]" } else { "" };
     let scanning_marker = if state.local_scanning { " …" } else { "" };
     let local_title = format!(
-        "Local · {}{}{} · sort:{}",
+        "[1] Local · {}{}{} · sort:{}",
         state.cwd.display(),
         recursive_marker,
         scanning_marker,
@@ -3158,7 +3365,7 @@ fn render_list(frame: &mut Frame, state: &AppState) {
     let gist_focused = state.focus == FocusPane::Gist;
     let gist_selected = (!ranked.is_empty()).then_some(state.gist_index);
     let mut gist_title = format!(
-        "Gists · {} · {}",
+        "[2] Gists · {} · {}",
         state.gist_type_filter.label(),
         state.gist_sort.label()
     );
@@ -3174,15 +3381,7 @@ fn render_list(frame: &mut Frame, state: &AppState) {
         gist_selected,
     );
 
-    frame.render_widget(
-        Paragraph::new(footer_body).wrap(Wrap { trim: true }).block(
-            Block::default()
-                .title("Commands")
-                .borders(Borders::ALL)
-                .padding(Padding::horizontal(1)),
-        ),
-        chunks[1],
-    );
+    render_footer(frame, chunks[1], "", &footer_body, footer_is_command);
 }
 
 fn render_pane(
@@ -3199,12 +3398,8 @@ fn render_pane(
     } else {
         Style::default().fg(Color::DarkGray)
     };
-    // Dim the unfocused pane so the active side is obvious at a glance.
-    let base_style = if focused {
-        Style::default()
-    } else {
-        Style::default().fg(Color::DarkGray)
-    };
+    // The border colour alone signals which pane is active; row text stays at full
+    // brightness in both panes so it is always legible.
     // Focused selection is a solid bar (whole row); unfocused just bolds the row.
     let highlight_style = if focused {
         Style::default()
@@ -3221,11 +3416,15 @@ fn render_pane(
     };
 
     let list = List::new(items)
-        .style(base_style)
         .block(
             Block::default()
                 .title(title)
+                // The title sits on the top border, so it would otherwise inherit the dimmed
+                // border colour when unfocused; pin it to the terminal default so only the
+                // border line reflects focus, never the title text.
+                .title_style(Style::default().fg(Color::Reset))
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(border_style)
                 .padding(Padding::horizontal(1)),
         )
@@ -3524,6 +3723,11 @@ fn confirm_prompt(state: &AppState) -> String {
         }) => {
             format!("Remove {filename} from gist {gist_id}? (y/n)")
         }
+        Some(PendingAction::CompactGist { label, count, .. }) => {
+            format!(
+                "Compact {count} revisions of \"{label}\" into one? This force-pushes and cannot be undone. (y/n)"
+            )
+        }
         _ => format!("Overwrite {}? (y/n)", state.download_target.display()),
     }
 }
@@ -3539,6 +3743,7 @@ fn confirm_modal_style(state: &AppState) -> (&'static str, Color) {
         Some(PendingAction::Upload { .. }) => ("Upload", Color::Yellow),
         Some(PendingAction::Delete { .. }) => ("Delete", Color::Red),
         Some(PendingAction::RemoveFile { .. }) => ("Remove file", Color::Red),
+        Some(PendingAction::CompactGist { .. }) => ("Compact revisions", Color::Red),
         _ => ("Overwrite", Color::Red),
     }
 }
@@ -3555,6 +3760,7 @@ fn render_diff_pane(frame: &mut Frame, area: Rect, state: &AppState) {
             Block::default()
                 .title(diff_title(state))
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .padding(Padding::horizontal(1)),
         ),
         area,
@@ -3577,23 +3783,15 @@ fn render_diff(frame: &mut Frame, state: &AppState) {
     };
 
     let area = frame.area();
-    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(4)).max(1);
+    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 2)])
+        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 1)])
         .split(area);
 
     render_diff_pane(frame, chunks[0], state);
 
-    frame.render_widget(
-        Paragraph::new(footer).wrap(Wrap { trim: true }).block(
-            Block::default()
-                .title("Commands")
-                .borders(Borders::ALL)
-                .padding(Padding::horizontal(1)),
-        ),
-        chunks[1],
-    );
+    render_footer(frame, chunks[1], "", &footer, true);
 }
 
 /// `Screen::Confirm`: the diff fills the screen as context behind a centered prompt modal,
@@ -3618,9 +3816,55 @@ mod tests {
 
     #[test]
     fn about_metadata_is_available_for_help() {
-        // The help/About header renders these; guard against dropping them from Cargo.toml.
+        // The footer renders both the repo URL and the version; guard against dropping
+        // either from Cargo.toml.
         assert!(!env!("CARGO_PKG_VERSION").is_empty());
         assert!(env!("CARGO_PKG_REPOSITORY").contains("github.com/akunzai/gistui"));
+    }
+
+    #[test]
+    fn hint_line_colours_keys_by_action_category() {
+        let line = hint_line("Tab panes  ·  d download  ·  X delete  ·  Esc/q back");
+        let key_fg = |k: &str| {
+            line.spans
+                .iter()
+                .find(|s| s.content == k)
+                .unwrap_or_else(|| panic!("key span {k}"))
+                .style
+                .fg
+        };
+        assert_eq!(key_fg("Tab"), Some(Color::Cyan)); // navigation
+        assert_eq!(key_fg("d"), Some(Color::Green)); // write/sync
+        assert_eq!(key_fg("X"), Some(Color::Red)); // destructive
+        assert_eq!(key_fg("Esc/q"), Some(Color::Cyan)); // navigation
+                                                        // Labels keep default brightness (no fg override) regardless of the key's category.
+        let label = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("download"))
+            .expect("label span");
+        assert_eq!(label.style.fg, None);
+    }
+
+    #[test]
+    fn action_color_matches_whole_words_only() {
+        // `pins` opens a view, not the `pin` write action, so it must not read as Green.
+        assert_eq!(action_color("pins"), Color::Cyan);
+        assert_eq!(action_color("synced ↑ local-newer"), Color::Cyan);
+        assert_eq!(action_color("remove file"), Color::Red);
+        assert_eq!(action_color("pin"), Color::Green);
+    }
+
+    #[test]
+    fn hint_line_preserves_every_character() {
+        // Sizing relies on wrap_line_count over the raw text, so styling must not add/drop chars.
+        let text = "↑↓ move  ·  Enter diff · q back";
+        let joined: String = hint_line(text)
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(joined, text);
     }
 
     #[test]
@@ -3629,6 +3873,15 @@ mod tests {
         assert_eq!(state.focus, FocusPane::Local);
         state.handle_key(KeyCode::Tab);
         assert_eq!(state.focus, FocusPane::Gist);
+    }
+
+    #[test]
+    fn digit_keys_jump_to_a_pane() {
+        let mut state = initial_state();
+        state.handle_key(KeyCode::Char('2'));
+        assert_eq!(state.focus, FocusPane::Gist);
+        state.handle_key(KeyCode::Char('1'));
+        assert_eq!(state.focus, FocusPane::Local);
     }
 
     #[test]
@@ -4219,6 +4472,20 @@ mod tests {
         });
         assert!(confirm_prompt(&state).starts_with("Upload main.rs to gist g1?"));
         assert_eq!(confirm_modal_style(&state), ("Upload", Color::Yellow));
+
+        state.pending_action = Some(PendingAction::CompactGist {
+            gist_id: "abc".into(),
+            label: "my config".into(),
+            count: 4,
+        });
+        assert_eq!(
+            confirm_prompt(&state),
+            "Compact 4 revisions of \"my config\" into one? This force-pushes and cannot be undone. (y/n)"
+        );
+        assert_eq!(
+            confirm_modal_style(&state),
+            ("Compact revisions", Color::Red)
+        );
     }
 
     #[test]
@@ -4703,15 +4970,32 @@ mod tests {
     }
 
     #[test]
-    fn q_in_list_quits() {
+    fn q_in_list_quits_on_second_press() {
         let mut state = initial_state();
+        // First press only arms the quit (and surfaces a hint); it must not exit.
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
+        assert!(state.quit_armed);
+        assert!(state.status.is_some());
+        // Second press confirms.
         assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
     }
 
     #[test]
-    fn esc_in_list_quits() {
+    fn esc_in_list_quits_on_second_press() {
         let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
         assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::Quit);
+    }
+
+    #[test]
+    fn any_key_cancels_a_pending_quit() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
+        assert!(state.quit_armed);
+        // A non-quit key disarms; the next q then needs two presses again.
+        state.handle_key(KeyCode::Tab);
+        assert!(!state.quit_armed);
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
     }
 
     #[test]
@@ -4845,6 +5129,39 @@ mod tests {
         let mut state = state_with_two_gists();
         assert_eq!(state.handle_key(KeyCode::Char('o')), KeyOutcome::None);
         assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn c_in_gist_view_requests_compaction() {
+        let mut state = state_with_two_gists();
+        state.screen = Screen::Gists;
+        assert_eq!(
+            state.handle_key(KeyCode::Char('c')),
+            KeyOutcome::CompactGist
+        );
+        // `c` on the main list is not a compaction trigger.
+        let mut list = state_with_two_gists();
+        assert_eq!(list.handle_key(KeyCode::Char('c')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn compact_confirm_y_executes_and_n_returns_to_gist_manager() {
+        let mut state = state_with_two_gists();
+        state.screen = Screen::Confirm;
+        state.pending_action = Some(PendingAction::CompactGist {
+            gist_id: "a".into(),
+            label: "My Ghostty config".into(),
+            count: 3,
+        });
+        assert_eq!(
+            state.handle_key(KeyCode::Char('y')),
+            KeyOutcome::ExecuteCompactGist
+        );
+
+        // Cancelling drops the pending action and lands back in the gist manager.
+        state.handle_key(KeyCode::Char('n'));
+        assert_eq!(state.screen, Screen::Gists);
+        assert!(state.pending_action.is_none());
     }
 
     #[test]

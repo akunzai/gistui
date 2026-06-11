@@ -133,18 +133,6 @@ pub fn open_browser_command(gist_id: &str) -> CommandPlan {
     }
 }
 
-pub fn open_repo_browser_command() -> CommandPlan {
-    CommandPlan {
-        program: "gh".into(),
-        args: vec![
-            "repo".into(),
-            "view".into(),
-            "akunzai/gistui".into(),
-            "--web".into(),
-        ],
-    }
-}
-
 pub fn create_command(local_path: &Path, public: bool, description: &str) -> CommandPlan {
     let mut args = vec![
         "gist".into(),
@@ -207,6 +195,117 @@ pub fn delete_command(gist_id: &str) -> CommandPlan {
             gist_id.to_string(),
         ],
     }
+}
+
+/// Asks the REST API for the number of revisions a gist has. `--jq` collapses the
+/// `history` array to its length so the command's stdout is just an integer.
+pub fn gist_revision_count_command(gist_id: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            format!("/gists/{gist_id}"),
+            "--jq".into(),
+            ".history | length".into(),
+        ],
+    }
+}
+
+/// Parse the integer printed by [`gist_revision_count_command`].
+pub fn parse_revision_count(stdout: &str) -> Option<usize> {
+    stdout.trim().parse().ok()
+}
+
+/// Clones `gist_id` into `dir` as a git working copy (the gist's revisions are its commits).
+pub fn gist_clone_command(gist_id: &str, dir: &Path) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "gist".into(),
+            "clone".into(),
+            gist_id.to_string(),
+            dir.display().to_string(),
+        ],
+    }
+}
+
+fn git_in(dir: &Path, args: &[&str]) -> CommandPlan {
+    let mut full = vec!["-C".to_string(), dir.display().to_string()];
+    full.extend(args.iter().map(|a| a.to_string()));
+    CommandPlan {
+        program: "git".into(),
+        args: full,
+    }
+}
+
+/// The command that reports a clone's checked-out branch (the gist's default branch).
+pub fn git_current_branch_command(dir: &Path) -> CommandPlan {
+    git_in(dir, &["rev-parse", "--abbrev-ref", "HEAD"])
+}
+
+/// The ordered git steps that collapse a cloned gist working copy into a single root commit
+/// and force-push it back over `branch`. Pure so the plan is unit-testable; the branch name is
+/// resolved separately (see [`compact_gist_repo`]). A committer identity is forced via `-c` so
+/// the commit succeeds regardless of the user's global git config.
+pub fn compact_git_plans(dir: &Path, branch: &str) -> Vec<CommandPlan> {
+    vec![
+        git_in(dir, &["checkout", "--orphan", "__gistui_compact"]),
+        git_in(dir, &["add", "-A"]),
+        git_in(
+            dir,
+            &[
+                "-c",
+                "user.name=gistui",
+                "-c",
+                "user.email=gistui@users.noreply.github.com",
+                "commit",
+                "-m",
+                "Compact gist history",
+            ],
+        ),
+        git_in(dir, &["branch", "-M", branch]),
+        git_in(dir, &["push", "--force", "origin", branch]),
+    ]
+}
+
+/// Clone `gist_id` into a fresh temp dir, collapse its history to a single commit, force-push,
+/// and remove the temp dir. The temp dir is always cleaned up, even on error. This is a thin IO
+/// boundary (real `gh`/`git`); the command planning it drives is what carries the unit tests.
+pub fn execute_compact_gist(gist_id: &str) -> Result<()> {
+    let dir = compact_temp_dir(gist_id);
+    let result = compact_in_dir(gist_id, &dir);
+    let _ = fs::remove_dir_all(&dir);
+    result
+}
+
+fn compact_in_dir(gist_id: &str, dir: &Path) -> Result<()> {
+    run_command(&SystemRunner, &gist_clone_command(gist_id, dir))?;
+    let branch = run_command(&SystemRunner, &git_current_branch_command(dir))?
+        .trim()
+        .to_string();
+    if branch.is_empty() {
+        bail!("could not determine the gist's default branch");
+    }
+    for plan in compact_git_plans(dir, &branch) {
+        run_command(&SystemRunner, &plan)?;
+    }
+    Ok(())
+}
+
+/// A unique, not-yet-existing temp path for a clone (let `git` create it, avoiding any
+/// "clone into a non-empty dir" surprise). Uniqueness: gist id + pid + a high-resolution stamp.
+fn compact_temp_dir(gist_id: &str) -> PathBuf {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let safe: String = gist_id.chars().filter(|c| c.is_alphanumeric()).collect();
+    let mut dir = std::env::temp_dir();
+    dir.push(format!(
+        "gistui-compact-{safe}-{}-{stamp}",
+        std::process::id()
+    ));
+    dir
 }
 
 pub fn execute_command(plan: &CommandPlan) -> Result<String> {
@@ -382,17 +481,67 @@ mod tests {
     }
 
     #[test]
-    fn open_repo_browser_command_targets_repo_view() {
-        let plan = open_repo_browser_command();
-        assert_eq!(plan.program, "gh");
-        assert_eq!(plan.args, vec!["repo", "view", "akunzai/gistui", "--web"]);
-    }
-
-    #[test]
     fn delete_command_targets_gist_delete() {
         let plan = delete_command("abc123");
         assert_eq!(plan.program, "gh");
         assert_eq!(plan.args, vec!["gist", "delete", "--yes", "abc123"]);
+    }
+
+    #[test]
+    fn gist_revision_count_command_uses_history_length_jq() {
+        let plan = gist_revision_count_command("abc123");
+        assert_eq!(plan.program, "gh");
+        assert_eq!(
+            plan.args,
+            vec!["api", "/gists/abc123", "--jq", ".history | length"]
+        );
+    }
+
+    #[test]
+    fn parse_revision_count_reads_trimmed_integer() {
+        assert_eq!(parse_revision_count("12\n"), Some(12));
+        assert_eq!(parse_revision_count("  1 "), Some(1));
+        assert_eq!(parse_revision_count("not a number"), None);
+        assert_eq!(parse_revision_count(""), None);
+    }
+
+    #[test]
+    fn gist_clone_command_clones_into_dir() {
+        let plan = gist_clone_command("abc123", Path::new("/tmp/x"));
+        assert_eq!(plan.program, "gh");
+        assert_eq!(plan.args, vec!["gist", "clone", "abc123", "/tmp/x"]);
+    }
+
+    #[test]
+    fn compact_git_plans_squash_to_one_commit_and_force_push() {
+        let plans = compact_git_plans(Path::new("/tmp/x"), "main");
+        // Every step runs against the clone dir.
+        assert!(plans
+            .iter()
+            .all(|p| p.program == "git" && p.args[0] == "-C" && p.args[1] == "/tmp/x"));
+        let verbs: Vec<&str> = plans.iter().map(|p| p.args[2].as_str()).collect();
+        assert_eq!(verbs, vec!["checkout", "add", "-c", "branch", "push"]);
+        // Orphan checkout drops all parents; the final step force-pushes the rebuilt branch.
+        assert_eq!(
+            plans[0].args,
+            vec!["-C", "/tmp/x", "checkout", "--orphan", "__gistui_compact"]
+        );
+        assert_eq!(
+            plans.last().unwrap().args,
+            vec!["-C", "/tmp/x", "push", "--force", "origin", "main"]
+        );
+        // The commit forces an identity so it never falls back to (possibly absent) global config.
+        assert!(plans[2].args.contains(&"user.name=gistui".to_string()));
+    }
+
+    #[test]
+    fn current_branch_command_reads_head() {
+        let plan = git_current_branch_command(Path::new("/tmp/x"));
+        assert_eq!(plan.program, "git");
+        assert_eq!(
+            plan.args,
+            vec!["-C", "/tmp/x", "rev-parse", "--abbrev-ref", "HEAD"]
+        );
     }
 
     #[test]
