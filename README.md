@@ -82,11 +82,13 @@ Inside the TUI press `?` for the full keymap (it also shows the running version 
 project repository link); the footer shows the keys relevant to the focused pane.
 
 The left pane lists the files in your current working directory; the right pane lists your
-gists. Ranking is **focus-driven**: the focused pane is the driver and the other pane is
-ranked against its selection, with stronger matches prefixed by stars (⭐⭐⭐
-exact-filename/pinned, ⭐⭐ path hint). With the local pane focused, gists are ranked against
-the selected file; `Tab` to the gist pane and the local files are ranked against the
-selected gist instead. Browse with `Tab` (switch pane) or `1`/`2` (jump to the Local /
+gists. Ranking is **anchor-driven**: one pane is the *anchor* (it drives the ranking) and
+the other pane is ranked against the anchor's current selection. The anchor is shown with a
+`⚓` marker in its title and is **independent of focus** — press `a` to flip it. So you
+can keep the Local pane driving (gists ranked against the selected file), `Tab` over to the
+gist pane to pick a candidate, and the order won't reset; press `a` to drive from the gist
+side instead. Ranked rows are flagged with `📌` (an existing pinned pair) or **bold** (a
+same-filename candidate). Browse with `Tab` (switch pane) or `1`/`2` (jump to the Local /
 Gist pane), `Up`/`Down` (move), and `Left`/`Right` (scroll a long row).
 
 ### Actions
@@ -133,6 +135,8 @@ Gist pane), `Up`/`Down` (move), and `Left`/`Right` (scroll a long row).
   force-refresh, bypassing the session cache).
 - `r` — toggle **recursive** local file discovery; the pane title shows `[↓]` while active
   and scans in the background so the UI stays responsive.
+- `a` — flip the **anchor** (which pane drives match ranking); independent of focus, so you
+  can focus the ranked pane to pick a file without the order resetting.
 - `/` filter by text · `v` cycle visibility (all/public/secret) · `s` cycle the **focused
   pane's** sort (match / name / recent — gists by name/updated, local files by
   name/modified-time) · `t` toggle row view.

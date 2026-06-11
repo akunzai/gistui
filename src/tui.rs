@@ -1,5 +1,5 @@
 use crate::domain::{group_gists, GistComment, GistFile, GistGroup, LocalCandidate, PinnedMapping};
-use crate::ranking::{rank_gist_files, rank_local_files, RankedGistFile, RankedLocal};
+use crate::ranking::{rank_gist_files, rank_local_files, MatchReason, RankedGistFile, RankedLocal};
 use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -258,6 +258,10 @@ pub struct AppState {
     pub gists: Vec<GistFile>,
     pub pinned: Vec<PinnedMapping>,
     pub focus: FocusPane,
+    /// The pane that DRIVES the match ranking, decoupled from `focus`: the anchored pane
+    /// shows natural order; the other pane is always ranked against the anchor's selection.
+    /// `focus` only moves the cursor/highlight and does not affect ranking.
+    pub anchor: FocusPane,
     pub local_index: usize,
     pub gist_index: usize,
     pub local_hscroll: u16,
@@ -426,14 +430,14 @@ impl AppState {
             })
             .cloned()
             .collect();
-        // Focus-driven ranking: the gist pane is ranked against the selected local file
-        // only while the LOCAL pane drives (focus == Local). When the gist pane itself is
-        // focused it is the driver and uses its own sort (no ranking), which also breaks
-        // the otherwise-mutual dependency with `visible_locals`.
-        // NOTE: only evaluate `selected_local()` inside the focus==Local branch. Computing
+        // Anchor-driven ranking: the gist pane is ranked against the selected local file
+        // only while the LOCAL pane is the anchor (anchor == Local). When the gist pane
+        // is the anchor it uses its own sort (no ranking), which also breaks the
+        // otherwise-mutual dependency with `visible_locals`.
+        // NOTE: only evaluate `selected_local()` inside the anchor==Local branch. Computing
         // it eagerly (e.g. in the match scrutinee) would recurse: selected_local ->
         // visible_locals -> selected_gist -> ranked_gists.
-        let mut ranked = if self.focus == FocusPane::Local {
+        let mut ranked = if self.anchor == FocusPane::Local {
             match self.selected_local() {
                 Some(local) => rank_gist_files(&local.path, &gists, &self.pinned),
                 None => unranked_gists(gists),
@@ -449,9 +453,9 @@ impl AppState {
     /// against the selected gist). Single source of truth for the local pane's order,
     /// selection, and rendering — mirrors `ranked_gists`.
     pub fn visible_locals(&self) -> Vec<RankedLocal> {
-        // Mirror of `ranked_gists`: only evaluate `selected_gist()` in the focus==Gist
+        // Mirror of `ranked_gists`: only evaluate `selected_gist()` in the anchor==Gist
         // branch to avoid recursing back through `ranked_gists` -> `selected_local`.
-        let mut ranked = if self.focus == FocusPane::Gist {
+        let mut ranked = if self.anchor == FocusPane::Gist {
             match self.selected_gist() {
                 Some(gist) => rank_local_files(&gist.file, &self.locals, &self.pinned),
                 None => unranked_locals(&self.locals),
@@ -616,6 +620,21 @@ impl AppState {
             FocusPane::Gist => &mut self.gist_hscroll,
         };
         *scroll = scroll.saturating_sub(1);
+    }
+
+    /// Reset the non-anchor ("ranked") pane to its top match: the pane that re-ranks
+    /// whenever the anchor pane's selection changes.
+    fn reset_ranked_pane(&mut self) {
+        match self.anchor {
+            FocusPane::Local => {
+                self.gist_index = 0;
+                self.gist_hscroll = 0;
+            }
+            FocusPane::Gist => {
+                self.local_index = 0;
+                self.local_hscroll = 0;
+            }
+        }
     }
 
     pub fn enter_diff(
@@ -979,34 +998,46 @@ impl AppState {
             // 1/2 jump straight to a pane (mirrors Tab; selection indices are untouched).
             KeyCode::Char('1') => self.focus = FocusPane::Local,
             KeyCode::Char('2') => self.focus = FocusPane::Gist,
+            // Flip which pane drives the match ranking (anchor), independent of focus.
+            KeyCode::Char('a') => {
+                self.anchor = match self.anchor {
+                    FocusPane::Local => FocusPane::Gist,
+                    FocusPane::Gist => FocusPane::Local,
+                };
+                // Reset the newly-ranked (non-driver) pane to its top match.
+                self.reset_ranked_pane();
+            }
             KeyCode::Down => match self.focus {
                 FocusPane::Local if self.local_index + 1 < self.locals.len() => {
                     self.local_index += 1;
-                    self.gist_index = 0;
                     self.local_hscroll = 0;
-                    self.gist_hscroll = 0;
+                    if self.anchor == FocusPane::Local {
+                        self.reset_ranked_pane();
+                    }
                 }
                 FocusPane::Gist if self.gist_index + 1 < self.ranked_gists().len() => {
                     self.gist_index += 1;
                     self.gist_hscroll = 0;
-                    // The local pane reverse-ranks against the selected gist.
-                    self.local_index = 0;
-                    self.local_hscroll = 0;
+                    if self.anchor == FocusPane::Gist {
+                        self.reset_ranked_pane();
+                    }
                 }
                 _ => {}
             },
             KeyCode::Up => match self.focus {
                 FocusPane::Local if self.local_index > 0 => {
                     self.local_index -= 1;
-                    self.gist_index = 0;
                     self.local_hscroll = 0;
-                    self.gist_hscroll = 0;
+                    if self.anchor == FocusPane::Local {
+                        self.reset_ranked_pane();
+                    }
                 }
                 FocusPane::Gist if self.gist_index > 0 => {
                     self.gist_index -= 1;
                     self.gist_hscroll = 0;
-                    self.local_index = 0;
-                    self.local_hscroll = 0;
+                    if self.anchor == FocusPane::Gist {
+                        self.reset_ranked_pane();
+                    }
                 }
                 _ => {}
             },
@@ -1383,6 +1414,7 @@ pub fn initial_state() -> AppState {
         gists: Vec::new(),
         pinned: Vec::new(),
         focus: FocusPane::Local,
+        anchor: FocusPane::Local,
         local_index: 0,
         gist_index: 0,
         local_hscroll: 0,
@@ -2961,9 +2993,11 @@ List screen
   r          toggle recursive file discovery (skips hidden + configured dirs)
   /          filter by filename or description
   v          cycle gist visibility: all / public / secret
-  s          cycle the FOCUSED pane's sort: match / name / recent
-             (the unfocused pane is ranked by your selection — ★ = strong match)
+  s          cycle the focused pane's sort: match / name / recent
   t          toggle row view: description / id
+  a          flip which pane drives match ranking (anchor); the other pane
+             re-ranks against the anchor's selection (focus stays put)
+             (📌 = pinned pair · bold = same filename)
 
 Actions (on the selected local file + gist)
   Enter      diff the local file against the gist; direction follows the focused
@@ -3390,33 +3424,45 @@ fn hscroll_str(text: &str, offset: u16) -> String {
     text.chars().skip(offset as usize).collect()
 }
 
-/// Match strength as stars. Mirrors the ranking tiers (exact-filename/pinned = 1000+,
-/// path hint = 250+); a recent-only score of 1 is too weak to be worth a star.
-fn match_stars(score: u16) -> &'static str {
-    match score {
-        s if s >= 1000 => "⭐⭐⭐",
-        s if s >= 250 => "⭐⭐",
-        s if s >= 2 => "⭐",
-        _ => "",
+/// How a file-list row should be flagged: 📌 = an existing pinned pair; same-name = bold; else none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RowMark {
+    Pinned,
+    SameName,
+    None,
+}
+
+fn row_mark(reasons: &[MatchReason]) -> RowMark {
+    if reasons.contains(&MatchReason::Pinned) {
+        RowMark::Pinned
+    } else if reasons.contains(&MatchReason::ExactFilename) {
+        RowMark::SameName
+    } else {
+        RowMark::None
+    }
+}
+
+/// Build a file-list row from its base text and match mark: 📌 prefix for a pinned pair,
+/// bold for a same-name match, plain otherwise. Shared by both panes in `render_list`.
+fn marked_item(base: String, mark: RowMark, hscroll: u16) -> ListItem<'static> {
+    match mark {
+        RowMark::Pinned => ListItem::new(hscroll_str(&format!("📌 {base}"), hscroll)),
+        RowMark::SameName => ListItem::new(hscroll_str(&base, hscroll))
+            .style(Style::default().add_modifier(Modifier::BOLD)),
+        RowMark::None => ListItem::new(hscroll_str(&base, hscroll)),
     }
 }
 
 fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
-    let stars = match_stars(g.score);
-    let prefix = if stars.is_empty() {
-        String::new()
-    } else {
-        format!("{stars} ")
-    };
     match view {
         GistView::Description => {
             if g.file.description.trim().is_empty() {
-                format!("{prefix}{}", g.file.filename)
+                g.file.filename.clone()
             } else {
-                format!("{prefix}{} — {}", g.file.filename, g.file.description)
+                format!("{} — {}", g.file.filename, g.file.description)
             }
         }
-        GistView::Id => format!("{prefix}{} / {}", g.file.gist_id, g.file.filename),
+        GistView::Id => format!("{} / {}", g.file.gist_id, g.file.filename),
     }
 }
 
@@ -3425,7 +3471,7 @@ fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
 /// it to the terminal width.
 fn commands_hint(focus: FocusPane) -> String {
     // Focus-relevant common keys only; the full reference lives in the `?` help overlay.
-    let mut items = vec!["Tab panes", "↑↓ move", "Enter diff"];
+    let mut items = vec!["Tab panes", "↑↓ move", "Enter diff", "a anchor"];
     match focus {
         FocusPane::Local => items.extend(["r recursive", "e edit", "n create", "P pins"]),
         FocusPane::Gist => items.extend([
@@ -3592,14 +3638,8 @@ fn render_list(frame: &mut Frame, state: &AppState) {
             .visible_locals()
             .iter()
             .map(|r| {
-                let stars = match_stars(r.score);
-                let prefix = if stars.is_empty() {
-                    String::new()
-                } else {
-                    format!("{stars} ")
-                };
-                let label = format!("{prefix}{}", local_row_label(&r.candidate.path, &state.cwd));
-                ListItem::new(hscroll_str(&label, state.local_hscroll))
+                let base = local_row_label(&r.candidate.path, &state.cwd);
+                marked_item(base, row_mark(&r.reasons), state.local_hscroll)
             })
             .collect()
     };
@@ -3614,6 +3654,12 @@ fn render_list(frame: &mut Frame, state: &AppState) {
         scanning_marker,
         state.local_sort.label()
     );
+    // Mark the pane that currently drives the match ranking (the anchor).
+    let local_title = if state.anchor == FocusPane::Local {
+        format!("{local_title} · ⚓")
+    } else {
+        local_title
+    };
     render_pane(
         frame,
         columns[0],
@@ -3638,10 +3684,8 @@ fn render_list(frame: &mut Frame, state: &AppState) {
         ranked
             .iter()
             .map(|g| {
-                ListItem::new(hscroll_str(
-                    &gist_row_label(g, state.gist_view),
-                    state.gist_hscroll,
-                ))
+                let base = gist_row_label(g, state.gist_view);
+                marked_item(base, row_mark(&g.reasons), state.gist_hscroll)
             })
             .collect()
     };
@@ -3655,6 +3699,11 @@ fn render_list(frame: &mut Frame, state: &AppState) {
     if !state.filter_query.is_empty() {
         gist_title.push_str(&format!(" · /{}", state.filter_query));
     }
+    let gist_title = if state.anchor == FocusPane::Gist {
+        format!("{gist_title} · ⚓")
+    } else {
+        gist_title
+    };
     render_pane(
         frame,
         columns[1],
@@ -4120,6 +4169,117 @@ mod tests {
         state
     }
 
+    fn list_state_with_matches() -> AppState {
+        let mut state = initial_state();
+        state.locals = vec![
+            LocalCandidate {
+                path: std::path::PathBuf::from("/cwd/settings.json"),
+                pinned: false,
+                modified: None,
+            },
+            LocalCandidate {
+                path: std::path::PathBuf::from("/cwd/other.txt"),
+                pinned: false,
+                modified: None,
+            },
+        ];
+        state.gists = vec![
+            GistFile {
+                gist_id: "a".into(),
+                description: "Zed".into(),
+                filename: "settings.json".into(),
+                public: true,
+                updated_at: "x".into(),
+                created_at: "x".into(),
+            },
+            GistFile {
+                gist_id: "b".into(),
+                description: "misc".into(),
+                filename: "zzz.txt".into(),
+                public: true,
+                updated_at: "x".into(),
+                created_at: "x".into(),
+            },
+        ];
+        state.local_index = 0;
+        state.gist_index = 0;
+        state
+    }
+
+    #[test]
+    fn anchor_defaults_to_local() {
+        assert_eq!(initial_state().anchor, FocusPane::Local);
+    }
+
+    #[test]
+    fn gist_ranking_follows_anchor_not_focus() {
+        let mut state = list_state_with_matches();
+        state.anchor = FocusPane::Local;
+        state.local_index = 0; // settings.json
+        state.focus = FocusPane::Gist; // focus moved away, but anchor still Local
+        let ranked = state.ranked_gists();
+        assert_eq!(ranked[0].file.filename, "settings.json");
+    }
+
+    #[test]
+    fn a_key_toggles_anchor_and_resets_ranked_pane() {
+        let mut state = list_state_with_matches();
+        assert_eq!(state.anchor, FocusPane::Local);
+        state.local_index = 1;
+        state.local_hscroll = 3;
+        state.handle_key(KeyCode::Char('a'));
+        assert_eq!(state.anchor, FocusPane::Gist);
+        // anchor now Gist → local is the newly-ranked (non-driver) pane → reset to top.
+        assert_eq!(state.local_index, 0);
+        assert_eq!(state.local_hscroll, 0);
+    }
+
+    #[test]
+    fn a_key_toggle_reverse_direction_resets_gist() {
+        let mut state = list_state_with_matches();
+        state.anchor = FocusPane::Gist;
+        state.gist_index = 1;
+        state.gist_hscroll = 4;
+        state.handle_key(KeyCode::Char('a'));
+        assert_eq!(state.anchor, FocusPane::Local);
+        assert_eq!(state.gist_index, 0);
+        assert_eq!(state.gist_hscroll, 0);
+    }
+
+    #[test]
+    fn moving_driver_pane_up_resets_ranked_pane() {
+        let mut state = list_state_with_matches();
+        state.anchor = FocusPane::Local;
+        state.focus = FocusPane::Local;
+        state.local_index = 1; // >0 so Up fires
+        state.gist_index = 1;
+        state.handle_key(KeyCode::Up);
+        assert_eq!(state.local_index, 0);
+        assert_eq!(state.gist_index, 0);
+    }
+
+    #[test]
+    fn moving_ranked_pane_does_not_reset_driver() {
+        let mut state = list_state_with_matches();
+        state.anchor = FocusPane::Local; // Local drives
+        state.local_index = 0;
+        state.focus = FocusPane::Gist; // picking in the ranked gist pane
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.gist_index, 1);
+        assert_eq!(state.local_index, 0); // driver NOT reset
+    }
+
+    #[test]
+    fn moving_driver_pane_resets_ranked_pane() {
+        let mut state = list_state_with_matches();
+        state.anchor = FocusPane::Local;
+        state.focus = FocusPane::Local; // moving the driver
+        state.gist_index = 1;
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.local_index, 1);
+        assert_eq!(state.gist_index, 0); // ranked pane reset to top
+    }
+
     #[test]
     fn enter_on_gist_opens_detail() {
         let mut state = state_with_gists();
@@ -4269,33 +4429,11 @@ mod tests {
             score: 1,
             reasons: Vec::new(),
         };
-        // A recent-only score of 1 is too weak to earn a star.
         assert_eq!(
             gist_row_label(&g, GistView::Description),
             "config — My Ghostty config"
         );
         assert_eq!(gist_row_label(&g, GistView::Id), "abc / config");
-    }
-
-    #[test]
-    fn strong_match_prefixes_stars() {
-        let g = RankedGistFile {
-            file: GistFile {
-                gist_id: "abc".into(),
-                description: "cfg".into(),
-                filename: "config".into(),
-                public: true,
-                updated_at: "x".into(),
-                created_at: "x".into(),
-            },
-            score: 1000,
-            reasons: Vec::new(),
-        };
-        assert_eq!(
-            gist_row_label(&g, GistView::Description),
-            "⭐⭐⭐ config — cfg"
-        );
-        assert_eq!(gist_row_label(&g, GistView::Id), "⭐⭐⭐ abc / config");
     }
 
     #[test]
@@ -4343,7 +4481,7 @@ mod tests {
     #[test]
     fn reverse_ranking_orders_locals_by_selected_gist() {
         let mut state = initial_state();
-        state.focus = FocusPane::Gist;
+        state.anchor = FocusPane::Gist;
         state.gists = vec![GistFile {
             gist_id: "a".into(),
             description: String::new(),
@@ -4429,9 +4567,9 @@ mod tests {
     }
 
     #[test]
-    fn ranking_helpers_terminate_in_either_focus() {
+    fn ranking_helpers_terminate_in_either_anchor() {
         // Regression: eagerly evaluating the cross-pane selection caused the two
-        // focus-driven rankings to recurse into each other.
+        // anchor-driven rankings to recurse into each other.
         let mut state = initial_state();
         state.gists = vec![GistFile {
             gist_id: "a".into(),
@@ -4446,8 +4584,8 @@ mod tests {
             pinned: false,
             modified: None,
         }];
-        for focus in [FocusPane::Local, FocusPane::Gist] {
-            state.focus = focus;
+        for anchor in [FocusPane::Local, FocusPane::Gist] {
+            state.anchor = anchor;
             let _ = state.ranked_gists();
             let _ = state.visible_locals();
             let _ = state.selected_local();
@@ -4865,12 +5003,21 @@ mod tests {
     }
 
     #[test]
-    fn match_stars_tiers() {
-        assert_eq!(match_stars(0), "");
-        assert_eq!(match_stars(1), "");
-        assert_eq!(match_stars(250), "⭐⭐");
-        assert_eq!(match_stars(1000), "⭐⭐⭐");
-        assert_eq!(match_stars(10_001), "⭐⭐⭐");
+    fn row_mark_pinned_beats_same_name() {
+        assert_eq!(
+            row_mark(&[MatchReason::Pinned, MatchReason::ExactFilename]),
+            RowMark::Pinned
+        );
+    }
+    #[test]
+    fn row_mark_same_name_when_exact_filename_only() {
+        assert_eq!(row_mark(&[MatchReason::ExactFilename]), RowMark::SameName);
+    }
+    #[test]
+    fn row_mark_none_for_weak_matches() {
+        assert_eq!(row_mark(&[MatchReason::PathSegment]), RowMark::None);
+        assert_eq!(row_mark(&[MatchReason::Recent]), RowMark::None);
+        assert_eq!(row_mark(&[]), RowMark::None);
     }
 
     #[test]
