@@ -149,11 +149,16 @@ Press `g` to open the **gist manager** — a gist-level view (one row per gist) 
 the gist owning the currently selected file. From here you manage gists as a whole:
 
 - `e` — edit the gist's description (type, `Enter` applies, `Esc` cancels).
+- `Enter` — open the **gist detail view**: shows basic info (description, visibility,
+  created/updated age, file count, short id), the file list, and fetched comments.
+  - `↑`/`↓` scroll comments · `PageUp`/`PageDown` page through comments.
+  - `c` compact · `o` browser · `q`/`Esc` back to the gist manager.
 - `X` — delete the entire gist and all its files, after a `y`/`n` confirmation.
 - `o` — open the gist on gist.github.com in your browser.
 - `c` — compact revisions: after showing the revision count and a `y`/`n` confirmation, the
   gist is cloned to a temp dir, its history squashed to a single commit, and force-pushed —
-  collapsing all older revisions. Irreversible.
+  collapsing all older revisions. Irreversible. (When triggered from the detail view, the
+  confirmation prompt shows the gist's info as context.)
 - `s` cycle sort (updated / created) · `v` cycle visibility (all/public/secret) · `/` filter
   by description or id · `Left`/`Right` scroll a long description.
 - `q`/`Esc` — back to the list.
@@ -170,7 +175,8 @@ the gist owning the currently selected file. From here you manage gists as a who
   confirmation — one-key sync never overwrites a local file silently.
 - Destructive remote actions each require a `y`/`n` confirmation: removing a file from a
   gist (`X` on the list), deleting a whole gist (`X` in the gist manager), and compacting a
-  gist's revisions (`c` in the gist manager — a history-rewriting force-push).
+  gist's revisions (`c` in the gist manager or detail view — a history-rewriting force-push;
+  the confirmation prompt displays the gist's info so the target stays visible while you decide).
 - No GitHub token is stored by the app, and gist content is never written to the config
   file — only path↔gist pin mappings are persisted.
 

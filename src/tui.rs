@@ -3010,10 +3010,18 @@ Gist manager (g)
   s          cycle sort: updated / created
   v          cycle visibility: all / public / secret
   e          edit the gist description (Enter apply, Esc cancel)
+  Enter      open the gist detail view (info, file list, comments)
   o          open the gist in your web browser
   c          compact revisions: squash history to one commit (force-push, y/n confirm)
   X          delete the entire gist and all its files (y/n confirm)
   q / Esc    back to the list
+
+Gist detail (Enter from gist manager)
+  Up/Down    scroll comments
+  PageUp/Dn  page through comments
+  c          compact revisions (y/n confirm; gist info shown as context)
+  o          open the gist in your web browser
+  q / Esc    back to the gist manager
 
 General
   Esc / q    close an overlay; from the list, press twice to quit the app
@@ -3156,7 +3164,7 @@ fn render_gists(frame: &mut Frame, state: &AppState) {
     } else {
         (
             String::new(),
-            "↑↓ move · ←→ scroll · / filter · s sort · v type · e desc · o browser · c compact · X delete · q back"
+            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · e desc · o browser · c compact · X delete · q back"
                 .to_string(),
             true,
         )
