@@ -12,8 +12,9 @@ use std::path::PathBuf;
 use gistui::actions::{run_command, upload_command, CommandOutput, CommandPlan, CommandRunner};
 use gistui::domain::GistFile;
 use gistui::gh::{
-    auth_status_plan, check_gh_ready_with, fetch_gist_file_content_with, fetch_gist_list_json_with,
-    gh_version_plan, gist_list_plan, gist_view_plan, parse_gist_list_json,
+    auth_status_plan, check_gh_ready_with, fetch_gist_comments_json_with,
+    fetch_gist_file_content_with, fetch_gist_list_json_with, gh_version_plan, gist_comments_plan,
+    gist_list_plan, gist_view_plan, parse_gist_comments_json, parse_gist_list_json,
 };
 
 /// A scripted runner: returns queued outputs in order and records every plan it
@@ -60,6 +61,7 @@ impl CommandRunner for FakeRunner {
 }
 
 const GIST_LIST_JSON: &str = include_str!("fixtures/gh/gist-list.json");
+const GIST_COMMENTS_JSON: &str = include_str!("fixtures/gh/gist-comments.json");
 
 #[test]
 fn fetch_and_parse_gist_list_via_fake_runner() {
@@ -164,4 +166,35 @@ fn run_command_surfaces_stderr_on_failure() {
 
     let err = run_command(&runner, &plan).unwrap_err();
     assert!(err.to_string().contains("gist not found"));
+}
+
+#[test]
+fn fetch_and_parse_gist_comments_via_fake_runner() {
+    let runner = FakeRunner::new(vec![FakeRunner::ok(GIST_COMMENTS_JSON)]);
+
+    let raw = fetch_gist_comments_json_with(&runner, "abc123").unwrap();
+    let comments = parse_gist_comments_json(&raw).unwrap();
+
+    assert_eq!(comments.len(), 3);
+    assert_eq!(comments[0].author, "alice");
+    assert_eq!(comments[1].author, "bob");
+    assert_eq!(comments[1].body, "Multi-line\nbody here.");
+    assert_eq!(comments[2].author, "(unknown)");
+    assert_eq!(comments[2].body, "ghost comment");
+    assert_eq!(comments[2].created_at, "2026-06-11T01:00:00Z");
+    assert_eq!(runner.calls.borrow()[0], gist_comments_plan("abc123"));
+}
+
+#[test]
+fn fetch_gist_comments_surfaces_stderr_on_failure() {
+    let runner = FakeRunner::new(vec![FakeRunner::fail("HTTP 404: Not Found")]);
+
+    let err = fetch_gist_comments_json_with(&runner, "missing").unwrap_err();
+    assert!(err.to_string().contains("Not Found"));
+}
+
+#[test]
+fn parse_gist_comments_handles_empty_array() {
+    let comments = parse_gist_comments_json("[]").unwrap();
+    assert!(comments.is_empty());
 }
