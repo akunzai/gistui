@@ -246,6 +246,10 @@ pub enum KeyOutcome {
     PreviewPinDiff,
     /// Persist the diff-context toggle (`diff_show_full`) to config after pressing `c`.
     PersistDiffContext,
+    /// Copy the context gist's web URL to the system clipboard (`y`).
+    CopyGistUrl,
+    /// Copy the previewed file content to the system clipboard (`Y`, Preview screen).
+    CopyPreviewContent,
 }
 
 #[derive(Debug, Clone)]

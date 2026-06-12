@@ -1707,6 +1707,41 @@ fn o_on_main_list_is_noop_now_that_browser_moved_to_gist_view() {
 }
 
 #[test]
+fn y_copies_gist_url_on_list_gists_and_detail() {
+    let mut list = state_with_two_gists();
+    assert_eq!(list.handle_key(KeyCode::Char('y')), KeyOutcome::CopyGistUrl);
+
+    let mut gists = state_with_two_gists();
+    gists.screen = Screen::Gists;
+    assert_eq!(
+        gists.handle_key(KeyCode::Char('y')),
+        KeyOutcome::CopyGistUrl
+    );
+
+    let mut detail = state_with_gists();
+    detail.screen = Screen::GistDetail;
+    detail.detail_gist_id = Some("g1".into());
+    assert_eq!(
+        detail.handle_key(KeyCode::Char('y')),
+        KeyOutcome::CopyGistUrl
+    );
+}
+
+#[test]
+fn preview_y_copies_url_and_capital_y_copies_content() {
+    let mut state = state_with_gists();
+    state.screen = Screen::Preview;
+    assert_eq!(
+        state.handle_key(KeyCode::Char('y')),
+        KeyOutcome::CopyGistUrl
+    );
+    assert_eq!(
+        state.handle_key(KeyCode::Char('Y')),
+        KeyOutcome::CopyPreviewContent
+    );
+}
+
+#[test]
 fn c_in_gist_view_requests_compaction() {
     let mut state = state_with_two_gists();
     state.screen = Screen::Gists;

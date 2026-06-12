@@ -659,6 +659,8 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     }
                 }
                 KeyOutcome::OpenBrowser => open_browser(&mut state),
+                KeyOutcome::CopyGistUrl => copy_gist_url(&mut state),
+                KeyOutcome::CopyPreviewContent => copy_preview_content(&mut state),
                 KeyOutcome::EditLocal => edit_local(terminal, &mut state)?,
                 KeyOutcome::ExecuteDelete => {
                     let Some(PendingAction::Delete { gist_id, .. }) = state.pending_action.clone()
@@ -1128,6 +1130,38 @@ fn open_browser(state: &mut AppState) {
     match crate::actions::execute_command(&plan) {
         Ok(_) => state.set_status(format!("Opened gist {gist_id} in the browser")),
         Err(error) => state.set_status(format!("open failed: {error}")),
+    }
+}
+
+/// Copies the context gist's web URL to the system clipboard. On the Preview screen the
+/// URL comes from the previewed file's gist; elsewhere from the current selection.
+fn copy_gist_url(state: &mut AppState) {
+    let gist_id = match state.screen {
+        Screen::Preview => state.preview_gist_key.as_ref().map(|(id, _)| id.clone()),
+        _ => state.context_gist_id(),
+    };
+    let Some(gist_id) = gist_id else {
+        state.set_status("no gist selected to copy");
+        return;
+    };
+    let url = crate::actions::gist_web_url(&gist_id);
+    match crate::actions::copy_to_clipboard(&url) {
+        Ok(_) => state.set_status(format!("Copied URL to clipboard: {url}")),
+        Err(error) => state.set_status(format!("copy failed: {error}")),
+    }
+}
+
+/// Copies the full previewed file content (the text shown on `Screen::Preview`) to the
+/// system clipboard.
+fn copy_preview_content(state: &mut AppState) {
+    if state.diff_text.is_empty() {
+        state.set_status("no content to copy");
+        return;
+    }
+    let bytes = state.diff_text.len();
+    match crate::actions::copy_to_clipboard(&state.diff_text) {
+        Ok(_) => state.set_status(format!("Copied {bytes} bytes to clipboard")),
+        Err(error) => state.set_status(format!("copy failed: {error}")),
     }
 }
 
