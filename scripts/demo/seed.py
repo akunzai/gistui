@@ -27,9 +27,13 @@ GISTS = {
         "files": {
             "starship.toml": (
                 "# Starship prompt\n"
-                "add_newline = false\n\n"
+                "add_newline = false\n"
+                "command_timeout = 1000\n\n"
                 "[character]\n"
                 'success_symbol = "[→](bold green)"\n'
+                'error_symbol = "[✗](bold red)"\n\n'
+                "[git_branch]\n"
+                'symbol = " "\n'
             )
         },
     },
@@ -40,9 +44,18 @@ GISTS = {
         "created_at": "2026-02-10T00:00:00Z",
         "files": {
             "aliases.sh": (
+                "#!/usr/bin/env bash\n"
+                "# Handy git aliases\n"
                 "alias gs='git status'\n"
                 "alias gp='git push'\n"
                 "alias gl='git log --oneline -20'\n"
+                "alias gb='git branch'\n"
+                "alias gco='git checkout'\n"
+                "alias gf='git fetch --all --prune'\n"
+                "alias gst='git stash'\n"
+                "alias gpl='git pull --rebase'\n"
+                "alias gm='git merge'\n"
+                "alias gr='git rebase'\n"
             )
         },
     },
@@ -87,19 +100,37 @@ LOCAL = {
     # differs from the gist -> a meaningful upload diff
     "starship.toml": (
         "# Starship prompt\n"
-        "add_newline = false\n\n"
+        "add_newline = false\n"
+        "command_timeout = 1500\n\n"
         "[character]\n"
-        'success_symbol = "[→](bold green)"\n\n'
+        'success_symbol = "[→](bold green)"\n'
+        'error_symbol = "[✗](bold red)"\n\n'
         "[git_branch]\n"
         'symbol = " "\n'
+        'style = "bold purple"\n\n'
+        "[directory]\n"
+        "truncation_length = 3\n"
     ),
     # differs from the gist -> triggers the download overwrite gate
     "hello.py": ("#!/usr/bin/env python3\n" 'print("Hello from the gistui demo")\n'),
-    # identical to the gist -> a clean, already-synced pair
+    # differs from the gist -> a meaningful upload diff (shell highlighting);
+    # changes top + bottom with a long unchanged middle so the `c` context
+    # toggle visibly collapses/expands hidden lines.
     "aliases.sh": (
-        "alias gs='git status'\n"
+        "#!/usr/bin/env bash\n"
+        "# Handy git aliases\n"
+        "alias gs='git status --short'\n"
         "alias gp='git push'\n"
         "alias gl='git log --oneline -20'\n"
+        "alias gb='git branch'\n"
+        "alias gco='git checkout'\n"
+        "alias gf='git fetch --all --prune'\n"
+        "alias gst='git stash'\n"
+        "alias gpl='git pull --rebase'\n"
+        "alias gm='git merge'\n"
+        "alias gr='git rebase'\n"
+        "alias gd='git diff'\n"
+        "alias gca='git commit --amend'\n"
     ),
 }
 
