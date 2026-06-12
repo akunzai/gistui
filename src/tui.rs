@@ -515,7 +515,11 @@ impl AppState {
     fn gists_hscroll_max(&self) -> u16 {
         self.visible_gist_groups()
             .iter()
-            .map(|g| gist_group_row_label(g, unix_now()).chars().count())
+            .map(|g| {
+                gist_group_row_label(g, unix_now(), self.gists_sort)
+                    .chars()
+                    .count()
+            })
             .max()
             .unwrap_or(0)
             .saturating_sub(1)
@@ -3176,19 +3180,24 @@ fn render_pins(frame: &mut Frame, state: &AppState) {
     render_footer(frame, chunks[1], "", &footer, true);
 }
 
-fn gist_group_row_label(g: &GistGroup, now: u64) -> String {
+fn gist_group_row_label(g: &GistGroup, now: u64, sort: GistGroupSort) -> String {
     let desc = if g.description.trim().is_empty() {
         "(no description)".to_string()
     } else {
         g.description.clone()
     };
     // Visibility is dropped from the row — it's surfaced by the `v` filter, the title's
-    // `type:` label, and the detail view. 📄 / 🕒 distinguish file count from last-updated age.
-    // The date is shown as a relative age (single largest unit), matching the detail view.
-    let updated = crate::domain::parse_rfc3339_to_unix(&g.updated_at)
+    // `type:` label, and the detail view. 📄 / 🕒 distinguish file count from the age.
+    // The 🕒 age tracks the active sort key (created vs updated) so the column the rows
+    // are ordered by is the one shown; it's a relative age (single largest unit).
+    let timestamp = match sort {
+        GistGroupSort::Updated => &g.updated_at,
+        GistGroupSort::Created => &g.created_at,
+    };
+    let age = crate::domain::parse_rfc3339_to_unix(timestamp)
         .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
         .unwrap_or_else(|| "?".into());
-    format!("{}  {}  📄 {}  🕒 {}", g.id, desc, g.file_count, updated)
+    format!("{}  {}  📄 {}  🕒 {}", g.id, desc, g.file_count, age)
 }
 
 fn render_gists(frame: &mut Frame, state: &AppState) {
@@ -3232,7 +3241,7 @@ fn render_gists(frame: &mut Frame, state: &AppState) {
             .iter()
             .map(|g| {
                 ListItem::new(hscroll_str(
-                    &gist_group_row_label(g, now),
+                    &gist_group_row_label(g, now, state.gists_sort),
                     state.gists_hscroll,
                 ))
             })
@@ -6240,5 +6249,24 @@ mod tests {
         state.apply_fetched_comments("g1", Err("boom".into()));
         assert_eq!(state.detail_comments.as_ref().unwrap().len(), 0);
         assert_eq!(state.detail_comments_error.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn gist_group_row_age_tracks_active_sort() {
+        let group = GistGroup {
+            id: "g1".into(),
+            description: "demo".into(),
+            public: false,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+            file_count: 2,
+        };
+        let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+        // Sorting by updated shows the updated age (1 day ago); sorting by created shows the
+        // created age (10 days ago → "1w"), so the 🕒 column matches the ordering key.
+        let updated = gist_group_row_label(&group, now, GistGroupSort::Updated);
+        let created = gist_group_row_label(&group, now, GistGroupSort::Created);
+        assert!(updated.ends_with("🕒 1d"), "{updated}");
+        assert!(created.ends_with("🕒 1w"), "{created}");
     }
 }
