@@ -77,6 +77,12 @@ Diff view (Enter / d / u)
   d / u      download / upload from the diff
   Esc / q    back
 
+Full-screen preview (Space, or 1-9 in the detail view)
+  Up/Down/Left/Right  scroll (Left/Right only when wrap is off)
+  w          toggle soft line wrapping (remembered for the session)
+  R          re-fetch the content
+  Esc / q    back
+
 Upload Confirmation screen (u)
   y          confirm and execute the upload
   n / Esc    cancel the upload
@@ -105,6 +111,7 @@ Gist detail (Enter from gist manager)
   1-9        preview the content of the Nth file (full-screen; R refresh, q back)
   c          compact revisions (y/n confirm; gist info shown as context)
   o          open the gist in your web browser
+  X          delete the entire gist and all its files (y/n confirm)
   q / Esc    back to the gist manager
 
 General
@@ -127,28 +134,36 @@ General
 pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
     // A `R`-refresh fetch error (set via state.status) must surface here, not be swallowed.
-    let (footer, colored) = footer_with_status(
-        state.status.as_deref(),
-        "↑↓←→ scroll  ·  R refresh  ·  Esc/q back",
-    );
+    let hints = if state.preview_wrap {
+        "↑↓ scroll  ·  w wrap [on]  ·  R refresh  ·  Esc/q back"
+    } else {
+        "↑↓←→ scroll  ·  w wrap [off]  ·  R refresh  ·  Esc/q back"
+    };
+    let (footer, colored) = footer_with_status(state.status.as_deref(), hints);
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 1)])
         .split(area);
 
-    frame.render_widget(
+    // When wrapping, horizontal scroll is meaningless — pin the x offset to 0 so long lines
+    // wrap into view instead of being scrolled off-screen.
+    let block = Block::default()
+        .title(state.preview_title.clone())
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .padding(Padding::horizontal(1));
+    let paragraph = if state.preview_wrap {
+        Paragraph::new(state.diff_text.clone())
+            .scroll((state.diff_scroll, 0))
+            .wrap(Wrap { trim: false })
+            .block(block)
+    } else {
         Paragraph::new(state.diff_text.clone())
             .scroll((state.diff_scroll, state.diff_hscroll))
-            .block(
-                Block::default()
-                    .title(state.preview_title.clone())
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .padding(Padding::horizontal(1)),
-            ),
-        chunks[0],
-    );
+            .block(block)
+    };
+    frame.render_widget(paragraph, chunks[0]);
     render_footer(frame, chunks[1], "", &footer, colored);
 }
 
@@ -513,10 +528,10 @@ pub(super) fn footer_with_status(status: Option<&str>, hints: &str) -> (String, 
 pub(super) fn detail_footer(status: Option<&str>, focus: DetailFocus) -> (String, bool) {
     let hints = match focus {
         DetailFocus::Comments => {
-            "Tab files · ↑↓ scroll · 1-9 preview · c compact · o browser · q back"
+            "Tab files · ↑↓ scroll · 1-9 preview · c compact · o browser · X delete · q back"
         }
         DetailFocus::Files => {
-            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · c compact · o browser · q back"
+            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · c compact · o browser · X delete · q back"
         }
     };
     footer_with_status(status, hints)

@@ -287,6 +287,9 @@ pub struct AppState {
     pub status: Option<String>,
     pub loading: bool,
     pub preview_title: String,
+    /// Soft line-wrapping in the full-screen preview, toggled with `w` (remembered for the
+    /// session). When on, long lines wrap instead of needing horizontal scroll.
+    pub preview_wrap: bool,
     pub preview_gist_key: Option<(String, String)>,
     /// Screen to return to when leaving the full-screen preview (default: List; set to
     /// GistDetail when a detail-view file preview is launched).
@@ -766,6 +769,7 @@ pub fn initial_state() -> AppState {
         status: None,
         loading: false,
         preview_title: String::new(),
+        preview_wrap: false,
         preview_gist_key: None,
         preview_return: Screen::List,
         preview_request: None,

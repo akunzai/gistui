@@ -204,6 +204,32 @@ impl AppState {
                     DetailFocus::Files => DetailFocus::Comments,
                 };
             }
+            // X deletes the whole gist (y/n confirm), mirroring the gist manager. Reuses the
+            // shared Delete confirm path, which lands on the list once the gist is gone.
+            KeyCode::Char('X') => {
+                if let Some(group) = self
+                    .detail_gist_id
+                    .clone()
+                    .and_then(|id| self.group_by_id(&id))
+                {
+                    let label = if group.description.is_empty() {
+                        group.id.clone()
+                    } else {
+                        group.description.clone()
+                    };
+                    self.diff_text = format!(
+                        "Delete gist {} ({} file(s)): {label}.\n\nThis permanently removes the entire gist and all its files.",
+                        group.id, group.file_count
+                    );
+                    self.diff_scroll = 0;
+                    self.diff_hscroll = 0;
+                    self.pending_action = Some(PendingAction::Delete {
+                        gist_id: group.id.clone(),
+                        label,
+                    });
+                    self.screen = Screen::Confirm;
+                }
+            }
             KeyCode::Enter if self.detail_focus == DetailFocus::Files => {
                 if let Some(gist_id) = self.detail_gist_id.clone() {
                     let cursor = self.detail_file_cursor;
@@ -284,6 +310,7 @@ impl AppState {
                 self.preview_gist_key = None;
             }
             KeyCode::Char('R') => return KeyOutcome::RefreshPreview,
+            KeyCode::Char('w') => self.preview_wrap = !self.preview_wrap,
             KeyCode::Down => self.scroll_diff_down(),
             KeyCode::Up => self.scroll_diff_up(),
             KeyCode::Right => self.scroll_diff_right(),
