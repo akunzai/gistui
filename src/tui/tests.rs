@@ -906,7 +906,7 @@ fn diff_context_toggle_flips_effective_radius() {
 #[test]
 fn diff_view_applies_vertical_and_horizontal_scroll() {
     let text = "--- a\n+++ b\nabcdef\n more";
-    let v = diff_view(text, 2, 2); // skip 2 lines, drop 2 leading chars
+    let v = diff_view_highlighted(text, 2, 2, None, false); // skip 2 lines, drop 2 leading chars
     assert_eq!(v.lines.len(), 2);
     assert_eq!(v.lines[0].spans[0].content, "cdef");
 }
@@ -915,9 +915,9 @@ fn diff_view_applies_vertical_and_horizontal_scroll() {
 fn diff_view_inline_highlights_changed_words() {
     // A single-line modification: "hello world" → "hello planet"
     let text = "--- a\n+++ b\n-hello world\n+hello planet\n";
-    let v = diff_view(text, 2, 0); // skip header lines
-                                   // del line: span 0 is "-", unchanged word "hello " is plain red,
-                                   //           changed word "world" is bold red
+    let v = diff_view_highlighted(text, 2, 0, None, false); // skip header lines
+                                                            // del line: span 0 is "-", unchanged word "hello " is plain red,
+                                                            //           changed word "world" is bold red
     assert_eq!(v.lines.len(), 2);
     let del = &v.lines[0];
     let sign = del.spans.iter().find(|s| s.content == "-").unwrap();
@@ -944,6 +944,42 @@ fn diff_view_inline_highlights_changed_words() {
         .find(|s| s.content.trim() == "planet")
         .unwrap();
     assert!(planet.style.add_modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn diff_view_highlights_context_lines_for_known_language() {
+    // Context line " let x = 1;" gets syntax colour; the -/+ pair keeps red/green.
+    let text = "--- a\n+++ b\n let x = 1;\n-old\n+new\n";
+    let v = diff_view_highlighted(text, 0, 0, Some("rs"), true);
+    let ctx = v
+        .lines
+        .iter()
+        .find(|l| l.spans.first().map(|s| s.content.as_ref()) == Some(" "))
+        .expect("a context line marked by a leading space span");
+    // `let` is a Rust keyword → magenta somewhere on the context line.
+    assert!(ctx.spans.iter().any(|s| s.style.fg == Some(Color::Magenta)));
+    // The del line stays red, never picks up a syntax colour.
+    let del = v
+        .lines
+        .iter()
+        .find(|l| l.spans.iter().any(|s| s.content == "-"))
+        .unwrap();
+    assert!(del.spans.iter().all(|s| s.style.fg != Some(Color::Magenta)));
+}
+
+#[test]
+fn diff_view_leaves_context_plain_when_highlight_disabled() {
+    let text = "--- a\n+++ b\n let x = 1;\n";
+    let v = diff_view_highlighted(text, 0, 0, Some("rs"), false);
+    assert!(v.lines[2].spans.iter().all(|s| s.style.fg.is_none()));
+}
+
+#[test]
+fn diff_view_skips_tabbed_context_lines() {
+    // A tab in the context line keeps it plain so indentation stays aligned with -/+ lines.
+    let text = "--- a\n+++ b\n \tlet x = 1;\n";
+    let v = diff_view_highlighted(text, 0, 0, Some("rs"), true);
+    assert!(v.lines[2].spans.iter().all(|s| s.style.fg.is_none()));
 }
 
 #[test]
