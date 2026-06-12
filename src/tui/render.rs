@@ -98,8 +98,10 @@ Gist manager (g)
   q / Esc    back to the list
 
 Gist detail (Enter from gist manager)
-  Up/Down    scroll comments
-  PageUp/Dn  page through comments
+  Tab        switch focus between comments and the file list
+  Up/Down    scroll comments, or move the file cursor when the list is focused
+  PageUp/Dn  page comments / file cursor by 10
+  Enter      preview the cursor-selected file (file list focused)
   1-9        preview the content of the Nth file (full-screen; R refresh, q back)
   c          compact revisions (y/n confirm; gist info shown as context)
   o          open the gist in your web browser
@@ -353,6 +355,15 @@ pub(super) fn unix_now() -> u64 {
 }
 
 /// Info + file-list block for a gist (reused as the compaction-confirm background).
+/// First visible file index so `cursor` stays within a `visible_rows`-high window over
+/// `count` files. Returns 0 when everything fits or `visible_rows == 0`.
+pub(super) fn file_list_scroll(cursor: usize, visible_rows: usize, count: usize) -> usize {
+    if visible_rows == 0 || count <= visible_rows || cursor < visible_rows {
+        return 0;
+    }
+    (cursor + 1).saturating_sub(visible_rows)
+}
+
 pub(super) fn render_gist_info_and_files(
     frame: &mut Frame,
     area: Rect,
@@ -369,23 +380,50 @@ pub(super) fn render_gist_info_and_files(
         format!("Gist: {}", group.description)
     };
     let files = state.gist_filenames(gist_id);
+    let files_focused =
+        state.detail_focus == DetailFocus::Files && state.screen == Screen::GistDetail;
+    let files_title = if files_focused {
+        format!("Files ({})  [focus: ↑↓ select · ⏎ preview]", files.len())
+    } else {
+        format!("Files ({})", files.len())
+    };
     let mut lines: Vec<Line> = vec![
         Line::from(gist_info_line(&group, now)),
         Line::from(""),
         Line::from(Span::styled(
-            format!("Files ({})", files.len()),
+            files_title,
             Style::default().add_modifier(Modifier::BOLD),
         )),
     ];
     // Number the first nine files so the detail view's 1–9 preview keys are discoverable;
-    // any beyond the ninth are bullet-aligned (not directly previewable).
-    for (i, f) in files.iter().enumerate() {
+    // any beyond the ninth are bullet-aligned. When the file list is focused, a cursor row
+    // is highlighted and the list auto-scrolls to keep it visible.
+    let cursor = state.detail_file_cursor.min(files.len().saturating_sub(1));
+    // Visible file rows = area height minus borders(2), info line, blank, "Files (n)" header (3).
+    let visible_rows = (area.height as usize).saturating_sub(5);
+    let offset = file_list_scroll(cursor, visible_rows, files.len());
+    for (i, f) in files
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(visible_rows.max(1))
+    {
         let marker = if i < 9 {
             format!("{}.", i + 1)
         } else {
             "·".to_string()
         };
-        lines.push(Line::from(format!("  {marker} {f}")));
+        if files_focused && i == cursor {
+            lines.push(Line::from(Span::styled(
+                format!("▸ {marker} {f}"),
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )));
+        } else {
+            lines.push(Line::from(format!("  {marker} {f}")));
+        }
     }
     frame.render_widget(
         Paragraph::new(lines).block(
@@ -456,19 +494,26 @@ pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppSta
 /// The detail-view footer: a one-shot `state.status` message (e.g. the compaction result,
 /// including "nothing to compact") when present, else the key hints. Only the hints are
 /// colourised. Mirrors the gist-manager footer so detail-triggered statuses are visible.
-pub(super) fn detail_footer(status: Option<&str>) -> (String, bool) {
+pub(super) fn detail_footer(status: Option<&str>, focus: DetailFocus) -> (String, bool) {
     match status {
         Some(message) => (message.to_string(), false),
-        None => (
-            "↑↓ scroll · 1-9 preview file · c compact · o browser · q back".to_string(),
-            true,
-        ),
+        None => {
+            let hints = match focus {
+                DetailFocus::Comments => {
+                    "Tab files · ↑↓ scroll · 1-9 preview · c compact · o browser · q back"
+                }
+                DetailFocus::Files => {
+                    "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · c compact · o browser · q back"
+                }
+            };
+            (hints.to_string(), true)
+        }
     }
 }
 
 pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
-    let (footer, colored) = detail_footer(state.status.as_deref());
+    let (footer, colored) = detail_footer(state.status.as_deref(), state.detail_focus);
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let files = state
         .detail_gist_id
