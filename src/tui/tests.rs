@@ -1,4 +1,5 @@
 use super::*;
+use crossterm::event::KeyCode;
 use ratatui::style::{Color, Modifier};
 use std::path::PathBuf;
 
