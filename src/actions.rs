@@ -1,6 +1,6 @@
 use crate::config::{save_config, AppConfig};
 use crate::domain::{GistFile, PinnedMapping, SyncDirection};
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -280,7 +280,29 @@ pub fn execute_compact_gist(gist_id: &str) -> Result<()> {
     let dir = compact_temp_dir(gist_id);
     let result = compact_in_dir(gist_id, &dir);
     let _ = fs::remove_dir_all(&dir);
-    result
+    // A raw git HTTPS auth failure (no gist.github.com credential helper) is confusing; map it
+    // to an actionable hint. Unrelated errors surface verbatim, and the happy path is untouched.
+    result.map_err(|e| match compact_auth_hint(&e.to_string()) {
+        Some(hint) => anyhow!(hint),
+        None => e,
+    })
+}
+
+/// Map a git failure `stderr` to an actionable hint when it looks like an HTTPS authentication
+/// failure against gist.github.com — typically because `gh auth setup-git` was never run, so git
+/// has no credential helper for the host. Returns `None` for unrelated errors so they surface
+/// verbatim. See #71 (follow-up to #65, which routes compaction over HTTPS/the gh token).
+pub fn compact_auth_hint(stderr: &str) -> Option<String> {
+    let lower = stderr.to_lowercase();
+    let is_auth_failure = lower.contains("could not read username")
+        || lower.contains("could not read password")
+        || lower.contains("authentication failed")
+        || lower.contains("terminal prompts disabled");
+    is_auth_failure.then(|| {
+        "git could not authenticate to gist.github.com. \
+         Run `gh auth setup-git` to enable gist compaction (one-time setup)."
+            .to_string()
+    })
 }
 
 fn compact_in_dir(gist_id: &str, dir: &Path) -> Result<()> {
@@ -542,6 +564,33 @@ mod tests {
         );
         // The commit forces an identity so it never falls back to (possibly absent) global config.
         assert!(plans[2].args.contains(&"user.name=gistui".to_string()));
+    }
+
+    #[test]
+    fn compact_auth_hint_flags_git_auth_failures() {
+        // The signatures git emits when no gist.github.com credential helper is configured.
+        for stderr in [
+            "fatal: could not read Username for 'https://gist.github.com': terminal prompts disabled",
+            "remote: Support for password authentication was removed.\nfatal: Authentication failed for 'https://gist.github.com/abc.git/'",
+            "fatal: could not read Password for 'https://gist.github.com': No such device",
+        ] {
+            let hint = compact_auth_hint(stderr).expect("auth failure should yield a hint");
+            assert!(hint.contains("gh auth setup-git"));
+        }
+    }
+
+    #[test]
+    fn compact_auth_hint_ignores_unrelated_errors() {
+        assert_eq!(
+            compact_auth_hint("could not determine the gist's default branch"),
+            None
+        );
+        assert_eq!(
+            compact_auth_hint(
+                "fatal: unable to access 'https://gist.github.com/': Could not resolve host"
+            ),
+            None
+        );
     }
 
     #[test]

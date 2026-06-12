@@ -169,7 +169,8 @@ the gist owning the currently selected file. From here you manage gists as a who
   gist is cloned to a temp dir over HTTPS (authenticating through your `gh` token, never SSH
   keys), its history squashed to a single commit, and force-pushed — collapsing all older
   revisions. Irreversible. (When triggered from the detail view, the confirmation prompt shows
-  the gist's info as context.)
+  the gist's info as context.) Requires the git credential helper that `gh auth setup-git`
+  configures; if it is missing, compaction reports an actionable error pointing you to that command.
 - `s` cycle sort (updated / created) · `v` cycle visibility (all/public/secret) · `/` filter
   by description or id · `Left`/`Right` scroll a long description.
 - `q`/`Esc` — back to the list.
