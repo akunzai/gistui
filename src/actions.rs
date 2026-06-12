@@ -217,13 +217,18 @@ pub fn parse_revision_count(stdout: &str) -> Option<usize> {
 }
 
 /// Clones `gist_id` into `dir` as a git working copy (the gist's revisions are its commits).
+///
+/// Cloned over HTTPS (not `gh gist clone`, which follows the user's `git_protocol` and may
+/// pick SSH) so both the clone and the later force-push authenticate through git's credential
+/// helper — the `gh` token. Compaction runs while the TUI owns the terminal in raw mode, so an
+/// SSH key passphrase prompt cannot be answered and fails (`incorrect passphrase supplied to
+/// decrypt private key`); routing through HTTPS/`gh` token avoids SSH keys entirely.
 pub fn gist_clone_command(gist_id: &str, dir: &Path) -> CommandPlan {
     CommandPlan {
-        program: "gh".into(),
+        program: "git".into(),
         args: vec![
-            "gist".into(),
             "clone".into(),
-            gist_id.to_string(),
+            format!("https://gist.github.com/{gist_id}.git"),
             dir.display().to_string(),
         ],
     }
@@ -506,10 +511,15 @@ mod tests {
     }
 
     #[test]
-    fn gist_clone_command_clones_into_dir() {
+    fn gist_clone_command_clones_over_https_into_dir() {
         let plan = gist_clone_command("abc123", Path::new("/tmp/x"));
-        assert_eq!(plan.program, "gh");
-        assert_eq!(plan.args, vec!["gist", "clone", "abc123", "/tmp/x"]);
+        // HTTPS (not `gh gist clone`/SSH) so auth flows through the gh token credential
+        // helper and compaction never hits an SSH passphrase prompt under the TUI.
+        assert_eq!(plan.program, "git");
+        assert_eq!(
+            plan.args,
+            vec!["clone", "https://gist.github.com/abc123.git", "/tmp/x"]
+        );
     }
 
     #[test]

@@ -160,9 +160,10 @@ the gist owning the currently selected file. From here you manage gists as a who
 - `X` — delete the entire gist and all its files, after a `y`/`n` confirmation.
 - `o` — open the gist on gist.github.com in your browser.
 - `c` — compact revisions: after showing the revision count and a `y`/`n` confirmation, the
-  gist is cloned to a temp dir, its history squashed to a single commit, and force-pushed —
-  collapsing all older revisions. Irreversible. (When triggered from the detail view, the
-  confirmation prompt shows the gist's info as context.)
+  gist is cloned to a temp dir over HTTPS (authenticating through your `gh` token, never SSH
+  keys), its history squashed to a single commit, and force-pushed — collapsing all older
+  revisions. Irreversible. (When triggered from the detail view, the confirmation prompt shows
+  the gist's info as context.)
 - `s` cycle sort (updated / created) · `v` cycle visibility (all/public/secret) · `/` filter
   by description or id · `Left`/`Right` scroll a long description.
 - `q`/`Esc` — back to the list.
