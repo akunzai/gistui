@@ -175,10 +175,10 @@ impl AppState {
             KeyCode::Char('q') | KeyCode::Esc => {
                 self.screen = Screen::Gists;
             }
-            KeyCode::Down => self.detail_scroll = self.detail_scroll.saturating_add(1),
-            KeyCode::Up => self.detail_scroll = self.detail_scroll.saturating_sub(1),
-            KeyCode::PageDown => self.detail_scroll = self.detail_scroll.saturating_add(10),
-            KeyCode::PageUp => self.detail_scroll = self.detail_scroll.saturating_sub(10),
+            KeyCode::Down => self.detail_nav(1),
+            KeyCode::Up => self.detail_nav(-1),
+            KeyCode::PageDown => self.detail_nav(10),
+            KeyCode::PageUp => self.detail_nav(-10),
             KeyCode::Char('o') => return KeyOutcome::OpenBrowser,
             KeyCode::Char('c') => {
                 self.compact_return_screen = Screen::GistDetail;
@@ -195,9 +195,52 @@ impl AppState {
                     }
                 }
             }
+            KeyCode::Tab => {
+                self.detail_focus = match self.detail_focus {
+                    DetailFocus::Comments => DetailFocus::Files,
+                    DetailFocus::Files => DetailFocus::Comments,
+                };
+            }
+            KeyCode::Enter if self.detail_focus == DetailFocus::Files => {
+                if let Some(gist_id) = self.detail_gist_id.clone() {
+                    let cursor = self.detail_file_cursor;
+                    if let Some(filename) = self.gist_filenames(&gist_id).into_iter().nth(cursor) {
+                        self.preview_request = Some((gist_id, filename));
+                        self.preview_return = Screen::GistDetail;
+                        return KeyOutcome::PreviewContent;
+                    }
+                }
+            }
             _ => {}
         }
         KeyOutcome::None
+    }
+
+    /// Move within the focused detail pane: scroll comments, or move the file cursor
+    /// (clamped to the gist's file count). `delta` is signed rows.
+    fn detail_nav(&mut self, delta: i32) {
+        match self.detail_focus {
+            DetailFocus::Comments => {
+                self.detail_scroll = if delta < 0 {
+                    self.detail_scroll.saturating_sub((-delta) as u16)
+                } else {
+                    self.detail_scroll.saturating_add(delta as u16)
+                };
+            }
+            DetailFocus::Files => {
+                let count = self
+                    .detail_gist_id
+                    .as_deref()
+                    .map(|id| self.gist_filenames(id).len())
+                    .unwrap_or(0);
+                if count == 0 {
+                    return;
+                }
+                let max = count - 1;
+                let next = self.detail_file_cursor as i64 + delta as i64;
+                self.detail_file_cursor = next.clamp(0, max as i64) as usize;
+            }
+        }
     }
 
     /// Apply a finished comment fetch, ignoring it if the user has since navigated to a

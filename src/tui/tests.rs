@@ -27,6 +27,21 @@ fn state_with_gists() -> AppState {
     state
 }
 
+fn state_with_many_files(n: usize) -> AppState {
+    let mut state = initial_state();
+    state.gists = (0..n)
+        .map(|i| GistFile {
+            gist_id: "g1".into(),
+            description: "demo".into(),
+            filename: format!("f{i}.txt"),
+            public: false,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+        })
+        .collect();
+    state
+}
+
 fn list_state_with_matches() -> AppState {
     let mut state = initial_state();
     state.locals = vec![
@@ -147,6 +162,79 @@ fn enter_on_gist_opens_detail() {
 }
 
 #[test]
+fn detail_focus_and_cursor_default_to_comments_and_zero() {
+    let state = initial_state();
+    assert_eq!(state.detail_focus, DetailFocus::Comments);
+    assert_eq!(state.detail_file_cursor, 0);
+}
+
+#[test]
+fn detail_tab_toggles_focus() {
+    let mut state = state_with_gists();
+    state.screen = Screen::GistDetail;
+    assert_eq!(state.detail_focus, DetailFocus::Comments);
+    state.handle_key(KeyCode::Tab);
+    assert_eq!(state.detail_focus, DetailFocus::Files);
+    state.handle_key(KeyCode::Tab);
+    assert_eq!(state.detail_focus, DetailFocus::Comments);
+}
+
+#[test]
+fn detail_files_focus_arrows_move_cursor_and_clamp() {
+    let mut state = state_with_gists(); // g1 has 2 files: a.txt, b.txt
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("g1".into());
+    state.detail_focus = DetailFocus::Files;
+
+    state.handle_key(KeyCode::Up); // already at 0, clamps
+    assert_eq!(state.detail_file_cursor, 0);
+    state.handle_key(KeyCode::Down);
+    assert_eq!(state.detail_file_cursor, 1);
+    state.handle_key(KeyCode::Down); // only 2 files, clamps at index 1
+    assert_eq!(state.detail_file_cursor, 1);
+    state.handle_key(KeyCode::PageUp); // jumps to 0
+    assert_eq!(state.detail_file_cursor, 0);
+    state.handle_key(KeyCode::PageDown); // +10 clamps to last (1)
+    assert_eq!(state.detail_file_cursor, 1);
+    // Comment scroll is untouched while files-focused.
+    assert_eq!(state.detail_scroll, 0);
+}
+
+#[test]
+fn detail_comments_focus_arrows_still_scroll_comments() {
+    let mut state = state_with_gists();
+    state.screen = Screen::GistDetail;
+    state.detail_focus = DetailFocus::Comments;
+    state.handle_key(KeyCode::Down);
+    assert_eq!(state.detail_scroll, 1);
+    assert_eq!(state.detail_file_cursor, 0); // cursor untouched
+}
+
+#[test]
+fn detail_enter_previews_cursor_file_including_tenth() {
+    let mut state = state_with_many_files(12);
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("g1".into());
+    state.detail_focus = DetailFocus::Files;
+    state.detail_file_cursor = 9; // the 10th file — unreachable via 1-9
+    let outcome = state.handle_key(KeyCode::Enter);
+    assert!(matches!(outcome, KeyOutcome::PreviewContent));
+    assert_eq!(state.preview_request, Some(("g1".into(), "f9.txt".into())));
+    assert_eq!(state.preview_return, Screen::GistDetail);
+}
+
+#[test]
+fn detail_enter_in_comments_focus_is_noop() {
+    let mut state = state_with_gists();
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("g1".into());
+    state.detail_focus = DetailFocus::Comments;
+    let outcome = state.handle_key(KeyCode::Enter);
+    assert!(matches!(outcome, KeyOutcome::None));
+    assert_eq!(state.preview_request, None);
+}
+
+#[test]
 fn detail_q_returns_to_gists() {
     let mut state = state_with_gists();
     state.screen = Screen::GistDetail;
@@ -208,13 +296,36 @@ fn preview_q_returns_to_launch_screen() {
 }
 
 #[test]
+fn file_list_scroll_keeps_cursor_visible() {
+    // count <= visible: no scroll.
+    assert_eq!(file_list_scroll(0, 5, 3), 0);
+    assert_eq!(file_list_scroll(2, 5, 3), 0);
+    // cursor within the first window: no scroll.
+    assert_eq!(file_list_scroll(2, 5, 20), 0);
+    assert_eq!(file_list_scroll(4, 5, 20), 0);
+    // cursor past the window: scroll so cursor is the last visible row.
+    assert_eq!(file_list_scroll(5, 5, 20), 1);
+    assert_eq!(file_list_scroll(19, 5, 20), 15);
+    // visible_rows == 0: never panic, offset 0.
+    assert_eq!(file_list_scroll(19, 0, 20), 0);
+}
+
+#[test]
 fn detail_footer_surfaces_status_else_hints() {
-    let (msg, colored) = detail_footer(Some("nothing to compact"));
+    let (msg, colored) = detail_footer(Some("nothing to compact"), DetailFocus::Comments);
     assert_eq!(msg, "nothing to compact");
     assert!(!colored);
-    let (hint, colored) = detail_footer(None);
+    let (hint, colored) = detail_footer(None, DetailFocus::Comments);
     assert!(hint.contains("1-9") && hint.contains("compact"));
     assert!(colored);
+}
+
+#[test]
+fn detail_footer_is_focus_aware() {
+    let (comments, _) = detail_footer(None, DetailFocus::Comments);
+    assert!(comments.contains("Tab files") && comments.contains("scroll"));
+    let (files, _) = detail_footer(None, DetailFocus::Files);
+    assert!(files.contains("Tab comments") && files.contains("preview"));
 }
 
 #[test]

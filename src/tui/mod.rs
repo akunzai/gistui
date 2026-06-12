@@ -28,6 +28,14 @@ pub enum Screen {
     GistDetail,
 }
 
+/// Which pane the navigation keys drive in `Screen::GistDetail`. Default `Comments`
+/// preserves the pre-#67 up/down = comment-scroll behavior until the user presses Tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetailFocus {
+    Comments,
+    Files,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingAction {
     Download,
@@ -327,6 +335,10 @@ pub struct AppState {
     pub detail_comments_error: Option<String>,
     /// Comment-pane scroll offset.
     pub detail_scroll: u16,
+    /// Which detail-view pane Tab/arrows currently drive (Comments vs Files).
+    pub detail_focus: DetailFocus,
+    /// Cursor index into the detail gist's files when `detail_focus == Files`.
+    pub detail_file_cursor: usize,
     /// Screen to return to after a compaction confirm is cancelled/finished (Gists or GistDetail).
     pub compact_return_screen: Screen,
 }
@@ -788,6 +800,8 @@ pub fn initial_state() -> AppState {
         detail_comments: None,
         detail_comments_error: None,
         detail_scroll: 0,
+        detail_focus: DetailFocus::Comments,
+        detail_file_cursor: 0,
         compact_return_screen: Screen::Gists,
     }
 }

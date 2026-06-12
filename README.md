@@ -155,9 +155,13 @@ the gist owning the currently selected file. From here you manage gists as a who
 - `e` — edit the gist's description (type, `Enter` applies, `Esc` cancels).
 - `Enter` — open the **gist detail view**: shows basic info (description, visibility,
   created/updated age, file count, short id), the file list, and fetched comments.
-  - `↑`/`↓` scroll comments · `PageUp`/`PageDown` page through comments.
-  - `1`–`9` preview the content of the Nth file full-screen (`↑↓←→` scroll, `R` refresh,
-    `q`/`Esc` back).
+  - `Tab` switch focus between the comments pane and the file list.
+  - `↑`/`↓` scroll comments, or move the file cursor when the list is focused · `PageUp`/`PageDown`
+    page either by 10.
+  - `Enter` (file list focused) preview the cursor-selected file — this reaches **any** file,
+    including the 10th and beyond.
+  - `1`–`9` still preview the content of the Nth file directly, full-screen (`↑↓←→` scroll,
+    `R` refresh, `q`/`Esc` back).
   - `c` compact · `o` browser · `q`/`Esc` back to the gist manager.
 - `X` — delete the entire gist and all its files, after a `y`/`n` confirmation.
 - `o` — open the gist on gist.github.com in your browser.
