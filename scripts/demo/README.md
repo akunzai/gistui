@@ -70,3 +70,29 @@ Environment variables understood by `record.sh`:
 | `COLS` / `ROWS` | `100` / `30` | Recording terminal size. |
 | `GIF` | `docs/demo.gif` | Output GIF path. |
 | `CAST` | `<workspace>/demo.cast` | Intermediate cast (discarded by default). |
+
+## Still screenshots
+
+`record.sh` makes the animated demo; `shots.sh` makes **still PNGs** of individual
+screens (for the README / the GitHub Pages landing page):
+
+```bash
+scripts/demo/shots.sh
+```
+
+It reuses the same fake `gh` + `seed.py` data, then for each shot: drives the real
+TUI to one screen (`shoot.py`), renders that frame to a GIF with `agg`, and
+extracts the frame to a PNG with Pillow. Each entry in the `SHOTS` array maps
+`shots/<name>.json` (a storyboard, same format as `storyboard.json`) to
+`docs/<name>.png`. The current shots:
+
+| Shot | Screen | Output |
+|------|--------|--------|
+| `gist-manager` | the gist manager (`g`) | `docs/gist-manager.png` |
+
+`shoot.py` differs from `record.py` in one way: it writes the cast *before* the
+TUI tears down, so leaving the alternate screen never blanks the captured frame.
+Pillow is installed automatically into `scripts/demo/.venv` (kept out of the
+system python per PEP 668; gitignored), so no extra setup is needed.
+
+Tunables (env): `FONT`, `FONT_SIZE`, `COLS` / `ROWS`, `OUT_DIR` (default `docs/`).
