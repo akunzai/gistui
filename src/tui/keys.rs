@@ -36,6 +36,9 @@ impl AppState {
     }
 
     fn handle_key_pins(&mut self, code: KeyCode) -> KeyOutcome {
+        // One-shot: any key dismisses a lingering sync status; the run_loop IO helper for this
+        // key may set a fresh one afterwards (e.g. "already in sync").
+        self.status = None;
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
             KeyCode::Down if self.pins_index + 1 < self.pinned.len() => {
@@ -267,6 +270,9 @@ impl AppState {
     }
 
     fn handle_key_preview(&mut self, code: KeyCode) -> KeyOutcome {
+        // One-shot: any key dismisses a lingering status (e.g. a previous "fetch failed: …"); the
+        // run_loop refresh helper may set a fresh one afterwards.
+        self.status = None;
         match code {
             // In the preview, q and Esc return to wherever it was launched from (the list, or
             // the gist detail view) — never an accidental app exit. Reset to List afterwards.
