@@ -292,6 +292,13 @@ pub struct AppState {
     pub loading: bool,
     pub preview_title: String,
     pub preview_gist_key: Option<(String, String)>,
+    /// Screen to return to when leaving the full-screen preview (default: List; set to
+    /// GistDetail when a detail-view file preview is launched).
+    pub preview_return: Screen,
+    /// A `(gist_id, filename)` explicitly chosen for preview (e.g. a number key in the detail
+    /// view), taken by the `PreviewContent` IO step; when `None` it falls back to the selected
+    /// gist file on the list. Keeps `handle_key` pure: it records the intent, `run_loop` fetches.
+    pub preview_request: Option<(String, String)>,
     pub gist_content_cache: std::collections::HashMap<(String, String), String>,
     pub local_recursive: bool,
     pub skip_dirs: Vec<String>,
@@ -907,6 +914,17 @@ impl AppState {
                 self.compact_return_screen = Screen::GistDetail;
                 return KeyOutcome::CompactGist;
             }
+            // 1–9 preview the content of the Nth file in the gist (full-screen preview).
+            KeyCode::Char(c @ '1'..='9') => {
+                if let Some(gist_id) = self.detail_gist_id.clone() {
+                    let index = (c as u8 - b'1') as usize;
+                    if let Some(filename) = self.gist_filenames(&gist_id).into_iter().nth(index) {
+                        self.preview_request = Some((gist_id, filename));
+                        self.preview_return = Screen::GistDetail;
+                        return KeyOutcome::PreviewContent;
+                    }
+                }
+            }
             _ => {}
         }
         KeyOutcome::None
@@ -937,9 +955,11 @@ impl AppState {
 
     fn handle_key_preview(&mut self, code: KeyCode) -> KeyOutcome {
         match code {
-            // In the preview, q and Esc both return to the list (no accidental app exit).
+            // In the preview, q and Esc return to wherever it was launched from (the list, or
+            // the gist detail view) — never an accidental app exit. Reset to List afterwards.
             KeyCode::Char('q') | KeyCode::Esc => {
-                self.screen = Screen::List;
+                self.screen = self.preview_return;
+                self.preview_return = Screen::List;
                 self.diff_text.clear();
                 self.preview_title.clear();
                 self.preview_gist_key = None;
@@ -1114,6 +1134,7 @@ impl AppState {
                 self.status = Some("select a local file to edit".into());
             }
             KeyCode::Char(' ') if self.selected_gist().is_some() => {
+                self.preview_return = Screen::List;
                 return KeyOutcome::PreviewContent;
             }
             KeyCode::Char('d')
@@ -1446,6 +1467,8 @@ pub fn initial_state() -> AppState {
         loading: false,
         preview_title: String::new(),
         preview_gist_key: None,
+        preview_return: Screen::List,
+        preview_request: None,
         gist_content_cache: std::collections::HashMap::new(),
         local_recursive: false,
         skip_dirs: crate::config::AppConfig::default().skip_dirs,
@@ -2168,10 +2191,15 @@ fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()>
                     });
                 }
                 KeyOutcome::PreviewContent => {
-                    let Some(gist) = state.selected_gist() else {
-                        continue;
+                    // A detail-view number key records the exact file in `preview_request`;
+                    // otherwise fall back to the file selected on the list.
+                    let key = match state.preview_request.take() {
+                        Some(key) => key,
+                        None => match state.selected_gist() {
+                            Some(gist) => (gist.file.gist_id.clone(), gist.file.filename.clone()),
+                            None => continue,
+                        },
                     };
-                    let key = (gist.file.gist_id.clone(), gist.file.filename.clone());
                     if let Some(cached) = state.gist_content_cache.get(&key) {
                         state.preview_title = format!("Preview: {} / {}", key.0, key.1);
                         state.preview_gist_key = Some(key);
@@ -3064,6 +3092,7 @@ Gist manager (g)
 Gist detail (Enter from gist manager)
   Up/Down    scroll comments
   PageUp/Dn  page through comments
+  1-9        preview the content of the Nth file (full-screen; R refresh, q back)
   c          compact revisions (y/n confirm; gist info shown as context)
   o          open the gist in your web browser
   q / Esc    back to the gist manager
@@ -3335,8 +3364,15 @@ fn render_gist_info_and_files(frame: &mut Frame, area: Rect, state: &AppState, g
             Style::default().add_modifier(Modifier::BOLD),
         )),
     ];
-    for f in &files {
-        lines.push(Line::from(format!("  {f}")));
+    // Number the first nine files so the detail view's 1–9 preview keys are discoverable;
+    // any beyond the ninth are bullet-aligned (not directly previewable).
+    for (i, f) in files.iter().enumerate() {
+        let marker = if i < 9 {
+            format!("{}.", i + 1)
+        } else {
+            "·".to_string()
+        };
+        lines.push(Line::from(format!("  {marker} {f}")));
     }
     frame.render_widget(
         Paragraph::new(lines).block(
@@ -3404,10 +3440,23 @@ fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppState) {
     );
 }
 
+/// The detail-view footer: a one-shot `state.status` message (e.g. the compaction result,
+/// including "nothing to compact") when present, else the key hints. Only the hints are
+/// colourised. Mirrors the gist-manager footer so detail-triggered statuses are visible.
+fn detail_footer(status: Option<&str>) -> (String, bool) {
+    match status {
+        Some(message) => (message.to_string(), false),
+        None => (
+            "↑↓ scroll · 1-9 preview file · c compact · o browser · q back".to_string(),
+            true,
+        ),
+    }
+}
+
 fn render_gist_detail(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
-    let footer = "↑↓ scroll · c compact · o browser · q back";
-    let footer_lines = wrap_line_count(footer, area.width.saturating_sub(2)).max(1);
+    let (footer, colored) = detail_footer(state.status.as_deref());
+    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let files = state
         .detail_gist_id
         .as_deref()
@@ -3429,7 +3478,7 @@ fn render_gist_detail(frame: &mut Frame, state: &AppState) {
         render_gist_info_and_files(frame, chunks[0], state, id);
     }
     render_gist_comments(frame, chunks[1], state);
-    render_footer(frame, chunks[2], "", footer, true);
+    render_footer(frame, chunks[2], "", &footer, colored);
 }
 
 fn local_row_label(path: &std::path::Path, cwd: &std::path::Path) -> String {
@@ -4330,6 +4379,49 @@ mod tests {
         let outcome = state.handle_key(KeyCode::Char('c'));
         assert!(matches!(outcome, KeyOutcome::CompactGist));
         assert_eq!(state.compact_return_screen, Screen::GistDetail);
+    }
+
+    #[test]
+    fn detail_number_key_requests_file_preview() {
+        let mut state = state_with_gists();
+        state.screen = Screen::GistDetail;
+        state.detail_gist_id = Some("g1".into());
+        let outcome = state.handle_key(KeyCode::Char('1'));
+        assert!(matches!(outcome, KeyOutcome::PreviewContent));
+        assert_eq!(state.preview_request, Some(("g1".into(), "a.txt".into())));
+        assert_eq!(state.preview_return, Screen::GistDetail);
+    }
+
+    #[test]
+    fn detail_number_key_out_of_range_is_ignored() {
+        let mut state = state_with_gists();
+        state.screen = Screen::GistDetail;
+        state.detail_gist_id = Some("g1".into());
+        // Only two files exist; pressing 5 must do nothing (no fetch requested).
+        let outcome = state.handle_key(KeyCode::Char('5'));
+        assert!(matches!(outcome, KeyOutcome::None));
+        assert_eq!(state.preview_request, None);
+    }
+
+    #[test]
+    fn preview_q_returns_to_launch_screen() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Preview;
+        state.preview_return = Screen::GistDetail;
+        state.handle_key(KeyCode::Char('q'));
+        assert_eq!(state.screen, Screen::GistDetail);
+        // Reset so a later list-launched preview returns to the list.
+        assert_eq!(state.preview_return, Screen::List);
+    }
+
+    #[test]
+    fn detail_footer_surfaces_status_else_hints() {
+        let (msg, colored) = detail_footer(Some("nothing to compact"));
+        assert_eq!(msg, "nothing to compact");
+        assert!(!colored);
+        let (hint, colored) = detail_footer(None);
+        assert!(hint.contains("1-9") && hint.contains("compact"));
+        assert!(colored);
     }
 
     #[test]
