@@ -4,8 +4,6 @@ A terminal UI for managing GitHub Gists. Browse, diff, download, upload, create,
 pin your gists — and pair them with files in your working directory — all through the
 GitHub CLI (`gh`).
 
-**Website:** <https://akunzai.github.io/gistui/>
-
 ![gistui demo](docs/demo.gif)
 
 ## Requirements
