@@ -1,6 +1,11 @@
 use super::*;
 use crossterm::event::KeyCode;
 
+/// Lines moved per PageUp/PageDown in the scrollable views. Matches the gist-detail paging step
+/// (`detail_nav(10)`); `handle_key` is pure and cannot read the viewport height, so a fixed step
+/// keeps paging predictable without threading terminal size into the key logic.
+const PAGE_SCROLL: u16 = 10;
+
 impl AppState {
     pub fn handle_key(&mut self, code: KeyCode) -> KeyOutcome {
         match self.screen {
@@ -319,6 +324,8 @@ impl AppState {
             KeyCode::Char('Y') => return KeyOutcome::CopyPreviewContent,
             KeyCode::Down => self.scroll_diff_down(),
             KeyCode::Up => self.scroll_diff_up(),
+            KeyCode::PageDown => self.scroll_diff_page_down(PAGE_SCROLL),
+            KeyCode::PageUp => self.scroll_diff_page_up(PAGE_SCROLL),
             KeyCode::Right => self.scroll_diff_right(),
             KeyCode::Left => self.scroll_diff_left(),
             _ => {}
@@ -586,6 +593,8 @@ impl AppState {
             }
             KeyCode::Down => self.scroll_diff_down(),
             KeyCode::Up => self.scroll_diff_up(),
+            KeyCode::PageDown => self.scroll_diff_page_down(PAGE_SCROLL),
+            KeyCode::PageUp => self.scroll_diff_page_up(PAGE_SCROLL),
             KeyCode::Right => self.scroll_diff_right(),
             KeyCode::Left => self.scroll_diff_left(),
             // Identical files have nothing to sync, so download/upload are not offered.
@@ -618,6 +627,14 @@ impl AppState {
             }
             KeyCode::Up => {
                 self.scroll_diff_up();
+                return KeyOutcome::None;
+            }
+            KeyCode::PageDown => {
+                self.scroll_diff_page_down(PAGE_SCROLL);
+                return KeyOutcome::None;
+            }
+            KeyCode::PageUp => {
+                self.scroll_diff_page_up(PAGE_SCROLL);
                 return KeyOutcome::None;
             }
             KeyCode::Right => {

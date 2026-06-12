@@ -74,6 +74,7 @@ Pinned Mappings screen (P)
 
 Diff view (Enter / d / u)
   Up/Down/Left/Right  scroll the diff
+  PageUp/Dn  scroll the diff by 10 lines
   c          toggle context: configured radius <-> full file (remembered)
   d / u      download / upload from the diff
   syntax     unchanged context lines are syntax-highlighted by file type
@@ -81,6 +82,7 @@ Diff view (Enter / d / u)
 
 Full-screen preview (Space, or 1-9 in the detail view)
   Up/Down/Left/Right  scroll (Left/Right only when wrap is off)
+  PageUp/Dn  scroll by 10 lines
   w          toggle soft line wrapping (remembered for the session)
   y          copy the gist URL · Y copy the file content to the clipboard
   syntax     known file types are syntax-highlighted
@@ -178,9 +180,9 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
     // A `R`-refresh fetch error (set via state.status) must surface here, not be swallowed.
     let hints = if state.preview_wrap {
-        "↑↓ scroll  ·  w wrap [on]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
+        "↑↓ PgUp/Dn scroll  ·  w wrap [on]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
     } else {
-        "↑↓←→ scroll  ·  w wrap [off]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
+        "↑↓←→ PgUp/Dn scroll  ·  w wrap [off]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
     };
     let (footer, colored) = footer_with_status(state.status.as_deref(), hints);
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
@@ -1353,10 +1355,10 @@ pub(super) fn render_diff(frame: &mut Frame, state: &AppState) {
     };
     let footer = if state.diff_identical {
         format!(
-            "Files are identical — nothing to sync  ·  ↑↓←→ scroll  ·  {context}  ·  Esc/q back"
+            "Files are identical — nothing to sync  ·  ↑↓←→ PgUp/Dn scroll  ·  {context}  ·  Esc/q back"
         )
     } else {
-        format!("↑↓←→ scroll  ·  d download  ·  u upload  ·  {context}  ·  Esc/q back")
+        format!("↑↓←→ PgUp/Dn scroll  ·  d download  ·  u upload  ·  {context}  ·  Esc/q back")
     };
 
     let area = frame.area();

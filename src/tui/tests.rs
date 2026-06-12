@@ -852,6 +852,35 @@ fn preview_scrolls_with_arrows() {
 }
 
 #[test]
+fn page_keys_jump_by_ten_clamped_to_bounds() {
+    let mut state = initial_state();
+    state.screen = Screen::Preview;
+    // 30 lines → bottom is line 29 (count - 1).
+    state.diff_text = (0..30)
+        .map(|i| format!("l{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    state.handle_key(KeyCode::PageDown);
+    assert_eq!(state.diff_scroll, 10);
+    // A second page-down would reach 20; a third clamps at the 29-line bottom, not 30.
+    state.handle_key(KeyCode::PageDown);
+    state.handle_key(KeyCode::PageDown);
+    assert_eq!(state.diff_scroll, 29);
+    state.handle_key(KeyCode::PageUp);
+    assert_eq!(state.diff_scroll, 19);
+}
+
+#[test]
+fn page_up_saturates_at_top_in_diff() {
+    let mut state = initial_state();
+    state.screen = Screen::Diff;
+    state.diff_text = "a\nb\nc".into();
+    state.diff_scroll = 1;
+    state.handle_key(KeyCode::PageUp);
+    assert_eq!(state.diff_scroll, 0);
+}
+
+#[test]
 fn question_opens_help_and_any_key_closes_it() {
     let mut state = initial_state();
     state.handle_key(KeyCode::Char('?'));
