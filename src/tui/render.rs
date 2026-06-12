@@ -126,8 +126,12 @@ General
 
 pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
-    let footer = "↑↓←→ scroll  ·  R refresh  ·  Esc/q back";
-    let footer_lines = wrap_line_count(footer, area.width.saturating_sub(2)).max(1);
+    // A `R`-refresh fetch error (set via state.status) must surface here, not be swallowed.
+    let (footer, colored) = footer_with_status(
+        state.status.as_deref(),
+        "↑↓←→ scroll  ·  R refresh  ·  Esc/q back",
+    );
+    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 1)])
@@ -145,16 +149,19 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
             ),
         chunks[0],
     );
-    render_footer(frame, chunks[1], "", footer, true);
+    render_footer(frame, chunks[1], "", &footer, colored);
 }
 
 pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
-    let footer = if state.pinned.is_empty() {
-        "Esc/q back".to_string()
+    // Sync feedback (e.g. "already in sync", "can't tell which side is newer") is set via
+    // state.status while staying on this screen, so the footer must surface it (see #72).
+    let hints = if state.pinned.is_empty() {
+        "Esc/q back"
     } else {
-        "↑↓ move  ·  Enter diff · s sync · u push · d pull · x unpin  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back".to_string()
+        "↑↓ move  ·  Enter diff · s sync · u push · d pull · x unpin  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back"
     };
+    let (footer, colored) = footer_with_status(state.status.as_deref(), hints);
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -216,7 +223,7 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     list_state.select(selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
 
-    render_footer(frame, chunks[1], "", &footer, true);
+    render_footer(frame, chunks[1], "", &footer, colored);
 }
 
 pub(super) fn gist_group_row_label(g: &GistGroup, now: u64, sort: GistGroupSort) -> String {
@@ -491,24 +498,28 @@ pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppSta
     );
 }
 
-/// The detail-view footer: a one-shot `state.status` message (e.g. the compaction result,
-/// including "nothing to compact") when present, else the key hints. Only the hints are
-/// colourised. Mirrors the gist-manager footer so detail-triggered statuses are visible.
-pub(super) fn detail_footer(status: Option<&str>, focus: DetailFocus) -> (String, bool) {
+/// Footer text + whether to colourise it: a one-shot `state.status` message (shown plain) when
+/// present, else the colourised key `hints`. Shared by every screen so action results/errors
+/// surface consistently and are never swallowed by a hard-coded footer (see #72, #66).
+pub(super) fn footer_with_status(status: Option<&str>, hints: &str) -> (String, bool) {
     match status {
         Some(message) => (message.to_string(), false),
-        None => {
-            let hints = match focus {
-                DetailFocus::Comments => {
-                    "Tab files · ↑↓ scroll · 1-9 preview · c compact · o browser · q back"
-                }
-                DetailFocus::Files => {
-                    "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · c compact · o browser · q back"
-                }
-            };
-            (hints.to_string(), true)
-        }
+        None => (hints.to_string(), true),
     }
+}
+
+/// The detail-view footer: a one-shot `state.status` message (e.g. the compaction result,
+/// including "nothing to compact") when present, else the focus-aware key hints.
+pub(super) fn detail_footer(status: Option<&str>, focus: DetailFocus) -> (String, bool) {
+    let hints = match focus {
+        DetailFocus::Comments => {
+            "Tab files · ↑↓ scroll · 1-9 preview · c compact · o browser · q back"
+        }
+        DetailFocus::Files => {
+            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · c compact · o browser · q back"
+        }
+    };
+    footer_with_status(status, hints)
 }
 
 pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState) {
@@ -1217,6 +1228,10 @@ pub(super) fn render_diff_pane(frame: &mut Frame, area: Rect, state: &AppState) 
 }
 
 /// The `Screen::Diff` preview: the diff pane plus a scroll/commands footer.
+///
+/// #72 audit: this footer intentionally does not surface `state.status`. Diff actions (`d`/`u`)
+/// transition to `Screen::Confirm` or to the IO that lands back on `List`; their results surface
+/// on those destination screens (which read `state.status`), so no status is set while on Diff.
 pub(super) fn render_diff(frame: &mut Frame, state: &AppState) {
     let context = if state.diff_show_full {
         "c context [full]".to_string()
@@ -1245,6 +1260,9 @@ pub(super) fn render_diff(frame: &mut Frame, state: &AppState) {
 
 /// `Screen::Confirm`: the diff fills the screen as context behind a centered prompt modal,
 /// keeping the overwrite gate's diff visible while the question is asked front-and-centre.
+/// #72 audit: this modal intentionally does not surface `state.status`. It is a transient y/n
+/// gate — confirming executes the action and transitions to `List`/`Gists`, where the result
+/// status is shown; cancelling returns to the launching screen without setting a status here.
 pub(super) fn render_confirm(frame: &mut Frame, state: &AppState) {
     match &state.pending_action {
         Some(PendingAction::CompactGist { gist_id, .. }) => {

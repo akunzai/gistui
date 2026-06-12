@@ -311,6 +311,36 @@ fn file_list_scroll_keeps_cursor_visible() {
 }
 
 #[test]
+fn pins_key_clears_lingering_status_for_one_shot_display() {
+    let mut state = initial_state();
+    state.screen = Screen::Pins;
+    state.status = Some("already in sync".into());
+    state.handle_key(KeyCode::Up); // any key
+    assert_eq!(state.status, None);
+}
+
+#[test]
+fn preview_key_clears_lingering_status_for_one_shot_display() {
+    let mut state = initial_state();
+    state.screen = Screen::Preview;
+    state.status = Some("fetch failed: boom".into());
+    state.handle_key(KeyCode::Down); // any key
+    assert_eq!(state.status, None);
+}
+
+#[test]
+fn footer_with_status_prefers_status_else_colourised_hints() {
+    // A one-shot status message wins and is shown plain (not key-colourised).
+    let (msg, colored) = footer_with_status(Some("already in sync"), "↑↓ move · q back");
+    assert_eq!(msg, "already in sync");
+    assert!(!colored);
+    // Otherwise the key hints render, colourised.
+    let (hint, colored) = footer_with_status(None, "↑↓ move · q back");
+    assert_eq!(hint, "↑↓ move · q back");
+    assert!(colored);
+}
+
+#[test]
 fn detail_footer_surfaces_status_else_hints() {
     let (msg, colored) = detail_footer(Some("nothing to compact"), DetailFocus::Comments);
     assert_eq!(msg, "nothing to compact");
