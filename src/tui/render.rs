@@ -1217,3 +1217,128 @@ pub(super) fn is_json_file(path: &std::path::Path) -> bool {
         .map(|ext| ext.eq_ignore_ascii_case("json"))
         .unwrap_or(false)
 }
+
+pub(super) fn render_centered_modal(frame: &mut Frame, title: &str, body: &str, border: Color) {
+    let area = frame.area();
+    let max_width = area.width.saturating_sub(2).max(1);
+    let width = ((area.width as u32 * 60 / 100) as u16).clamp(max_width.min(20), max_width);
+    // Inner text width = box width minus the two border columns and the horizontal padding.
+    let inner_width = width.saturating_sub(4);
+    let body_lines = wrap_line_count(body, inner_width).max(1);
+    let max_height = area.height.saturating_sub(2).max(1);
+    let height = (body_lines + 2).clamp(max_height.min(3), max_height);
+    let rect = Rect {
+        x: area.width.saturating_sub(width) / 2,
+        y: area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(body.to_string())
+            .wrap(Wrap { trim: true })
+            .block(
+                Block::default()
+                    .title(title.to_string())
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(border))
+                    .padding(Padding::horizontal(1)),
+            ),
+        rect,
+    );
+}
+
+/// A centered "Working…" box shown while a blocking `gh` action runs.
+pub(super) fn render_loading_overlay(frame: &mut Frame, msg: &str) {
+    render_centered_modal(frame, "Working…", &format!("⏳ {msg}"), Color::Cyan);
+}
+
+/// Civil date (year, month, day) from a day count since the Unix epoch — Howard Hinnant's
+/// algorithm. UTC, leap-second agnostic (fine for display).
+pub(super) fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
+pub(super) fn format_unix_utc(secs: i64) -> String {
+    let (y, m, d) = civil_from_days(secs.div_euclid(86400));
+    let rem = secs.rem_euclid(86400);
+    format!(
+        "{y:04}-{m:02}-{d:02} {:02}:{:02} UTC",
+        rem / 3600,
+        rem % 3600 / 60
+    )
+}
+
+pub(super) fn file_mtime_label(path: &std::path::Path) -> String {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| format_unix_utc(d.as_secs() as i64))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+/// Normalises the gist API's RFC3339 `updated_at` (e.g. `2026-06-08T11:06:18Z`) to
+/// `2026-06-08 11:06 UTC` for display alongside the local file's mtime.
+pub(super) fn gist_time_label(updated_at: &str) -> String {
+    if updated_at.is_empty() {
+        "unknown".to_string()
+    } else if updated_at.len() >= 16 {
+        format!("{} UTC", updated_at[..16].replace('T', " "))
+    } else {
+        updated_at.to_string()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pinned-sync helpers (Task 9 + Task 10)
+// ---------------------------------------------------------------------------
+
+pub(super) fn diff_labels(
+    local_path: Option<&std::path::Path>,
+    gist: &GistFile,
+) -> (String, String) {
+    let local_name = local_path
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("(none)");
+    let local_time = local_path
+        .map(file_mtime_label)
+        .unwrap_or_else(|| "—".to_string());
+    let local_label = format!("local: {local_name} ({local_time})");
+    let gist_label = format!(
+        "gist {} / {} ({})",
+        gist.gist_id,
+        gist.filename,
+        gist_time_label(&gist.updated_at)
+    );
+    (local_label, gist_label)
+}
+
+/// Orientation for the `Enter` diff preview, driven by the focused pane: focusing the gist
+/// pane frames it as a *download* (old = local, new = gist), focusing the local pane frames
+/// it as an *upload* (old = gist, new = local). The dedicated `d`/`u` actions keep their own
+/// fixed orientation; this only affects the read-only preview.
+pub(super) fn preview_diff_text(
+    upload_orientation: bool,
+    local_label: &str,
+    local_content: &str,
+    gist_label: &str,
+    remote: &str,
+) -> String {
+    if upload_orientation {
+        crate::diff::unified_diff(gist_label, remote, local_label, local_content)
+    } else {
+        crate::diff::unified_diff(local_label, local_content, gist_label, remote)
+    }
+}

@@ -1,5 +1,5 @@
 use super::*;
-use ratatui::style::Modifier;
+use ratatui::style::{Color, Modifier};
 use std::path::PathBuf;
 
 fn state_with_gists() -> AppState {
