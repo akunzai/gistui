@@ -1,4 +1,5 @@
 use super::*;
+use ratatui::style::Modifier;
 use std::path::PathBuf;
 
 fn state_with_gists() -> AppState {
