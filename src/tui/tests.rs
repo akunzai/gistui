@@ -285,6 +285,31 @@ fn detail_number_key_out_of_range_is_ignored() {
 }
 
 #[test]
+fn preview_w_toggles_line_wrapping() {
+    let mut state = initial_state();
+    state.screen = Screen::Preview;
+    assert!(!state.preview_wrap);
+    state.handle_key(KeyCode::Char('w'));
+    assert!(state.preview_wrap);
+    state.handle_key(KeyCode::Char('w'));
+    assert!(!state.preview_wrap);
+}
+
+#[test]
+fn detail_x_requests_gist_delete_confirm() {
+    let mut state = state_with_gists();
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("g1".into());
+    let outcome = state.handle_key(KeyCode::Char('X'));
+    assert!(matches!(outcome, KeyOutcome::None));
+    assert_eq!(state.screen, Screen::Confirm);
+    assert!(matches!(
+        state.pending_action,
+        Some(PendingAction::Delete { ref gist_id, .. }) if gist_id == "g1"
+    ));
+}
+
+#[test]
 fn preview_q_returns_to_launch_screen() {
     let mut state = state_with_gists();
     state.screen = Screen::Preview;

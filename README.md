@@ -132,7 +132,8 @@ Gist pane), `Up`/`Down` (move), and `Left`/`Right` (scroll a long row).
   (push/pull by modified time; only available when the pair is pinned).
 - `e` (on a local file) — open it in `$VISUAL`/`$EDITOR`.
 - `Space` (on a gist) — preview the gist's raw content in a scrollable overlay (`R` to
-  force-refresh, bypassing the session cache).
+  force-refresh, bypassing the session cache; `w` to toggle soft line wrapping for long lines,
+  remembered for the session).
 - `r` — toggle **recursive** local file discovery; the pane title shows `[↓]` while active
   and scans in the background so the UI stays responsive.
 - `a` — flip the **anchor** (which pane drives match ranking); independent of focus, so you
@@ -161,8 +162,9 @@ the gist owning the currently selected file. From here you manage gists as a who
   - `Enter` (file list focused) preview the cursor-selected file — this reaches **any** file,
     including the 10th and beyond.
   - `1`–`9` still preview the content of the Nth file directly, full-screen (`↑↓←→` scroll,
-    `R` refresh, `q`/`Esc` back).
-  - `c` compact · `o` browser · `q`/`Esc` back to the gist manager.
+    `R` refresh, `w` wrap, `q`/`Esc` back).
+  - `c` compact · `o` browser · `X` delete the entire gist (`y`/`n` confirm) · `q`/`Esc` back to
+    the gist manager.
 - `X` — delete the entire gist and all its files, after a `y`/`n` confirmation.
 - `o` — open the gist on gist.github.com in your browser.
 - `c` — compact revisions: after showing the revision count and a `y`/`n` confirmation, the
