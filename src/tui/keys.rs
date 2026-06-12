@@ -140,6 +140,9 @@ impl AppState {
             KeyCode::Char('o') if self.gists_index < groups.len() => {
                 return KeyOutcome::OpenBrowser
             }
+            KeyCode::Char('y') if self.gists_index < groups.len() => {
+                return KeyOutcome::CopyGistUrl
+            }
             KeyCode::Char('c') if self.gists_index < groups.len() => {
                 // The revision count needs a network call, so analysis happens in run_loop;
                 // the confirm prompt is raised once the count is back.
@@ -183,6 +186,7 @@ impl AppState {
             KeyCode::PageDown => self.detail_nav(10),
             KeyCode::PageUp => self.detail_nav(-10),
             KeyCode::Char('o') => return KeyOutcome::OpenBrowser,
+            KeyCode::Char('y') => return KeyOutcome::CopyGistUrl,
             KeyCode::Char('c') => {
                 self.compact_return_screen = Screen::GistDetail;
                 return KeyOutcome::CompactGist;
@@ -311,6 +315,8 @@ impl AppState {
             }
             KeyCode::Char('R') => return KeyOutcome::RefreshPreview,
             KeyCode::Char('w') => self.preview_wrap = !self.preview_wrap,
+            KeyCode::Char('y') => return KeyOutcome::CopyGistUrl,
+            KeyCode::Char('Y') => return KeyOutcome::CopyPreviewContent,
             KeyCode::Down => self.scroll_diff_down(),
             KeyCode::Up => self.scroll_diff_up(),
             KeyCode::Right => self.scroll_diff_right(),
@@ -447,6 +453,7 @@ impl AppState {
                 return KeyOutcome::RefreshLocals;
             }
             KeyCode::Char('/') => self.filtering = true,
+            KeyCode::Char('y') => return KeyOutcome::CopyGistUrl,
             KeyCode::Char('?') => self.screen = Screen::Help,
             KeyCode::Char('P') => {
                 self.pins_index = 0;

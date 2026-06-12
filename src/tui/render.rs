@@ -60,6 +60,7 @@ Actions (on the selected local file + gist)
   X          remove the selected file from its gist (y/n confirm)
   g          open the gist manager (edit description, delete gist)
   e          edit the local file in $EDITOR
+  y          copy the selected gist's URL to the system clipboard
 
 Pinned Mappings screen (P)
   Up/Down    move between pins
@@ -80,6 +81,7 @@ Diff view (Enter / d / u)
 Full-screen preview (Space, or 1-9 in the detail view)
   Up/Down/Left/Right  scroll (Left/Right only when wrap is off)
   w          toggle soft line wrapping (remembered for the session)
+  y          copy the gist URL · Y copy the file content to the clipboard
   R          re-fetch the content
   Esc / q    back
 
@@ -99,6 +101,7 @@ Gist manager (g)
   e          edit the gist description (Enter apply, Esc cancel)
   Enter      open the gist detail view (info, file list, comments)
   o          open the gist in your web browser
+  y          copy the gist's URL to the system clipboard
   c          compact revisions: squash history to one commit (force-push, y/n confirm)
   X          delete the entire gist and all its files (y/n confirm)
   q / Esc    back to the list
@@ -111,6 +114,7 @@ Gist detail (Enter from gist manager)
   1-9        preview the content of the Nth file (full-screen; R refresh, q back)
   c          compact revisions (y/n confirm; gist info shown as context)
   o          open the gist in your web browser
+  y          copy the gist's URL to the system clipboard
   X          delete the entire gist and all its files (y/n confirm)
   q / Esc    back to the gist manager
 
@@ -135,9 +139,9 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
     // A `R`-refresh fetch error (set via state.status) must surface here, not be swallowed.
     let hints = if state.preview_wrap {
-        "↑↓ scroll  ·  w wrap [on]  ·  R refresh  ·  Esc/q back"
+        "↑↓ scroll  ·  w wrap [on]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
     } else {
-        "↑↓←→ scroll  ·  w wrap [off]  ·  R refresh  ·  Esc/q back"
+        "↑↓←→ scroll  ·  w wrap [off]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
     };
     let (footer, colored) = footer_with_status(state.status.as_deref(), hints);
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);

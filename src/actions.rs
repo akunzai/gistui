@@ -133,6 +133,35 @@ pub fn open_browser_command(gist_id: &str) -> CommandPlan {
     }
 }
 
+/// The public web URL for a gist id (what `gh gist view --web` opens).
+pub fn gist_web_url(gist_id: &str) -> String {
+    format!("https://gist.github.com/{gist_id}")
+}
+
+/// Clipboard-copy candidates for `os` (an `std::env::consts::OS` value), in
+/// priority order. Each reads the text to copy from stdin. Returns empty for
+/// platforms with no known tool, so callers can report a clear status.
+pub fn clipboard_copy_candidates(os: &str) -> Vec<CommandPlan> {
+    let specs: &[(&str, &[&str])] = match os {
+        "macos" => &[("pbcopy", &[])],
+        "windows" => &[("clip", &[])],
+        // Linux/BSD: prefer Wayland, then fall back to the X11 tools.
+        "linux" | "freebsd" | "netbsd" | "openbsd" | "dragonfly" | "solaris" | "illumos" => &[
+            ("wl-copy", &[]),
+            ("xclip", &["-selection", "clipboard"]),
+            ("xsel", &["--clipboard", "--input"]),
+        ],
+        _ => &[],
+    };
+    specs
+        .iter()
+        .map(|(program, args)| CommandPlan {
+            program: (*program).into(),
+            args: args.iter().map(|a| (*a).to_string()).collect(),
+        })
+        .collect()
+}
+
 pub fn create_command(local_path: &Path, public: bool, description: &str) -> CommandPlan {
     let mut args = vec![
         "gist".into(),
@@ -339,6 +368,56 @@ pub fn execute_command(plan: &CommandPlan) -> Result<String> {
     run_command(&SystemRunner, plan)
 }
 
+/// Copies `text` to the system clipboard by shelling out to the first available
+/// platform tool (pbcopy/clip/wl-copy/xclip/xsel), piping `text` via stdin.
+/// Returns the tool used on success, or an error naming the tools tried so the
+/// headless / no-clipboard case surfaces as a status rather than a panic.
+/// Thin IO boundary: not unit-tested (mirrors [`execute_command`]).
+pub fn copy_to_clipboard(text: &str) -> Result<String> {
+    let candidates = clipboard_copy_candidates(std::env::consts::OS);
+    let tried = candidates
+        .iter()
+        .map(|p| p.program.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if candidates.is_empty() {
+        bail!("no clipboard tool for this platform");
+    }
+    let mut last_err: Option<String> = None;
+    for plan in &candidates {
+        match copy_via(plan, text) {
+            Ok(()) => return Ok(plan.program.clone()),
+            Err(error) => last_err = Some(error.to_string()),
+        }
+    }
+    match last_err {
+        Some(error) => bail!("no clipboard tool worked (tried {tried}): {error}"),
+        None => bail!("no clipboard tool found (tried {tried})"),
+    }
+}
+
+fn copy_via(plan: &CommandPlan, text: &str) -> Result<()> {
+    use std::io::Write;
+    use std::process::Stdio;
+    let mut child = Command::new(&plan.program)
+        .args(&plan.args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("spawn {}", plan.program))?;
+    {
+        let mut stdin = child.stdin.take().context("clipboard stdin unavailable")?;
+        stdin.write_all(text.as_bytes())?;
+        // `stdin` drops here, closing the pipe so the tool sees EOF and exits.
+    }
+    let status = child.wait()?;
+    if !status.success() {
+        bail!("{} exited with {status}", plan.program);
+    }
+    Ok(())
+}
+
 pub fn execute_download(local_path: &Path, content: &str, overwrite_confirmed: bool) -> Result<()> {
     if local_path.exists() && !overwrite_confirmed {
         bail!(
@@ -505,6 +584,44 @@ mod tests {
         let plan = open_browser_command("abc123");
         assert_eq!(plan.program, "gh");
         assert_eq!(plan.args, vec!["gist", "view", "abc123", "--web"]);
+    }
+
+    #[test]
+    fn gist_web_url_builds_canonical_gist_link() {
+        assert_eq!(gist_web_url("abc123"), "https://gist.github.com/abc123");
+    }
+
+    #[test]
+    fn clipboard_candidates_pick_the_platform_tool() {
+        assert_eq!(
+            clipboard_copy_candidates("macos")
+                .iter()
+                .map(|p| p.program.clone())
+                .collect::<Vec<_>>(),
+            vec!["pbcopy"]
+        );
+        assert_eq!(
+            clipboard_copy_candidates("windows")
+                .iter()
+                .map(|p| p.program.clone())
+                .collect::<Vec<_>>(),
+            vec!["clip"]
+        );
+        // Linux prefers Wayland, then falls back to the X11 tools in order.
+        assert_eq!(
+            clipboard_copy_candidates("linux")
+                .iter()
+                .map(|p| p.program.clone())
+                .collect::<Vec<_>>(),
+            vec!["wl-copy", "xclip", "xsel"]
+        );
+        let xclip = &clipboard_copy_candidates("linux")[1];
+        assert_eq!(xclip.args, vec!["-selection", "clipboard"]);
+    }
+
+    #[test]
+    fn clipboard_candidates_empty_for_unknown_os() {
+        assert!(clipboard_copy_candidates("plan9").is_empty());
     }
 
     #[test]

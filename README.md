@@ -11,6 +11,9 @@ GitHub CLI (`gh`).
 - The GitHub CLI: [`gh`](https://cli.github.com), installed and on your `PATH`
 - An authenticated `gh` session: `gh auth login`
 - A Rust toolchain — **only if building from source** — <https://rustup.rs>
+- _Optional, for `y`/`Y` clipboard copy:_ a clipboard tool on your `PATH` — `pbcopy` (macOS,
+  built in), `clip` (Windows, built in), or `wl-copy` / `xclip` / `xsel` (Linux). Without one,
+  copy reports a clear status instead of failing.
 
 `gistui` shells out to `gh` at runtime (it stores no GitHub token of its own), so `gh` must
 be installed and authenticated wherever you run `gistui`.
@@ -131,9 +134,12 @@ Gist pane), `Up`/`Down` (move), and `Left`/`Right` (scroll a long row).
 - `S` (on a pinned pair) — smart-sync the selected local↔gist pair from the list screen
   (push/pull by modified time; only available when the pair is pinned).
 - `e` (on a local file) — open it in `$VISUAL`/`$EDITOR`.
+- `y` (on a gist) — copy the gist's URL (`https://gist.github.com/<id>`) to the system
+  clipboard. Works on the list, the gist manager, the detail view, and the preview overlay.
 - `Space` (on a gist) — preview the gist's raw content in a scrollable overlay (`R` to
   force-refresh, bypassing the session cache; `w` to toggle soft line wrapping for long lines,
-  remembered for the session).
+  remembered for the session). Inside the preview, `y` copies the gist URL and `Y` copies the
+  full file content to the clipboard.
 - `r` — toggle **recursive** local file discovery; the pane title shows `[↓]` while active
   and scans in the background so the UI stays responsive.
 - `a` — flip the **anchor** (which pane drives match ranking); independent of focus, so you
@@ -163,10 +169,11 @@ the gist owning the currently selected file. From here you manage gists as a who
     including the 10th and beyond.
   - `1`–`9` still preview the content of the Nth file directly, full-screen (`↑↓←→` scroll,
     `R` refresh, `w` wrap, `q`/`Esc` back).
-  - `c` compact · `o` browser · `X` delete the entire gist (`y`/`n` confirm) · `q`/`Esc` back to
-    the gist manager.
+  - `c` compact · `o` browser · `y` copy gist URL · `X` delete the entire gist (`y`/`n` confirm) ·
+    `q`/`Esc` back to the gist manager.
 - `X` — delete the entire gist and all its files, after a `y`/`n` confirmation.
 - `o` — open the gist on gist.github.com in your browser.
+- `y` — copy the gist's URL to the system clipboard.
 - `c` — compact revisions: after showing the revision count and a `y`/`n` confirmation, the
   gist is cloned to a temp dir over HTTPS (authenticating through your `gh` token, never SSH
   keys), its history squashed to a single commit, and force-pushed — collapsing all older
@@ -193,6 +200,9 @@ the gist owning the currently selected file. From here you manage gists as a who
   the confirmation prompt displays the gist's info so the target stays visible while you decide).
 - No GitHub token is stored by the app, and gist content is never written to the config
   file — only path↔gist pin mappings are persisted.
+- Clipboard copy (`y` URL, `Y` content) hands the text to the system clipboard via the OS
+  tool, where other applications can read it. `Y` copies the full previewed file content, so
+  treat it like any other paste of potentially sensitive data.
 
 ## Configuration
 
