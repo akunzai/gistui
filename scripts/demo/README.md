@@ -45,9 +45,11 @@ runs), and it is deleted on exit.
 ## Storyboard
 
 Browse with ranking ⭐ → pin a pair + the Pins view → cycle visibility (`v`) →
-diff with word-level highlight and the `c` context toggle → upload with the
-confirm diff → the **download overwrite gate** (`d` → diff → `d` → `y/n`) →
-help (`?`).
+**syntax-highlighted preview** (`Space`, a TOML file) → diff with word-level
+highlight, **syntax-highlighted context** and the `c` context toggle → upload
+with the confirm diff → the **download overwrite gate** (`d` → diff → `d` →
+`y/n`) → help (`?`). The fixtures pair a TOML and a shell file so the
+highlighting shows across two languages.
 
 ## Requirements
 
