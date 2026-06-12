@@ -294,6 +294,9 @@ pub struct AppState {
     /// Soft line-wrapping in the full-screen preview, toggled with `w` (remembered for the
     /// session). When on, long lines wrap instead of needing horizontal scroll.
     pub preview_wrap: bool,
+    /// Syntax-highlight file content in the preview and diff-context lines (issue #69).
+    /// Defaults on; `load_startup_state` turns it off when `NO_COLOR` is set in the environment.
+    pub syntax_highlight: bool,
     pub preview_gist_key: Option<(String, String)>,
     /// Screen to return to when leaving the full-screen preview (default: List; set to
     /// GistDetail when a detail-view file preview is launched).
@@ -774,6 +777,7 @@ pub fn initial_state() -> AppState {
         loading: false,
         preview_title: String::new(),
         preview_wrap: false,
+        syntax_highlight: true,
         preview_gist_key: None,
         preview_return: Screen::List,
         preview_request: None,
@@ -825,6 +829,8 @@ pub fn load_startup_state() -> Result<AppState> {
     state.scan_depth = config.scan_depth;
     state.diff_context = config.diff_context;
     state.diff_show_full = config.diff_show_full;
+    // Honour NO_COLOR for the syntax-highlight feature only (existing semantic colours stay).
+    state.syntax_highlight = std::env::var_os("NO_COLOR").is_none();
     state.locals = crate::local::discover_local_candidates(
         &cwd,
         &state.pinned,
@@ -902,6 +908,7 @@ impl AppState {
 /// the frame) and wiped clean with `Clear` so whatever is behind it doesn't bleed through.
 /// This is the shared "centered window" primitive behind both the loading overlay and the
 /// confirm prompt.
+mod highlight;
 mod render;
 use render::*;
 mod keys;

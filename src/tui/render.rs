@@ -76,12 +76,14 @@ Diff view (Enter / d / u)
   Up/Down/Left/Right  scroll the diff
   c          toggle context: configured radius <-> full file (remembered)
   d / u      download / upload from the diff
+  syntax     unchanged context lines are syntax-highlighted by file type
   Esc / q    back
 
 Full-screen preview (Space, or 1-9 in the detail view)
   Up/Down/Left/Right  scroll (Left/Right only when wrap is off)
   w          toggle soft line wrapping (remembered for the session)
   y          copy the gist URL · Y copy the file content to the clipboard
+  syntax     known file types are syntax-highlighted
   R          re-fetch the content
   Esc / q    back
 
@@ -121,7 +123,8 @@ Gist detail (Enter from gist manager)
 General
   Esc / q    close an overlay; from the list, press twice to quit the app
   ?          show this help
-  Up/Down    scroll this help text";
+  Up/Down    scroll this help text
+  NO_COLOR   set this env var to disable syntax highlighting (preview + diff)";
 
     frame.render_widget(
         Paragraph::new(body).scroll((state.help_scroll, 0)).block(
@@ -133,6 +136,42 @@ General
         ),
         frame.area(),
     );
+}
+
+/// Lowercase file extension of a filename or path string, if any.
+fn file_ext(name: &str) -> Option<String> {
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+}
+
+/// Language extension for the previewed file, taken from its gist key's filename.
+fn preview_ext(state: &AppState) -> Option<String> {
+    state
+        .preview_gist_key
+        .as_ref()
+        .and_then(|(_, filename)| file_ext(filename))
+}
+
+/// Language extension for the diff's file — the local/target filename both sides share.
+fn diff_ext(state: &AppState) -> Option<String> {
+    state
+        .download_target
+        .file_name()
+        .or_else(|| state.preview_local.file_name())
+        .and_then(|n| n.to_str())
+        .and_then(file_ext)
+}
+
+/// The preview body as per-line span vectors: syntax-highlighted when the feature is enabled and
+/// the file type is known, otherwise one plain span per line.
+fn preview_line_spans(state: &AppState) -> Vec<Vec<Span<'static>>> {
+    let lines: Vec<String> = state.diff_text.lines().map(str::to_string).collect();
+    match (state.syntax_highlight, preview_ext(state)) {
+        (true, Some(ext)) => super::highlight::highlight_buffer(&ext, &lines),
+        _ => lines.into_iter().map(|l| vec![Span::raw(l)]).collect(),
+    }
 }
 
 pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
@@ -157,15 +196,23 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .padding(Padding::horizontal(1));
+    let line_spans = preview_line_spans(state);
     let paragraph = if state.preview_wrap {
-        Paragraph::new(state.diff_text.clone())
+        // Wrapping needs the full line set; vertical scroll goes through Paragraph (no hscroll).
+        let body = Text::from(line_spans.into_iter().map(Line::from).collect::<Vec<_>>());
+        Paragraph::new(body)
             .scroll((state.diff_scroll, 0))
             .wrap(Wrap { trim: false })
             .block(block)
     } else {
-        Paragraph::new(state.diff_text.clone())
-            .scroll((state.diff_scroll, state.diff_hscroll))
-            .block(block)
+        // Manual horizontal + vertical scroll mirrors diff_view, avoiding the styled-line
+        // redraw artifacts that Paragraph::scroll leaves on coloured spans.
+        let visible: Vec<Line> = line_spans
+            .into_iter()
+            .map(|spans| apply_hscroll_spans(spans, state.diff_hscroll as usize))
+            .skip(state.diff_scroll as usize)
+            .collect();
+        Paragraph::new(Text::from(visible)).block(block)
     };
     frame.render_widget(paragraph, chunks[0]);
     render_footer(frame, chunks[1], "", &footer, colored);
@@ -1044,10 +1091,42 @@ pub(super) fn header_line(line: &str, hscroll: usize) -> Line<'static> {
 /// easy to spot. Scrolling is applied by hand — skip `vscroll` lines and drop `hscroll` leading
 /// chars per line — rather than via `Paragraph::scroll`, whose styled-line handling leaves
 /// redraw artifacts in ratatui 0.26.
-pub(super) fn diff_view(text: &str, vscroll: u16, hscroll: u16) -> Text<'static> {
+///
+/// When `highlight` is on and `ext` names a known language, the unchanged context lines (those
+/// prefixed by a space) are syntax coloured; `-`/`+` lines keep their red/green + word-level
+/// highlighting untouched so the add/delete signal stays dominant. Tabbed context lines are left
+/// plain so their indentation stays aligned with the raw-tab `-`/`+` lines.
+pub(super) fn diff_view_highlighted(
+    text: &str,
+    vscroll: u16,
+    hscroll: u16,
+    ext: Option<&str>,
+    highlight: bool,
+) -> Text<'static> {
     let raw: Vec<&str> = text.lines().collect();
     let hscroll = hscroll as usize;
     let mut result: Vec<Line<'static>> = Vec::with_capacity(raw.len());
+
+    // Pre-highlight the unchanged context lines as one buffer, keyed back by raw line index.
+    let ctx_highlight: std::collections::HashMap<usize, Vec<Span<'static>>> = match (highlight, ext)
+    {
+        (true, Some(ext)) => {
+            let mut idxs = Vec::new();
+            let mut contents = Vec::new();
+            for (idx, l) in raw.iter().enumerate() {
+                if l.starts_with(' ') && !l.contains('\t') {
+                    idxs.push(idx);
+                    contents.push(l[1..].to_string());
+                }
+            }
+            super::highlight::highlight_buffer(ext, &contents)
+                .into_iter()
+                .zip(idxs)
+                .map(|(spans, idx)| (idx, spans))
+                .collect()
+        }
+        _ => std::collections::HashMap::new(),
+    };
 
     let mut i = 0;
     while i < raw.len() {
@@ -1091,6 +1170,13 @@ pub(super) fn diff_view(text: &str, vscroll: u16, hscroll: u16) -> Text<'static>
             }
         } else if line.starts_with("+++") || line.starts_with("---") {
             result.push(header_line(line, hscroll));
+            i += 1;
+        } else if let Some(spans) = ctx_highlight.get(&i) {
+            // Syntax-highlighted context line: re-prepend the space marker, then scroll.
+            let mut line_spans = Vec::with_capacity(spans.len() + 1);
+            line_spans.push(Span::raw(" ".to_string()));
+            line_spans.extend(spans.iter().cloned());
+            result.push(apply_hscroll_spans(line_spans, hscroll));
             i += 1;
         } else {
             let visible: String = line.chars().skip(hscroll).collect();
@@ -1234,8 +1320,16 @@ pub(super) fn render_diff_pane(frame: &mut Frame, area: Rect, state: &AppState) 
         Some(radius) => crate::diff::collapse_context(&state.diff_text, radius),
         None => state.diff_text.clone(),
     };
+    let ext = diff_ext(state);
     frame.render_widget(
-        Paragraph::new(diff_view(&diff_body, state.diff_scroll, state.diff_hscroll)).block(
+        Paragraph::new(diff_view_highlighted(
+            &diff_body,
+            state.diff_scroll,
+            state.diff_hscroll,
+            ext.as_deref(),
+            state.syntax_highlight,
+        ))
+        .block(
             Block::default()
                 .title(diff_title(state))
                 .borders(Borders::ALL)
