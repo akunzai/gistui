@@ -106,6 +106,7 @@ Gist pane), `Up`/`Down` (move), and `Left`/`Right` (scroll a long row).
   `diff_context` config, default 3) and the full file. The choice is remembered (persisted
   to config). Unchanged context lines are **syntax-highlighted** by file type; the `-`/`+`
   lines keep their red/green and word-level highlighting so additions/removals stay obvious.
+  Scroll with the arrow keys, or `PageUp`/`PageDown` to jump 10 lines at a time.
 - `d` (on a gist) — download it into the cwd as `./<gist-filename>`. A brand-new file is
   written directly; an existing one is shown as a diff and overwritten only after a `y`/`n`
   confirmation.
@@ -139,8 +140,9 @@ Gist pane), `Up`/`Down` (move), and `Left`/`Right` (scroll a long row).
   clipboard. Works on the list, the gist manager, the detail view, and the preview overlay.
 - `Space` (on a gist) — preview the gist's raw content in a scrollable overlay (`R` to
   force-refresh, bypassing the session cache; `w` to toggle soft line wrapping for long lines,
-  remembered for the session). Known file types are **syntax-highlighted** by extension. Inside
-  the preview, `y` copies the gist URL and `Y` copies the full file content to the clipboard.
+  remembered for the session). Known file types are **syntax-highlighted** by extension. Scroll
+  with the arrow keys, or `PageUp`/`PageDown` to jump 10 lines at a time. Inside the preview, `y`
+  copies the gist URL and `Y` copies the full file content to the clipboard.
 - `r` — toggle **recursive** local file discovery; the pane title shows `[↓]` while active
   and scans in the background so the UI stays responsive.
 - `a` — flip the **anchor** (which pane drives match ranking); independent of focus, so you

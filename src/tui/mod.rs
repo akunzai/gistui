@@ -714,6 +714,22 @@ impl AppState {
         self.diff_scroll = self.diff_scroll.saturating_sub(1);
     }
 
+    /// Page the diff/preview down by `lines`, clamped to the same bottom as `scroll_diff_down`.
+    pub fn scroll_diff_page_down(&mut self, lines: u16) {
+        let max = self
+            .diff_text
+            .lines()
+            .count()
+            .saturating_sub(1)
+            .min(u16::MAX as usize) as u16;
+        self.diff_scroll = self.diff_scroll.saturating_add(lines).min(max);
+    }
+
+    /// Page the diff/preview up by `lines`, saturating at the top.
+    pub fn scroll_diff_page_up(&mut self, lines: u16) {
+        self.diff_scroll = self.diff_scroll.saturating_sub(lines);
+    }
+
     pub fn scroll_diff_right(&mut self) {
         let max = self
             .diff_text
