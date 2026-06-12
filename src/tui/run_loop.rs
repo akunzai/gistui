@@ -345,20 +345,17 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     let target = state.cwd.join(&filename);
                     let upload_orientation = state.focus == FocusPane::Local;
 
-                    state.bg_task_msg = Some("Loading diff…".to_string());
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    bg_rx = Some(rx);
-                    std::thread::spawn(move || {
+                    spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
                         let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
                             .map_err(|e| e.to_string());
-                        let _ = tx.send(BgTaskOutcome::PreviewDiff {
+                        BgTaskOutcome::PreviewDiff {
                             result,
                             local_path,
                             local_label,
                             gist_label,
                             target,
                             upload_orientation,
-                        });
+                        }
                     });
                 }
                 KeyOutcome::Download => download(&mut state),
@@ -372,20 +369,17 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     let target = state.cwd.join(&filename);
                     let (local_label, gist_label) = diff_labels(Some(&target), &gist);
 
-                    state.bg_task_msg = Some("Downloading…".to_string());
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    bg_rx = Some(rx);
-                    std::thread::spawn(move || {
+                    spawn_bg(&mut state, &mut bg_rx, "Downloading…", move || {
                         let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
                             .map_err(|e| e.to_string());
-                        let _ = tx.send(BgTaskOutcome::DownloadSelected {
+                        BgTaskOutcome::DownloadSelected {
                             result,
                             target,
                             local_label,
                             gist_label,
                             gist_id,
                             filename,
-                        });
+                        }
                     });
                 }
                 KeyOutcome::OpenGistDetail => {
@@ -401,20 +395,17 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     state.detail_focus = DetailFocus::Comments;
                     state.detail_file_cursor = 0;
 
-                    state.bg_task_msg = Some("Loading comments…".to_string());
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    bg_rx = Some(rx);
                     let fetch_id = gist_id.clone();
-                    std::thread::spawn(move || {
+                    spawn_bg(&mut state, &mut bg_rx, "Loading comments…", move || {
                         let result = crate::gh::fetch_gist_comments_json(&fetch_id)
                             .map_err(|e| e.to_string())
                             .and_then(|raw| {
                                 crate::gh::parse_gist_comments_json(&raw).map_err(|e| e.to_string())
                             });
-                        let _ = tx.send(BgTaskOutcome::CommentsFetched {
+                        BgTaskOutcome::CommentsFetched {
                             gist_id: fetch_id,
                             result,
-                        });
+                        }
                     });
                 }
                 KeyOutcome::CompactGist => {
@@ -430,10 +421,7 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         group.description.clone()
                     };
 
-                    state.bg_task_msg = Some("Checking revisions…".to_string());
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    bg_rx = Some(rx);
-                    std::thread::spawn(move || {
+                    spawn_bg(&mut state, &mut bg_rx, "Checking revisions…", move || {
                         let result = crate::actions::execute_command(
                             &crate::actions::gist_revision_count_command(&gist_id),
                         )
@@ -442,11 +430,11 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                             crate::actions::parse_revision_count(&out)
                                 .ok_or_else(|| "could not parse revision count".to_string())
                         });
-                        let _ = tx.send(BgTaskOutcome::CompactAnalyze {
+                        BgTaskOutcome::CompactAnalyze {
                             result,
                             gist_id,
                             label,
-                        });
+                        }
                     });
                 }
                 KeyOutcome::Pin => pin_selected(&mut state),
@@ -493,20 +481,17 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     let local_path = local.path.clone();
                     let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
 
-                    state.bg_task_msg = Some("Loading diff…".to_string());
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    bg_rx = Some(rx);
-                    std::thread::spawn(move || {
+                    spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
                         let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
                             .map_err(|e| e.to_string());
-                        let _ = tx.send(BgTaskOutcome::UploadPreview {
+                        BgTaskOutcome::UploadPreview {
                             result,
                             gist_id,
                             filename,
                             local_path,
                             local_label,
                             gist_label,
-                        });
+                        }
                     });
                 }
                 KeyOutcome::Upload => {
@@ -560,21 +545,18 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     };
 
                     state.back_to_list();
-                    state.bg_task_msg = Some("Uploading…".to_string());
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    bg_rx = Some(rx);
-                    std::thread::spawn(move || {
+                    spawn_bg(&mut state, &mut bg_rx, "Uploading…", move || {
                         let result = crate::actions::execute_command(&plan)
                             .map(|_| ())
                             .map_err(|e| e.to_string());
 
                         let _ = std::fs::remove_dir_all(&temp_dir);
 
-                        let _ = tx.send(BgTaskOutcome::UploadReplace {
+                        BgTaskOutcome::UploadReplace {
                             result,
                             gist_id,
                             filename,
-                        });
+                        }
                     });
                 }
                 KeyOutcome::EditUpload => {
@@ -588,18 +570,15 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     let description = state.description_input.clone();
                     let plan = crate::actions::create_command(&local_path, public, &description);
 
-                    state.bg_task_msg = Some("Creating gist…".to_string());
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    bg_rx = Some(rx);
-                    std::thread::spawn(move || {
+                    spawn_bg(&mut state, &mut bg_rx, "Creating gist…", move || {
                         let result = crate::actions::execute_command(&plan)
                             .map(|_| ())
                             .map_err(|e| e.to_string());
-                        let _ = tx.send(BgTaskOutcome::CreateGist {
+                        BgTaskOutcome::CreateGist {
                             result,
                             local_path,
                             public,
-                        });
+                        }
                     });
                 }
                 KeyOutcome::PreviewContent => {
@@ -624,17 +603,14 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         let gist_id = key.0.clone();
                         let filename = key.1.clone();
                         let preview_title = format!("Preview: {gist_id} / {filename}");
-                        state.bg_task_msg = Some("Loading preview…".to_string());
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        bg_rx = Some(rx);
-                        std::thread::spawn(move || {
+                        spawn_bg(&mut state, &mut bg_rx, "Loading preview…", move || {
                             let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
                                 .map_err(|e| e.to_string());
-                            let _ = tx.send(BgTaskOutcome::PreviewContent {
+                            BgTaskOutcome::PreviewContent {
                                 result,
                                 key,
                                 preview_title,
-                            });
+                            }
                         });
                     }
                 }
@@ -644,17 +620,14 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         let gist_id = key.0.clone();
                         let filename = key.1.clone();
                         let preview_title = format!("Preview: {gist_id} / {filename}");
-                        state.bg_task_msg = Some("Loading preview…".to_string());
-                        let (tx, rx) = std::sync::mpsc::channel();
-                        bg_rx = Some(rx);
-                        std::thread::spawn(move || {
+                        spawn_bg(&mut state, &mut bg_rx, "Loading preview…", move || {
                             let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
                                 .map_err(|e| e.to_string());
-                            let _ = tx.send(BgTaskOutcome::PreviewContent {
+                            BgTaskOutcome::PreviewContent {
                                 result,
                                 key,
                                 preview_title,
-                            });
+                            }
                         });
                     }
                 }
@@ -670,14 +643,11 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     let plan = crate::actions::delete_command(&gist_id);
                     state.back_to_list();
 
-                    state.bg_task_msg = Some("Deleting gist…".to_string());
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    bg_rx = Some(rx);
-                    std::thread::spawn(move || {
+                    spawn_bg(&mut state, &mut bg_rx, "Deleting gist…", move || {
                         let result = crate::actions::execute_command(&plan)
                             .map(|_| ())
                             .map_err(|e| e.to_string());
-                        let _ = tx.send(BgTaskOutcome::DeleteGist { result, gist_id });
+                        BgTaskOutcome::DeleteGist { result, gist_id }
                     });
                 }
                 KeyOutcome::ExecuteRemoveFile => {
@@ -690,18 +660,15 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     let plan = crate::actions::remove_file_command(&gist_id, &filename);
                     state.back_to_list();
 
-                    state.bg_task_msg = Some("Removing file…".to_string());
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    bg_rx = Some(rx);
-                    std::thread::spawn(move || {
+                    spawn_bg(&mut state, &mut bg_rx, "Removing file…", move || {
                         let result = crate::actions::execute_command(&plan)
                             .map(|_| ())
                             .map_err(|e| e.to_string());
-                        let _ = tx.send(BgTaskOutcome::RemoveFile {
+                        BgTaskOutcome::RemoveFile {
                             result,
                             gist_id,
                             filename,
-                        });
+                        }
                     });
                 }
                 KeyOutcome::ExecuteCompactGist => {
@@ -716,18 +683,20 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     state.pending_action = None;
                     state.screen = state.compact_return_screen;
 
-                    state.bg_task_msg = Some("Compacting revisions…".to_string());
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    bg_rx = Some(rx);
-                    std::thread::spawn(move || {
-                        let result = crate::actions::execute_compact_gist(&gist_id)
-                            .map_err(|e| e.to_string());
-                        let _ = tx.send(BgTaskOutcome::CompactGist {
-                            result,
-                            label,
-                            count,
-                        });
-                    });
+                    spawn_bg(
+                        &mut state,
+                        &mut bg_rx,
+                        "Compacting revisions…",
+                        move || {
+                            let result = crate::actions::execute_compact_gist(&gist_id)
+                                .map_err(|e| e.to_string());
+                            BgTaskOutcome::CompactGist {
+                                result,
+                                label,
+                                count,
+                            }
+                        },
+                    );
                 }
                 KeyOutcome::ApplyDescription => {
                     let Some(group) = state.selected_group() else {
@@ -740,15 +709,17 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     state.editing_description = false;
                     state.description_input.clear();
 
-                    state.bg_task_msg = Some("Updating description…".to_string());
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    bg_rx = Some(rx);
-                    std::thread::spawn(move || {
-                        let result = crate::actions::execute_command(&plan)
-                            .map(|_| ())
-                            .map_err(|e| e.to_string());
-                        let _ = tx.send(BgTaskOutcome::ApplyDescription { result, gist_id });
-                    });
+                    spawn_bg(
+                        &mut state,
+                        &mut bg_rx,
+                        "Updating description…",
+                        move || {
+                            let result = crate::actions::execute_command(&plan)
+                                .map(|_| ())
+                                .map_err(|e| e.to_string());
+                            BgTaskOutcome::ApplyDescription { result, gist_id }
+                        },
+                    );
                 }
                 KeyOutcome::RefreshLocals => {
                     state.set_status("Scanning files…");
@@ -965,6 +936,22 @@ fn spawn_local_scan(
 
 type BgRx = Option<std::sync::mpsc::Receiver<BgTaskOutcome>>;
 
+/// Run `work` on a background thread, wiring its result channel into `bg_rx` and setting
+/// the in-progress `bg_task_msg` the main loop renders. The worker's returned
+/// [`BgTaskOutcome`] is sent back for the loop to drain. Encapsulates the channel +
+/// thread + status boilerplate every async action otherwise repeats by hand.
+fn spawn_bg<F>(state: &mut AppState, bg_rx: &mut BgRx, msg: impl Into<String>, work: F)
+where
+    F: FnOnce() -> BgTaskOutcome + Send + 'static,
+{
+    state.bg_task_msg = Some(msg.into());
+    let (tx, rx) = std::sync::mpsc::channel();
+    *bg_rx = Some(rx);
+    std::thread::spawn(move || {
+        let _ = tx.send(work());
+    });
+}
+
 /// The pin currently selected in the Pins screen, if any.
 fn selected_pin(state: &AppState) -> Option<crate::domain::PinnedMapping> {
     state.pinned.get(state.pins_index).cloned()
@@ -999,20 +986,17 @@ fn spawn_pin_push(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         created_at: String::new(),
     };
     let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
-    state.bg_task_msg = Some("Loading diff…".to_string());
-    let (tx, rx) = std::sync::mpsc::channel();
-    *bg_rx = Some(rx);
-    std::thread::spawn(move || {
+    spawn_bg(state, bg_rx, "Loading diff…", move || {
         let result =
             crate::gh::fetch_gist_file_content(&gist_id, &filename).map_err(|e| e.to_string());
-        let _ = tx.send(BgTaskOutcome::UploadPreview {
+        BgTaskOutcome::UploadPreview {
             result,
             gist_id,
             filename,
             local_path,
             local_label,
             gist_label,
-        });
+        }
     });
 }
 
@@ -1031,20 +1015,17 @@ fn spawn_pin_pull(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         created_at: String::new(),
     };
     let (local_label, gist_label) = diff_labels(Some(&target), &gist_file);
-    state.bg_task_msg = Some("Downloading…".to_string());
-    let (tx, rx) = std::sync::mpsc::channel();
-    *bg_rx = Some(rx);
-    std::thread::spawn(move || {
+    spawn_bg(state, bg_rx, "Downloading…", move || {
         let result =
             crate::gh::fetch_gist_file_content(&gist_id, &filename).map_err(|e| e.to_string());
-        let _ = tx.send(BgTaskOutcome::DownloadSelected {
+        BgTaskOutcome::DownloadSelected {
             result,
             target,
             local_label,
             gist_label,
             gist_id,
             filename,
-        });
+        }
     });
 }
 
@@ -1062,14 +1043,11 @@ fn spawn_pin_diff(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         created_at: String::new(),
     };
     let (local_label, gist_label) = diff_labels(Some(&local_abs), &gist_file);
-    state.bg_task_msg = Some("Loading diff…".to_string());
-    let (tx, rx) = std::sync::mpsc::channel();
-    *bg_rx = Some(rx);
     let target = local_abs.clone();
-    std::thread::spawn(move || {
+    spawn_bg(state, bg_rx, "Loading diff…", move || {
         let result =
             crate::gh::fetch_gist_file_content(&gist_id, &filename).map_err(|e| e.to_string());
-        let _ = tx.send(BgTaskOutcome::PreviewDiff {
+        BgTaskOutcome::PreviewDiff {
             result,
             local_path: Some(local_abs),
             local_label,
@@ -1078,7 +1056,7 @@ fn spawn_pin_diff(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
             // Pin diffs originate from the Pins screen (no focused pane); keep the
             // historical download orientation (old = local, new = gist).
             upload_orientation: false,
-        });
+        }
     });
 }
 
