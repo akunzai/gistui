@@ -81,6 +81,31 @@ pub fn normalize_path(path: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Human-friendly rendering of a local path for TUI display. Replaces the user's
+/// home-directory prefix with `~` and normalizes the suffix to `/` separators (so the
+/// form is short and consistent on every platform, matching git / gh conventions). It is
+/// the display-side symmetry to `normalize_path`'s `~` expansion. Paths outside home, or
+/// when no home is known, render unchanged. This thin wrapper feeds the real home into the
+/// pure [`display_path_with_home`] so the logic stays unit-testable.
+pub fn display_path(path: &Path) -> String {
+    display_path_with_home(path, dirs::home_dir().as_deref())
+}
+
+/// Pure core of [`display_path`] with the home directory injected, so home handling
+/// (including Windows-style separators) is deterministically testable.
+pub fn display_path_with_home(path: &Path, home: Option<&Path>) -> String {
+    if let Some(home) = home {
+        if let Ok(suffix) = path.strip_prefix(home) {
+            if suffix.as_os_str().is_empty() {
+                return "~".to_string();
+            }
+            let suffix = suffix.to_string_lossy().replace('\\', "/");
+            return format!("~/{}", suffix.trim_start_matches('/'));
+        }
+    }
+    path.display().to_string()
+}
+
 /// Resolve the working directory to operate in. `None` keeps the current directory;
 /// `Some(path)` must point at an existing directory (a `~` prefix is expanded) — a missing
 /// path or a non-directory is an error, so the caller can report it and exit before the TUI.
@@ -300,5 +325,58 @@ mod tests {
         std::fs::write(&file, "x").unwrap();
         let err = resolve_working_dir(Some(file)).unwrap_err();
         assert!(err.to_string().contains("not a directory"));
+    }
+
+    #[test]
+    fn display_path_with_home_is_tilde_for_home_root() {
+        let home = Path::new("/Users/alice");
+        assert_eq!(display_path_with_home(home, Some(home)), "~");
+    }
+
+    #[test]
+    fn display_path_with_home_shortens_path_under_home() {
+        let home = Path::new("/Users/alice");
+        let p = home.join("code").join("gistui");
+        assert_eq!(display_path_with_home(&p, Some(home)), "~/code/gistui");
+    }
+
+    #[test]
+    fn display_path_with_home_preserves_spaces() {
+        let home = Path::new("/Users/alice");
+        let p = home.join("My Docs").join("a b.txt");
+        assert_eq!(display_path_with_home(&p, Some(home)), "~/My Docs/a b.txt");
+    }
+
+    #[test]
+    fn display_path_with_home_uses_forward_slashes_in_suffix() {
+        // On Windows the stripped suffix carries `\` separators; the display form
+        // normalizes them to `/`. We exercise the replacement portably by placing a
+        // literal backslash inside a single path component.
+        let home = Path::new("/Users/alice");
+        let p = home.join(r"sub\dir");
+        assert_eq!(display_path_with_home(&p, Some(home)), "~/sub/dir");
+    }
+
+    #[test]
+    fn display_path_with_home_keeps_paths_outside_home() {
+        let home = Path::new("/Users/alice");
+        let p = Path::new("/etc/hosts");
+        assert_eq!(display_path_with_home(p, Some(home)), "/etc/hosts");
+    }
+
+    #[test]
+    fn display_path_with_home_falls_back_without_home() {
+        let p = Path::new("/Users/alice/code");
+        assert_eq!(display_path_with_home(p, None), "/Users/alice/code");
+    }
+
+    #[test]
+    fn display_path_matches_helper_with_real_home() {
+        // The thin wrapper just feeds dirs::home_dir() into the pure helper.
+        if let Some(home) = dirs::home_dir() {
+            let p = home.join("code").join("gistui");
+            assert_eq!(display_path(&p), display_path_with_home(&p, Some(&home)));
+            assert_eq!(display_path(&p), "~/code/gistui");
+        }
     }
 }
