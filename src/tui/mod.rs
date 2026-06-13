@@ -311,6 +311,7 @@ pub struct AppState {
     pub scan_depth: u32,
     pub local_scanning: bool,
     pub pins_index: usize,
+    pub pins_hscroll: u16,
     pub gists_index: usize,
     pub gists_hscroll: u16,
     pub gists_sort: GistGroupSort,
@@ -537,6 +538,19 @@ impl AppState {
                     .chars()
                     .count()
             })
+            .max()
+            .unwrap_or(0)
+            .saturating_sub(1)
+            .min(u16::MAX as usize) as u16
+    }
+
+    /// Highest horizontal-scroll offset for the Pins screen, bounded by the longest
+    /// displayed local path (the only variable-length, overflow-prone field in a pin row).
+    /// Pure helper modeled on `gists_hscroll_max`.
+    fn pins_hscroll_max(&self) -> u16 {
+        self.pinned
+            .iter()
+            .map(|m| crate::config::display_path(&m.local_path).chars().count())
             .max()
             .unwrap_or(0)
             .saturating_sub(1)
@@ -803,6 +817,7 @@ pub fn initial_state() -> AppState {
         scan_depth: crate::config::AppConfig::default().scan_depth,
         local_scanning: false,
         pins_index: 0,
+        pins_hscroll: 0,
         gists_index: 0,
         gists_hscroll: 0,
         gists_sort: GistGroupSort::Updated,

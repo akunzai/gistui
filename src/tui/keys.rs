@@ -48,9 +48,17 @@ impl AppState {
             KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
             KeyCode::Down if self.pins_index + 1 < self.pinned.len() => {
                 self.pins_index += 1;
+                self.pins_hscroll = 0;
             }
             KeyCode::Up if self.pins_index > 0 => {
                 self.pins_index -= 1;
+                self.pins_hscroll = 0;
+            }
+            KeyCode::Right => {
+                self.pins_hscroll = (self.pins_hscroll + 1).min(self.pins_hscroll_max());
+            }
+            KeyCode::Left => {
+                self.pins_hscroll = self.pins_hscroll.saturating_sub(1);
             }
             KeyCode::Enter if !self.pinned.is_empty() => return KeyOutcome::PreviewPinDiff,
             KeyCode::Char('x') if !self.pinned.is_empty() => return KeyOutcome::UnpinAtPin,
@@ -464,6 +472,7 @@ impl AppState {
             KeyCode::Char('?') => self.screen = Screen::Help,
             KeyCode::Char('P') => {
                 self.pins_index = 0;
+                self.pins_hscroll = 0;
                 self.screen = Screen::Pins;
             }
             KeyCode::Char('S') => return KeyOutcome::SyncSelectedPair,

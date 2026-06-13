@@ -109,8 +109,13 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                             } else {
                                 match crate::actions::execute_download(&target, &remote, false) {
                                     Ok(()) => {
-                                        state
-                                            .set_status(format!("Downloaded {}", target.display()));
+                                        state.set_status(format!(
+                                            "Downloaded {}",
+                                            target
+                                                .file_name()
+                                                .unwrap_or(target.as_os_str())
+                                                .to_string_lossy()
+                                        ));
                                         record_pin_sync(
                                             &mut state,
                                             &target,
@@ -196,7 +201,7 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                             state.set_status(format!(
                                 "Created {} gist from {}",
                                 visibility,
-                                local_path.display()
+                                crate::config::display_path(&local_path)
                             ));
                             state.description_input.clear();
                             state.back_to_list();
@@ -457,7 +462,8 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         local_path: local_path.clone(),
                     });
 
-                    let local_label = format!("local: {}", local_path.display());
+                    let local_label =
+                        format!("local: {}", crate::config::display_path(&local_path));
                     let gist_label = "(new file)".to_string();
                     state.init_upload_state(
                         &local_path,
@@ -1174,7 +1180,10 @@ fn edit_local(
     terminal.clear()?;
 
     match result {
-        Ok(_) => state.set_status(format!("Edited {}", local.path.display())),
+        Ok(_) => state.set_status(format!(
+            "Edited {}",
+            crate::config::display_path(&local.path)
+        )),
         Err(error) => state.set_status(format!("editor failed: {error}")),
     }
     Ok(())
@@ -1247,7 +1256,13 @@ fn download(state: &mut AppState) {
     let content = state.preview_remote.clone();
     match crate::actions::execute_download(&target, &content, true) {
         Ok(()) => {
-            state.set_status(format!("Downloaded {}", target.display()));
+            state.set_status(format!(
+                "Downloaded {}",
+                target
+                    .file_name()
+                    .unwrap_or(target.as_os_str())
+                    .to_string_lossy()
+            ));
             if let (Some(gid), Some(fname)) = (
                 state.download_gist_id.clone(),
                 state.download_gist_filename.clone(),
@@ -1345,7 +1360,10 @@ fn unpin_selected(state: &mut AppState) {
             state.pinned = config.pinned;
             state.skip_dirs = config.skip_dirs;
             state.scan_depth = config.scan_depth;
-            state.set_status(format!("Unpinned {}", local.path.display()));
+            state.set_status(format!(
+                "Unpinned {}",
+                crate::config::display_path(&local.path)
+            ));
         }
         Err(error) => state.set_status(format!("unpin failed: {error}")),
     }
@@ -1355,7 +1373,7 @@ fn unpin_at_pin_index(state: &mut AppState) {
     let Some(mapping) = state.pinned.get(state.pins_index).cloned() else {
         return;
     };
-    let label = mapping.local_path.display().to_string();
+    let label = crate::config::display_path(&mapping.local_path);
     let result = crate::config::config_path().and_then(|path| {
         let config = crate::config::load_config(&path)?;
         crate::actions::unpin_mapping_exact(&path, config, &mapping.local_path, &mapping.gist_id)
