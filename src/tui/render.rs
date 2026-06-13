@@ -64,6 +64,7 @@ Actions (on the selected local file + gist)
 
 Pinned Mappings screen (P)
   Up/Down    move between pins
+  Left/Right scroll a long local path horizontally (~ = home)
   Enter      diff the selected pair (then d pull / u push from the diff)
   s          smart-sync (newer side wins; skips if already identical)
   u          force push  (upload local → gist)
@@ -227,7 +228,7 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     let hints = if state.pinned.is_empty() {
         "Esc/q back"
     } else {
-        "↑↓ move  ·  Enter diff · s sync · u push · d pull · x unpin  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back"
+        "↑↓ move · ←→ scroll · Enter diff · s sync · u push · d pull · x unpin  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back"
     };
     let (footer, colored) = footer_with_status(state.status.as_deref(), hints);
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
@@ -256,14 +257,16 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
                     ts.map(|t| crate::domain::humanize_age(now - t as i64))
                         .unwrap_or_else(|| "?".to_string())
                 };
-                ListItem::new(format!(
-                    "{}  {}  ↔  {} / {}   (local {} · gist {})",
-                    state.pin_sync_status(i).icon(),
-                    m.local_path.display(),
-                    m.gist_id,
-                    m.gist_filename,
-                    age(lts),
-                    age(rts),
+                ListItem::new(hscroll_str(
+                    &pin_row_label(
+                        state.pin_sync_status(i).icon(),
+                        &m.local_path,
+                        &m.gist_id,
+                        &m.gist_filename,
+                        &age(lts),
+                        &age(rts),
+                    ),
+                    state.pins_hscroll,
                 ))
             })
             .collect()
@@ -626,6 +629,28 @@ pub(super) fn hscroll_str(text: &str, offset: u16) -> String {
     text.chars().skip(offset as usize).collect()
 }
 
+/// Builds a single Pins-screen row. The local path is rendered with `display_path`
+/// (home → `~`) so it stays readable; the full row is horizontally scrollable. Pure so
+/// the path-shortening is unit-testable without a frame.
+pub(super) fn pin_row_label(
+    icon: &str,
+    local_path: &std::path::Path,
+    gist_id: &str,
+    gist_filename: &str,
+    local_age: &str,
+    gist_age: &str,
+) -> String {
+    format!(
+        "{}  {}  ↔  {} / {}   (local {} · gist {})",
+        icon,
+        crate::config::display_path(local_path),
+        gist_id,
+        gist_filename,
+        local_age,
+        gist_age,
+    )
+}
+
 /// How a file-list row should be flagged: 📌 = an existing pinned pair; same-name = bold; else none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RowMark {
@@ -851,7 +876,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
     let scanning_marker = if state.local_scanning { " …" } else { "" };
     let local_title = format!(
         "[1] Local · {}{}{} · sort:{}",
-        state.cwd.display(),
+        crate::config::display_path(&state.cwd),
         recursive_marker,
         scanning_marker,
         state.local_sort.label()
@@ -1204,7 +1229,10 @@ pub(super) fn diff_title(state: &AppState) -> String {
             gist_id, filename, ..
         }) => format!("Upload → gist {gist_id} / {filename}"),
         Some(PendingAction::Create { local_path }) => {
-            format!("Create gist from {}", local_path.display())
+            format!(
+                "Create gist from {}",
+                crate::config::display_path(local_path)
+            )
         }
         Some(PendingAction::Delete { gist_id, .. }) => {
             format!("Delete gist {gist_id}")
@@ -1223,12 +1251,15 @@ pub(super) fn diff_title(state: &AppState) -> String {
             if state.preview_local.as_os_str().is_empty()
                 || state.preview_local == state.download_target
             {
-                format!("{label} → {}", state.download_target.display())
+                format!(
+                    "{label} → {}",
+                    crate::config::display_path(&state.download_target)
+                )
             } else {
                 format!(
                     "{label}: {} → {}",
-                    state.preview_local.display(),
-                    state.download_target.display()
+                    crate::config::display_path(&state.preview_local),
+                    crate::config::display_path(&state.download_target)
                 )
             }
         }
@@ -1253,7 +1284,7 @@ pub(super) fn confirm_prompt(state: &AppState) -> String {
             };
             format!(
                 "Create gist from {} ({desc})?  s secret  p public  Esc cancel",
-                local_path.display()
+                crate::config::display_path(local_path)
             )
         }
         Some(PendingAction::Upload {

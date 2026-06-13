@@ -84,7 +84,8 @@ does not exist (or is not a directory) `gistui` prints an error and exits withou
 Inside the TUI press `?` for the full keymap (it also shows the running version and the
 project repository link); the footer shows the keys relevant to the focused pane.
 
-The left pane lists the files in your current working directory; the right pane lists your
+The left pane lists the files in your current working directory (its title shows the
+directory path with your home directory shortened to `~`); the right pane lists your
 gists. Ranking is **anchor-driven**: one pane is the *anchor* (it drives the ranking) and
 the other pane is ranked against the anchor's current selection. The anchor is shown with a
 `⚓` marker in its title and is **independent of focus** — press `a` to flip it. So you
@@ -127,7 +128,9 @@ Gist pane), `Up`/`Down` (move), and `Left`/`Right` (scroll a long row).
 - `P` — open the **Pins view** listing all pinned pairs with sync-status icons.
   Each row shows one of: `✓` synced · `↑` local newer · `↓` remote newer · `?` unknown,
   plus `(local <age> · gist <age>)` relative modification times.
+  Local paths are shown with the home directory shortened to `~`.
   Keys inside the Pins view:
+  - `↑`/`↓` — move between pins; `←`/`→` — scroll a long local path horizontally.
   - `Enter` — diff the selected pair (read-only; `d`/`u` from the diff to pull/push; `Esc`/`q` returns to the Pins view).
   - `s` — smart-sync (newer side wins by modified time; skips if already identical).
   - `u` — force push (upload local → gist).

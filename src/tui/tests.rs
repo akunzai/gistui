@@ -2338,6 +2338,139 @@ fn pins_screen_enter_emits_preview_pin_diff() {
     assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::PreviewPinDiff);
 }
 
+fn pins_state_with_long_home_path() -> AppState {
+    let mut state = initial_state();
+    state.screen = Screen::Pins;
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
+    state.pinned = vec![PinnedMapping {
+        local_path: home.join("code/very/deeply/nested/project/config.json"),
+        gist_id: "g1".into(),
+        gist_filename: "config.json".into(),
+        direction: None,
+        last_seen_hash: None,
+    }];
+    state.pins_index = 0;
+    state
+}
+
+#[test]
+fn pins_hscroll_starts_at_zero() {
+    assert_eq!(initial_state().pins_hscroll, 0);
+}
+
+#[test]
+fn create_diff_title_shortens_home_path() {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
+    let mut state = initial_state();
+    state.pending_action = Some(PendingAction::Create {
+        local_path: home.join("notes.txt"),
+    });
+    assert_eq!(diff_title(&state), "Create gist from ~/notes.txt");
+}
+
+#[test]
+fn diff_view_title_shortens_single_home_path() {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
+    let mut state = initial_state();
+    state.pending_action = None;
+    state.preview_local = PathBuf::new();
+    state.download_target = home.join("notes.txt");
+    assert_eq!(diff_title(&state), "Diff → ~/notes.txt");
+}
+
+#[test]
+fn diff_view_title_shortens_both_home_paths() {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
+    let mut state = initial_state();
+    state.pending_action = None;
+    state.preview_local = home.join("src").join("a.txt");
+    state.download_target = home.join("b.txt");
+    assert_eq!(diff_title(&state), "Diff: ~/src/a.txt → ~/b.txt");
+}
+
+#[test]
+fn create_confirm_prompt_shortens_home_path() {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
+    let mut state = initial_state();
+    state.pending_action = Some(PendingAction::Create {
+        local_path: home.join("notes.txt"),
+    });
+    assert!(
+        confirm_prompt(&state).starts_with("Create gist from ~/notes.txt"),
+        "got {}",
+        confirm_prompt(&state)
+    );
+}
+
+#[test]
+fn pin_row_label_shows_home_as_tilde() {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
+    let label = pin_row_label(
+        "✓",
+        &home.join("code/gistui"),
+        "abc123",
+        "notes.txt",
+        "2h",
+        "3h",
+    );
+    assert!(
+        label.contains("~/code/gistui"),
+        "expected ~ home in label, got {label}"
+    );
+    assert!(!label.contains(home.to_string_lossy().as_ref()));
+}
+
+#[test]
+fn pins_right_scrolls_then_clamps_at_a_bound() {
+    let mut state = pins_state_with_long_home_path();
+    state.handle_key(KeyCode::Right);
+    assert_eq!(state.pins_hscroll, 1, "Right should advance the scroll");
+    // Far past the end clamps to a stable maximum (does not run away).
+    for _ in 0..500 {
+        state.handle_key(KeyCode::Right);
+    }
+    let clamped = state.pins_hscroll;
+    state.handle_key(KeyCode::Right);
+    assert_eq!(state.pins_hscroll, clamped, "scroll must clamp at its max");
+    assert!(clamped > 0, "a long path must be scrollable");
+}
+
+#[test]
+fn pins_left_clamps_at_zero() {
+    let mut state = pins_state_with_long_home_path();
+    state.handle_key(KeyCode::Right);
+    state.handle_key(KeyCode::Left);
+    state.handle_key(KeyCode::Left);
+    assert_eq!(state.pins_hscroll, 0);
+}
+
+#[test]
+fn pins_hscroll_resets_when_selection_moves() {
+    let mut state = pins_state_with_long_home_path();
+    state.pinned.push(PinnedMapping {
+        local_path: PathBuf::from("/tmp/b.txt"),
+        gist_id: "g2".into(),
+        gist_filename: "b.txt".into(),
+        direction: None,
+        last_seen_hash: None,
+    });
+    state.handle_key(KeyCode::Right);
+    assert!(state.pins_hscroll > 0);
+    state.handle_key(KeyCode::Down);
+    assert_eq!(state.pins_hscroll, 0, "moving selection resets hscroll");
+}
+
+#[test]
+fn entering_pins_screen_resets_hscroll() {
+    let mut state = pins_state_with_long_home_path();
+    state.handle_key(KeyCode::Right);
+    assert!(state.pins_hscroll > 0);
+    state.screen = Screen::List;
+    state.handle_key(KeyCode::Char('P'));
+    assert_eq!(state.screen, Screen::Pins);
+    assert_eq!(state.pins_hscroll, 0);
+}
+
 #[test]
 fn list_screen_capital_s_syncs_selected_pair() {
     let mut state = initial_state();
