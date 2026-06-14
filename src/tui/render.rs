@@ -200,6 +200,7 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
         .border_type(BorderType::Rounded)
         .padding(Padding::horizontal(1));
     let line_spans = preview_line_spans(state);
+    let total_lines = line_spans.len();
     let paragraph = if state.preview_wrap {
         // Wrapping needs the full line set; vertical scroll goes through Paragraph (no hscroll).
         let body = Text::from(line_spans.into_iter().map(Line::from).collect::<Vec<_>>());
@@ -218,6 +219,11 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
         Paragraph::new(Text::from(visible)).block(block)
     };
     frame.render_widget(paragraph, chunks[0]);
+    // Only the non-wrap path keeps a 1:1 line↔row mapping for an accurate thumb; under soft
+    // wrapping the logical line count diverges from rendered rows, so skip the scrollbar there.
+    if !state.preview_wrap {
+        render_text_scrollbar(frame, chunks[0], total_lines, state.diff_scroll as usize);
+    }
     render_footer(frame, chunks[1], "", &footer, colored);
 }
 
@@ -1346,6 +1352,27 @@ pub(super) fn confirm_modal_style(state: &AppState) -> (&'static str, Color) {
     }
 }
 
+/// Overlay a vertical scrollbar on the right edge of a bordered, scrollable text pane when
+/// its `total` lines overflow the inner viewport. `offset` is the index of the topmost
+/// visible line, so the thumb reflects the real scroll position (not a selection index).
+fn render_text_scrollbar(frame: &mut Frame, area: Rect, total: usize, offset: usize) {
+    let viewport = area.height.saturating_sub(2) as usize;
+    if viewport == 0 || total <= viewport {
+        return;
+    }
+    let mut sb_state = ScrollbarState::new(total).position(offset);
+    frame.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(None)
+            .end_symbol(None),
+        area.inner(Margin {
+            vertical: 1,
+            horizontal: 0,
+        }),
+        &mut sb_state,
+    );
+}
+
 /// Render just the diff content pane (no footer) into `area`.
 pub(super) fn render_diff_pane(frame: &mut Frame, area: Rect, state: &AppState) {
     // Collapse unchanged context to the configured radius unless the user toggled full view.
@@ -1371,6 +1398,8 @@ pub(super) fn render_diff_pane(frame: &mut Frame, area: Rect, state: &AppState) 
         ),
         area,
     );
+    let total_lines = diff_body.lines().count();
+    render_text_scrollbar(frame, area, total_lines, state.diff_scroll as usize);
 }
 
 /// The `Screen::Diff` preview: the diff pane plus a scroll/commands footer.
