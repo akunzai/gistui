@@ -631,6 +631,9 @@ pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppSta
         Some(c) if state.detail_comments_error.is_none() => format!("Comments ({})", c.len()),
         _ => "Comments".to_string(),
     };
+    // The scrollbar uses the logical line count, which shares units with `detail_scroll`, so the
+    // thumb position is exact (its size is approximate when long comments soft-wrap).
+    let total_lines = body.len();
     frame.render_widget(
         Paragraph::new(body)
             .scroll((state.detail_scroll, 0))
@@ -644,6 +647,7 @@ pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppSta
             ),
         area,
     );
+    render_text_scrollbar(frame, area, total_lines, state.detail_scroll as usize);
 }
 
 /// Footer text + whether to colourise it: a one-shot `state.status` message (shown plain) when

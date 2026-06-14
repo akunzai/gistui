@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   active, `(N)` otherwise), matching the existing `Files (N)` / `Comments (N)` style.
 - Gist detail view is now tabbed — a `Files │ Comments` strip under the basic info shows one
   pane at a time (opens on the Files tab; `Tab` switches), instead of stacking both panes.
+- Scrollbar on the gist-detail comments pane (the Diff and Preview panes already had one).
 - Animated spinner on the scanning, loading and working states (replaces the static `⏳`),
   so long-running `gh` operations no longer look frozen.
 - Install from crates.io: `cargo install gistui`, or `cargo binstall gistui` for the
