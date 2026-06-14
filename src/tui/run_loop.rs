@@ -1204,9 +1204,8 @@ fn edit_upload_buffer(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let temp_file_path = state
-        .cwd
-        .join(format!(".gistui_redact_{timestamp}_{filename}"));
+    let temp_file_path =
+        std::env::temp_dir().join(format!(".gistui_redact_{timestamp}_{filename}"));
 
     let current_content = state.content_to_upload();
     if let Err(e) = std::fs::write(&temp_file_path, &current_content) {
