@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Gist detail view shows a `Comments | Files` focus tab strip, so the pane `Tab` drives is
+  visible at a glance instead of only hinted in the footer.
 - Animated spinner on the scanning, loading and working states (replaces the static `⏳`),
   so long-running `gh` operations no longer look frozen.
 - Install from crates.io: `cargo install gistui`, or `cargo binstall gistui` for the

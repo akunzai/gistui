@@ -384,6 +384,12 @@ fn detail_footer_is_focus_aware() {
 }
 
 #[test]
+fn detail_focus_tab_tracks_focus() {
+    assert_eq!(detail_focus_tab(DetailFocus::Comments), 0);
+    assert_eq!(detail_focus_tab(DetailFocus::Files), 1);
+}
+
+#[test]
 fn spinner_glyph_cycles_through_frames_and_wraps() {
     // Adjacent ticks advance the frame; the cycle wraps after a full revolution.
     assert_ne!(spinner_glyph(0), spinner_glyph(1));

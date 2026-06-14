@@ -464,27 +464,28 @@ pub(super) fn render_gist_info_and_files(
         format!("Gist: {}", group.description)
     };
     let files = state.gist_filenames(gist_id);
-    let files_focused =
-        state.detail_focus == DetailFocus::Files && state.screen == Screen::GistDetail;
-    let files_title = if files_focused {
-        format!("Files ({})  [focus: ↑↓ select · ⏎ preview]", files.len())
-    } else {
-        format!("Files ({})", files.len())
-    };
-    let mut lines: Vec<Line> = vec![
-        Line::from(gist_info_line(&group, now)),
-        Line::from(""),
-        Line::from(Span::styled(
-            files_title,
-            Style::default().add_modifier(Modifier::BOLD),
-        )),
-    ];
+    let on_detail = state.screen == Screen::GistDetail;
+    let files_focused = state.detail_focus == DetailFocus::Files && on_detail;
+    // On the detail screen a Comments|Files focus strip sits just under the basic info; the
+    // compaction-confirm background reuses this fn without it. The old "[focus: …]" suffix on
+    // the file count is dropped — the strip plus the footer already carry that hint.
+    let mut lines: Vec<Line> = vec![Line::from(gist_info_line(&group, now))];
+    if on_detail {
+        lines.push(detail_focus_tabs_line(state.detail_focus));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("Files ({})", files.len()),
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
     // Number the first nine files so the detail view's 1–9 preview keys are discoverable;
     // any beyond the ninth are bullet-aligned. When the file list is focused, a cursor row
     // is highlighted and the list auto-scrolls to keep it visible.
     let cursor = state.detail_file_cursor.min(files.len().saturating_sub(1));
-    // Visible file rows = area height minus borders(2), info line, blank, "Files (n)" header (3).
-    let visible_rows = (area.height as usize).saturating_sub(5);
+    // Header rows above the file list: info line + (focus strip on the detail screen) + blank
+    // + "Files (n)" header, plus the box borders(2).
+    let header_rows = if on_detail { 4 } else { 3 };
+    let visible_rows = (area.height as usize).saturating_sub(2 + header_rows);
     let offset = file_list_scroll(cursor, visible_rows, files.len());
     for (i, f) in files
         .iter()
@@ -599,6 +600,40 @@ pub(super) fn detail_footer(status: Option<&str>, focus: DetailFocus) -> (String
     footer_with_status(status, hints)
 }
 
+/// The Comments|Files focus index, mirroring `detail_focus`. Pure so the tab selection is
+/// trivially testable and stays in sync with the navigation handler.
+pub(super) fn detail_focus_tab(focus: DetailFocus) -> usize {
+    match focus {
+        DetailFocus::Comments => 0,
+        DetailFocus::Files => 1,
+    }
+}
+
+/// A `Comments │ Files` focus indicator line, with the pane Tab currently drives highlighted.
+/// Rendered just under the gist's basic info (inside the info box) rather than as a floating
+/// strip, so the active focus is visible without a disconnected top row.
+pub(super) fn detail_focus_tabs_line(focus: DetailFocus) -> Line<'static> {
+    let active = detail_focus_tab(focus);
+    let active_style = Style::default()
+        .fg(Color::Black)
+        .bg(Color::Cyan)
+        .add_modifier(Modifier::BOLD);
+    let idle_style = Style::default().fg(Color::DarkGray);
+    let mut spans = Vec::new();
+    for (i, label) in ["Comments", "Files"].iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" │ ", idle_style));
+        }
+        let style = if i == active {
+            active_style
+        } else {
+            idle_style
+        };
+        spans.push(Span::styled(format!(" {label} "), style));
+    }
+    Line::from(spans)
+}
+
 pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
     let (footer, colored) = detail_footer(state.status.as_deref(), state.detail_focus);
@@ -608,10 +643,11 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState) {
         .as_deref()
         .map(|id| state.gist_filenames(id).len())
         .unwrap_or(0);
-    // Scale to the file count, but never exceed half the screen nor drop below 5 rows.
+    // Scale to the file count, but never exceed half the screen nor drop below 6 rows
+    // (borders + info line + focus strip + blank + "Files (n)" header).
     let info_height = (files as u16)
-        .saturating_add(5)
-        .clamp(5, (area.height / 2).max(5));
+        .saturating_add(6)
+        .clamp(6, (area.height / 2).max(6));
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
