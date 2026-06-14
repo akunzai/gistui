@@ -208,12 +208,13 @@ Press `g` to open the **gist manager** — a gist-level view (one row per gist) 
 the gist owning the currently selected file. From here you manage gists as a whole:
 
 - `e` — edit the gist's description (type, `Enter` applies, `Esc` cancels).
-- `Enter` — open the **gist detail view**: shows basic info (description, visibility,
-  created/updated age, file count, short id), the file list, and fetched comments.
-  - `Tab` switch focus between the comments pane and the file list.
-  - `↑`/`↓` scroll comments, or move the file cursor when the list is focused · `PageUp`/`PageDown`
+- `Enter` — open the **gist detail view**: a header with basic info (description, visibility,
+  created/updated age, short id) and a `Files │ Comments` tab strip, with the active tab's
+  content below. Opens on the **Files** tab.
+  - `Tab` switch tab between the file list and the comments (only one shows at a time).
+  - `↑`/`↓` move the file cursor (Files tab) or scroll comments (Comments tab) · `PageUp`/`PageDown`
     page either by 10.
-  - `Enter` (file list focused) preview the cursor-selected file — this reaches **any** file,
+  - `Enter` (Files tab) preview the cursor-selected file — this reaches **any** file,
     including the 10th and beyond.
   - `1`–`9` still preview the content of the Nth file directly, full-screen (`↑↓←→` scroll,
     `R` refresh, `w` wrap, `q`/`Esc` back).

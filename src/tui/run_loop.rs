@@ -410,7 +410,7 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     state.detail_comments = None;
                     state.detail_comments_error = None;
                     state.detail_scroll = 0;
-                    state.detail_focus = DetailFocus::Comments;
+                    state.detail_focus = DetailFocus::Files;
                     state.detail_file_cursor = 0;
 
                     let fetch_id = gist_id.clone();

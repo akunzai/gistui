@@ -28,8 +28,9 @@ pub enum Screen {
     GistDetail,
 }
 
-/// Which pane the navigation keys drive in `Screen::GistDetail`. Default `Comments`
-/// preserves the pre-#67 up/down = comment-scroll behavior until the user presses Tab.
+/// Which tab `Screen::GistDetail` shows, and which the navigation keys drive: the file list
+/// or the comments (only one is visible at a time). Defaults to `Files` — the gist's primary
+/// content — with the comments one `Tab` away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DetailFocus {
     Comments,
@@ -837,7 +838,7 @@ pub fn initial_state() -> AppState {
         detail_comments: None,
         detail_comments_error: None,
         detail_scroll: 0,
-        detail_focus: DetailFocus::Comments,
+        detail_focus: DetailFocus::Files,
         detail_file_cursor: 0,
         compact_return_screen: Screen::Gists,
         spinner_frame: 0,
