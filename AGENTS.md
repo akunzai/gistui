@@ -49,6 +49,7 @@ Pure, testable domain logic is kept separate from impure shell/filesystem adapte
 - Fold same-scope follow-up fixes into the original commit (amend) rather than adding `fix typo` / `review fix` commits.
 - Every PR MUST carry a release-note category label (`enhancement`, `bug`, `documentation`, `dependencies`, or `skip-changelog`) — GitHub groups auto-generated release notes by these via `.github/release.yml`.
 - When a change adds or alters a user-facing key, screen, or feature, update `README.md` (the Actions/keymap and Safety sections) and the `?` help text in `tui.rs` **in the same PR** — keep docs and behavior in lockstep.
+- Any user-facing feature or bug fix MUST add a concise bullet under the `## [Unreleased]` section of `CHANGELOG.md` **in the same PR**. Keep it one line, summarising the user-visible effect (GitHub Releases stays the authoritative, detailed source — see the file header). Changes labelled `skip-changelog` or purely internal (dependency bumps, refactors, test-only, typo fixes) do not need an entry.
 - Versioning (SemVer): stay on `0.x` while the keymap/feature surface is still evolving; only cut `1.0.0` once it has gone several releases without a breaking UX change. A release is a `vX.Y.Z` tag matching `Cargo.toml`, which triggers `.github/workflows/release.yml` to build and attach the platform binaries the README `install.sh` expects.
 
 ## Claude Code compatibility

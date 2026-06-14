@@ -5,6 +5,9 @@ edition = "2021"
 license = "MIT"
 description = "A terminal UI for managing GitHub Gists"
 repository = "https://github.com/akunzai/gistui"
+homepage = "https://akunzai.github.io/gistui/"
+keywords = ["tui", "gist", "github", "cli", "terminal"]
+categories = ["command-line-utilities"]
 
 [dependencies]
 anyhow = "1"
