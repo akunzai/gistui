@@ -5,5 +5,6 @@ pub mod diff;
 pub mod domain;
 pub mod gh;
 pub mod local;
+pub mod lru;
 pub mod ranking;
 pub mod tui;

@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   misleading empty diff.
 - Show a scrollbar on the Diff and Preview panes so position in long diffs and
   large files is visible.
+- Bound the in-memory gist preview cache (LRU, 64 entries) so browsing many or
+  large gists no longer grows memory without limit.
 - Project metadata, README badges, and this changelog for discoverability.
 
 ## [0.7.0] — 2026-06-12
