@@ -20,6 +20,14 @@ exclude = [
     "/.gitignore",
 ]
 
+# Let `cargo binstall gistui` reuse the GitHub Release assets built by release.yml
+# (`gistui-vX.Y.Z-<target>.tar.gz`, `.zip` on Windows; each archive holds a
+# `gistui-vX.Y.Z-<target>/` dir with the binary). Takes effect from the next
+# published version onward.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/gistui-v{ version }-{ target }{ archive-suffix }"
+bin-dir = "gistui-v{ version }-{ target }/{ bin }{ binary-ext }"
+
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
