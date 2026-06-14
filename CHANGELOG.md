@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   large files is visible.
 - Bound the in-memory gist preview cache (LRU, 64 entries) so browsing many or
   large gists no longer grows memory without limit.
+- Install via Homebrew: `brew install akunzai/tap/gistui` (new `akunzai/homebrew-tap` tap).
 - Project metadata, README badges, and this changelog for discoverability.
 
 ## [0.7.0] — 2026-06-12

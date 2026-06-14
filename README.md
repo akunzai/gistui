@@ -33,6 +33,18 @@ be installed and authenticated wherever you run `gistui`.
 
 ## Installation
 
+### Homebrew (macOS / Linux)
+
+```bash
+brew install akunzai/tap/gistui
+```
+
+This installs `gistui` (and its `gh` dependency) from the
+[`akunzai/homebrew-tap`](https://github.com/akunzai/homebrew-tap) tap. The fully-qualified
+name trusts only this formula — Homebrew 6.0.0+ requires non-official taps to be trusted
+before their code runs; see the tap README for the `brew tap` + short-name flow and the
+`Brewfile` `trusted:` option.
+
 ### Download a prebuilt binary (recommended)
 
 Each [release](https://github.com/akunzai/gistui/releases/latest) attaches prebuilt,
