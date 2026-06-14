@@ -66,20 +66,27 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         upload_orientation,
                     } => match result {
                         Ok(remote) => {
-                            let local_content = local_path
-                                .as_ref()
-                                .map(|path| std::fs::read_to_string(path).unwrap_or_default())
-                                .unwrap_or_default();
-                            let diff = preview_diff_text(
-                                upload_orientation,
-                                &local_label,
-                                &local_content,
-                                &gist_label,
-                                &remote,
-                            );
-                            let identical = local_content == remote;
-                            state.enter_diff(diff, remote, local_path.unwrap_or_default(), target);
-                            state.diff_identical = identical;
+                            match local_path.as_ref().map(std::fs::read_to_string).transpose() {
+                                Ok(local) => {
+                                    let local_content = local.unwrap_or_default();
+                                    let diff = preview_diff_text(
+                                        upload_orientation,
+                                        &local_label,
+                                        &local_content,
+                                        &gist_label,
+                                        &remote,
+                                    );
+                                    let identical = local_content == remote;
+                                    state.enter_diff(
+                                        diff,
+                                        remote,
+                                        local_path.unwrap_or_default(),
+                                        target,
+                                    );
+                                    state.diff_identical = identical;
+                                }
+                                Err(error) => state.set_status(format!("read failed: {error}")),
+                            }
                         }
                         Err(error) => state.set_status(format!("fetch failed: {error}")),
                     },
@@ -93,19 +100,22 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     } => match result {
                         Ok(remote) => {
                             if target.exists() {
-                                let local_content =
-                                    std::fs::read_to_string(&target).unwrap_or_default();
-                                let diff = crate::diff::unified_diff(
-                                    &local_label,
-                                    &local_content,
-                                    &gist_label,
-                                    &remote,
-                                );
-                                let identical = local_content == remote;
-                                state.download_gist_id = Some(gist_id);
-                                state.download_gist_filename = Some(filename);
-                                state.enter_diff(diff, remote, target.clone(), target);
-                                state.diff_identical = identical;
+                                match std::fs::read_to_string(&target) {
+                                    Ok(local_content) => {
+                                        let diff = crate::diff::unified_diff(
+                                            &local_label,
+                                            &local_content,
+                                            &gist_label,
+                                            &remote,
+                                        );
+                                        let identical = local_content == remote;
+                                        state.download_gist_id = Some(gist_id);
+                                        state.download_gist_filename = Some(filename);
+                                        state.enter_diff(diff, remote, target.clone(), target);
+                                        state.diff_identical = identical;
+                                    }
+                                    Err(error) => state.set_status(format!("read failed: {error}")),
+                                }
                             } else {
                                 match crate::actions::execute_download(&target, &remote, false) {
                                     Ok(()) => {
