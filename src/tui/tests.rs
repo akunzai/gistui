@@ -390,6 +390,14 @@ fn detail_focus_tab_tracks_focus() {
 }
 
 #[test]
+fn count_label_plain_unless_filtered() {
+    assert_eq!(count_label(12, 12), "(12)");
+    assert_eq!(count_label(0, 0), "(0)");
+    // Filtered: fewer shown than total.
+    assert_eq!(count_label(3, 12), "(3/12)");
+}
+
+#[test]
 fn spinner_glyph_cycles_through_frames_and_wraps() {
     // Adjacent ticks advance the frame; the cycle wraps after a full revolution.
     assert_ne!(spinner_glyph(0), spinner_glyph(1));

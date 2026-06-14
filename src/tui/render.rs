@@ -27,6 +27,17 @@ pub(super) fn render(frame: &mut Frame, state: &AppState) {
     }
 }
 
+/// A count suffix for a list title: `(N)` normally, or `(shown/total)` when a filter has
+/// narrowed the list (`shown < total`). Extends the existing `Files (N)` / `Comments (N)`
+/// convention to the other panes consistently.
+pub(super) fn count_label(shown: usize, total: usize) -> String {
+    if shown < total {
+        format!("({shown}/{total})")
+    } else {
+        format!("({total})")
+    }
+}
+
 pub(super) fn render_help(frame: &mut Frame, state: &AppState) {
     // The repo URL and version live in the footer on every screen, so help is keys only.
     let body = "\
@@ -282,7 +293,10 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     let list = List::new(items)
         .block(
             Block::default()
-                .title("Pinned Mappings")
+                .title(format!(
+                    "Pinned Mappings {}",
+                    count_label(state.pinned.len(), state.pinned.len())
+                ))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::Cyan))
@@ -373,7 +387,8 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
 
     let selected = (!groups.is_empty()).then_some(state.gists_index);
     let mut title = format!(
-        "Gists  ·  sort:{}  ·  type:{}",
+        "Gists {}  ·  sort:{}  ·  type:{}",
+        count_label(groups.len(), state.gist_groups().len()),
         state.gists_sort.label(),
         state.gists_type_filter.label()
     );
@@ -921,7 +936,8 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
     let recursive_marker = if state.local_recursive { " [↓]" } else { "" };
     let scanning_marker = if state.local_scanning { " …" } else { "" };
     let local_title = format!(
-        "[1] Local · {}{}{} · sort:{}",
+        "[1] Local {} · {}{}{} · sort:{}",
+        count_label(state.locals.len(), state.locals.len()),
         crate::config::display_path(&state.cwd),
         recursive_marker,
         scanning_marker,
@@ -969,7 +985,8 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
     let gist_focused = state.focus == FocusPane::Gist;
     let gist_selected = (!ranked.is_empty()).then_some(state.gist_index);
     let mut gist_title = format!(
-        "[2] Gists · {} · {}",
+        "[2] Gists {} · {} · {}",
+        count_label(ranked.len(), state.gists.len()),
         state.gist_type_filter.label(),
         state.gist_sort.label()
     );
