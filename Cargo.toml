@@ -8,6 +8,17 @@ repository = "https://github.com/akunzai/gistui"
 homepage = "https://akunzai.github.io/gistui/"
 keywords = ["tui", "gist", "github", "cli", "terminal"]
 categories = ["command-line-utilities"]
+# Keep the published crate lean: ship the source, docs and license but not the
+# demo harness, site assets, CI config or install script. The README's demo GIF is
+# referenced by absolute URL, so it still renders on crates.io without shipping it.
+exclude = [
+    "/.github",
+    "/docs",
+    "/scripts",
+    "/install.sh",
+    "/CLAUDE.md",
+    "/.gitignore",
+]
 
 [dependencies]
 anyhow = "1"

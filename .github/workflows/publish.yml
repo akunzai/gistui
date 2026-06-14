@@ -1,0 +1,45 @@
+name: Publish to crates.io
+
+# Publishes the crate when a vX.Y.Z tag is pushed (the same tags that drive
+# release.yml). No-ops gracefully until the CARGO_REGISTRY_TOKEN secret is set, so
+# tagging a release never fails CI before crates.io is wired up. Can also be run
+# manually for the very first publish via the Actions tab (workflow_dispatch).
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  publish:
+    name: cargo publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify tag matches Cargo.toml version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate="$(cargo metadata --no-deps --format-version 1 | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)"
+          if [ "$tag" != "$crate" ]; then
+            echo "::error::Tag v$tag does not match Cargo.toml version $crate"
+            exit 1
+          fi
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::notice::CARGO_REGISTRY_TOKEN not set — skipping crates.io publish."
+            exit 0
+          fi
+          cargo publish
