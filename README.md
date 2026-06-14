@@ -1,6 +1,7 @@
 # gistui
 
 [![CI](https://github.com/akunzai/gistui/actions/workflows/ci.yml/badge.svg)](https://github.com/akunzai/gistui/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/gistui.svg)](https://crates.io/crates/gistui)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A terminal UI for managing GitHub Gists. Browse, diff, download, upload, create, edit, and
@@ -76,6 +77,22 @@ Then extract it and put `gistui` somewhere on your `PATH`, e.g. on macOS/Linux:
 ```bash
 tar -xzf gistui-<version>-<target>.tar.gz
 install -m 755 gistui-<version>-<target>/gistui ~/.local/bin/gistui
+```
+
+### crates.io
+
+With a Rust toolchain, install the published crate from
+[crates.io](https://crates.io/crates/gistui):
+
+```bash
+cargo install gistui
+```
+
+Or grab the same checksummed release binaries without compiling, via
+[`cargo binstall`](https://github.com/cargo-bins/cargo-binstall):
+
+```bash
+cargo binstall gistui
 ```
 
 ### Build from source
