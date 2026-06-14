@@ -305,7 +305,7 @@ pub struct AppState {
     /// view), taken by the `PreviewContent` IO step; when `None` it falls back to the selected
     /// gist file on the list. Keeps `handle_key` pure: it records the intent, `run_loop` fetches.
     pub preview_request: Option<(String, String)>,
-    pub gist_content_cache: std::collections::HashMap<(String, String), String>,
+    pub gist_content_cache: crate::lru::LruCache<(String, String), String>,
     pub local_recursive: bool,
     pub skip_dirs: Vec<String>,
     pub scan_depth: u32,
@@ -811,7 +811,9 @@ pub fn initial_state() -> AppState {
         preview_gist_key: None,
         preview_return: Screen::List,
         preview_request: None,
-        gist_content_cache: std::collections::HashMap::new(),
+        // Bound the in-memory preview cache so browsing many/large gists can't grow unbounded;
+        // evicted entries are simply re-fetched on demand.
+        gist_content_cache: crate::lru::LruCache::new(64),
         local_recursive: false,
         skip_dirs: crate::config::AppConfig::default().skip_dirs,
         scan_depth: crate::config::AppConfig::default().scan_depth,
