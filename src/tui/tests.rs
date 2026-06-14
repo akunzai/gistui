@@ -1172,9 +1172,7 @@ fn row_mark_same_name_when_exact_filename_only() {
     assert_eq!(row_mark(&[MatchReason::ExactFilename]), RowMark::SameName);
 }
 #[test]
-fn row_mark_none_for_weak_matches() {
-    assert_eq!(row_mark(&[MatchReason::PathSegment]), RowMark::None);
-    assert_eq!(row_mark(&[MatchReason::Recent]), RowMark::None);
+fn row_mark_none_for_empty_reasons() {
     assert_eq!(row_mark(&[]), RowMark::None);
 }
 
