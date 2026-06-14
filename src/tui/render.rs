@@ -23,7 +23,7 @@ pub(super) fn render(frame: &mut Frame, state: &AppState) {
         Screen::GistDetail => render_gist_detail(frame, state),
     }
     if let Some(ref msg) = state.bg_task_msg {
-        render_loading_overlay(frame, msg);
+        render_loading_overlay(frame, msg, state.spinner_frame);
     }
 }
 
@@ -863,7 +863,11 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
     // Show each candidate's path relative to cwd; in flat mode this is just the filename,
     // in recursive mode it includes the subdirectory (e.g. src/utils/helpers.rs).
     let local_items: Vec<ListItem> = if state.local_scanning && state.locals.is_empty() {
-        vec![ListItem::new("  ⏳ Scanning files…").style(Style::default().fg(Color::DarkGray))]
+        vec![ListItem::new(format!(
+            "  {} Scanning files…",
+            spinner_glyph(state.spinner_frame)
+        ))
+        .style(Style::default().fg(Color::DarkGray))]
     } else if state.locals.is_empty() {
         vec![ListItem::new("  📭 No local files found").style(Style::default().fg(Color::DarkGray))]
     } else {
@@ -904,7 +908,11 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
 
     let ranked = state.ranked_gists();
     let gist_items: Vec<ListItem> = if state.loading && ranked.is_empty() {
-        vec![ListItem::new("  ⏳ Loading gists…").style(Style::default().fg(Color::DarkGray))]
+        vec![ListItem::new(format!(
+            "  {} Loading gists…",
+            spinner_glyph(state.spinner_frame)
+        ))
+        .style(Style::default().fg(Color::DarkGray))]
     } else if ranked.is_empty() {
         let message = if !state.filter_query.is_empty() {
             ListItem::new("  🔍 No gists match the filter")
@@ -1487,9 +1495,21 @@ pub(super) fn render_centered_modal(frame: &mut Frame, title: &str, body: &str, 
     );
 }
 
+/// Frames for the in-progress spinner, advanced by `AppState::spinner_frame` (one step per
+/// event-loop tick, ~150ms). Braille dots are as widely supported as the emoji already used
+/// across the UI (📭/🔍/⏳), so no ASCII fallback is added here.
+const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// The spinner glyph for the given tick. `frame` may be any value; it is reduced modulo the
+/// frame count.
+pub(super) fn spinner_glyph(frame: usize) -> &'static str {
+    SPINNER_FRAMES[frame % SPINNER_FRAMES.len()]
+}
+
 /// A centered "Working…" box shown while a blocking `gh` action runs.
-pub(super) fn render_loading_overlay(frame: &mut Frame, msg: &str) {
-    render_centered_modal(frame, "Working…", &format!("⏳ {msg}"), Color::Cyan);
+pub(super) fn render_loading_overlay(frame: &mut Frame, msg: &str, spinner_frame: usize) {
+    let body = format!("{} {msg}", spinner_glyph(spinner_frame));
+    render_centered_modal(frame, "Working…", &body, Color::Cyan);
 }
 
 /// Civil date (year, month, day) from a day count since the Unix epoch — Howard Hinnant's

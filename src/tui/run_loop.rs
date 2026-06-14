@@ -11,6 +11,9 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
 
     loop {
         terminal.draw(|frame| render(frame, &state))?;
+        // Advance the spinner once per iteration; the poll below caps the loop at ~150ms, so
+        // in-progress states (scanning/loading/working) animate even with no input.
+        state.spinner_frame = state.spinner_frame.wrapping_add(1);
 
         // Absorb the background gist list once it arrives.
         if state.loading {
