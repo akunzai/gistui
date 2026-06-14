@@ -398,40 +398,8 @@ impl AppState {
                 // Reset the newly-ranked (non-driver) pane to its top match.
                 self.reset_ranked_pane();
             }
-            KeyCode::Down => match self.focus {
-                FocusPane::Local if self.local_index + 1 < self.locals.len() => {
-                    self.local_index += 1;
-                    self.local_hscroll = 0;
-                    if self.anchor == FocusPane::Local {
-                        self.reset_ranked_pane();
-                    }
-                }
-                FocusPane::Gist if self.gist_index + 1 < self.ranked_gists().len() => {
-                    self.gist_index += 1;
-                    self.gist_hscroll = 0;
-                    if self.anchor == FocusPane::Gist {
-                        self.reset_ranked_pane();
-                    }
-                }
-                _ => {}
-            },
-            KeyCode::Up => match self.focus {
-                FocusPane::Local if self.local_index > 0 => {
-                    self.local_index -= 1;
-                    self.local_hscroll = 0;
-                    if self.anchor == FocusPane::Local {
-                        self.reset_ranked_pane();
-                    }
-                }
-                FocusPane::Gist if self.gist_index > 0 => {
-                    self.gist_index -= 1;
-                    self.gist_hscroll = 0;
-                    if self.anchor == FocusPane::Gist {
-                        self.reset_ranked_pane();
-                    }
-                }
-                _ => {}
-            },
+            KeyCode::Down => self.list_move_focused(true),
+            KeyCode::Up => self.list_move_focused(false),
             KeyCode::Right => self.scroll_focused_right(),
             KeyCode::Left => self.scroll_focused_left(),
             KeyCode::Char('t') => {
@@ -446,21 +414,7 @@ impl AppState {
                 self.gist_index = 0;
                 self.gist_hscroll = 0;
             }
-            KeyCode::Char('s') => {
-                // Cycle the focused pane's sort: match -> name -> recent -> match.
-                match self.focus {
-                    FocusPane::Gist => {
-                        self.gist_sort = self.gist_sort.next();
-                        self.gist_index = 0;
-                        self.gist_hscroll = 0;
-                    }
-                    FocusPane::Local => {
-                        self.local_sort = self.local_sort.next();
-                        self.local_index = 0;
-                        self.local_hscroll = 0;
-                    }
-                }
-            }
+            KeyCode::Char('s') => self.cycle_focused_sort(),
             KeyCode::Char('r') => {
                 self.local_recursive = !self.local_recursive;
                 self.local_index = 0;
@@ -476,26 +430,7 @@ impl AppState {
                 self.screen = Screen::Pins;
             }
             KeyCode::Char('S') => return KeyOutcome::SyncSelectedPair,
-            KeyCode::Char('g') => {
-                if self.gists.is_empty() {
-                    self.status = Some("no gists to manage".into());
-                    return KeyOutcome::None;
-                }
-                // Reset the gist-level view's own filters so the target is always
-                // visible, then land on the gist that owns the selected file row.
-                self.gists_filtering = false;
-                self.gists_filter_query.clear();
-                self.gists_type_filter = GistTypeFilter::All;
-                self.gists_hscroll = 0;
-                self.editing_description = false;
-                self.description_input.clear();
-                let target = self.selected_gist().map(|g| g.file.gist_id);
-                let groups = self.visible_gist_groups();
-                self.gists_index = target
-                    .and_then(|id| groups.iter().position(|g| g.id == id))
-                    .unwrap_or(0);
-                self.screen = Screen::Gists;
-            }
+            KeyCode::Char('g') => self.open_gist_manager(),
             KeyCode::Char('e') => {
                 if self.selected_local().is_some() {
                     return KeyOutcome::EditLocal;
@@ -516,79 +451,171 @@ impl AppState {
             KeyCode::Enter if self.gist_index < self.ranked_gists().len() => {
                 return KeyOutcome::PreviewDiff;
             }
-            KeyCode::Char('p') => {
-                let (Some(local), Some(gist)) = (self.selected_local(), self.selected_gist())
-                else {
-                    self.status = Some("select a local file and a gist to pin".into());
-                    return KeyOutcome::None;
-                };
-                let already = self.pinned.iter().any(|m| {
-                    m.local_path == local.path
-                        && m.gist_id == gist.file.gist_id
-                        && m.gist_filename == gist.file.filename
-                });
-                return if already {
-                    KeyOutcome::Unpin
-                } else {
-                    KeyOutcome::Pin
-                };
-            }
+            KeyCode::Char('p') => return self.pin_toggle_intent(),
             KeyCode::Char('u') => return self.upload_intent(),
-            KeyCode::Char('X') => {
-                let Some(gist) = self.selected_gist() else {
-                    self.status = Some("select a gist file to remove".into());
-                    return KeyOutcome::None;
-                };
-                let gist_id = gist.file.gist_id.clone();
-                let filename = gist.file.filename.clone();
-                // A gist must keep at least one file; deleting the whole gist lives in the
-                // gist-level view (g -> X) instead.
-                if self.gist_file_count(&gist_id) <= 1 {
-                    self.status = Some(format!(
-                        "{filename} is the gist's only file — use g then X to delete the gist"
-                    ));
-                    return KeyOutcome::None;
-                }
-                let label = if gist.file.description.is_empty() {
-                    gist_id.clone()
-                } else {
-                    gist.file.description.clone()
-                };
-                self.diff_text = format!(
-                    "Remove file \"{filename}\" from gist {gist_id} ({label}).\n\nThe other files in this gist are kept. This cannot be undone."
-                );
-                self.diff_scroll = 0;
-                self.diff_hscroll = 0;
-                self.pending_action = Some(PendingAction::RemoveFile {
-                    gist_id,
-                    filename,
-                    label,
-                });
-                self.screen = Screen::Confirm;
-            }
-            KeyCode::Char('n') => {
-                let Some(local) = self.selected_local() else {
-                    self.status = Some("select a local file to create a gist".into());
-                    return KeyOutcome::None;
-                };
-                // Create is a two-step confirm: type an optional description (inline
-                // editor, shared with the gist-level view), then choose visibility.
-                self.diff_text = format!(
-                    "Create a new gist from {}.\n\nType an optional description, then choose visibility.",
-                    local.path.display()
-                );
-                self.diff_scroll = 0;
-                self.diff_hscroll = 0;
-                self.editing_description = true;
-                self.description_input.clear();
-                self.pending_action = Some(PendingAction::Create {
-                    local_path: local.path,
-                });
-                self.screen = Screen::Confirm;
-            }
+            KeyCode::Char('X') => self.remove_gist_file_intent(),
+            KeyCode::Char('n') => self.create_gist_intent(),
             _ => {}
         }
         KeyOutcome::None
+    }
+
+    /// Move the selection in the focused list pane. `forward` advances toward the end of the
+    /// list; otherwise it moves toward the top. Both directions clamp at the pane's bounds,
+    /// reset the horizontal scroll, and re-rank the opposite pane when the focused pane is the
+    /// ranking anchor.
+    fn list_move_focused(&mut self, forward: bool) {
+        match self.focus {
+            FocusPane::Local => {
+                if forward {
+                    if self.local_index + 1 >= self.locals.len() {
+                        return;
+                    }
+                    self.local_index += 1;
+                } else {
+                    if self.local_index == 0 {
+                        return;
+                    }
+                    self.local_index -= 1;
+                }
+                self.local_hscroll = 0;
+                if self.anchor == FocusPane::Local {
+                    self.reset_ranked_pane();
+                }
+            }
+            FocusPane::Gist => {
+                if forward {
+                    if self.gist_index + 1 >= self.ranked_gists().len() {
+                        return;
+                    }
+                    self.gist_index += 1;
+                } else {
+                    if self.gist_index == 0 {
+                        return;
+                    }
+                    self.gist_index -= 1;
+                }
+                self.gist_hscroll = 0;
+                if self.anchor == FocusPane::Gist {
+                    self.reset_ranked_pane();
+                }
+            }
+        }
+    }
+
+    /// Cycle the focused pane's sort order (match -> name -> recent -> match) and reset that
+    /// pane's selection and horizontal scroll.
+    fn cycle_focused_sort(&mut self) {
+        match self.focus {
+            FocusPane::Gist => {
+                self.gist_sort = self.gist_sort.next();
+                self.gist_index = 0;
+                self.gist_hscroll = 0;
+            }
+            FocusPane::Local => {
+                self.local_sort = self.local_sort.next();
+                self.local_index = 0;
+                self.local_hscroll = 0;
+            }
+        }
+    }
+
+    /// Open the gist-level manager (`Screen::Gists`), landing on the gist that owns the
+    /// selected file row. Resets the manager's own filters first so the target is always
+    /// visible. No-op (with a status hint) when there are no gists to manage.
+    fn open_gist_manager(&mut self) {
+        if self.gists.is_empty() {
+            self.status = Some("no gists to manage".into());
+            return;
+        }
+        self.gists_filtering = false;
+        self.gists_filter_query.clear();
+        self.gists_type_filter = GistTypeFilter::All;
+        self.gists_hscroll = 0;
+        self.editing_description = false;
+        self.description_input.clear();
+        let target = self.selected_gist().map(|g| g.file.gist_id);
+        let groups = self.visible_gist_groups();
+        self.gists_index = target
+            .and_then(|id| groups.iter().position(|g| g.id == id))
+            .unwrap_or(0);
+        self.screen = Screen::Gists;
+    }
+
+    /// Pin/unpin the selected local↔gist pair: returns [`KeyOutcome::Unpin`] when the exact
+    /// pair is already pinned, otherwise [`KeyOutcome::Pin`]. Requires a selection in both
+    /// panes; otherwise it just sets a status hint.
+    fn pin_toggle_intent(&mut self) -> KeyOutcome {
+        let (Some(local), Some(gist)) = (self.selected_local(), self.selected_gist()) else {
+            self.status = Some("select a local file and a gist to pin".into());
+            return KeyOutcome::None;
+        };
+        let already = self.pinned.iter().any(|m| {
+            m.local_path == local.path
+                && m.gist_id == gist.file.gist_id
+                && m.gist_filename == gist.file.filename
+        });
+        if already {
+            KeyOutcome::Unpin
+        } else {
+            KeyOutcome::Pin
+        }
+    }
+
+    /// Stage removal of the selected gist file behind a y/n confirm (`Screen::Confirm`). A gist
+    /// must keep at least one file, so removing the gist's only file is refused — delete the
+    /// whole gist from the gist-level view (`g` then `X`) instead.
+    fn remove_gist_file_intent(&mut self) {
+        let Some(gist) = self.selected_gist() else {
+            self.status = Some("select a gist file to remove".into());
+            return;
+        };
+        let gist_id = gist.file.gist_id.clone();
+        let filename = gist.file.filename.clone();
+        if self.gist_file_count(&gist_id) <= 1 {
+            self.status = Some(format!(
+                "{filename} is the gist's only file — use g then X to delete the gist"
+            ));
+            return;
+        }
+        let label = if gist.file.description.is_empty() {
+            gist_id.clone()
+        } else {
+            gist.file.description.clone()
+        };
+        self.diff_text = format!(
+            "Remove file \"{filename}\" from gist {gist_id} ({label}).\n\nThe other files in this gist are kept. This cannot be undone."
+        );
+        self.diff_scroll = 0;
+        self.diff_hscroll = 0;
+        self.pending_action = Some(PendingAction::RemoveFile {
+            gist_id,
+            filename,
+            label,
+        });
+        self.screen = Screen::Confirm;
+    }
+
+    /// Stage creation of a new gist from the selected local file. Create is a two-step confirm:
+    /// type an optional description (inline editor, shared with the gist-level view), then
+    /// choose visibility. Requires a selected local file.
+    fn create_gist_intent(&mut self) {
+        let Some(local) = self.selected_local() else {
+            self.status = Some("select a local file to create a gist".into());
+            return;
+        };
+        self.diff_text = format!(
+            "Create a new gist from {}.\n\nType an optional description, then choose visibility.",
+            local.path.display()
+        );
+        self.diff_scroll = 0;
+        self.diff_hscroll = 0;
+        self.editing_description = true;
+        self.description_input.clear();
+        self.pending_action = Some(PendingAction::Create {
+            local_path: local.path,
+        });
+        self.screen = Screen::Confirm;
     }
 
     fn handle_key_diff(&mut self, code: KeyCode) -> KeyOutcome {
