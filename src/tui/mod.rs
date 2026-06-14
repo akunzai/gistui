@@ -76,56 +76,71 @@ pub enum GistTypeFilter {
     Secret,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GistSort {
-    Match,
-    Name,
-    Recent,
-}
-
-/// Sort order for the gist-level view (`Screen::Gists`). The `gh` list already
-/// arrives updated-first, so `Updated` mirrors that; `Created` re-sorts by age.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GistGroupSort {
-    Updated,
-    Created,
-}
-
-impl GistGroupSort {
-    fn next(self) -> Self {
-        match self {
-            GistGroupSort::Updated => GistGroupSort::Created,
-            GistGroupSort::Created => GistGroupSort::Updated,
+/// Generates a small enum whose variants cycle in declaration order. `next()` advances to the
+/// following variant (wrapping past the last) and `label()` returns each variant's short
+/// status-footer label. Keeping the variant↔label pairing in one place lets the sort enums
+/// share a single definition instead of hand-rolling near-identical `next`/`label` impls.
+macro_rules! cycling_enum {
+    (
+        $(#[$meta:meta])*
+        $vis:vis enum $name:ident { $($variant:ident => $label:literal),+ $(,)? }
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        $vis enum $name {
+            $($variant),+
         }
+
+        impl $name {
+            /// Cycle to the next variant in declaration order, wrapping past the last.
+            fn next(self) -> Self {
+                const ORDER: &[$name] = &[$($name::$variant),+];
+                let i = ORDER.iter().position(|v| *v == self).unwrap_or(0);
+                ORDER[(i + 1) % ORDER.len()]
+            }
+
+            /// The short status-footer label for this variant.
+            fn label(self) -> &'static str {
+                match self {
+                    $($name::$variant => $label),+
+                }
+            }
+        }
+    };
+}
+
+cycling_enum! {
+    /// Sort order for the ranked gist pane. `Match` keeps the incoming order (ranking score,
+    /// or the gh list order when no local is selected); the others override it.
+    pub enum GistSort {
+        Match => "match",
+        Name => "name",
+        Recent => "recent",
     }
+}
 
-    fn label(self) -> &'static str {
-        match self {
-            GistGroupSort::Updated => "updated",
-            GistGroupSort::Created => "created",
-        }
+cycling_enum! {
+    /// Sort order for the gist-level view (`Screen::Gists`). The `gh` list already
+    /// arrives updated-first, so `Updated` mirrors that; `Created` re-sorts by age.
+    pub enum GistGroupSort {
+        Updated => "updated",
+        Created => "created",
+    }
+}
+
+cycling_enum! {
+    /// Sort order for the local file pane. Mirrors [`GistSort`]: `Match` keeps the
+    /// incoming order (reverse-ranking score when the gist pane drives, else discovery
+    /// order); the others override it.
+    pub enum LocalSort {
+        Match => "match",
+        Name => "name",
+        Recent => "recent",
     }
 }
 
 impl GistSort {
-    fn next(self) -> Self {
-        match self {
-            GistSort::Match => GistSort::Name,
-            GistSort::Name => GistSort::Recent,
-            GistSort::Recent => GistSort::Match,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            GistSort::Match => "match",
-            GistSort::Name => "name",
-            GistSort::Recent => "recent",
-        }
-    }
-
-    /// Re-orders ranked gists. `Match` keeps the incoming order (ranking score, or the
-    /// gh list order when no local is selected); the others override it.
+    /// Re-orders ranked gists. `Match` keeps the incoming order; the others override it.
     fn apply(self, gists: &mut [RankedGistFile]) {
         match self {
             GistSort::Match => {}
@@ -137,33 +152,7 @@ impl GistSort {
     }
 }
 
-/// Sort order for the local file pane. Mirrors [`GistSort`]: `Match` keeps the
-/// incoming order (reverse-ranking score when the gist pane drives, else discovery
-/// order); the others override it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LocalSort {
-    Match,
-    Name,
-    Recent,
-}
-
 impl LocalSort {
-    fn next(self) -> Self {
-        match self {
-            LocalSort::Match => LocalSort::Name,
-            LocalSort::Name => LocalSort::Recent,
-            LocalSort::Recent => LocalSort::Match,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            LocalSort::Match => "match",
-            LocalSort::Name => "name",
-            LocalSort::Recent => "recent",
-        }
-    }
-
     fn apply(self, locals: &mut [RankedLocal]) {
         match self {
             LocalSort::Match => {}
