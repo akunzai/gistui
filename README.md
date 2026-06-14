@@ -1,10 +1,23 @@
 # gistui
 
+[![CI](https://github.com/akunzai/gistui/actions/workflows/ci.yml/badge.svg)](https://github.com/akunzai/gistui/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A terminal UI for managing GitHub Gists. Browse, diff, download, upload, create, edit, and
 pin your gists — and pair them with files in your working directory — all through the
 GitHub CLI (`gh`).
 
-![gistui demo](docs/demo.gif)
+![gistui demo](https://raw.githubusercontent.com/akunzai/gistui/main/docs/demo.gif)
+
+## Why gistui?
+
+- **vs. `gh gist`** — the official CLI is non-interactive and text-only. `gistui` adds a
+  full TUI: visual word-level diffs, anchor-driven ranking of gists against your working
+  directory, and one-key pinned sync.
+- **vs. the web UI** — never leave the terminal, work directly against your local files, and
+  pair gists with the directory you launched from.
+- **Safe by default** — an existing file is never overwritten without first showing the diff
+  and a `y/n` confirmation; no tokens are stored (auth is delegated to `gh`).
 
 ## Requirements
 
