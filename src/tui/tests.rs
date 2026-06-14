@@ -384,6 +384,17 @@ fn detail_footer_is_focus_aware() {
 }
 
 #[test]
+fn spinner_glyph_cycles_through_frames_and_wraps() {
+    // Adjacent ticks advance the frame; the cycle wraps after a full revolution.
+    assert_ne!(spinner_glyph(0), spinner_glyph(1));
+    assert_eq!(spinner_glyph(0), spinner_glyph(10));
+    assert_eq!(spinner_glyph(3), spinner_glyph(13));
+    // Every position in one revolution yields a distinct glyph.
+    let frames: std::collections::HashSet<_> = (0..10).map(spinner_glyph).collect();
+    assert_eq!(frames.len(), 10);
+}
+
+#[test]
 fn context_gist_id_uses_detail_id_on_detail_screen() {
     let mut state = state_with_gists();
     state.screen = Screen::GistDetail;

@@ -341,6 +341,9 @@ pub struct AppState {
     pub detail_file_cursor: usize,
     /// Screen to return to after a compaction confirm is cancelled/finished (Gists or GistDetail).
     pub compact_return_screen: Screen,
+    /// Monotonic tick advanced once per event-loop iteration (~150ms); drives the in-progress
+    /// spinner animation. Wraps freely — only its value modulo the frame count is observed.
+    pub spinner_frame: usize,
 }
 
 fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
@@ -837,6 +840,7 @@ pub fn initial_state() -> AppState {
         detail_focus: DetailFocus::Comments,
         detail_file_cursor: 0,
         compact_return_screen: Screen::Gists,
+        spinner_frame: 0,
     }
 }
 
