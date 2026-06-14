@@ -162,9 +162,9 @@ fn enter_on_gist_opens_detail() {
 }
 
 #[test]
-fn detail_focus_and_cursor_default_to_comments_and_zero() {
+fn detail_focus_and_cursor_default_to_files_and_zero() {
     let state = initial_state();
-    assert_eq!(state.detail_focus, DetailFocus::Comments);
+    assert_eq!(state.detail_focus, DetailFocus::Files);
     assert_eq!(state.detail_file_cursor, 0);
 }
 
@@ -172,11 +172,11 @@ fn detail_focus_and_cursor_default_to_comments_and_zero() {
 fn detail_tab_toggles_focus() {
     let mut state = state_with_gists();
     state.screen = Screen::GistDetail;
-    assert_eq!(state.detail_focus, DetailFocus::Comments);
-    state.handle_key(KeyCode::Tab);
     assert_eq!(state.detail_focus, DetailFocus::Files);
     state.handle_key(KeyCode::Tab);
     assert_eq!(state.detail_focus, DetailFocus::Comments);
+    state.handle_key(KeyCode::Tab);
+    assert_eq!(state.detail_focus, DetailFocus::Files);
 }
 
 #[test]
@@ -246,6 +246,7 @@ fn detail_q_returns_to_gists() {
 fn detail_scroll_saturates_at_zero() {
     let mut state = state_with_gists();
     state.screen = Screen::GistDetail;
+    state.detail_focus = DetailFocus::Comments;
     state.detail_scroll = 0;
     state.handle_key(KeyCode::Up);
     assert_eq!(state.detail_scroll, 0);
@@ -385,8 +386,8 @@ fn detail_footer_is_focus_aware() {
 
 #[test]
 fn detail_focus_tab_tracks_focus() {
-    assert_eq!(detail_focus_tab(DetailFocus::Comments), 0);
-    assert_eq!(detail_focus_tab(DetailFocus::Files), 1);
+    assert_eq!(detail_focus_tab(DetailFocus::Files), 0);
+    assert_eq!(detail_focus_tab(DetailFocus::Comments), 1);
 }
 
 #[test]

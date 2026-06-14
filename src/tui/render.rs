@@ -123,8 +123,8 @@ Gist manager (g)
   q / Esc    back to the list
 
 Gist detail (Enter from gist manager)
-  Tab        switch focus between comments and the file list
-  Up/Down    scroll comments, or move the file cursor when the list is focused
+  Tab        switch tab: Files / Comments (one shows at a time; opens on Files)
+  Up/Down    move the file cursor (Files tab) or scroll comments (Comments tab)
   PageUp/Dn  page comments / file cursor by 10
   Enter      preview the cursor-selected file (file list focused)
   1-9        preview the content of the Nth file (full-screen; R refresh, q back)
@@ -463,45 +463,18 @@ pub(super) fn file_list_scroll(cursor: usize, visible_rows: usize, count: usize)
     (cursor + 1).saturating_sub(visible_rows)
 }
 
-pub(super) fn render_gist_info_and_files(
-    frame: &mut Frame,
-    area: Rect,
-    state: &AppState,
-    gist_id: &str,
-) {
-    let Some(group) = state.group_by_id(gist_id) else {
-        return;
-    };
-    let now = unix_now();
-    let title = if group.description.trim().is_empty() {
-        format!("Gist {}", group.id)
-    } else {
-        format!("Gist: {}", group.description)
-    };
-    let files = state.gist_filenames(gist_id);
-    let on_detail = state.screen == Screen::GistDetail;
-    let files_focused = state.detail_focus == DetailFocus::Files && on_detail;
-    // On the detail screen a Comments|Files focus strip sits just under the basic info; the
-    // compaction-confirm background reuses this fn without it. The old "[focus: …]" suffix on
-    // the file count is dropped — the strip plus the footer already carry that hint.
-    let mut lines: Vec<Line> = vec![Line::from(gist_info_line(&group, now))];
-    if on_detail {
-        lines.push(detail_focus_tabs_line(state.detail_focus));
-    }
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        format!("Files ({})", files.len()),
-        Style::default().add_modifier(Modifier::BOLD),
-    )));
-    // Number the first nine files so the detail view's 1–9 preview keys are discoverable;
-    // any beyond the ninth are bullet-aligned. When the file list is focused, a cursor row
-    // is highlighted and the list auto-scrolls to keep it visible.
-    let cursor = state.detail_file_cursor.min(files.len().saturating_sub(1));
-    // Header rows above the file list: info line + (focus strip on the detail screen) + blank
-    // + "Files (n)" header, plus the box borders(2).
-    let header_rows = if on_detail { 4 } else { 3 };
-    let visible_rows = (area.height as usize).saturating_sub(2 + header_rows);
-    let offset = file_list_scroll(cursor, visible_rows, files.len());
+/// Build the numbered file rows for the gist's file list (detail Files tab and the
+/// compaction-confirm background). The first nine files are numbered to match the 1–9 preview
+/// keys; the rest are bulleted. With `highlight_cursor`, the `cursor` row is reverse-styled.
+/// Windows to `visible_rows` rows starting at `offset`.
+fn file_rows(
+    files: &[String],
+    cursor: usize,
+    offset: usize,
+    visible_rows: usize,
+    highlight_cursor: bool,
+) -> Vec<Line<'static>> {
+    let mut rows = Vec::new();
     for (i, f) in files
         .iter()
         .enumerate()
@@ -513,8 +486,8 @@ pub(super) fn render_gist_info_and_files(
         } else {
             "·".to_string()
         };
-        if files_focused && i == cursor {
-            lines.push(Line::from(Span::styled(
+        if highlight_cursor && i == cursor {
+            rows.push(Line::from(Span::styled(
                 format!("▸ {marker} {f}"),
                 Style::default()
                     .fg(Color::Black)
@@ -522,13 +495,95 @@ pub(super) fn render_gist_info_and_files(
                     .add_modifier(Modifier::BOLD),
             )));
         } else {
-            lines.push(Line::from(format!("  {marker} {f}")));
+            rows.push(Line::from(format!("  {marker} {f}")));
         }
     }
+    rows
+}
+
+/// The gist's title, derived from its description (falling back to the id).
+fn gist_block_title(group: &GistGroup) -> String {
+    if group.description.trim().is_empty() {
+        format!("Gist {}", group.id)
+    } else {
+        format!("Gist: {}", group.description)
+    }
+}
+
+/// Info + file-list block for a gist, used as the compaction-confirm background. (The gist
+/// detail screen renders the info header and the file list as separate blocks so it can tab
+/// between the file list and the comments.)
+pub(super) fn render_gist_info_and_files(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    gist_id: &str,
+) {
+    let Some(group) = state.group_by_id(gist_id) else {
+        return;
+    };
+    let files = state.gist_filenames(gist_id);
+    let mut lines: Vec<Line> = vec![
+        Line::from(gist_info_line(&group, unix_now())),
+        Line::from(""),
+        Line::from(Span::styled(
+            format!("Files ({})", files.len()),
+            Style::default().add_modifier(Modifier::BOLD),
+        )),
+    ];
+    let cursor = state.detail_file_cursor.min(files.len().saturating_sub(1));
+    // Visible file rows = area height minus borders(2), info line, blank, "Files (n)" header (3).
+    let visible_rows = (area.height as usize).saturating_sub(5);
+    let offset = file_list_scroll(cursor, visible_rows, files.len());
+    lines.extend(file_rows(&files, cursor, offset, visible_rows, false));
     frame.render_widget(
         Paragraph::new(lines).block(
             Block::default()
-                .title(title)
+                .title(gist_block_title(&group))
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Cyan))
+                .padding(Padding::horizontal(1)),
+        ),
+        area,
+    );
+}
+
+/// The gist detail header: a block holding the basic-info line and the `Files │ Comments`
+/// focus tabs. The active tab's content is rendered below it.
+fn render_detail_header(frame: &mut Frame, area: Rect, state: &AppState, gist_id: &str) {
+    let Some(group) = state.group_by_id(gist_id) else {
+        return;
+    };
+    let lines = vec![
+        Line::from(gist_info_line(&group, unix_now())),
+        detail_focus_tabs_line(state.detail_focus),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(gist_block_title(&group))
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Cyan))
+                .padding(Padding::horizontal(1)),
+        ),
+        area,
+    );
+}
+
+/// The gist detail's Files tab: the numbered, cursor-highlighted, scrollable file list,
+/// titled with the file count.
+fn render_gist_file_list(frame: &mut Frame, area: Rect, state: &AppState, gist_id: &str) {
+    let files = state.gist_filenames(gist_id);
+    let cursor = state.detail_file_cursor.min(files.len().saturating_sub(1));
+    let visible_rows = (area.height as usize).saturating_sub(2);
+    let offset = file_list_scroll(cursor, visible_rows, files.len());
+    let lines = file_rows(&files, cursor, offset, visible_rows, true);
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(format!("Files ({})", files.len()))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::Cyan))
@@ -615,16 +670,17 @@ pub(super) fn detail_footer(status: Option<&str>, focus: DetailFocus) -> (String
     footer_with_status(status, hints)
 }
 
-/// The Comments|Files focus index, mirroring `detail_focus`. Pure so the tab selection is
-/// trivially testable and stays in sync with the navigation handler.
+/// The Files|Comments tab index, mirroring `detail_focus`. Pure so the tab selection is
+/// trivially testable and stays in sync with the navigation handler. Files is the default
+/// tab, so it comes first.
 pub(super) fn detail_focus_tab(focus: DetailFocus) -> usize {
     match focus {
-        DetailFocus::Comments => 0,
-        DetailFocus::Files => 1,
+        DetailFocus::Files => 0,
+        DetailFocus::Comments => 1,
     }
 }
 
-/// A `Comments │ Files` focus indicator line, with the pane Tab currently drives highlighted.
+/// A `Files │ Comments` focus indicator line, with the pane Tab currently drives highlighted.
 /// Rendered just under the gist's basic info (inside the info box) rather than as a floating
 /// strip, so the active focus is visible without a disconnected top row.
 pub(super) fn detail_focus_tabs_line(focus: DetailFocus) -> Line<'static> {
@@ -635,7 +691,7 @@ pub(super) fn detail_focus_tabs_line(focus: DetailFocus) -> Line<'static> {
         .add_modifier(Modifier::BOLD);
     let idle_style = Style::default().fg(Color::DarkGray);
     let mut spans = Vec::new();
-    for (i, label) in ["Comments", "Files"].iter().enumerate() {
+    for (i, label) in ["Files", "Comments"].iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(" │ ", idle_style));
         }
@@ -653,28 +709,23 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
     let (footer, colored) = detail_footer(state.status.as_deref(), state.detail_focus);
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
-    let files = state
-        .detail_gist_id
-        .as_deref()
-        .map(|id| state.gist_filenames(id).len())
-        .unwrap_or(0);
-    // Scale to the file count, but never exceed half the screen nor drop below 6 rows
-    // (borders + info line + focus strip + blank + "Files (n)" header).
-    let info_height = (files as u16)
-        .saturating_add(6)
-        .clamp(6, (area.height / 2).max(6));
+    // Fixed 4-row header (borders + basic-info line + focus tabs); the active tab — the file
+    // list or the comments, never both — fills the rest above the footer.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(info_height),
+            Constraint::Length(4),
             Constraint::Min(3),
             Constraint::Length(footer_lines + 1),
         ])
         .split(area);
     if let Some(id) = state.detail_gist_id.as_deref() {
-        render_gist_info_and_files(frame, chunks[0], state, id);
+        render_detail_header(frame, chunks[0], state, id);
+        match state.detail_focus {
+            DetailFocus::Files => render_gist_file_list(frame, chunks[1], state, id),
+            DetailFocus::Comments => render_gist_comments(frame, chunks[1], state),
+        }
     }
-    render_gist_comments(frame, chunks[1], state);
     render_footer(frame, chunks[2], "", &footer, colored);
 }
 
