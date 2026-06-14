@@ -18,9 +18,10 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
         // Absorb the background gist list once it arrives.
         if state.loading {
             if let Some(ref rx) = gist_rx {
-                if let Ok(gists) = rx.try_recv() {
+                if let Ok((gists, comment_counts)) = rx.try_recv() {
                     cache_gists(&gists);
                     state.gists = gists;
+                    state.gist_comment_counts = comment_counts;
                     state.loading = false;
                     if state.gist_index >= state.ranked_gists().len() {
                         state.gist_index = 0;
@@ -920,17 +921,23 @@ fn cache_gists(gists: &[GistFile]) {
 
 /// Fetches the gist list on a background thread so startup does not block on `gh`.
 /// Mirrors the previous graceful degradation: an empty list on any error.
-fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<Vec<GistFile>> {
+fn spawn_gist_fetch(
+) -> std::sync::mpsc::Receiver<(Vec<GistFile>, std::collections::HashMap<String, u32>)> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let gists = if crate::gh::check_gh_ready().is_ok() {
+        let result = if crate::gh::check_gh_ready().is_ok() {
             crate::gh::fetch_gist_list_json()
-                .and_then(|raw| crate::gh::parse_gist_list_json(&raw))
+                .map(|raw| {
+                    let files = crate::gh::parse_gist_list_json(&raw).unwrap_or_default();
+                    let comment_counts =
+                        crate::gh::parse_gist_comment_counts(&raw).unwrap_or_default();
+                    (files, comment_counts)
+                })
                 .unwrap_or_default()
         } else {
-            Vec::new()
+            Default::default()
         };
-        let _ = tx.send(gists);
+        let _ = tx.send(result);
     });
     rx
 }

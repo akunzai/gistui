@@ -2,7 +2,7 @@ use crate::actions::{run_command, CommandPlan, CommandRunner, SystemRunner};
 use crate::domain::{GistComment, GistFile};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Deserialize)]
 struct GhGist {
@@ -15,6 +15,10 @@ struct GhGist {
     updated_at: String,
     #[serde(default)]
     created_at: String,
+    /// Number of comments on the gist. The REST list response includes this, so the count is
+    /// available without a per-gist comments fetch.
+    #[serde(default)]
+    comments: u32,
     // The REST API returns `files` as an object keyed by filename. BTreeMap keeps
     // the order deterministic (by filename) for stable display and tests.
     #[serde(default)]
@@ -128,6 +132,13 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
     Ok(files)
 }
 
+/// Map each gist id to its comment count, parsed from the same gist-list JSON. The count rides
+/// along in the list response, so this needs no extra `gh` call.
+pub fn parse_gist_comment_counts(raw: &str) -> Result<HashMap<String, u32>> {
+    let gists: Vec<GhGist> = serde_json::from_str(raw).context("parse gh gist list JSON")?;
+    Ok(gists.into_iter().map(|g| (g.id, g.comments)).collect())
+}
+
 #[derive(Debug, Deserialize)]
 struct GhComment {
     #[serde(default)]
@@ -207,5 +218,15 @@ mod tests {
         let notes = files.iter().find(|f| f.filename == "notes.md").unwrap();
         assert_eq!(notes.description, "");
         assert!(notes.public);
+    }
+
+    #[test]
+    fn parses_comment_counts_defaulting_to_zero() {
+        let raw = include_str!("../tests/fixtures/gh/gist-list.json");
+        let counts = parse_gist_comment_counts(raw).unwrap();
+
+        assert_eq!(counts.get("abc123").copied(), Some(2));
+        // The gist with no `comments` field falls back to 0 via `#[serde(default)]`.
+        assert_eq!(counts.get("def456").copied(), Some(0));
     }
 }

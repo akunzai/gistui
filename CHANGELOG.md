@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes are summarised here. Each release links to its full,
+All notable changes are summarised here. Each version links to its full,
 auto-generated notes on the [GitHub Releases][releases] page, which remains the
 authoritative source.
 
@@ -10,11 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Item counts in the Local, Gists and Pins titles (e.g. `Gists (3/12)` when a filter is
-  active, `(N)` otherwise), matching the existing `Files (N)` / `Comments (N)` style.
+## [0.9.0] — 2026-06-14
+
 - Gist detail view is now tabbed — a `Files │ Comments` strip under the basic info shows one
   pane at a time (opens on the Files tab; `Tab` switches), instead of stacking both panes.
 - Scrollbar on the gist-detail comments pane (the Diff and Preview panes already had one).
+- Item counts in the Local, Gists and Pins titles (e.g. `Gists (3/12)` when a filter is
+  active, `(N)` otherwise), matching the existing `Files (N)` / `Comments (N)` style.
+- Gist manager rows show a `💬 N` comment count for gists that have comments (drawn from the
+  existing gist-list fetch — no extra API calls).
 - Animated spinner on the scanning, loading and working states (replaces the static `⏳`),
   so long-running `gh` operations no longer look frozen.
 - Install from crates.io: `cargo install gistui`, or `cargo binstall gistui` for the
@@ -30,8 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Homebrew install: `brew install akunzai/tap/gistui`.
 - Crate metadata, README badges, and this changelog.
 
-[Full notes](https://github.com/akunzai/gistui/releases/tag/v0.8.0).
-
 ## [0.7.0] — 2026-06-12
 
 - Cursor-based file selection in the gist detail view.
@@ -41,14 +43,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - PageUp/PageDown scrolling.
 - GitHub Pages landing page.
 
-[Full notes](https://github.com/akunzai/gistui/releases/tag/v0.7.0).
-
 ## [0.6.0] — 2026-06-12
 
 - Preview file content with number keys in the detail view.
 - HTTPS clone during compaction to avoid SSH passphrase prompts.
-
-[Full notes](https://github.com/akunzai/gistui/releases/tag/v0.6.0).
 
 ## [0.5.0] — 2026-06-11
 
@@ -56,16 +54,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Anchor-driven list ranking with pinned/same-name markers.
 - Windows key-repeat fix.
 
-[Full notes](https://github.com/akunzai/gistui/releases/tag/v0.5.0).
-
 ## [0.4.0] — 2026-06-11
 
 - UI refresh.
 - Gist revision compaction.
 - Quit guard.
 - Pane-oriented Enter diff preview.
-
-[Full notes](https://github.com/akunzai/gistui/releases/tag/v0.4.0).
 
 ## [0.3.0] — 2026-06-10
 
@@ -77,8 +71,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Collapsible diff context.
 - Working-directory path argument.
 
-[Full notes](https://github.com/akunzai/gistui/releases/tag/v0.3.0).
-
 ## [0.2.0] — 2026-06-09
 
 - Paginate beyond 100 gists.
@@ -89,8 +81,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A pins view.
 - Word-level inline diff highlighting.
 
-[Full notes](https://github.com/akunzai/gistui/releases/tag/v0.2.0).
-
 ## [0.1.0] — 2026-06-09
 
 - Initial MVP: browse and rank gists against the working directory.
@@ -100,6 +90,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[Full notes](https://github.com/akunzai/gistui/releases/tag/v0.1.0).
-
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/akunzai/gistui/releases/tag/v0.9.0
+[0.8.0]: https://github.com/akunzai/gistui/releases/tag/v0.8.0
+[0.7.0]: https://github.com/akunzai/gistui/releases/tag/v0.7.0
+[0.6.0]: https://github.com/akunzai/gistui/releases/tag/v0.6.0
+[0.5.0]: https://github.com/akunzai/gistui/releases/tag/v0.5.0
+[0.4.0]: https://github.com/akunzai/gistui/releases/tag/v0.4.0
+[0.3.0]: https://github.com/akunzai/gistui/releases/tag/v0.3.0
+[0.2.0]: https://github.com/akunzai/gistui/releases/tag/v0.2.0
+[0.1.0]: https://github.com/akunzai/gistui/releases/tag/v0.1.0
 [releases]: https://github.com/akunzai/gistui/releases

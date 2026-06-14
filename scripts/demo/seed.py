@@ -24,6 +24,7 @@ GISTS = {
         "public": True,
         "updated_at": "2026-06-09T18:20:00Z",
         "created_at": "2026-03-01T00:00:00Z",
+        "comments": 2,
         "files": {
             "starship.toml": (
                 "# Starship prompt\n"

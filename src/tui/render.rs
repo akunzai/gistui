@@ -317,7 +317,12 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     render_footer(frame, chunks[1], "", &footer, colored);
 }
 
-pub(super) fn gist_group_row_label(g: &GistGroup, now: u64, sort: GistGroupSort) -> String {
+pub(super) fn gist_group_row_label(
+    g: &GistGroup,
+    now: u64,
+    sort: GistGroupSort,
+    comments: u32,
+) -> String {
     let desc = if g.description.trim().is_empty() {
         "(no description)".to_string()
     } else {
@@ -334,7 +339,17 @@ pub(super) fn gist_group_row_label(g: &GistGroup, now: u64, sort: GistGroupSort)
     let age = crate::domain::parse_rfc3339_to_unix(timestamp)
         .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
         .unwrap_or_else(|| "?".into());
-    format!("{}  {}  📄 {}  🕒 {}", g.id, desc, g.file_count, age)
+    // Only surface the 💬 marker when the gist actually has comments, to keep the common
+    // zero-comment rows clean.
+    let comments_seg = if comments > 0 {
+        format!("  💬 {comments}")
+    } else {
+        String::new()
+    };
+    format!(
+        "{}  {}  📄 {}{}  🕒 {}",
+        g.id, desc, g.file_count, comments_seg, age
+    )
 }
 
 pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
@@ -378,7 +393,12 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
             .iter()
             .map(|g| {
                 ListItem::new(hscroll_str(
-                    &gist_group_row_label(g, now, state.gists_sort),
+                    &gist_group_row_label(
+                        g,
+                        now,
+                        state.gists_sort,
+                        state.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
+                    ),
                     state.gists_hscroll,
                 ))
             })
