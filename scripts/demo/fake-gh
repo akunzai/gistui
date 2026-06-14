@@ -51,6 +51,7 @@ def main():
                 "public": g.get("public", False),
                 "updated_at": g.get("updated_at", ""),
                 "created_at": g.get("created_at", ""),
+                "comments": g.get("comments", 0),
                 "files": {fn: {"filename": fn} for fn in g["files"]},
             }
             for gid, g in d["gists"].items()
