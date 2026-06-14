@@ -345,6 +345,10 @@ pub struct AppState {
     /// Monotonic tick advanced once per event-loop iteration (~150ms); drives the in-progress
     /// spinner animation. Wraps freely — only its value modulo the frame count is observed.
     pub spinner_frame: usize,
+    /// Per-gist comment counts (`gist_id` → count) from the gist-list fetch, surfaced in the
+    /// gist manager rows. Kept off `GistFile` since the count is a gist-level value, not a
+    /// per-file one; empty until the first live fetch lands (cached startup gists show 0).
+    pub gist_comment_counts: std::collections::HashMap<String, u32>,
 }
 
 fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
@@ -527,9 +531,14 @@ impl AppState {
         self.visible_gist_groups()
             .iter()
             .map(|g| {
-                gist_group_row_label(g, unix_now(), self.gists_sort)
-                    .chars()
-                    .count()
+                gist_group_row_label(
+                    g,
+                    unix_now(),
+                    self.gists_sort,
+                    self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
+                )
+                .chars()
+                .count()
             })
             .max()
             .unwrap_or(0)
@@ -842,6 +851,7 @@ pub fn initial_state() -> AppState {
         detail_file_cursor: 0,
         compact_return_screen: Screen::Gists,
         spinner_frame: 0,
+        gist_comment_counts: std::collections::HashMap::new(),
     }
 }
 

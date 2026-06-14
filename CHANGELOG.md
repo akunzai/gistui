@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Gist manager rows show a `💬 N` comment count for gists that have comments (drawn from the
+  existing gist-list fetch — no extra API calls).
 - Item counts in the Local, Gists and Pins titles (e.g. `Gists (3/12)` when a filter is
   active, `(N)` otherwise), matching the existing `Files (N)` / `Comments (N)` style.
 - Gist detail view is now tabbed — a `Files │ Comments` strip under the basic info shows one
