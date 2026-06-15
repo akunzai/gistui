@@ -88,27 +88,33 @@ impl AppState {
             }
             return KeyOutcome::None;
         }
-        // Inline text filter: capture the query until Enter (keep) or Esc (clear).
+        // Inline text filter: live-navigate with arrows; Tab is a no-op (single pane).
         if self.gists_filtering {
             match code {
-                KeyCode::Esc => {
-                    self.gists_filter_query.clear();
-                    self.gists_filtering = false;
-                    self.gists_index = 0;
+                KeyCode::Up if self.gists_index > 0 => {
+                    self.gists_index -= 1;
                     self.gists_hscroll = 0;
                 }
-                KeyCode::Enter => self.gists_filtering = false,
-                KeyCode::Backspace => {
-                    self.gists_filter_query.pop();
-                    self.gists_index = 0;
-                    self.gists_hscroll = 0;
+                KeyCode::Up => {}
+                KeyCode::Down => {
+                    if self.gists_index + 1 < self.visible_gist_groups().len() {
+                        self.gists_index += 1;
+                        self.gists_hscroll = 0;
+                    }
                 }
-                KeyCode::Char(c) => {
-                    self.gists_filter_query.push(c);
-                    self.gists_index = 0;
-                    self.gists_hscroll = 0;
-                }
-                _ => {}
+                _ => match apply_filter_edit(code, &mut self.gists_filter_query) {
+                    FilterKey::Edited => {
+                        self.gists_index = 0;
+                        self.gists_hscroll = 0;
+                    }
+                    FilterKey::Cleared => {
+                        self.gists_filtering = false;
+                        self.gists_index = 0;
+                        self.gists_hscroll = 0;
+                    }
+                    FilterKey::Exited => self.gists_filtering = false,
+                    FilterKey::Pass => {}
+                },
             }
             return KeyOutcome::None;
         }

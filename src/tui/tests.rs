@@ -2741,3 +2741,62 @@ fn list_filter_enter_keeps_query_and_exits() {
     assert!(!state.filtering); // exited input
     assert_eq!(state.local_filter_query, "j"); // query kept
 }
+
+fn gists_screen_state() -> AppState {
+    let mut state = initial_state();
+    state.gists = vec![
+        GistFile {
+            gist_id: "g1".into(),
+            description: "alpha".into(),
+            filename: "a.txt".into(),
+            public: false,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+        },
+        GistFile {
+            gist_id: "g2".into(),
+            description: "beta".into(),
+            filename: "b.txt".into(),
+            public: false,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+        },
+    ];
+    state.screen = Screen::Gists;
+    state
+}
+
+#[test]
+fn gists_filter_navigates_while_typing() {
+    let mut state = gists_screen_state();
+    state.gists_filtering = true;
+
+    state.handle_key(KeyCode::Down);
+    assert_eq!(state.gists_index, 1);
+    assert!(state.gists_filtering);
+    state.handle_key(KeyCode::Up);
+    assert_eq!(state.gists_index, 0);
+}
+
+#[test]
+fn gists_filter_empty_backspace_exits() {
+    let mut state = gists_screen_state();
+    state.gists_filtering = true;
+
+    state.handle_key(KeyCode::Char('a'));
+    state.handle_key(KeyCode::Backspace); // empty again, still filtering
+    assert!(state.gists_filtering);
+    state.handle_key(KeyCode::Backspace); // empty -> exit
+    assert!(!state.gists_filtering);
+}
+
+#[test]
+fn gists_filter_tab_is_noop() {
+    let mut state = gists_screen_state();
+    state.gists_filtering = true;
+    state.handle_key(KeyCode::Char('a'));
+
+    state.handle_key(KeyCode::Tab);
+    assert!(state.gists_filtering); // still typing
+    assert_eq!(state.gists_filter_query, "a"); // unchanged
+}
