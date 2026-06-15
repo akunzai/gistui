@@ -2643,3 +2643,101 @@ fn gist_group_row_shows_comment_marker_only_when_present() {
     assert!(!gist_group_row_label(&group, now, GistGroupSort::Updated, 0).contains('💬'));
     assert!(gist_group_row_label(&group, now, GistGroupSort::Updated, 3).contains("💬 3"));
 }
+
+#[test]
+fn list_filter_routes_chars_to_focused_pane() {
+    let mut state = state_with_local_paths(&["/cwd/a.json", "/cwd/b.txt"]);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+
+    state.handle_key(KeyCode::Char('j'));
+    state.handle_key(KeyCode::Char('s'));
+    assert_eq!(state.local_filter_query, "js");
+    assert_eq!(state.filter_query, ""); // gist pane untouched
+}
+
+#[test]
+fn list_filter_focus_gist_routes_to_gist_query() {
+    let mut state = state_with_local_paths(&["/cwd/a.json"]);
+    state.focus = FocusPane::Gist;
+    state.filtering = true;
+
+    state.handle_key(KeyCode::Char('x'));
+    assert_eq!(state.filter_query, "x");
+    assert_eq!(state.local_filter_query, "");
+}
+
+#[test]
+fn list_filter_navigates_while_typing() {
+    let mut state = state_with_local_paths(&["/cwd/a.txt", "/cwd/b.txt", "/cwd/c.txt"]);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+
+    state.handle_key(KeyCode::Down);
+    assert_eq!(state.local_index, 1);
+    assert!(state.filtering); // still in filter input
+    state.handle_key(KeyCode::Up);
+    assert_eq!(state.local_index, 0);
+}
+
+#[test]
+fn list_filter_empty_backspace_exits() {
+    let mut state = state_with_local_paths(&["/cwd/a.txt"]);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+
+    state.handle_key(KeyCode::Char('a'));
+    state.handle_key(KeyCode::Backspace); // back to empty, still filtering
+    assert!(state.filtering);
+    assert_eq!(state.local_filter_query, "");
+    state.handle_key(KeyCode::Backspace); // empty -> exit
+    assert!(!state.filtering);
+}
+
+#[test]
+fn list_filter_tab_commits_and_switches_pane() {
+    let mut state = state_with_local_paths(&["/cwd/a.json"]);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+    state.handle_key(KeyCode::Char('j'));
+
+    state.handle_key(KeyCode::Tab);
+    assert!(!state.filtering); // committed, left input
+    assert_eq!(state.local_filter_query, "j"); // query kept
+    assert_eq!(state.focus, FocusPane::Gist); // switched pane
+}
+
+#[test]
+fn list_filter_esc_clears_focused_query() {
+    let mut state = state_with_local_paths(&["/cwd/a.json"]);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+    state.handle_key(KeyCode::Char('j'));
+
+    state.handle_key(KeyCode::Esc);
+    assert!(!state.filtering);
+    assert_eq!(state.local_filter_query, "");
+}
+
+#[test]
+fn list_filter_char_resets_focused_index() {
+    let mut state = state_with_local_paths(&["/cwd/a.txt", "/cwd/ab.txt", "/cwd/abc.txt"]);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+    state.local_index = 2; // cursor not at top
+
+    state.handle_key(KeyCode::Char('a')); // edit -> reset to top
+    assert_eq!(state.local_index, 0);
+}
+
+#[test]
+fn list_filter_enter_keeps_query_and_exits() {
+    let mut state = state_with_local_paths(&["/cwd/a.json"]);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+    state.handle_key(KeyCode::Char('j'));
+
+    state.handle_key(KeyCode::Enter);
+    assert!(!state.filtering); // exited input
+    assert_eq!(state.local_filter_query, "j"); // query kept
+}

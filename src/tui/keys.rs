@@ -340,27 +340,81 @@ impl AppState {
         }
         KeyOutcome::None
     }
+}
 
+/// Outcome of applying one key to a filter query's text (the shared edit transitions
+/// for every inline filter input). Nav keys (Up/Down) and Tab are handled by the caller.
+enum FilterKey {
+    /// Query text changed (char appended or backspace popped a char); caller resets
+    /// the affected pane's selection index + horizontal scroll.
+    Edited,
+    /// Leave filter input, keeping the current query (Enter, or Backspace on empty).
+    Exited,
+    /// Esc: query cleared; caller leaves input and resets index + scroll.
+    Cleared,
+    /// Not a text-edit key (e.g. an arrow or Tab the caller already handled); ignore.
+    Pass,
+}
+
+/// Apply one key to `query` and report the transition. Pure: only mutates `query`.
+fn apply_filter_edit(code: KeyCode, query: &mut String) -> FilterKey {
+    match code {
+        KeyCode::Esc => {
+            query.clear();
+            FilterKey::Cleared
+        }
+        KeyCode::Enter => FilterKey::Exited,
+        KeyCode::Backspace => {
+            if query.pop().is_some() {
+                FilterKey::Edited
+            } else {
+                FilterKey::Exited // already empty -> leave input
+            }
+        }
+        KeyCode::Char(c) => {
+            query.push(c);
+            FilterKey::Edited
+        }
+        _ => FilterKey::Pass,
+    }
+}
+
+impl AppState {
     fn handle_key_filter(&mut self, code: KeyCode) -> KeyOutcome {
+        // Live navigation while typing: arrows move the focused pane's selection.
         match code {
-            KeyCode::Esc => {
-                self.filter_query.clear();
+            KeyCode::Up => {
+                self.list_move_focused(false);
+                return KeyOutcome::None;
+            }
+            KeyCode::Down => {
+                self.list_move_focused(true);
+                return KeyOutcome::None;
+            }
+            // Tab commits (keeps the query), leaves input, and switches pane.
+            KeyCode::Tab => {
                 self.filtering = false;
-                self.gist_index = 0;
-                self.gist_hscroll = 0;
-            }
-            KeyCode::Enter => self.filtering = false,
-            KeyCode::Backspace => {
-                self.filter_query.pop();
-                self.gist_index = 0;
-                self.gist_hscroll = 0;
-            }
-            KeyCode::Char(c) => {
-                self.filter_query.push(c);
-                self.gist_index = 0;
-                self.gist_hscroll = 0;
+                self.focus = match self.focus {
+                    FocusPane::Local => FocusPane::Gist,
+                    FocusPane::Gist => FocusPane::Local,
+                };
+                return KeyOutcome::None;
             }
             _ => {}
+        }
+        let focus = self.focus;
+        let query = match focus {
+            FocusPane::Local => &mut self.local_filter_query,
+            FocusPane::Gist => &mut self.filter_query,
+        };
+        match apply_filter_edit(code, query) {
+            FilterKey::Edited => self.reset_focused_filter_scroll(),
+            FilterKey::Cleared => {
+                self.filtering = false;
+                self.reset_focused_filter_scroll();
+            }
+            FilterKey::Exited => self.filtering = false,
+            FilterKey::Pass => {}
         }
         KeyOutcome::None
     }
@@ -458,6 +512,21 @@ impl AppState {
             _ => {}
         }
         KeyOutcome::None
+    }
+
+    /// Reset the focused pane's selection index and horizontal scroll (used when a
+    /// filter edit changes the visible rows).
+    fn reset_focused_filter_scroll(&mut self) {
+        match self.focus {
+            FocusPane::Local => {
+                self.local_index = 0;
+                self.local_hscroll = 0;
+            }
+            FocusPane::Gist => {
+                self.gist_index = 0;
+                self.gist_hscroll = 0;
+            }
+        }
     }
 
     /// Move the selection in the focused list pane. `forward` advances toward the end of the
