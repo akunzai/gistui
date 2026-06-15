@@ -467,8 +467,9 @@ impl AppState {
     fn list_move_focused(&mut self, forward: bool) {
         match self.focus {
             FocusPane::Local => {
+                let len = self.visible_locals().len();
                 if forward {
-                    if self.local_index + 1 >= self.locals.len() {
+                    if self.local_index + 1 >= len {
                         return;
                     }
                     self.local_index += 1;

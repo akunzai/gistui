@@ -264,6 +264,10 @@ pub struct AppState {
     pub local_sort: LocalSort,
     pub filtering: bool,
     pub filter_query: String,
+    /// Text filter for the LOCAL pane (List screen). Independent of `filter_query`
+    /// (the gist pane), so both panes can be filtered at once. Matched against the
+    /// cwd-relative display label, i.e. the exact string shown in the local list.
+    pub local_filter_query: String,
     pub diff_previewed: bool,
     pub diff_text: String,
     pub diff_scroll: u16,
@@ -478,6 +482,14 @@ impl AppState {
         } else {
             unranked_locals(&self.locals)
         };
+        let query = self.local_filter_query.to_lowercase();
+        if !query.is_empty() {
+            ranked.retain(|r| {
+                render::local_row_label(&r.candidate.path, &self.cwd)
+                    .to_lowercase()
+                    .contains(&query)
+            });
+        }
         self.local_sort.apply(&mut ranked);
         ranked
     }
@@ -794,6 +806,7 @@ pub fn initial_state() -> AppState {
         local_sort: LocalSort::Match,
         filtering: false,
         filter_query: String::new(),
+        local_filter_query: String::new(),
         diff_previewed: false,
         diff_text: String::new(),
         diff_scroll: 0,

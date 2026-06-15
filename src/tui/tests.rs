@@ -42,6 +42,57 @@ fn state_with_many_files(n: usize) -> AppState {
     state
 }
 
+fn state_with_local_paths(paths: &[&str]) -> AppState {
+    let mut state = initial_state();
+    state.cwd = PathBuf::from("/cwd");
+    state.locals = paths
+        .iter()
+        .map(|p| LocalCandidate {
+            path: PathBuf::from(p),
+            pinned: false,
+            modified: None,
+        })
+        .collect();
+    state
+}
+
+#[test]
+fn local_filter_matches_filename_and_relative_path() {
+    let mut state =
+        state_with_local_paths(&["/cwd/settings.json", "/cwd/src/main.rs", "/cwd/notes.txt"]);
+
+    assert_eq!(state.visible_locals().len(), 3);
+
+    state.local_filter_query = "json".into();
+    let visible: Vec<_> = state
+        .visible_locals()
+        .iter()
+        .map(|r| r.candidate.path.clone())
+        .collect();
+    assert_eq!(visible, vec![PathBuf::from("/cwd/settings.json")]);
+
+    state.local_filter_query = "src/".into();
+    let visible: Vec<_> = state
+        .visible_locals()
+        .iter()
+        .map(|r| r.candidate.path.clone())
+        .collect();
+    assert_eq!(visible, vec![PathBuf::from("/cwd/src/main.rs")]);
+
+    state.local_filter_query = "NOTES".into();
+    assert_eq!(state.visible_locals().len(), 1);
+}
+
+#[test]
+fn local_down_clamps_to_filtered_count() {
+    let mut state = state_with_local_paths(&["/cwd/a.json", "/cwd/b.txt", "/cwd/c.txt"]);
+    state.focus = FocusPane::Local;
+    state.local_filter_query = "json".into(); // only 1 match
+
+    state.handle_key(KeyCode::Down); // would move to index 1 if clamped on raw len
+    assert_eq!(state.local_index, 0); // clamped: only one visible row
+}
+
 fn list_state_with_matches() -> AppState {
     let mut state = initial_state();
     state.locals = vec![
