@@ -78,6 +78,7 @@ Actions (on the selected local file + gist)
 Pinned Mappings screen (P)
   Up/Down    move between pins
   Left/Right scroll a long local path horizontally (~ = home)
+  /          filter pins by path or filename (↑↓ move · Enter apply · Esc clear)
   Enter      diff the selected pair (then d pull / u push from the diff)
   s          smart-sync (newer side wins; skips if already identical)
   u          force push  (upload local → gist)
@@ -247,15 +248,25 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     let hints = if state.pinned.is_empty() {
         "Esc/q back"
     } else {
-        "↑↓ move · ←→ scroll · Enter diff · s sync · u push · d pull · x unpin  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back"
+        "↑↓ move · ←→ scroll · / filter · Enter diff · s sync · u push · d pull · x unpin  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back"
     };
-    let (footer, colored) = footer_with_status(state.status.as_deref(), hints);
+    let (ftitle, footer, colored) = if state.pins_filtering {
+        (
+            "Filter (↑↓ move · Enter keep · Esc clear)".to_string(),
+            format!("/{}_", state.pins_filter_query),
+            false,
+        )
+    } else {
+        let (footer, colored) = footer_with_status(state.status.as_deref(), hints);
+        (String::new(), footer, colored)
+    };
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 1)])
         .split(area);
 
+    let visible = state.visible_pin_indices();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -265,12 +276,14 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
             ListItem::new("  📌 No pinned mappings found (use p to pin a pair)")
                 .style(Style::default().fg(Color::DarkGray)),
         ]
+    } else if visible.is_empty() {
+        vec![ListItem::new("  🔍 No pins match the filter")
+            .style(Style::default().fg(Color::DarkGray))]
     } else {
-        state
-            .pinned
+        visible
             .iter()
-            .enumerate()
-            .map(|(i, m)| {
+            .map(|&i| {
+                let m = &state.pinned[i];
                 let (lts, rts) = state.pin_mtimes(i);
                 let age = |ts: Option<u64>| {
                     ts.map(|t| crate::domain::humanize_age(now - t as i64))
@@ -291,14 +304,18 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
             .collect()
     };
 
-    let selected = (!state.pinned.is_empty()).then_some(state.pins_index);
+    let selected = (!visible.is_empty()).then_some(state.pins_index);
+    let mut title = format!(
+        "Pinned Mappings {}",
+        count_label(visible.len(), state.pinned.len())
+    );
+    if !state.pins_filter_query.is_empty() {
+        title.push_str(&format!(" · /{}", state.pins_filter_query));
+    }
     let list = List::new(items)
         .block(
             Block::default()
-                .title(format!(
-                    "Pinned Mappings {}",
-                    count_label(state.pinned.len(), state.pinned.len())
-                ))
+                .title(title)
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::Cyan))
@@ -316,7 +333,7 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     list_state.select(selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
 
-    render_footer(frame, chunks[1], "", &footer, colored);
+    render_footer(frame, chunks[1], &ftitle, &footer, colored);
 }
 
 pub(super) fn gist_group_row_label(

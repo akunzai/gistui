@@ -205,6 +205,8 @@ Gist pane), `Up`/`Down` (move), and `Left`/`Right` (scroll a long row).
   Local paths are shown with the home directory shortened to `~`.
   Keys inside the Pins view:
   - `↑`/`↓` — move between pins; `←`/`→` — scroll a long local path horizontally.
+  - `/` — filter pins by local path or gist filename; while filtering, `↑`/`↓` move,
+    `Enter` applies, `Esc` clears.
   - `Enter` — diff the selected pair (read-only; `d`/`u` from the diff to pull/push; `Esc`/`q` returns to the Pins view).
   - `s` — smart-sync (newer side wins by modified time; skips if already identical).
   - `u` — force push (upload local → gist).

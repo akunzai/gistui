@@ -2800,3 +2800,96 @@ fn gists_filter_tab_is_noop() {
     assert!(state.gists_filtering); // still typing
     assert_eq!(state.gists_filter_query, "a"); // unchanged
 }
+
+// ── Pins screen filter ────────────────────────────────────────────────────────
+
+fn state_with_pins(rows: &[(&str, &str, &str)]) -> AppState {
+    let mut state = initial_state();
+    state.cwd = PathBuf::from("/cwd");
+    state.screen = Screen::Pins;
+    state.pinned = rows
+        .iter()
+        .map(|(lp, id, fname)| PinnedMapping {
+            local_path: PathBuf::from(lp),
+            gist_id: (*id).into(),
+            gist_filename: (*fname).into(),
+            direction: None,
+            last_seen_hash: None,
+        })
+        .collect();
+    state
+}
+
+#[test]
+fn visible_pin_indices_filters_by_path_and_filename() {
+    let mut state = state_with_pins(&[
+        ("/cwd/.zshrc", "g1", "zshrc"),
+        ("/cwd/init.lua", "g2", "init.lua"),
+        ("/cwd/notes.md", "g3", "notes.md"),
+    ]);
+    assert_eq!(state.visible_pin_indices(), vec![0, 1, 2]);
+
+    state.pins_filter_query = "lua".into(); // matches filename of row 1
+    assert_eq!(state.visible_pin_indices(), vec![1]);
+
+    state.pins_filter_query = "ZSH".into(); // case-insensitive, matches path of row 0
+    assert_eq!(state.visible_pin_indices(), vec![0]);
+}
+
+#[test]
+fn selected_pin_index_maps_through_filter() {
+    let mut state = state_with_pins(&[
+        ("/cwd/alpha", "g1", "alpha"),
+        ("/cwd/beta", "g2", "beta"),
+        ("/cwd/gamma", "g3", "gamma"),
+    ]);
+    state.pins_filter_query = "gamma".into(); // only row 2 visible
+    state.pins_index = 0; // first (and only) visible row
+    assert_eq!(state.selected_pin_index(), Some(2)); // TRUE index, not 0
+}
+
+#[test]
+fn pins_down_clamps_to_filtered_count() {
+    let mut state = state_with_pins(&[
+        ("/cwd/a", "g1", "a"),
+        ("/cwd/blua", "g2", "blua"),
+        ("/cwd/c", "g3", "c"),
+    ]);
+    state.pins_filter_query = "lua".into(); // 1 visible
+    state.handle_key(KeyCode::Down);
+    assert_eq!(state.pins_index, 0); // clamped to the single filtered row
+}
+
+#[test]
+fn pins_filter_input_behaviors() {
+    let mut state = state_with_pins(&[("/cwd/a", "g1", "a"), ("/cwd/b", "g2", "b")]);
+    state.pins_filtering = true;
+
+    // live nav while typing
+    state.handle_key(KeyCode::Down);
+    assert_eq!(state.pins_index, 1);
+    assert!(state.pins_filtering);
+
+    // Tab is a no-op (single pane)
+    state.handle_key(KeyCode::Char('a'));
+    state.handle_key(KeyCode::Tab);
+    assert!(state.pins_filtering);
+    assert_eq!(state.pins_filter_query, "a");
+
+    // Esc clears + exits
+    state.handle_key(KeyCode::Esc);
+    assert!(!state.pins_filtering);
+    assert_eq!(state.pins_filter_query, "");
+
+    // Backspace on empty exits
+    state.pins_filtering = true;
+    state.handle_key(KeyCode::Backspace);
+    assert!(!state.pins_filtering);
+
+    // Enter keeps query + exits
+    state.pins_filtering = true;
+    state.handle_key(KeyCode::Char('b'));
+    state.handle_key(KeyCode::Enter);
+    assert!(!state.pins_filtering);
+    assert_eq!(state.pins_filter_query, "b");
+}

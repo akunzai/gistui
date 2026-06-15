@@ -44,9 +44,39 @@ impl AppState {
         // One-shot: any key dismisses a lingering sync status; the run_loop IO helper for this
         // key may set a fresh one afterwards (e.g. "already in sync").
         self.status = None;
+        // Inline text filter: live-navigate with arrows; Tab is a no-op (single pane).
+        if self.pins_filtering {
+            match code {
+                KeyCode::Up if self.pins_index > 0 => {
+                    self.pins_index -= 1;
+                    self.pins_hscroll = 0;
+                }
+                KeyCode::Up => {}
+                KeyCode::Down => {
+                    if self.pins_index + 1 < self.visible_pin_indices().len() {
+                        self.pins_index += 1;
+                        self.pins_hscroll = 0;
+                    }
+                }
+                _ => match apply_filter_edit(code, &mut self.pins_filter_query) {
+                    FilterKey::Edited => {
+                        self.pins_index = 0;
+                        self.pins_hscroll = 0;
+                    }
+                    FilterKey::Cleared => {
+                        self.pins_filtering = false;
+                        self.pins_index = 0;
+                        self.pins_hscroll = 0;
+                    }
+                    FilterKey::Exited => self.pins_filtering = false,
+                    FilterKey::Pass => {}
+                },
+            }
+            return KeyOutcome::None;
+        }
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
-            KeyCode::Down if self.pins_index + 1 < self.pinned.len() => {
+            KeyCode::Down if self.pins_index + 1 < self.visible_pin_indices().len() => {
                 self.pins_index += 1;
                 self.pins_hscroll = 0;
             }
@@ -60,6 +90,7 @@ impl AppState {
             KeyCode::Left => {
                 self.pins_hscroll = self.pins_hscroll.saturating_sub(1);
             }
+            KeyCode::Char('/') => self.pins_filtering = true,
             KeyCode::Enter if !self.pinned.is_empty() => return KeyOutcome::PreviewPinDiff,
             KeyCode::Char('x') if !self.pinned.is_empty() => return KeyOutcome::UnpinAtPin,
             KeyCode::Char('s') if !self.pinned.is_empty() => return KeyOutcome::SyncPinAuto,
