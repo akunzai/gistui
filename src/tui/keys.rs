@@ -21,23 +21,65 @@ impl AppState {
         }
     }
 
+    /// Open the Help screen on the topic for the current screen, remembering where to return.
+    fn open_help(&mut self) {
+        self.help_return = self.screen;
+        self.help_topic = HelpTopic::for_screen(self.screen);
+        self.help_index_open = false;
+        self.help_scroll = 0;
+        self.screen = Screen::Help;
+    }
+
     fn handle_key_help(&mut self, code: KeyCode) -> KeyOutcome {
-        match code {
-            KeyCode::Down => {
-                self.help_scroll = self.help_scroll.saturating_add(1);
-                KeyOutcome::None
+        let topics = HelpTopic::all();
+        if self.help_index_open {
+            match code {
+                KeyCode::Up => self.help_index_sel = self.help_index_sel.saturating_sub(1),
+                KeyCode::Down => {
+                    if self.help_index_sel + 1 < topics.len() {
+                        self.help_index_sel += 1;
+                    }
+                }
+                KeyCode::Enter => {
+                    self.help_topic = topics[self.help_index_sel];
+                    self.help_index_open = false;
+                    self.help_scroll = 0;
+                }
+                KeyCode::Char(c @ '1'..='8') => {
+                    self.help_topic = topics[(c as u8 - b'1') as usize];
+                    self.help_index_open = false;
+                    self.help_scroll = 0;
+                }
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                    self.screen = self.help_return;
+                    self.help_index_open = false;
+                    self.help_scroll = 0;
+                }
+                _ => {}
             }
-            KeyCode::Up => {
-                self.help_scroll = self.help_scroll.saturating_sub(1);
-                KeyOutcome::None
-            }
-            _ => {
-                // Any other key just closes the help overlay back to the list.
-                self.screen = Screen::List;
-                self.help_scroll = 0;
-                KeyOutcome::None
+        } else {
+            match code {
+                KeyCode::Down => self.help_scroll = self.help_scroll.saturating_add(1),
+                KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
+                KeyCode::Tab => {
+                    self.help_index_sel = topics
+                        .iter()
+                        .position(|&t| t == self.help_topic)
+                        .unwrap_or(0);
+                    self.help_index_open = true;
+                }
+                KeyCode::Char(c @ '1'..='8') => {
+                    self.help_topic = topics[(c as u8 - b'1') as usize];
+                    self.help_scroll = 0;
+                }
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
+                    self.screen = self.help_return;
+                    self.help_scroll = 0;
+                }
+                _ => {}
             }
         }
+        KeyOutcome::None
     }
 
     fn handle_key_pins(&mut self, code: KeyCode) -> KeyOutcome {
@@ -96,6 +138,7 @@ impl AppState {
             KeyCode::Char('s') if !self.pinned.is_empty() => return KeyOutcome::SyncPinAuto,
             KeyCode::Char('u') if !self.pinned.is_empty() => return KeyOutcome::SyncPinPush,
             KeyCode::Char('d') if !self.pinned.is_empty() => return KeyOutcome::SyncPinPull,
+            KeyCode::Char('?') => self.open_help(),
             _ => {}
         }
         KeyOutcome::None
@@ -219,6 +262,7 @@ impl AppState {
                     self.screen = Screen::Confirm;
                 }
             }
+            KeyCode::Char('?') => self.open_help(),
             _ => {}
         }
         KeyOutcome::None
@@ -294,6 +338,7 @@ impl AppState {
                     }
                 }
             }
+            KeyCode::Char('?') => self.open_help(),
             _ => {}
         }
         KeyOutcome::None
@@ -514,7 +559,7 @@ impl AppState {
             }
             KeyCode::Char('/') => self.filtering = true,
             KeyCode::Char('y') => return KeyOutcome::CopyGistUrl,
-            KeyCode::Char('?') => self.screen = Screen::Help,
+            KeyCode::Char('?') => self.open_help(),
             KeyCode::Char('P') => {
                 self.pins_index = 0;
                 self.pins_hscroll = 0;

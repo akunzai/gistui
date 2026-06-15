@@ -28,6 +28,61 @@ pub enum Screen {
     GistDetail,
 }
 
+/// A help topic — one per key-dense area. Ordered for the index list and `1`-`8` quick-jump.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HelpTopic {
+    List,
+    Pins,
+    GistManager,
+    GistDetail,
+    Diff,
+    Preview,
+    Upload,
+    General,
+}
+
+impl HelpTopic {
+    /// All topics in index / quick-jump order.
+    pub fn all() -> [HelpTopic; 8] {
+        use HelpTopic::*;
+        [
+            List,
+            Pins,
+            GistManager,
+            GistDetail,
+            Diff,
+            Preview,
+            Upload,
+            General,
+        ]
+    }
+
+    /// Short title shown in the index and the topic-view block title.
+    pub fn title(self) -> &'static str {
+        match self {
+            HelpTopic::List => "List screen",
+            HelpTopic::Pins => "Pinned Mappings",
+            HelpTopic::GistManager => "Gist manager",
+            HelpTopic::GistDetail => "Gist detail",
+            HelpTopic::Diff => "Diff view",
+            HelpTopic::Preview => "Preview",
+            HelpTopic::Upload => "Upload confirmation",
+            HelpTopic::General => "General",
+        }
+    }
+
+    /// The topic to open when `?` is pressed on a given screen. Non-key-dense screens
+    /// fall back to the List topic.
+    pub fn for_screen(screen: Screen) -> HelpTopic {
+        match screen {
+            Screen::Pins => HelpTopic::Pins,
+            Screen::Gists => HelpTopic::GistManager,
+            Screen::GistDetail => HelpTopic::GistDetail,
+            _ => HelpTopic::List,
+        }
+    }
+}
+
 /// Which tab `Screen::GistDetail` shows, and which the navigation keys drive: the file list
 /// or the comments (only one is visible at a time). Defaults to `Files` — the gist's primary
 /// content — with the comments one `Tab` away.
@@ -321,6 +376,14 @@ pub struct AppState {
     /// other key clears it. Prevents an accidental single-key exit.
     pub quit_armed: bool,
     pub help_scroll: u16,
+    /// Screen to return to when leaving Help (mirrors `preview_return` / `diff_return`).
+    pub help_return: Screen,
+    /// The topic shown in the Help screen's topic view.
+    pub help_topic: HelpTopic,
+    /// When true the Help screen shows the topic index instead of a topic body.
+    pub help_index_open: bool,
+    /// Highlighted row in the Help topic index.
+    pub help_index_sel: usize,
     pub upload_original_content: String,
     pub upload_edited_content: Option<String>,
     pub upload_json_pretty: bool,
@@ -880,6 +943,10 @@ pub fn initial_state() -> AppState {
         bg_task_msg: None,
         quit_armed: false,
         help_scroll: 0,
+        help_return: Screen::List,
+        help_topic: HelpTopic::List,
+        help_index_open: false,
+        help_index_sel: 0,
         upload_original_content: String::new(),
         upload_edited_content: None,
         upload_json_pretty: false,

@@ -958,24 +958,23 @@ fn page_up_saturates_at_top_in_diff() {
 }
 
 #[test]
-fn question_opens_help_and_any_key_closes_it() {
+fn question_opens_contextual_help_from_list() {
     let mut state = initial_state();
     state.handle_key(KeyCode::Char('?'));
     assert_eq!(state.screen, Screen::Help);
-    // Arrow keys scroll help instead of closing
+    assert_eq!(state.help_topic, HelpTopic::List);
+    assert_eq!(state.help_return, Screen::List);
+    assert!(!state.help_index_open);
+    // Arrow keys scroll help
     state.handle_key(KeyCode::Down);
     assert_eq!(state.screen, Screen::Help);
     assert_eq!(state.help_scroll, 1);
     state.handle_key(KeyCode::Up);
     assert_eq!(state.screen, Screen::Help);
     assert_eq!(state.help_scroll, 0);
-    // Other keys close help
-    assert_eq!(state.handle_key(KeyCode::Char('x')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::List);
-    // Closing resets scroll
-    state.screen = Screen::Help;
+    // Esc closes help and resets scroll
     state.help_scroll = 5;
-    state.handle_key(KeyCode::Char('q'));
+    state.handle_key(KeyCode::Esc);
     assert_eq!(state.screen, Screen::List);
     assert_eq!(state.help_scroll, 0);
 }
@@ -2892,4 +2891,103 @@ fn pins_filter_input_behaviors() {
     state.handle_key(KeyCode::Enter);
     assert!(!state.pins_filtering);
     assert_eq!(state.pins_filter_query, "b");
+}
+
+#[test]
+fn help_topic_all_is_ordered_and_titled() {
+    let all = HelpTopic::all();
+    assert_eq!(all.len(), 8);
+    assert_eq!(all[0], HelpTopic::List);
+    assert_eq!(all[7], HelpTopic::General);
+    assert_eq!(HelpTopic::Pins.title(), "Pinned Mappings");
+}
+
+#[test]
+fn help_topic_for_screen_maps_key_dense_screens() {
+    assert_eq!(HelpTopic::for_screen(Screen::List), HelpTopic::List);
+    assert_eq!(HelpTopic::for_screen(Screen::Pins), HelpTopic::Pins);
+    assert_eq!(HelpTopic::for_screen(Screen::Gists), HelpTopic::GistManager);
+    assert_eq!(
+        HelpTopic::for_screen(Screen::GistDetail),
+        HelpTopic::GistDetail
+    );
+    assert_eq!(HelpTopic::for_screen(Screen::Diff), HelpTopic::List);
+}
+
+#[test]
+fn question_mark_opens_contextual_help_from_pins() {
+    let mut state = initial_state();
+    state.screen = Screen::Pins;
+    state.handle_key(KeyCode::Char('?'));
+    assert_eq!(state.screen, Screen::Help);
+    assert_eq!(state.help_topic, HelpTopic::Pins);
+    assert_eq!(state.help_return, Screen::Pins);
+    assert!(!state.help_index_open);
+}
+
+#[test]
+fn help_topic_view_tab_opens_index_at_current_topic() {
+    let mut state = initial_state();
+    state.screen = Screen::Help;
+    state.help_topic = HelpTopic::GistManager; // index 2
+    state.handle_key(KeyCode::Tab);
+    assert!(state.help_index_open);
+    assert_eq!(state.help_index_sel, 2);
+}
+
+#[test]
+fn help_topic_view_number_switches_topic() {
+    let mut state = initial_state();
+    state.screen = Screen::Help;
+    state.help_topic = HelpTopic::List;
+    state.help_scroll = 5;
+    state.handle_key(KeyCode::Char('2')); // 2 -> Pins (index 1)
+    assert_eq!(state.help_topic, HelpTopic::Pins);
+    assert_eq!(state.help_scroll, 0);
+    assert!(!state.help_index_open);
+}
+
+#[test]
+fn help_topic_view_esc_returns_to_origin() {
+    let mut state = initial_state();
+    state.screen = Screen::Help;
+    state.help_return = Screen::Gists;
+    state.handle_key(KeyCode::Esc);
+    assert_eq!(state.screen, Screen::Gists);
+}
+
+#[test]
+fn help_index_navigates_and_enter_opens_topic() {
+    let mut state = initial_state();
+    state.screen = Screen::Help;
+    state.help_index_open = true;
+    state.help_index_sel = 0;
+    state.handle_key(KeyCode::Down); // -> 1
+    state.handle_key(KeyCode::Down); // -> 2 (GistManager)
+    assert_eq!(state.help_index_sel, 2);
+    state.handle_key(KeyCode::Enter);
+    assert!(!state.help_index_open);
+    assert_eq!(state.help_topic, HelpTopic::GistManager);
+}
+
+#[test]
+fn help_index_esc_returns_to_origin() {
+    let mut state = initial_state();
+    state.screen = Screen::Help;
+    state.help_index_open = true;
+    state.help_return = Screen::List;
+    state.handle_key(KeyCode::Esc);
+    assert_eq!(state.screen, Screen::List);
+    assert!(!state.help_index_open);
+}
+
+#[test]
+fn help_index_question_mark_exits_help() {
+    let mut state = initial_state();
+    state.screen = Screen::Help;
+    state.help_index_open = true;
+    state.help_return = Screen::Pins;
+    state.handle_key(KeyCode::Char('?'));
+    assert_eq!(state.screen, Screen::Pins);
+    assert!(!state.help_index_open);
 }

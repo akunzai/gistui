@@ -38,9 +38,10 @@ pub(super) fn count_label(shown: usize, total: usize) -> String {
     }
 }
 
-pub(super) fn render_help(frame: &mut Frame, state: &AppState) {
-    // The repo URL and version live in the footer on every screen, so help is keys only.
-    let body = "\
+fn help_topic_body(topic: HelpTopic) -> &'static str {
+    match topic {
+        HelpTopic::List => {
+            "\
 Navigation
   Tab        switch pane (Local / Gists)
   1 / 2      jump to the Local / Gist pane
@@ -73,9 +74,10 @@ Actions (on the selected local file + gist)
   X          remove the selected file from its gist (y/n confirm)
   g          open the gist manager (edit description, delete gist)
   e          edit the local file in $EDITOR
-  y          copy the selected gist's URL to the system clipboard
-
-Pinned Mappings screen (P)
+  y          copy the selected gist's URL to the system clipboard"
+        }
+        HelpTopic::Pins => {
+            "\
   Up/Down    move between pins
   Left/Right scroll a long local path horizontally (~ = home)
   /          filter pins by path or filename (↑↓ move · Enter apply · Esc clear)
@@ -85,33 +87,10 @@ Pinned Mappings screen (P)
   d          force pull  (download gist → local, diff + y/n confirm)
   x          unpin the selected pair
   status     ✓ synced · ↑ local newer · ↓ remote newer · ? unknown
-  Each row shows (local <age> · gist <age>) relative modification times.
-
-Diff view (Enter / d / u)
-  Up/Down/Left/Right  scroll the diff
-  PageUp/Dn  scroll the diff by 10 lines
-  c          toggle context: configured radius <-> full file (remembered)
-  d / u      download / upload from the diff
-  syntax     unchanged context lines are syntax-highlighted by file type
-  Esc / q    back
-
-Full-screen preview (Space, or 1-9 in the detail view)
-  Up/Down/Left/Right  scroll (Left/Right only when wrap is off)
-  PageUp/Dn  scroll by 10 lines
-  w          toggle soft line wrapping (remembered for the session)
-  y          copy the gist URL · Y copy the file content to the clipboard
-  syntax     known file types are syntax-highlighted
-  R          re-fetch the content
-  Esc / q    back
-
-Upload Confirmation screen (u)
-  y          confirm and execute the upload
-  n / Esc    cancel the upload
-  e          edit / redact the upload content in $EDITOR before upload
-  p          (JSON only) toggle pretty-print formatting
-  s          (JSON only) toggle recursive key sorting
-
-Gist manager (g)
+  Each row shows (local <age> · gist <age>) relative modification times."
+        }
+        HelpTopic::GistManager => {
+            "\
   Up/Down    move between gists
   Left/Right scroll a long description horizontally
   /          filter gists by description or id (↑↓ move · Enter apply · Esc clear)
@@ -123,9 +102,10 @@ Gist manager (g)
   y          copy the gist's URL to the system clipboard
   c          compact revisions: squash history to one commit (force-push, y/n confirm)
   X          delete the entire gist and all its files (y/n confirm)
-  q / Esc    back to the list
-
-Gist detail (Enter from gist manager)
+  q / Esc    back to the list"
+        }
+        HelpTopic::GistDetail => {
+            "\
   Tab        switch tab: Files / Comments (one shows at a time; opens on Files)
   Up/Down    move the file cursor (Files tab) or scroll comments (Comments tab)
   PageUp/Dn  page comments / file cursor by 10
@@ -135,24 +115,88 @@ Gist detail (Enter from gist manager)
   o          open the gist in your web browser
   y          copy the gist's URL to the system clipboard
   X          delete the entire gist and all its files (y/n confirm)
-  q / Esc    back to the gist manager
-
-General
+  q / Esc    back to the gist manager"
+        }
+        HelpTopic::Diff => {
+            "\
+  Up/Down/Left/Right  scroll the diff
+  PageUp/Dn  scroll the diff by 10 lines
+  c          toggle context: configured radius <-> full file (remembered)
+  d / u      download / upload from the diff
+  syntax     unchanged context lines are syntax-highlighted by file type
+  Esc / q    back"
+        }
+        HelpTopic::Preview => {
+            "\
+  Up/Down/Left/Right  scroll (Left/Right only when wrap is off)
+  PageUp/Dn  scroll by 10 lines
+  w          toggle soft line wrapping (remembered for the session)
+  y          copy the gist URL · Y copy the file content to the clipboard
+  syntax     known file types are syntax-highlighted
+  R          re-fetch the content
+  Esc / q    back"
+        }
+        HelpTopic::Upload => {
+            "\
+  y          confirm and execute the upload
+  n / Esc    cancel the upload
+  e          edit / redact the upload content in $EDITOR before upload
+  p          (JSON only) toggle pretty-print formatting
+  s          (JSON only) toggle recursive key sorting"
+        }
+        HelpTopic::General => {
+            "\
   Esc / q    close an overlay; from the list, press twice to quit the app
   ?          show this help
   Up/Down    scroll this help text
-  NO_COLOR   set this env var to disable syntax highlighting (preview + diff)";
+  NO_COLOR   set this env var to disable syntax highlighting (preview + diff)"
+        }
+    }
+}
 
-    frame.render_widget(
-        Paragraph::new(body).scroll((state.help_scroll, 0)).block(
-            Block::default()
-                .title("Help (Up/Down scroll) — press any other key to close")
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .padding(Padding::horizontal(1)),
-        ),
-        frame.area(),
-    );
+pub(super) fn render_help(frame: &mut Frame, state: &AppState) {
+    if state.help_index_open {
+        let items: Vec<ListItem> = HelpTopic::all()
+            .iter()
+            .enumerate()
+            .map(|(i, t)| ListItem::new(format!("  {}  {}", i + 1, t.title())))
+            .collect();
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .title("Help — pick a topic (1-8 / ↑↓ Enter · Esc back)")
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .padding(Padding::horizontal(1)),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Cyan)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶ ");
+        let mut list_state = ListState::default();
+        list_state.select(Some(state.help_index_sel));
+        frame.render_stateful_widget(list, frame.area(), &mut list_state);
+    } else {
+        let title = format!(
+            "Help · {} — Tab topics · ↑↓ scroll · Esc back",
+            state.help_topic.title()
+        );
+        frame.render_widget(
+            Paragraph::new(help_topic_body(state.help_topic))
+                .scroll((state.help_scroll, 0))
+                .block(
+                    Block::default()
+                        .title(title)
+                        .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
+                        .padding(Padding::horizontal(1)),
+                ),
+            frame.area(),
+        );
+    }
 }
 
 /// Lowercase file extension of a filename or path string, if any.
@@ -248,7 +292,7 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     let hints = if state.pinned.is_empty() {
         "Esc/q back"
     } else {
-        "↑↓ move · ←→ scroll · / filter · Enter diff · s sync · u push · d pull · x unpin  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back"
+        "↑↓ move · ←→ scroll · / filter · Enter diff · s sync · u push · d pull · x unpin · ? help  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back"
     };
     let (ftitle, footer, colored) = if state.pins_filtering {
         (
@@ -386,7 +430,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
     } else {
         (
             String::new(),
-            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · e desc · o browser · c compact · X delete · q back"
+            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · e desc · o browser · c compact · X delete · ? help · q back"
                 .to_string(),
             true,
         )
@@ -704,10 +748,10 @@ pub(super) fn footer_with_status(status: Option<&str>, hints: &str) -> (String, 
 pub(super) fn detail_footer(status: Option<&str>, focus: DetailFocus) -> (String, bool) {
     let hints = match focus {
         DetailFocus::Comments => {
-            "Tab files · ↑↓ scroll · 1-9 preview · c compact · o browser · X delete · q back"
+            "Tab files · ↑↓ scroll · 1-9 preview · c compact · o browser · X delete · ? help · q back"
         }
         DetailFocus::Files => {
-            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · c compact · o browser · X delete · q back"
+            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · c compact · o browser · X delete · ? help · q back"
         }
     };
     footer_with_status(status, hints)
