@@ -76,7 +76,7 @@ until the registry token is set.
 - [x] Add a `cargo install gistui` option to the README install section.
 - [x] Add `[package.metadata.binstall]` and verify `cargo binstall --dry-run gistui` (see issue #93).
 
-**Ongoing:** each release is a `vX.Y.Z` tag matching `Cargo.toml`; the tag triggers both the binary release (`release.yml`) and the crates.io publish (`publish.yml`). Remember to bump the [Homebrew tap](https://github.com/akunzai/homebrew-tap) formula too.
+**Ongoing:** each release is a `vX.Y.Z` tag matching `Cargo.toml`; the tag triggers both the binary release (`release.yml`) and the crates.io publish (`publish.yml`). The [Homebrew tap](https://github.com/akunzai/homebrew-tap) and [Scoop bucket](https://github.com/akunzai/scoop-bucket) both update themselves via their scheduled workflows (`brew livecheck` bump / `checkver` + `autoupdate` Excavator), so neither needs a manual bump on release.
 
 ## Reporting Issues
 
