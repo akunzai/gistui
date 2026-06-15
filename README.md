@@ -66,6 +66,17 @@ To pin a release or change the install directory, invoke it as a script block:
 > the WSL launcher and installs the **Linux** binary inside WSL. Use `install.ps1` for a native
 > Windows install, or run `install.sh` from [Git Bash](https://gitforwindows.org).
 
+### Scoop (Windows)
+
+With [Scoop](https://scoop.sh), install from the
+[`akunzai/scoop-bucket`](https://github.com/akunzai/scoop-bucket) bucket — it handles `PATH`,
+updates, and the `gh` dependency for you:
+
+```powershell
+scoop bucket add akunzai https://github.com/akunzai/scoop-bucket
+scoop install gistui
+```
+
 ### Download a prebuilt binary (recommended)
 
 Each [release](https://github.com/akunzai/gistui/releases/latest) attaches prebuilt,
