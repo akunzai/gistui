@@ -169,6 +169,12 @@ side instead. Ranked rows are flagged with `📌` (an existing pinned pair) or *
 same-filename candidate). Browse with `Tab` (switch pane) or `1`/`2` (jump to the Local /
 Gist pane), `Up`/`Down` (move), and `Left`/`Right` (scroll a long row).
 
+Press `?` in the app for the full keymap — it now opens the **current screen's** keys, and
+`Tab` browses all topics (List, Pins, Gist manager, Gist detail, Diff, Preview, …).
+
+<details>
+<summary>Full keymap (all actions & per-screen keys)</summary>
+
 ### Actions
 
 - `Enter` (on a gist) — preview the unified diff between the selected local file and the
@@ -266,6 +272,8 @@ the gist owning the currently selected file. From here you manage gists as a who
 - `s` cycle sort (updated / created) · `v` cycle visibility (all/public/secret) · `/` filter
   by description or id (↑/↓ move · Enter apply · Esc clear) · `Left`/`Right` scroll a long description.
 - `q`/`Esc` — back to the list.
+
+</details>
 
 ## Safety rules
 
