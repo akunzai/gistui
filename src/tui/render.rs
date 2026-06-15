@@ -49,7 +49,9 @@ Navigation
 
 List screen
   r          toggle recursive file discovery (skips hidden + configured dirs)
-  /          filter by filename or description
+  /          filter the focused pane (Local = path/filename, Gist = description/id)
+             while filtering: type to match · ↑↓ move · Tab apply + switch pane
+             · Enter apply · Esc clear
   v          cycle gist visibility: all / public / secret
   s          cycle the focused pane's sort: match / name / recent
   t          toggle row view: description / id
@@ -111,7 +113,7 @@ Upload Confirmation screen (u)
 Gist manager (g)
   Up/Down    move between gists
   Left/Right scroll a long description horizontally
-  /          filter gists by description or id
+  /          filter gists by description or id (↑↓ move · Enter apply · Esc clear)
   s          cycle sort: updated / created
   v          cycle visibility: all / public / secret
   e          edit the gist description (Enter apply, Esc cancel)
@@ -358,7 +360,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
     // result) when present, else the command hints. Only the hints get key colouring.
     let (ftitle, footer, colored) = if state.gists_filtering {
         (
-            "Filter (Enter keep · Esc clear)".to_string(),
+            "Filter (↑↓ move · Enter keep · Esc clear)".to_string(),
             format!("/{}_", state.gists_filter_query),
             false,
         )
