@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Local file list now has a text filter: `/` filters the focused pane (Local matches path/filename, Gist matches description/id). Filtering supports typing-while-navigating (↑/↓), `Tab` to apply and switch panes, and `Backspace` on an empty query to exit.
+- The Pinned Mappings screen (`P`) gained the same `/` text filter — matches the local path or gist filename, with live ↑/↓ navigation.
+
 ## [0.9.0] — 2026-06-14
 
 - Gist detail view is now tabbed — a `Files │ Comments` strip under the basic info shows one

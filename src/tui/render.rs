@@ -49,7 +49,9 @@ Navigation
 
 List screen
   r          toggle recursive file discovery (skips hidden + configured dirs)
-  /          filter by filename or description
+  /          filter the focused pane (Local = path/filename, Gist = description/id)
+             while filtering: type to match · ↑↓ move · Tab apply + switch pane
+             · Enter apply · Esc clear
   v          cycle gist visibility: all / public / secret
   s          cycle the focused pane's sort: match / name / recent
   t          toggle row view: description / id
@@ -76,6 +78,7 @@ Actions (on the selected local file + gist)
 Pinned Mappings screen (P)
   Up/Down    move between pins
   Left/Right scroll a long local path horizontally (~ = home)
+  /          filter pins by path or filename (↑↓ move · Enter apply · Esc clear)
   Enter      diff the selected pair (then d pull / u push from the diff)
   s          smart-sync (newer side wins; skips if already identical)
   u          force push  (upload local → gist)
@@ -111,7 +114,7 @@ Upload Confirmation screen (u)
 Gist manager (g)
   Up/Down    move between gists
   Left/Right scroll a long description horizontally
-  /          filter gists by description or id
+  /          filter gists by description or id (↑↓ move · Enter apply · Esc clear)
   s          cycle sort: updated / created
   v          cycle visibility: all / public / secret
   e          edit the gist description (Enter apply, Esc cancel)
@@ -245,15 +248,25 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     let hints = if state.pinned.is_empty() {
         "Esc/q back"
     } else {
-        "↑↓ move · ←→ scroll · Enter diff · s sync · u push · d pull · x unpin  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back"
+        "↑↓ move · ←→ scroll · / filter · Enter diff · s sync · u push · d pull · x unpin  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back"
     };
-    let (footer, colored) = footer_with_status(state.status.as_deref(), hints);
+    let (ftitle, footer, colored) = if state.pins_filtering {
+        (
+            "Filter (↑↓ move · Enter keep · Esc clear)".to_string(),
+            format!("/{}_", state.pins_filter_query),
+            false,
+        )
+    } else {
+        let (footer, colored) = footer_with_status(state.status.as_deref(), hints);
+        (String::new(), footer, colored)
+    };
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 1)])
         .split(area);
 
+    let visible = state.visible_pin_indices();
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
@@ -263,12 +276,14 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
             ListItem::new("  📌 No pinned mappings found (use p to pin a pair)")
                 .style(Style::default().fg(Color::DarkGray)),
         ]
+    } else if visible.is_empty() {
+        vec![ListItem::new("  🔍 No pins match the filter")
+            .style(Style::default().fg(Color::DarkGray))]
     } else {
-        state
-            .pinned
+        visible
             .iter()
-            .enumerate()
-            .map(|(i, m)| {
+            .map(|&i| {
+                let m = &state.pinned[i];
                 let (lts, rts) = state.pin_mtimes(i);
                 let age = |ts: Option<u64>| {
                     ts.map(|t| crate::domain::humanize_age(now - t as i64))
@@ -289,14 +304,18 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
             .collect()
     };
 
-    let selected = (!state.pinned.is_empty()).then_some(state.pins_index);
+    let selected = (!visible.is_empty()).then_some(state.pins_index);
+    let mut title = format!(
+        "Pinned Mappings {}",
+        count_label(visible.len(), state.pinned.len())
+    );
+    if !state.pins_filter_query.is_empty() {
+        title.push_str(&format!(" · /{}", state.pins_filter_query));
+    }
     let list = List::new(items)
         .block(
             Block::default()
-                .title(format!(
-                    "Pinned Mappings {}",
-                    count_label(state.pinned.len(), state.pinned.len())
-                ))
+                .title(title)
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::Cyan))
@@ -314,7 +333,7 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     list_state.select(selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
 
-    render_footer(frame, chunks[1], "", &footer, colored);
+    render_footer(frame, chunks[1], &ftitle, &footer, colored);
 }
 
 pub(super) fn gist_group_row_label(
@@ -358,7 +377,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
     // result) when present, else the command hints. Only the hints get key colouring.
     let (ftitle, footer, colored) = if state.gists_filtering {
         (
-            "Filter (Enter keep · Esc clear)".to_string(),
+            "Filter (↑↓ move · Enter keep · Esc clear)".to_string(),
             format!("/{}_", state.gists_filter_query),
             false,
         )
@@ -963,10 +982,11 @@ pub(super) fn render_footer(frame: &mut Frame, area: Rect, title: &str, text: &s
 pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
     let footer_body = if state.filtering {
-        format!(
-            "filter: {}_   (Enter apply · Esc clear)",
-            state.filter_query
-        )
+        let (pane, query) = match state.focus {
+            FocusPane::Local => ("local", &state.local_filter_query),
+            FocusPane::Gist => ("gist", &state.filter_query),
+        };
+        format!("filter {pane}: {query}_   (Tab next pane · Enter apply · Esc clear)")
     } else {
         match &state.status {
             Some(message) => message.clone(),
@@ -988,6 +1008,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
 
     // Show each candidate's path relative to cwd; in flat mode this is just the filename,
     // in recursive mode it includes the subdirectory (e.g. src/utils/helpers.rs).
+    let visible_locals = state.visible_locals();
     let local_items: Vec<ListItem> = if state.local_scanning && state.locals.is_empty() {
         vec![ListItem::new(format!(
             "  {} Scanning files…",
@@ -996,9 +1017,11 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
         .style(Style::default().fg(Color::DarkGray))]
     } else if state.locals.is_empty() {
         vec![ListItem::new("  📭 No local files found").style(Style::default().fg(Color::DarkGray))]
+    } else if visible_locals.is_empty() {
+        vec![ListItem::new("  🔍 No files match the filter")
+            .style(Style::default().fg(Color::DarkGray))]
     } else {
-        state
-            .visible_locals()
+        visible_locals
             .iter()
             .map(|r| {
                 let base = local_row_label(&r.candidate.path, &state.cwd);
@@ -1007,17 +1030,20 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
             .collect()
     };
     let local_focused = state.focus == FocusPane::Local;
-    let local_selected = (!state.locals.is_empty()).then_some(state.local_index);
+    let local_selected = (!visible_locals.is_empty()).then_some(state.local_index);
     let recursive_marker = if state.local_recursive { " [↓]" } else { "" };
     let scanning_marker = if state.local_scanning { " …" } else { "" };
-    let local_title = format!(
+    let mut local_title = format!(
         "[1] Local {} · {}{}{} · sort:{}",
-        count_label(state.locals.len(), state.locals.len()),
+        count_label(visible_locals.len(), state.locals.len()),
         crate::config::display_path(&state.cwd),
         recursive_marker,
         scanning_marker,
         state.local_sort.label()
     );
+    if !state.local_filter_query.is_empty() {
+        local_title.push_str(&format!(" · /{}", state.local_filter_query));
+    }
     // Mark the pane that currently drives the match ranking (the anchor).
     let local_title = if state.anchor == FocusPane::Local {
         format!("{local_title} · ⚓")

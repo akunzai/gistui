@@ -42,6 +42,57 @@ fn state_with_many_files(n: usize) -> AppState {
     state
 }
 
+fn state_with_local_paths(paths: &[&str]) -> AppState {
+    let mut state = initial_state();
+    state.cwd = PathBuf::from("/cwd");
+    state.locals = paths
+        .iter()
+        .map(|p| LocalCandidate {
+            path: PathBuf::from(p),
+            pinned: false,
+            modified: None,
+        })
+        .collect();
+    state
+}
+
+#[test]
+fn local_filter_matches_filename_and_relative_path() {
+    let mut state =
+        state_with_local_paths(&["/cwd/settings.json", "/cwd/src/main.rs", "/cwd/notes.txt"]);
+
+    assert_eq!(state.visible_locals().len(), 3);
+
+    state.local_filter_query = "json".into();
+    let visible: Vec<_> = state
+        .visible_locals()
+        .iter()
+        .map(|r| r.candidate.path.clone())
+        .collect();
+    assert_eq!(visible, vec![PathBuf::from("/cwd/settings.json")]);
+
+    state.local_filter_query = "src/".into();
+    let visible: Vec<_> = state
+        .visible_locals()
+        .iter()
+        .map(|r| r.candidate.path.clone())
+        .collect();
+    assert_eq!(visible, vec![PathBuf::from("/cwd/src/main.rs")]);
+
+    state.local_filter_query = "NOTES".into();
+    assert_eq!(state.visible_locals().len(), 1);
+}
+
+#[test]
+fn local_down_clamps_to_filtered_count() {
+    let mut state = state_with_local_paths(&["/cwd/a.json", "/cwd/b.txt", "/cwd/c.txt"]);
+    state.focus = FocusPane::Local;
+    state.local_filter_query = "json".into(); // only 1 match
+
+    state.handle_key(KeyCode::Down); // would move to index 1 if clamped on raw len
+    assert_eq!(state.local_index, 0); // clamped: only one visible row
+}
+
 fn list_state_with_matches() -> AppState {
     let mut state = initial_state();
     state.locals = vec![
@@ -2591,4 +2642,254 @@ fn gist_group_row_shows_comment_marker_only_when_present() {
     let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
     assert!(!gist_group_row_label(&group, now, GistGroupSort::Updated, 0).contains('💬'));
     assert!(gist_group_row_label(&group, now, GistGroupSort::Updated, 3).contains("💬 3"));
+}
+
+#[test]
+fn list_filter_routes_chars_to_focused_pane() {
+    let mut state = state_with_local_paths(&["/cwd/a.json", "/cwd/b.txt"]);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+
+    state.handle_key(KeyCode::Char('j'));
+    state.handle_key(KeyCode::Char('s'));
+    assert_eq!(state.local_filter_query, "js");
+    assert_eq!(state.filter_query, ""); // gist pane untouched
+}
+
+#[test]
+fn list_filter_focus_gist_routes_to_gist_query() {
+    let mut state = state_with_local_paths(&["/cwd/a.json"]);
+    state.focus = FocusPane::Gist;
+    state.filtering = true;
+
+    state.handle_key(KeyCode::Char('x'));
+    assert_eq!(state.filter_query, "x");
+    assert_eq!(state.local_filter_query, "");
+}
+
+#[test]
+fn list_filter_navigates_while_typing() {
+    let mut state = state_with_local_paths(&["/cwd/a.txt", "/cwd/b.txt", "/cwd/c.txt"]);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+
+    state.handle_key(KeyCode::Down);
+    assert_eq!(state.local_index, 1);
+    assert!(state.filtering); // still in filter input
+    state.handle_key(KeyCode::Up);
+    assert_eq!(state.local_index, 0);
+}
+
+#[test]
+fn list_filter_empty_backspace_exits() {
+    let mut state = state_with_local_paths(&["/cwd/a.txt"]);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+
+    state.handle_key(KeyCode::Char('a'));
+    state.handle_key(KeyCode::Backspace); // back to empty, still filtering
+    assert!(state.filtering);
+    assert_eq!(state.local_filter_query, "");
+    state.handle_key(KeyCode::Backspace); // empty -> exit
+    assert!(!state.filtering);
+}
+
+#[test]
+fn list_filter_tab_commits_and_switches_pane() {
+    let mut state = state_with_local_paths(&["/cwd/a.json"]);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+    state.handle_key(KeyCode::Char('j'));
+
+    state.handle_key(KeyCode::Tab);
+    assert!(!state.filtering); // committed, left input
+    assert_eq!(state.local_filter_query, "j"); // query kept
+    assert_eq!(state.focus, FocusPane::Gist); // switched pane
+}
+
+#[test]
+fn list_filter_esc_clears_focused_query() {
+    let mut state = state_with_local_paths(&["/cwd/a.json"]);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+    state.handle_key(KeyCode::Char('j'));
+
+    state.handle_key(KeyCode::Esc);
+    assert!(!state.filtering);
+    assert_eq!(state.local_filter_query, "");
+}
+
+#[test]
+fn list_filter_char_resets_focused_index() {
+    let mut state = state_with_local_paths(&["/cwd/a.txt", "/cwd/ab.txt", "/cwd/abc.txt"]);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+    state.local_index = 2; // cursor not at top
+
+    state.handle_key(KeyCode::Char('a')); // edit -> reset to top
+    assert_eq!(state.local_index, 0);
+}
+
+#[test]
+fn list_filter_enter_keeps_query_and_exits() {
+    let mut state = state_with_local_paths(&["/cwd/a.json"]);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+    state.handle_key(KeyCode::Char('j'));
+
+    state.handle_key(KeyCode::Enter);
+    assert!(!state.filtering); // exited input
+    assert_eq!(state.local_filter_query, "j"); // query kept
+}
+
+fn gists_screen_state() -> AppState {
+    let mut state = initial_state();
+    state.gists = vec![
+        GistFile {
+            gist_id: "g1".into(),
+            description: "alpha".into(),
+            filename: "a.txt".into(),
+            public: false,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+        },
+        GistFile {
+            gist_id: "g2".into(),
+            description: "beta".into(),
+            filename: "b.txt".into(),
+            public: false,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+        },
+    ];
+    state.screen = Screen::Gists;
+    state
+}
+
+#[test]
+fn gists_filter_navigates_while_typing() {
+    let mut state = gists_screen_state();
+    state.gists_filtering = true;
+
+    state.handle_key(KeyCode::Down);
+    assert_eq!(state.gists_index, 1);
+    assert!(state.gists_filtering);
+    state.handle_key(KeyCode::Up);
+    assert_eq!(state.gists_index, 0);
+}
+
+#[test]
+fn gists_filter_empty_backspace_exits() {
+    let mut state = gists_screen_state();
+    state.gists_filtering = true;
+
+    state.handle_key(KeyCode::Char('a'));
+    state.handle_key(KeyCode::Backspace); // empty again, still filtering
+    assert!(state.gists_filtering);
+    state.handle_key(KeyCode::Backspace); // empty -> exit
+    assert!(!state.gists_filtering);
+}
+
+#[test]
+fn gists_filter_tab_is_noop() {
+    let mut state = gists_screen_state();
+    state.gists_filtering = true;
+    state.handle_key(KeyCode::Char('a'));
+
+    state.handle_key(KeyCode::Tab);
+    assert!(state.gists_filtering); // still typing
+    assert_eq!(state.gists_filter_query, "a"); // unchanged
+}
+
+// ── Pins screen filter ────────────────────────────────────────────────────────
+
+fn state_with_pins(rows: &[(&str, &str, &str)]) -> AppState {
+    let mut state = initial_state();
+    state.cwd = PathBuf::from("/cwd");
+    state.screen = Screen::Pins;
+    state.pinned = rows
+        .iter()
+        .map(|(lp, id, fname)| PinnedMapping {
+            local_path: PathBuf::from(lp),
+            gist_id: (*id).into(),
+            gist_filename: (*fname).into(),
+            direction: None,
+            last_seen_hash: None,
+        })
+        .collect();
+    state
+}
+
+#[test]
+fn visible_pin_indices_filters_by_path_and_filename() {
+    let mut state = state_with_pins(&[
+        ("/cwd/.zshrc", "g1", "zshrc"),
+        ("/cwd/init.lua", "g2", "init.lua"),
+        ("/cwd/notes.md", "g3", "notes.md"),
+    ]);
+    assert_eq!(state.visible_pin_indices(), vec![0, 1, 2]);
+
+    state.pins_filter_query = "lua".into(); // matches filename of row 1
+    assert_eq!(state.visible_pin_indices(), vec![1]);
+
+    state.pins_filter_query = "ZSH".into(); // case-insensitive, matches path of row 0
+    assert_eq!(state.visible_pin_indices(), vec![0]);
+}
+
+#[test]
+fn selected_pin_index_maps_through_filter() {
+    let mut state = state_with_pins(&[
+        ("/cwd/alpha", "g1", "alpha"),
+        ("/cwd/beta", "g2", "beta"),
+        ("/cwd/gamma", "g3", "gamma"),
+    ]);
+    state.pins_filter_query = "gamma".into(); // only row 2 visible
+    state.pins_index = 0; // first (and only) visible row
+    assert_eq!(state.selected_pin_index(), Some(2)); // TRUE index, not 0
+}
+
+#[test]
+fn pins_down_clamps_to_filtered_count() {
+    let mut state = state_with_pins(&[
+        ("/cwd/a", "g1", "a"),
+        ("/cwd/blua", "g2", "blua"),
+        ("/cwd/c", "g3", "c"),
+    ]);
+    state.pins_filter_query = "lua".into(); // 1 visible
+    state.handle_key(KeyCode::Down);
+    assert_eq!(state.pins_index, 0); // clamped to the single filtered row
+}
+
+#[test]
+fn pins_filter_input_behaviors() {
+    let mut state = state_with_pins(&[("/cwd/a", "g1", "a"), ("/cwd/b", "g2", "b")]);
+    state.pins_filtering = true;
+
+    // live nav while typing
+    state.handle_key(KeyCode::Down);
+    assert_eq!(state.pins_index, 1);
+    assert!(state.pins_filtering);
+
+    // Tab is a no-op (single pane)
+    state.handle_key(KeyCode::Char('a'));
+    state.handle_key(KeyCode::Tab);
+    assert!(state.pins_filtering);
+    assert_eq!(state.pins_filter_query, "a");
+
+    // Esc clears + exits
+    state.handle_key(KeyCode::Esc);
+    assert!(!state.pins_filtering);
+    assert_eq!(state.pins_filter_query, "");
+
+    // Backspace on empty exits
+    state.pins_filtering = true;
+    state.handle_key(KeyCode::Backspace);
+    assert!(!state.pins_filtering);
+
+    // Enter keeps query + exits
+    state.pins_filtering = true;
+    state.handle_key(KeyCode::Char('b'));
+    state.handle_key(KeyCode::Enter);
+    assert!(!state.pins_filtering);
+    assert_eq!(state.pins_filter_query, "b");
 }

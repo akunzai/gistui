@@ -795,10 +795,11 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     }
                 }
                 KeyOutcome::SyncPinAuto => {
-                    let Some(m) = selected_pin(&state) else {
+                    let Some(pin_idx) = state.selected_pin_index() else {
                         continue;
                     };
-                    match state.pin_sync_status(state.pins_index) {
+                    let m = state.pinned[pin_idx].clone();
+                    match state.pin_sync_status(pin_idx) {
                         crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
                         crate::domain::SyncStatus::Pull => {
                             spawn_pin_pull(&mut state, &mut bg_rx, &m)
@@ -980,7 +981,9 @@ where
 
 /// The pin currently selected in the Pins screen, if any.
 fn selected_pin(state: &AppState) -> Option<crate::domain::PinnedMapping> {
-    state.pinned.get(state.pins_index).cloned()
+    state
+        .selected_pin_index()
+        .and_then(|i| state.pinned.get(i).cloned())
 }
 
 /// Resolve a pin's absolute local path against cwd.
@@ -1389,9 +1392,10 @@ fn unpin_selected(state: &mut AppState) {
 }
 
 fn unpin_at_pin_index(state: &mut AppState) {
-    let Some(mapping) = state.pinned.get(state.pins_index).cloned() else {
+    let Some(idx) = state.selected_pin_index() else {
         return;
     };
+    let mapping = state.pinned[idx].clone();
     let label = crate::config::display_path(&mapping.local_path);
     let result = crate::config::config_path().and_then(|path| {
         let config = crate::config::load_config(&path)?;
@@ -1402,7 +1406,9 @@ fn unpin_at_pin_index(state: &mut AppState) {
             state.pinned = config.pinned;
             state.skip_dirs = config.skip_dirs;
             state.scan_depth = config.scan_depth;
-            state.pins_index = state.pins_index.min(state.pinned.len().saturating_sub(1));
+            state.pins_index = state
+                .pins_index
+                .min(state.visible_pin_indices().len().saturating_sub(1));
             refresh_locals(state);
             state.set_status(format!("Unpinned {label}"));
         }

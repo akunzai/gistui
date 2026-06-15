@@ -264,6 +264,10 @@ pub struct AppState {
     pub local_sort: LocalSort,
     pub filtering: bool,
     pub filter_query: String,
+    /// Text filter for the LOCAL pane (List screen). Independent of `filter_query`
+    /// (the gist pane), so both panes can be filtered at once. Matched against the
+    /// cwd-relative display label, i.e. the exact string shown in the local list.
+    pub local_filter_query: String,
     pub diff_previewed: bool,
     pub diff_text: String,
     pub diff_scroll: u16,
@@ -302,6 +306,8 @@ pub struct AppState {
     pub local_scanning: bool,
     pub pins_index: usize,
     pub pins_hscroll: u16,
+    pub pins_filtering: bool,
+    pub pins_filter_query: String,
     pub gists_index: usize,
     pub gists_hscroll: u16,
     pub gists_sort: GistGroupSort,
@@ -478,6 +484,14 @@ impl AppState {
         } else {
             unranked_locals(&self.locals)
         };
+        let query = self.local_filter_query.to_lowercase();
+        if !query.is_empty() {
+            ranked.retain(|r| {
+                render::local_row_label(&r.candidate.path, &self.cwd)
+                    .to_lowercase()
+                    .contains(&query)
+            });
+        }
         self.local_sort.apply(&mut ranked);
         ranked
     }
@@ -557,6 +571,36 @@ impl AppState {
             .unwrap_or(0)
             .saturating_sub(1)
             .min(u16::MAX as usize) as u16
+    }
+
+    /// Indices into `self.pinned` that match the Pins-screen text filter, in original
+    /// order. Empty query → every index. Matched against the cwd/home-shortened local
+    /// path plus the gist filename (the meaningful, visible parts of the row).
+    pub fn visible_pin_indices(&self) -> Vec<usize> {
+        let query = self.pins_filter_query.to_lowercase();
+        self.pinned
+            .iter()
+            .enumerate()
+            .filter(|(_, m)| {
+                if query.is_empty() {
+                    return true;
+                }
+                let hay = format!(
+                    "{} {}",
+                    crate::config::display_path(&m.local_path),
+                    m.gist_filename
+                )
+                .to_lowercase();
+                hay.contains(&query)
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// The true `self.pinned` index of the currently selected Pins row (selection is a
+    /// position within the filtered view).
+    pub fn selected_pin_index(&self) -> Option<usize> {
+        self.visible_pin_indices().get(self.pins_index).copied()
     }
 
     /// Number of files the given gist holds in the current in-memory list. Used to guard
@@ -794,6 +838,7 @@ pub fn initial_state() -> AppState {
         local_sort: LocalSort::Match,
         filtering: false,
         filter_query: String::new(),
+        local_filter_query: String::new(),
         diff_previewed: false,
         diff_text: String::new(),
         diff_scroll: 0,
@@ -822,6 +867,8 @@ pub fn initial_state() -> AppState {
         local_scanning: false,
         pins_index: 0,
         pins_hscroll: 0,
+        pins_filtering: false,
+        pins_filter_query: String::new(),
         gists_index: 0,
         gists_hscroll: 0,
         gists_sort: GistGroupSort::Updated,

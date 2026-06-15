@@ -44,9 +44,39 @@ impl AppState {
         // One-shot: any key dismisses a lingering sync status; the run_loop IO helper for this
         // key may set a fresh one afterwards (e.g. "already in sync").
         self.status = None;
+        // Inline text filter: live-navigate with arrows; Tab is a no-op (single pane).
+        if self.pins_filtering {
+            match code {
+                KeyCode::Up if self.pins_index > 0 => {
+                    self.pins_index -= 1;
+                    self.pins_hscroll = 0;
+                }
+                KeyCode::Up => {}
+                KeyCode::Down => {
+                    if self.pins_index + 1 < self.visible_pin_indices().len() {
+                        self.pins_index += 1;
+                        self.pins_hscroll = 0;
+                    }
+                }
+                _ => match apply_filter_edit(code, &mut self.pins_filter_query) {
+                    FilterKey::Edited => {
+                        self.pins_index = 0;
+                        self.pins_hscroll = 0;
+                    }
+                    FilterKey::Cleared => {
+                        self.pins_filtering = false;
+                        self.pins_index = 0;
+                        self.pins_hscroll = 0;
+                    }
+                    FilterKey::Exited => self.pins_filtering = false,
+                    FilterKey::Pass => {}
+                },
+            }
+            return KeyOutcome::None;
+        }
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
-            KeyCode::Down if self.pins_index + 1 < self.pinned.len() => {
+            KeyCode::Down if self.pins_index + 1 < self.visible_pin_indices().len() => {
                 self.pins_index += 1;
                 self.pins_hscroll = 0;
             }
@@ -60,6 +90,7 @@ impl AppState {
             KeyCode::Left => {
                 self.pins_hscroll = self.pins_hscroll.saturating_sub(1);
             }
+            KeyCode::Char('/') => self.pins_filtering = true,
             KeyCode::Enter if !self.pinned.is_empty() => return KeyOutcome::PreviewPinDiff,
             KeyCode::Char('x') if !self.pinned.is_empty() => return KeyOutcome::UnpinAtPin,
             KeyCode::Char('s') if !self.pinned.is_empty() => return KeyOutcome::SyncPinAuto,
@@ -88,27 +119,33 @@ impl AppState {
             }
             return KeyOutcome::None;
         }
-        // Inline text filter: capture the query until Enter (keep) or Esc (clear).
+        // Inline text filter: live-navigate with arrows; Tab is a no-op (single pane).
         if self.gists_filtering {
             match code {
-                KeyCode::Esc => {
-                    self.gists_filter_query.clear();
-                    self.gists_filtering = false;
-                    self.gists_index = 0;
+                KeyCode::Up if self.gists_index > 0 => {
+                    self.gists_index -= 1;
                     self.gists_hscroll = 0;
                 }
-                KeyCode::Enter => self.gists_filtering = false,
-                KeyCode::Backspace => {
-                    self.gists_filter_query.pop();
-                    self.gists_index = 0;
-                    self.gists_hscroll = 0;
+                KeyCode::Up => {}
+                KeyCode::Down => {
+                    if self.gists_index + 1 < self.visible_gist_groups().len() {
+                        self.gists_index += 1;
+                        self.gists_hscroll = 0;
+                    }
                 }
-                KeyCode::Char(c) => {
-                    self.gists_filter_query.push(c);
-                    self.gists_index = 0;
-                    self.gists_hscroll = 0;
-                }
-                _ => {}
+                _ => match apply_filter_edit(code, &mut self.gists_filter_query) {
+                    FilterKey::Edited => {
+                        self.gists_index = 0;
+                        self.gists_hscroll = 0;
+                    }
+                    FilterKey::Cleared => {
+                        self.gists_filtering = false;
+                        self.gists_index = 0;
+                        self.gists_hscroll = 0;
+                    }
+                    FilterKey::Exited => self.gists_filtering = false,
+                    FilterKey::Pass => {}
+                },
             }
             return KeyOutcome::None;
         }
@@ -340,27 +377,81 @@ impl AppState {
         }
         KeyOutcome::None
     }
+}
 
+/// Outcome of applying one key to a filter query's text (the shared edit transitions
+/// for every inline filter input). Nav keys (Up/Down) and Tab are handled by the caller.
+enum FilterKey {
+    /// Query text changed (char appended or backspace popped a char); caller resets
+    /// the affected pane's selection index + horizontal scroll.
+    Edited,
+    /// Leave filter input, keeping the current query (Enter, or Backspace on empty).
+    Exited,
+    /// Esc: query cleared; caller leaves input and resets index + scroll.
+    Cleared,
+    /// Not a text-edit key (e.g. an arrow or Tab the caller already handled); ignore.
+    Pass,
+}
+
+/// Apply one key to `query` and report the transition. Pure: only mutates `query`.
+fn apply_filter_edit(code: KeyCode, query: &mut String) -> FilterKey {
+    match code {
+        KeyCode::Esc => {
+            query.clear();
+            FilterKey::Cleared
+        }
+        KeyCode::Enter => FilterKey::Exited,
+        KeyCode::Backspace => {
+            if query.pop().is_some() {
+                FilterKey::Edited
+            } else {
+                FilterKey::Exited // already empty -> leave input
+            }
+        }
+        KeyCode::Char(c) => {
+            query.push(c);
+            FilterKey::Edited
+        }
+        _ => FilterKey::Pass,
+    }
+}
+
+impl AppState {
     fn handle_key_filter(&mut self, code: KeyCode) -> KeyOutcome {
+        // Live navigation while typing: arrows move the focused pane's selection.
         match code {
-            KeyCode::Esc => {
-                self.filter_query.clear();
+            KeyCode::Up => {
+                self.list_move_focused(false);
+                return KeyOutcome::None;
+            }
+            KeyCode::Down => {
+                self.list_move_focused(true);
+                return KeyOutcome::None;
+            }
+            // Tab commits (keeps the query), leaves input, and switches pane.
+            KeyCode::Tab => {
                 self.filtering = false;
-                self.gist_index = 0;
-                self.gist_hscroll = 0;
-            }
-            KeyCode::Enter => self.filtering = false,
-            KeyCode::Backspace => {
-                self.filter_query.pop();
-                self.gist_index = 0;
-                self.gist_hscroll = 0;
-            }
-            KeyCode::Char(c) => {
-                self.filter_query.push(c);
-                self.gist_index = 0;
-                self.gist_hscroll = 0;
+                self.focus = match self.focus {
+                    FocusPane::Local => FocusPane::Gist,
+                    FocusPane::Gist => FocusPane::Local,
+                };
+                return KeyOutcome::None;
             }
             _ => {}
+        }
+        let focus = self.focus;
+        let query = match focus {
+            FocusPane::Local => &mut self.local_filter_query,
+            FocusPane::Gist => &mut self.filter_query,
+        };
+        match apply_filter_edit(code, query) {
+            FilterKey::Edited => self.reset_focused_filter_scroll(),
+            FilterKey::Cleared => {
+                self.filtering = false;
+                self.reset_focused_filter_scroll();
+            }
+            FilterKey::Exited => self.filtering = false,
+            FilterKey::Pass => {}
         }
         KeyOutcome::None
     }
@@ -460,6 +551,21 @@ impl AppState {
         KeyOutcome::None
     }
 
+    /// Reset the focused pane's selection index and horizontal scroll (used when a
+    /// filter edit changes the visible rows).
+    fn reset_focused_filter_scroll(&mut self) {
+        match self.focus {
+            FocusPane::Local => {
+                self.local_index = 0;
+                self.local_hscroll = 0;
+            }
+            FocusPane::Gist => {
+                self.gist_index = 0;
+                self.gist_hscroll = 0;
+            }
+        }
+    }
+
     /// Move the selection in the focused list pane. `forward` advances toward the end of the
     /// list; otherwise it moves toward the top. Both directions clamp at the pane's bounds,
     /// reset the horizontal scroll, and re-rank the opposite pane when the focused pane is the
@@ -467,8 +573,9 @@ impl AppState {
     fn list_move_focused(&mut self, forward: bool) {
         match self.focus {
             FocusPane::Local => {
+                let len = self.visible_locals().len();
                 if forward {
-                    if self.local_index + 1 >= self.locals.len() {
+                    if self.local_index + 1 >= len {
                         return;
                     }
                     self.local_index += 1;
