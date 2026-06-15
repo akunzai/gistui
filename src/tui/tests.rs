@@ -2893,3 +2893,24 @@ fn pins_filter_input_behaviors() {
     assert!(!state.pins_filtering);
     assert_eq!(state.pins_filter_query, "b");
 }
+
+#[test]
+fn help_topic_all_is_ordered_and_titled() {
+    let all = HelpTopic::all();
+    assert_eq!(all.len(), 8);
+    assert_eq!(all[0], HelpTopic::List);
+    assert_eq!(all[7], HelpTopic::General);
+    assert_eq!(HelpTopic::Pins.title(), "Pinned Mappings");
+}
+
+#[test]
+fn help_topic_for_screen_maps_key_dense_screens() {
+    assert_eq!(HelpTopic::for_screen(Screen::List), HelpTopic::List);
+    assert_eq!(HelpTopic::for_screen(Screen::Pins), HelpTopic::Pins);
+    assert_eq!(HelpTopic::for_screen(Screen::Gists), HelpTopic::GistManager);
+    assert_eq!(
+        HelpTopic::for_screen(Screen::GistDetail),
+        HelpTopic::GistDetail
+    );
+    assert_eq!(HelpTopic::for_screen(Screen::Diff), HelpTopic::List);
+}
