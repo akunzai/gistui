@@ -963,10 +963,11 @@ pub(super) fn render_footer(frame: &mut Frame, area: Rect, title: &str, text: &s
 pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
     let footer_body = if state.filtering {
-        format!(
-            "filter: {}_   (Enter apply · Esc clear)",
-            state.filter_query
-        )
+        let (pane, query) = match state.focus {
+            FocusPane::Local => ("local", &state.local_filter_query),
+            FocusPane::Gist => ("gist", &state.filter_query),
+        };
+        format!("filter {pane}: {query}_   (Tab next pane · Enter apply · Esc clear)")
     } else {
         match &state.status {
             Some(message) => message.clone(),
@@ -988,6 +989,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
 
     // Show each candidate's path relative to cwd; in flat mode this is just the filename,
     // in recursive mode it includes the subdirectory (e.g. src/utils/helpers.rs).
+    let visible_locals = state.visible_locals();
     let local_items: Vec<ListItem> = if state.local_scanning && state.locals.is_empty() {
         vec![ListItem::new(format!(
             "  {} Scanning files…",
@@ -996,9 +998,11 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
         .style(Style::default().fg(Color::DarkGray))]
     } else if state.locals.is_empty() {
         vec![ListItem::new("  📭 No local files found").style(Style::default().fg(Color::DarkGray))]
+    } else if visible_locals.is_empty() {
+        vec![ListItem::new("  🔍 No files match the filter")
+            .style(Style::default().fg(Color::DarkGray))]
     } else {
-        state
-            .visible_locals()
+        visible_locals
             .iter()
             .map(|r| {
                 let base = local_row_label(&r.candidate.path, &state.cwd);
@@ -1007,17 +1011,20 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
             .collect()
     };
     let local_focused = state.focus == FocusPane::Local;
-    let local_selected = (!state.locals.is_empty()).then_some(state.local_index);
+    let local_selected = (!visible_locals.is_empty()).then_some(state.local_index);
     let recursive_marker = if state.local_recursive { " [↓]" } else { "" };
     let scanning_marker = if state.local_scanning { " …" } else { "" };
-    let local_title = format!(
+    let mut local_title = format!(
         "[1] Local {} · {}{}{} · sort:{}",
-        count_label(state.locals.len(), state.locals.len()),
+        count_label(visible_locals.len(), state.locals.len()),
         crate::config::display_path(&state.cwd),
         recursive_marker,
         scanning_marker,
         state.local_sort.label()
     );
+    if !state.local_filter_query.is_empty() {
+        local_title.push_str(&format!(" · /{}", state.local_filter_query));
+    }
     // Mark the pane that currently drives the match ranking (the anchor).
     let local_title = if state.anchor == FocusPane::Local {
         format!("{local_title} · ⚓")
