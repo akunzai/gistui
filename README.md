@@ -46,6 +46,26 @@ name trusts only this formula — Homebrew 6.0.0+ requires non-official taps to 
 before their code runs; see the tap README for the `brew tap` + short-name flow and the
 `Brewfile` `trusted:` option.
 
+### Windows (PowerShell)
+
+Install natively from PowerShell — this downloads the `x86_64-pc-windows-msvc` build,
+verifies its SHA-256 checksum, installs into `~\.local\bin`, and adds that directory to your
+user `PATH`:
+
+```powershell
+irm https://raw.githubusercontent.com/akunzai/gistui/main/install.ps1 | iex
+```
+
+To pin a release or change the install directory, invoke it as a script block:
+
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/akunzai/gistui/main/install.ps1))) -Version v0.9.0 -BinDir 'C:\tools\bin'
+```
+
+> Don't pipe `install.sh` into `bash` from PowerShell: if WSL is installed, `bash` resolves to
+> the WSL launcher and installs the **Linux** binary inside WSL. Use `install.ps1` for a native
+> Windows install, or run `install.sh` from [Git Bash](https://gitforwindows.org).
+
 ### Download a prebuilt binary (recommended)
 
 Each [release](https://github.com/akunzai/gistui/releases/latest) attaches prebuilt,
@@ -59,7 +79,8 @@ curl -fsSL https://raw.githubusercontent.com/akunzai/gistui/main/install.sh | ba
 ```
 
 It supports Linux (x86-64/ARM64), macOS (Intel/Apple Silicon), and Windows (x86-64) under
-[Git Bash](https://gitforwindows.org)/MSYS2. Pass `--version <tag>` to pin a release or
+[Git Bash](https://gitforwindows.org)/MSYS2 — on Windows, prefer the native [PowerShell
+installer](#windows-powershell) above. Pass `--version <tag>` to pin a release or
 `--bin-dir <dir>` to change the install location.
 
 Prefer to install by hand? Grab the archive for your platform from the releases page:
