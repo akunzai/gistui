@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Local file list now has a text filter: `/` filters the focused pane (Local matches path/filename, Gist matches description/id). Filtering supports typing-while-navigating (↑/↓), `Tab` to apply and switch panes, and `Backspace` on an empty query to exit.
 - The Pinned Mappings screen (`P`) gained the same `/` text filter — matches the local path or gist filename, with live ↑/↓ navigation.
 - Pin times are now consistent between the Pins list and the diff view: pins pointing outside the scanned working directory show the real local mtime (and a correct ↑/↓ sync status) instead of `?`, and the pin diff header shows the gist's update time instead of `unknown`.
+- Inline text inputs (gist description editor and every `/` filter) are now full single-line editors: `←`/`→`/`Home`/`End` move the cursor and `Backspace`/`Del` delete around it, with a block cursor showing its real position — no more deleting back to fix an earlier character.
 
 ## [0.9.0] — 2026-06-14
 

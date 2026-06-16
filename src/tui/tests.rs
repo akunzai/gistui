@@ -2166,6 +2166,78 @@ fn gist_view_e_edits_description_with_prefill_and_enter_applies() {
 }
 
 #[test]
+fn input_line_reverses_the_char_under_the_cursor() {
+    let mut input = TextInput::from("abc");
+    input.left(); // ab|c → cursor on 'c'
+    let line = input_line("/", &input, "");
+    // Exactly one span carries the reverse-video cursor, and it's the char at the cursor.
+    let reversed: Vec<&str> = line
+        .spans
+        .iter()
+        .filter(|s| s.style.add_modifier.contains(Modifier::REVERSED))
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert_eq!(reversed, vec!["c"]);
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(text, "/abc");
+}
+
+#[test]
+fn input_line_cursor_at_end_reverses_trailing_space() {
+    let input = TextInput::from("ab");
+    let line = input_line("", &input, "");
+    let reversed: Vec<&str> = line
+        .spans
+        .iter()
+        .filter(|s| s.style.add_modifier.contains(Modifier::REVERSED))
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert_eq!(reversed, vec![" "]);
+}
+
+#[test]
+fn gist_view_description_edits_mid_string_with_cursor_keys() {
+    let mut state = state_with_two_gists();
+    state.screen = Screen::Gists;
+    state.gists_index = 0;
+    state.handle_key(KeyCode::Char('e'));
+    assert_eq!(state.description_input, "My Ghostty config");
+    // Jump to the start, step right past "My", and insert without retyping the rest.
+    state.handle_key(KeyCode::Home);
+    state.handle_key(KeyCode::Right);
+    state.handle_key(KeyCode::Right);
+    state.handle_key(KeyCode::Char(' '));
+    state.handle_key(KeyCode::Char('o'));
+    state.handle_key(KeyCode::Char('w'));
+    state.handle_key(KeyCode::Char('n'));
+    assert_eq!(state.description_input, "My own Ghostty config");
+    // Delete removes the char at the cursor (the space before "Ghostty").
+    state.handle_key(KeyCode::Delete);
+    assert_eq!(state.description_input, "My ownGhostty config");
+}
+
+#[test]
+fn create_description_edits_mid_string_with_cursor_keys() {
+    let mut state = initial_state();
+    state.pending_action = Some(PendingAction::Create {
+        local_path: PathBuf::from("notes.txt"),
+    });
+    state.editing_description = true;
+    state.screen = Screen::Confirm;
+    for c in "helo".chars() {
+        state.handle_key(KeyCode::Char(c));
+    }
+    // Fix the typo: go back one char and insert the missing 'l'.
+    state.handle_key(KeyCode::Left);
+    state.handle_key(KeyCode::Char('l'));
+    assert_eq!(state.description_input, "hello");
+    // Enter advances to the visibility step without losing the text.
+    state.handle_key(KeyCode::Enter);
+    assert!(!state.editing_description);
+    assert_eq!(state.description_input, "hello");
+}
+
+#[test]
 fn gist_view_esc_cancels_description_edit() {
     let mut state = state_with_two_gists();
     state.screen = Screen::Gists;

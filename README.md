@@ -197,7 +197,8 @@ Press `?` in the app for the full keymap — it now opens the **current screen's
   - `e` — edit / redact the upload content in `$EDITOR` before upload (does NOT mutate the local file).
   - `p` / `s` — (JSON only) toggle pretty-print / recursive key sorting on the upload buffer.
 - `n` (on a local file) — create a new gist from it: type an optional description, then
-  choose `s` secret or `p` public.
+  choose `s` secret or `p` public. The description field is a full line editor —
+  `←`/`→`/`Home`/`End` move the cursor, `Backspace`/`Del` delete around it.
 - `X` (on a gist) — remove the selected file from its gist after a `y`/`n` confirmation.
   Deleting a whole gist lives in the **gist manager** (`g`); a gist's only file can't be
   removed (delete the gist instead).
@@ -212,7 +213,7 @@ Press `?` in the app for the full keymap — it now opens the **current screen's
   Keys inside the Pins view:
   - `↑`/`↓` — move between pins; `←`/`→` — scroll a long local path horizontally.
   - `/` — filter pins by local path or gist filename; while filtering, `↑`/`↓` move,
-    `Enter` applies, `Esc` clears.
+    `Enter` applies, `Esc` clears, and `←`/`→`/`Home`/`End`/`Del` edit the query text.
   - `Enter` — diff the selected pair (read-only; `d`/`u` from the diff to pull/push; `Esc`/`q` returns to the Pins view).
   - `s` — smart-sync (newer side wins by modified time; skips if already identical).
   - `u` — force push (upload local → gist).
@@ -232,7 +233,7 @@ Press `?` in the app for the full keymap — it now opens the **current screen's
   and scans in the background so the UI stays responsive.
 - `a` — flip the **anchor** (which pane drives match ranking); independent of focus, so you
   can focus the ranked pane to pick a file without the order resetting.
-- `/` filter the focused pane (Local pane matches path/filename; Gist pane matches description/id). While filtering: type to match, ↑/↓ move, Tab applies and switches pane, Enter applies, Esc clears. · `v` cycle visibility (all/public/secret) · `s` cycle the **focused
+- `/` filter the focused pane (Local pane matches path/filename; Gist pane matches description/id). While filtering: type to match, ↑/↓ move, Tab applies and switches pane, Enter applies, Esc clears, and ←/→/Home/End/Del edit the query text. · `v` cycle visibility (all/public/secret) · `s` cycle the **focused
   pane's** sort (match / name / recent — gists by name/updated, local files by
   name/modified-time) · `t` toggle row view.
 - `Esc`/`q` — go back from an overlay; on the main list, press twice to quit (the first press
@@ -247,7 +248,8 @@ unranked so you can still preview and download into the current directory.
 Press `g` to open the **gist manager** — a gist-level view (one row per gist) that lands on
 the gist owning the currently selected file. From here you manage gists as a whole:
 
-- `e` — edit the gist's description (type, `Enter` applies, `Esc` cancels).
+- `e` — edit the gist's description (type, `Enter` applies, `Esc` cancels;
+  `←`/`→`/`Home`/`End`/`Del` edit text mid-string instead of only at the end).
 - `Enter` — open the **gist detail view**: a header with basic info (description, visibility,
   created/updated age, short id) and a `Files │ Comments` tab strip, with the active tab's
   content below. Opens on the **Files** tab.
@@ -270,7 +272,7 @@ the gist owning the currently selected file. From here you manage gists as a who
   the gist's info as context.) Requires the git credential helper that `gh auth setup-git`
   configures; if it is missing, compaction reports an actionable error pointing you to that command.
 - `s` cycle sort (updated / created) · `v` cycle visibility (all/public/secret) · `/` filter
-  by description or id (↑/↓ move · Enter apply · Esc clear) · `Left`/`Right` scroll a long description.
+  by description or id (↑/↓ move · Enter apply · Esc clear · ←/→/Home/End/Del edit query) · `Left`/`Right` scroll a long description.
 - `q`/`Esc` — back to the list.
 
 </details>
