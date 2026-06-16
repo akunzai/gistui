@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-06-16
+
 - `?` help is now contextual: it opens the current screen's keys (and is reachable from the Pins, Gist manager, and Gist detail screens, not just the list), with `Tab` to browse an index of all topics instead of scrolling one long page.
 - Local file list now has a text filter: `/` filters the focused pane (Local matches path/filename, Gist matches description/id). Filtering supports typing-while-navigating (↑/↓), `Tab` to apply and switch panes, and `Backspace` on an empty query to exit.
 - The Pinned Mappings screen (`P`) gained the same `/` text filter — matches the local path or gist filename, with live ↑/↓ navigation.
@@ -96,7 +98,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.9.0...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/akunzai/gistui/releases/tag/v0.10.0
 [0.9.0]: https://github.com/akunzai/gistui/releases/tag/v0.9.0
 [0.8.0]: https://github.com/akunzai/gistui/releases/tag/v0.8.0
 [0.7.0]: https://github.com/akunzai/gistui/releases/tag/v0.7.0
