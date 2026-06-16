@@ -1032,6 +1032,7 @@ fn spawn_pin_push(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
 /// Spawn the pull (download gist → local) flow for a pin: lands in the existing
 /// download `Screen::Confirm` diff when the local file exists.
 fn spawn_pin_pull(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::PinnedMapping) {
+    state.diff_return = Screen::Pins;
     let target = pin_local_abs(state, m);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
@@ -1284,6 +1285,7 @@ fn edit_upload_buffer(
 fn download(state: &mut AppState) {
     let target = state.download_target.clone();
     let content = state.preview_remote.clone();
+    let return_screen = state.diff_return;
     match crate::actions::execute_download(&target, &content, true) {
         Ok(()) => {
             state.set_status(format!(
@@ -1307,6 +1309,7 @@ fn download(state: &mut AppState) {
                 );
             }
             state.back_to_list();
+            state.screen = return_screen;
             refresh_locals(state);
         }
         Err(error) => {

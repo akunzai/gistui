@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Pins screen: `o` cycles sort order (default / local path / gist filename); active sort shown in the title bar.
+- Pins screen: after a `d` pull completes, the view stays on Pins instead of returning to the main list.
+- Confirm overwrite prompt now shows `~`-shortened paths instead of full absolute paths.
+
 ## [0.10.0] — 2026-06-16
 
 - `?` help is now contextual: it opens the current screen's keys (and is reachable from the Pins, Gist manager, and Gist detail screens, not just the list), with `Tab` to browse an index of all topics instead of scrolling one long page.

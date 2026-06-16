@@ -82,6 +82,7 @@ Actions (on the selected local file + gist)
   Left/Right scroll a long local path horizontally (~ = home)
   /          filter pins by path or filename (↑↓ move · Enter apply · Esc clear)
              ←/→/Home/End move the text cursor · Del deletes ahead
+  o          cycle sort: default / local path / gist filename
   Enter      diff the selected pair (then d pull / u push from the diff)
   s          smart-sync (newer side wins; skips if already identical)
   u          force push  (upload local → gist)
@@ -294,7 +295,7 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     let hints = if state.pinned.is_empty() {
         "Esc/q back"
     } else {
-        "↑↓ move · ←→ scroll · / filter · Enter diff · s sync · u push · d pull · x unpin · ? help  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back"
+        "↑↓ move · ←→ scroll · / filter · o sort · Enter diff · s sync · u push · d pull · x unpin · ? help  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back"
     };
     let (ftitle, footer, colored) = if state.pins_filtering {
         (
@@ -357,6 +358,9 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     );
     if !state.pins_filter_query.is_empty() {
         title.push_str(&format!(" · /{}", state.pins_filter_query));
+    }
+    if state.pins_sort != crate::tui::PinSort::Default {
+        title.push_str(&format!(" · sort:{}", state.pins_sort.label()));
     }
     let list = List::new(items)
         .block(
@@ -1622,7 +1626,10 @@ pub(super) fn confirm_prompt(state: &AppState) -> String {
                 "Compact {count} revisions of \"{label}\" into one? This force-pushes and cannot be undone. (y/n)"
             )
         }
-        _ => format!("Overwrite {}? (y/n)", state.download_target.display()),
+        _ => format!(
+            "Overwrite {}? (y/n)",
+            crate::config::display_path(&state.download_target)
+        ),
     }
 }
 
