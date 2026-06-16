@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pins screen: `o` cycles sort order (default / local path / gist filename); active sort shown in the title bar.
 - Pins screen: after a `d` pull completes, the view stays on Pins instead of returning to the main list.
 - Confirm overwrite prompt now shows `~`-shortened paths instead of full absolute paths.
+- Fixed: pressing `u` or `d` in the diff screen opened from Pins (Enter or `d`-pull) now correctly targets the pin pair's local file instead of the Files-view selection; `record_pin_sync` also fires correctly after a confirmed pull.
 
 ## [0.10.0] — 2026-06-16
 
