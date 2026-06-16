@@ -725,7 +725,38 @@ impl AppState {
     /// Upload intent shared by the list and the diff screen: requires a selected local file
     /// and gist, then branches on whether the gist already holds a file of the local name
     /// (case C: preview + confirm overwrite) or not (case B: add directly).
+    /// True when we're in the diff screen launched from a Pins context (pin diff or pin pull).
+    /// In this state `preview_local` holds the pin's local file and `download_gist_id/filename`
+    /// hold the pin's gist identity, so upload/download should use those instead of the
+    /// Files-view selection which may point to a completely different pair.
+    pub fn is_pin_diff_context(&self) -> bool {
+        self.screen == Screen::Diff
+            && !self.preview_local.as_os_str().is_empty()
+            && self.download_gist_id.is_some()
+    }
+
     fn upload_intent(&mut self) -> KeyOutcome {
+        if self.is_pin_diff_context() {
+            let Some(local_filename) = self
+                .preview_local
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(String::from)
+            else {
+                self.status = Some("local file has no name".into());
+                return KeyOutcome::None;
+            };
+            let gist_id = self.download_gist_id.as_deref().unwrap_or_default();
+            let has_same_name = self
+                .gists
+                .iter()
+                .any(|g| g.gist_id == gist_id && g.filename == local_filename);
+            return if has_same_name {
+                KeyOutcome::UploadPreview
+            } else {
+                KeyOutcome::UploadAdd
+            };
+        }
         let (Some(local), Some(gist)) = (self.selected_local(), self.selected_gist()) else {
             self.status = Some("select a local file and a gist to upload".into());
             return KeyOutcome::None;
