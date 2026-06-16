@@ -1020,7 +1020,9 @@ pub fn run() -> Result<()> {
 }
 
 impl AppState {
-    /// `(local_ts, remote_ts)` Unix-seconds for `pinned[index]`, from in-memory data.
+    /// `(local_ts, remote_ts)` Unix-seconds for `pinned[index]`. The remote side comes
+    /// from the matching gist's in-memory `updated_at`; the local side prefers the
+    /// discovered candidate's mtime and falls back to stat-ing the path on disk.
     pub fn pin_mtimes(&self, index: usize) -> (Option<u64>, Option<u64>) {
         let Some(m) = self.pinned.get(index) else {
             return (None, None);
@@ -1030,14 +1032,21 @@ impl AppState {
         } else {
             self.cwd.join(&m.local_path)
         };
-        let local_ts = self.locals.iter().find_map(|c| {
-            let cabs = if c.path.is_absolute() {
-                c.path.clone()
-            } else {
-                self.cwd.join(&c.path)
-            };
-            (cabs == local_abs).then_some(c.modified).flatten()
-        });
+        let local_ts = self
+            .locals
+            .iter()
+            .find_map(|c| {
+                let cabs = if c.path.is_absolute() {
+                    c.path.clone()
+                } else {
+                    self.cwd.join(&c.path)
+                };
+                (cabs == local_abs).then_some(c.modified).flatten()
+            })
+            // Pins can point outside cwd (or into skipped/too-deep dirs), so they
+            // never appear in `self.locals`. Fall back to stat-ing the path so the
+            // Pins list and sync status still reflect the real mtime.
+            .or_else(|| crate::local::file_mtime_secs(&local_abs));
         let remote_ts = self.gists.iter().find_map(|g| {
             (g.gist_id == m.gist_id && g.filename == m.gist_filename)
                 .then(|| crate::domain::parse_rfc3339_to_unix(&g.updated_at))

@@ -1063,12 +1063,20 @@ fn spawn_pin_diff(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
     let local_abs = pin_local_abs(state, m);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
+    // Pull the real `updated_at` from the loaded gists so the diff header shows the
+    // gist mtime (matching the Pins list) instead of "unknown".
+    let updated_at = state
+        .gists
+        .iter()
+        .find(|g| g.gist_id == gist_id && g.filename == filename)
+        .map(|g| g.updated_at.clone())
+        .unwrap_or_default();
     let gist_file = GistFile {
         gist_id: gist_id.clone(),
         description: String::new(),
         filename: filename.clone(),
         public: false,
-        updated_at: String::new(),
+        updated_at,
         created_at: String::new(),
     };
     let (local_label, gist_label) = diff_labels(Some(&local_abs), &gist_file);

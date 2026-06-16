@@ -2991,3 +2991,28 @@ fn help_index_question_mark_exits_help() {
     assert_eq!(state.screen, Screen::Pins);
     assert!(!state.help_index_open);
 }
+
+#[test]
+fn pin_mtimes_local_falls_back_to_disk_when_not_discovered() {
+    // A pin pointing outside cwd is absent from state.locals, but the Pins list
+    // and sync status should still reflect the file's real mtime by stat-ing it.
+    let dir = tempfile::tempdir().unwrap();
+    let outside = dir.path().join("settings.json");
+    std::fs::write(&outside, "{}").unwrap();
+
+    let mut state = initial_state();
+    state.locals.clear();
+    state.pinned = vec![crate::domain::PinnedMapping {
+        local_path: outside.clone(),
+        gist_id: "g1".into(),
+        gist_filename: "settings.json".into(),
+        direction: None,
+        last_seen_hash: None,
+    }];
+
+    let (local_ts, _remote_ts) = state.pin_mtimes(0);
+    assert!(
+        local_ts.is_some(),
+        "local mtime should fall back to disk for pins outside cwd"
+    );
+}

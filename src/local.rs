@@ -9,6 +9,16 @@ use std::path::Path;
 /// returned (original behaviour). When `recursive` is true the tree is
 /// walked up to 10 levels deep; hidden directories (name starts with `.`)
 /// and names in `skip_dirs` are skipped.
+/// File modification time as Unix seconds, or `None` when it can't be read
+/// (missing file, permission error, or a pre-epoch timestamp).
+pub fn file_mtime_secs(path: &Path) -> Option<u64> {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+}
+
 pub fn discover_local_candidates(
     cwd: &Path,
     pinned: &[PinnedMapping],
@@ -36,11 +46,7 @@ pub fn discover_local_candidates(
         .into_iter()
         .map(|path| {
             let pinned_match = pinned.iter().any(|m| m.local_path == path);
-            let modified = std::fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs());
+            let modified = file_mtime_secs(&path);
             LocalCandidate {
                 path,
                 pinned: pinned_match,
