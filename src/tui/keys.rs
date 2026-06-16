@@ -138,6 +138,11 @@ impl AppState {
             KeyCode::Char('s') if !self.pinned.is_empty() => return KeyOutcome::SyncPinAuto,
             KeyCode::Char('u') if !self.pinned.is_empty() => return KeyOutcome::SyncPinPush,
             KeyCode::Char('d') if !self.pinned.is_empty() => return KeyOutcome::SyncPinPull,
+            KeyCode::Char('o') => {
+                self.pins_sort = self.pins_sort.next();
+                self.pins_index = 0;
+                self.pins_hscroll = 0;
+            }
             KeyCode::Char('?') => self.open_help(),
             _ => {}
         }

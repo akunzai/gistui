@@ -459,12 +459,19 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                 KeyOutcome::Pin => pin_selected(&mut state),
                 KeyOutcome::Unpin => unpin_selected(&mut state),
                 KeyOutcome::UploadAdd => {
-                    let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist())
-                    else {
-                        continue;
+                    let (local_path, gist_id) = if state.is_pin_diff_context() {
+                        (
+                            state.preview_local.clone(),
+                            state.download_gist_id.clone().unwrap(),
+                        )
+                    } else {
+                        let (Some(local), Some(gist)) =
+                            (state.selected_local(), state.selected_gist())
+                        else {
+                            continue;
+                        };
+                        (local.path.clone(), gist.file.gist_id.clone())
                     };
-                    let local_path = local.path.clone();
-                    let gist_id = gist.file.gist_id.clone();
                     let Some(filename) = upload_local_filename(&local_path) else {
                         state.set_status("local file has no name");
                         continue;
@@ -488,17 +495,40 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     state.screen = Screen::Confirm;
                 }
                 KeyOutcome::UploadPreview => {
-                    let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist())
-                    else {
-                        continue;
+                    let (local_path, gist_id, gist_file) = if state.is_pin_diff_context() {
+                        let local_path = state.preview_local.clone();
+                        let gist_id = state.download_gist_id.clone().unwrap();
+                        let filename = state.download_gist_filename.clone().unwrap_or_default();
+                        let gist_file = state
+                            .gists
+                            .iter()
+                            .find(|g| g.gist_id == gist_id && g.filename == filename)
+                            .cloned()
+                            .unwrap_or_else(|| GistFile {
+                                gist_id: gist_id.clone(),
+                                description: String::new(),
+                                filename: filename.clone(),
+                                public: false,
+                                updated_at: String::new(),
+                                created_at: String::new(),
+                            });
+                        (local_path, gist_id, gist_file)
+                    } else {
+                        let (Some(local), Some(gist)) =
+                            (state.selected_local(), state.selected_gist())
+                        else {
+                            continue;
+                        };
+                        (
+                            local.path.clone(),
+                            gist.file.gist_id.clone(),
+                            gist.file.clone(),
+                        )
                     };
-                    let Some(filename) = upload_local_filename(&local.path) else {
+                    let Some(filename) = upload_local_filename(&local_path) else {
                         state.set_status("local file has no name");
                         continue;
                     };
-                    let gist_id = gist.file.gist_id.clone();
-                    let gist_file = gist.file.clone();
-                    let local_path = local.path.clone();
                     let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
 
                     spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
@@ -1032,6 +1062,7 @@ fn spawn_pin_push(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
 /// Spawn the pull (download gist → local) flow for a pin: lands in the existing
 /// download `Screen::Confirm` diff when the local file exists.
 fn spawn_pin_pull(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::PinnedMapping) {
+    state.diff_return = Screen::Pins;
     let target = pin_local_abs(state, m);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
@@ -1063,6 +1094,11 @@ fn spawn_pin_diff(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
     let local_abs = pin_local_abs(state, m);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
+    // Record the pin's identity so that `d`/`u` in the diff screen can attribute
+    // the action to this pin (record_pin_sync) and use the correct local file
+    // instead of the Files-view selection (is_pin_diff_context check).
+    state.download_gist_id = Some(gist_id.clone());
+    state.download_gist_filename = Some(filename.clone());
     // Pull the real `updated_at` from the loaded gists so the diff header shows the
     // gist mtime (matching the Pins list) instead of "unknown".
     let updated_at = state
@@ -1284,6 +1320,7 @@ fn edit_upload_buffer(
 fn download(state: &mut AppState) {
     let target = state.download_target.clone();
     let content = state.preview_remote.clone();
+    let return_screen = state.diff_return;
     match crate::actions::execute_download(&target, &content, true) {
         Ok(()) => {
             state.set_status(format!(
@@ -1307,6 +1344,7 @@ fn download(state: &mut AppState) {
                 );
             }
             state.back_to_list();
+            state.screen = return_screen;
             refresh_locals(state);
         }
         Err(error) => {

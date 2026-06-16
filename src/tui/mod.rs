@@ -195,6 +195,16 @@ cycling_enum! {
     }
 }
 
+cycling_enum! {
+    /// Sort order for the Pins screen. `Default` keeps config/insertion order; the
+    /// others sort the visible rows by the named field.
+    pub enum PinSort {
+        Default => "default",
+        Local => "local",
+        Gist => "gist",
+    }
+}
+
 impl GistSort {
     /// Re-orders ranked gists. `Match` keeps the incoming order; the others override it.
     fn apply(self, gists: &mut [RankedGistFile]) {
@@ -363,6 +373,7 @@ pub struct AppState {
     pub pins_hscroll: u16,
     pub pins_filtering: bool,
     pub pins_filter_query: TextInput,
+    pub pins_sort: PinSort,
     pub gists_index: usize,
     pub gists_hscroll: u16,
     pub gists_sort: GistGroupSort,
@@ -636,12 +647,13 @@ impl AppState {
             .min(u16::MAX as usize) as u16
     }
 
-    /// Indices into `self.pinned` that match the Pins-screen text filter, in original
-    /// order. Empty query → every index. Matched against the cwd/home-shortened local
-    /// path plus the gist filename (the meaningful, visible parts of the row).
+    /// Indices into `self.pinned` that match the Pins-screen text filter, in sort order.
+    /// Empty query → every index. Matched against the cwd/home-shortened local path plus
+    /// the gist filename (the meaningful, visible parts of the row).
     pub fn visible_pin_indices(&self) -> Vec<usize> {
         let query = self.pins_filter_query.to_lowercase();
-        self.pinned
+        let mut indices: Vec<usize> = self
+            .pinned
             .iter()
             .enumerate()
             .filter(|(_, m)| {
@@ -657,7 +669,20 @@ impl AppState {
                 hay.contains(&query)
             })
             .map(|(i, _)| i)
-            .collect()
+            .collect();
+        match self.pins_sort {
+            PinSort::Default => {}
+            PinSort::Local => indices.sort_by(|&a, &b| {
+                crate::config::display_path(&self.pinned[a].local_path)
+                    .cmp(&crate::config::display_path(&self.pinned[b].local_path))
+            }),
+            PinSort::Gist => indices.sort_by(|&a, &b| {
+                self.pinned[a]
+                    .gist_filename
+                    .cmp(&self.pinned[b].gist_filename)
+            }),
+        }
+        indices
     }
 
     /// The true `self.pinned` index of the currently selected Pins row (selection is a
@@ -700,7 +725,38 @@ impl AppState {
     /// Upload intent shared by the list and the diff screen: requires a selected local file
     /// and gist, then branches on whether the gist already holds a file of the local name
     /// (case C: preview + confirm overwrite) or not (case B: add directly).
+    /// True when we're in the diff screen launched from a Pins context (pin diff or pin pull).
+    /// In this state `preview_local` holds the pin's local file and `download_gist_id/filename`
+    /// hold the pin's gist identity, so upload/download should use those instead of the
+    /// Files-view selection which may point to a completely different pair.
+    pub fn is_pin_diff_context(&self) -> bool {
+        self.screen == Screen::Diff
+            && !self.preview_local.as_os_str().is_empty()
+            && self.download_gist_id.is_some()
+    }
+
     fn upload_intent(&mut self) -> KeyOutcome {
+        if self.is_pin_diff_context() {
+            let Some(local_filename) = self
+                .preview_local
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(String::from)
+            else {
+                self.status = Some("local file has no name".into());
+                return KeyOutcome::None;
+            };
+            let gist_id = self.download_gist_id.as_deref().unwrap_or_default();
+            let has_same_name = self
+                .gists
+                .iter()
+                .any(|g| g.gist_id == gist_id && g.filename == local_filename);
+            return if has_same_name {
+                KeyOutcome::UploadPreview
+            } else {
+                KeyOutcome::UploadAdd
+            };
+        }
         let (Some(local), Some(gist)) = (self.selected_local(), self.selected_gist()) else {
             self.status = Some("select a local file and a gist to upload".into());
             return KeyOutcome::None;
@@ -932,6 +988,7 @@ pub fn initial_state() -> AppState {
         pins_hscroll: 0,
         pins_filtering: false,
         pins_filter_query: TextInput::default(),
+        pins_sort: PinSort::Default,
         gists_index: 0,
         gists_hscroll: 0,
         gists_sort: GistGroupSort::Updated,
