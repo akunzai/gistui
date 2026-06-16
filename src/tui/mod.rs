@@ -318,11 +318,11 @@ pub struct AppState {
     pub gist_sort: GistSort,
     pub local_sort: LocalSort,
     pub filtering: bool,
-    pub filter_query: String,
+    pub filter_query: TextInput,
     /// Text filter for the LOCAL pane (List screen). Independent of `filter_query`
     /// (the gist pane), so both panes can be filtered at once. Matched against the
     /// cwd-relative display label, i.e. the exact string shown in the local list.
-    pub local_filter_query: String,
+    pub local_filter_query: TextInput,
     pub diff_previewed: bool,
     pub diff_text: String,
     pub diff_scroll: u16,
@@ -362,15 +362,15 @@ pub struct AppState {
     pub pins_index: usize,
     pub pins_hscroll: u16,
     pub pins_filtering: bool,
-    pub pins_filter_query: String,
+    pub pins_filter_query: TextInput,
     pub gists_index: usize,
     pub gists_hscroll: u16,
     pub gists_sort: GistGroupSort,
     pub gists_type_filter: GistTypeFilter,
     pub gists_filtering: bool,
-    pub gists_filter_query: String,
+    pub gists_filter_query: TextInput,
     pub editing_description: bool,
-    pub description_input: String,
+    pub description_input: TextInput,
     pub bg_task_msg: Option<String>,
     /// Set after the first `q`/`Esc` on the main list; a second press confirms the quit. Any
     /// other key clears it. Prevents an accidental single-key exit.
@@ -900,8 +900,8 @@ pub fn initial_state() -> AppState {
         gist_sort: GistSort::Match,
         local_sort: LocalSort::Match,
         filtering: false,
-        filter_query: String::new(),
-        local_filter_query: String::new(),
+        filter_query: TextInput::default(),
+        local_filter_query: TextInput::default(),
         diff_previewed: false,
         diff_text: String::new(),
         diff_scroll: 0,
@@ -931,15 +931,15 @@ pub fn initial_state() -> AppState {
         pins_index: 0,
         pins_hscroll: 0,
         pins_filtering: false,
-        pins_filter_query: String::new(),
+        pins_filter_query: TextInput::default(),
         gists_index: 0,
         gists_hscroll: 0,
         gists_sort: GistGroupSort::Updated,
         gists_type_filter: GistTypeFilter::All,
         gists_filtering: false,
-        gists_filter_query: String::new(),
+        gists_filter_query: TextInput::default(),
         editing_description: false,
-        description_input: String::new(),
+        description_input: TextInput::default(),
         bg_task_msg: None,
         quit_armed: false,
         help_scroll: 0,
@@ -1074,6 +1074,8 @@ use render::*;
 mod keys;
 mod run_loop;
 use run_loop::run_loop;
+mod text_input;
+pub use text_input::{EditResult, TextInput};
 
 #[cfg(test)]
 mod tests;

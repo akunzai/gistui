@@ -111,7 +111,7 @@ impl AppState {
                         self.pins_hscroll = 0;
                     }
                     FilterKey::Exited => self.pins_filtering = false,
-                    FilterKey::Pass => {}
+                    FilterKey::Moved | FilterKey::Pass => {}
                 },
             }
             return KeyOutcome::None;
@@ -154,11 +154,9 @@ impl AppState {
                     self.description_input.clear();
                 }
                 KeyCode::Enter => return KeyOutcome::ApplyDescription,
-                KeyCode::Backspace => {
-                    self.description_input.pop();
+                _ => {
+                    self.description_input.apply_edit(code);
                 }
-                KeyCode::Char(c) => self.description_input.push(c),
-                _ => {}
             }
             return KeyOutcome::None;
         }
@@ -187,7 +185,7 @@ impl AppState {
                         self.gists_hscroll = 0;
                     }
                     FilterKey::Exited => self.gists_filtering = false,
-                    FilterKey::Pass => {}
+                    FilterKey::Moved | FilterKey::Pass => {}
                 },
             }
             return KeyOutcome::None;
@@ -224,7 +222,7 @@ impl AppState {
             KeyCode::Char('e') => {
                 if let Some(group) = groups.get(self.gists_index) {
                     self.editing_description = true;
-                    self.description_input = group.description.clone();
+                    self.description_input.set(group.description.clone());
                 }
             }
             KeyCode::Enter if self.gists_index < groups.len() => {
@@ -434,30 +432,29 @@ enum FilterKey {
     Exited,
     /// Esc: query cleared; caller leaves input and resets index + scroll.
     Cleared,
-    /// Not a text-edit key (e.g. an arrow or Tab the caller already handled); ignore.
+    /// Only the cursor moved (←/→/Home/End): caller stays in input, no re-rank.
+    Moved,
+    /// Not a text-edit key (e.g. Up/Down or Tab the caller already handled); ignore.
     Pass,
 }
 
 /// Apply one key to `query` and report the transition. Pure: only mutates `query`.
-fn apply_filter_edit(code: KeyCode, query: &mut String) -> FilterKey {
+/// Text editing (insert/delete/cursor movement) is delegated to [`TextInput`]; this
+/// only owns the filter-specific Esc/Enter/empty-Backspace exit policy.
+fn apply_filter_edit(code: KeyCode, query: &mut TextInput) -> FilterKey {
     match code {
         KeyCode::Esc => {
             query.clear();
             FilterKey::Cleared
         }
         KeyCode::Enter => FilterKey::Exited,
-        KeyCode::Backspace => {
-            if query.pop().is_some() {
-                FilterKey::Edited
-            } else {
-                FilterKey::Exited // already empty -> leave input
-            }
-        }
-        KeyCode::Char(c) => {
-            query.push(c);
-            FilterKey::Edited
-        }
-        _ => FilterKey::Pass,
+        // Backspace on an already-empty query leaves the input (keeps the old shortcut).
+        KeyCode::Backspace if query.is_empty() => FilterKey::Exited,
+        _ => match query.apply_edit(code) {
+            EditResult::Changed => FilterKey::Edited,
+            EditResult::Moved => FilterKey::Moved,
+            EditResult::Ignored => FilterKey::Pass,
+        },
     }
 }
 
@@ -496,7 +493,7 @@ impl AppState {
                 self.reset_focused_filter_scroll();
             }
             FilterKey::Exited => self.filtering = false,
-            FilterKey::Pass => {}
+            FilterKey::Moved | FilterKey::Pass => {}
         }
         KeyOutcome::None
     }
@@ -808,32 +805,36 @@ impl AppState {
     }
 
     fn handle_key_confirm(&mut self, code: KeyCode) -> KeyOutcome {
-        match code {
-            KeyCode::Down => {
-                self.scroll_diff_down();
-                return KeyOutcome::None;
+        // While typing the create flow's description, arrows drive the text cursor (handled
+        // below), not the background diff scroll.
+        if !self.editing_description {
+            match code {
+                KeyCode::Down => {
+                    self.scroll_diff_down();
+                    return KeyOutcome::None;
+                }
+                KeyCode::Up => {
+                    self.scroll_diff_up();
+                    return KeyOutcome::None;
+                }
+                KeyCode::PageDown => {
+                    self.scroll_diff_page_down(PAGE_SCROLL);
+                    return KeyOutcome::None;
+                }
+                KeyCode::PageUp => {
+                    self.scroll_diff_page_up(PAGE_SCROLL);
+                    return KeyOutcome::None;
+                }
+                KeyCode::Right => {
+                    self.scroll_diff_right();
+                    return KeyOutcome::None;
+                }
+                KeyCode::Left => {
+                    self.scroll_diff_left();
+                    return KeyOutcome::None;
+                }
+                _ => {}
             }
-            KeyCode::Up => {
-                self.scroll_diff_up();
-                return KeyOutcome::None;
-            }
-            KeyCode::PageDown => {
-                self.scroll_diff_page_down(PAGE_SCROLL);
-                return KeyOutcome::None;
-            }
-            KeyCode::PageUp => {
-                self.scroll_diff_page_up(PAGE_SCROLL);
-                return KeyOutcome::None;
-            }
-            KeyCode::Right => {
-                self.scroll_diff_right();
-                return KeyOutcome::None;
-            }
-            KeyCode::Left => {
-                self.scroll_diff_left();
-                return KeyOutcome::None;
-            }
-            _ => {}
         }
         match self.pending_action.clone() {
             Some(PendingAction::Download) => match code {
@@ -870,11 +871,9 @@ impl AppState {
                     self.description_input.clear();
                     self.back_to_list();
                 }
-                KeyCode::Backspace => {
-                    self.description_input.pop();
+                _ => {
+                    self.description_input.apply_edit(code);
                 }
-                KeyCode::Char(c) => self.description_input.push(c),
-                _ => {}
             },
             Some(PendingAction::Create { .. }) => match code {
                 // Step 2: choose visibility (the description is kept in description_input).

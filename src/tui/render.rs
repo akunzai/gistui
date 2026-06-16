@@ -52,7 +52,7 @@ List screen
   r          toggle recursive file discovery (skips hidden + configured dirs)
   /          filter the focused pane (Local = path/filename, Gist = description/id)
              while filtering: type to match · ↑↓ move · Tab apply + switch pane
-             · Enter apply · Esc clear
+             · Enter apply · Esc clear · ←/→/Home/End move · Del
   v          cycle gist visibility: all / public / secret
   s          cycle the focused pane's sort: match / name / recent
   t          toggle row view: description / id
@@ -81,6 +81,7 @@ Actions (on the selected local file + gist)
   Up/Down    move between pins
   Left/Right scroll a long local path horizontally (~ = home)
   /          filter pins by path or filename (↑↓ move · Enter apply · Esc clear)
+             ←/→/Home/End move the text cursor · Del deletes ahead
   Enter      diff the selected pair (then d pull / u push from the diff)
   s          smart-sync (newer side wins; skips if already identical)
   u          force push  (upload local → gist)
@@ -97,6 +98,7 @@ Actions (on the selected local file + gist)
   s          cycle sort: updated / created
   v          cycle visibility: all / public / secret
   e          edit the gist description (Enter apply, Esc cancel)
+             ←/→/Home/End move the text cursor · Del deletes ahead
   Enter      open the gist detail view (info, file list, comments)
   o          open the gist in your web browser
   y          copy the gist's URL to the system clipboard
@@ -377,7 +379,16 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     list_state.select(selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
 
-    render_footer(frame, chunks[1], &ftitle, &footer, colored);
+    if state.pins_filtering {
+        render_footer_line(
+            frame,
+            chunks[1],
+            &ftitle,
+            input_line("/", &state.pins_filter_query, ""),
+        );
+    } else {
+        render_footer(frame, chunks[1], &ftitle, &footer, colored);
+    }
 }
 
 pub(super) fn gist_group_row_label(
@@ -499,13 +510,24 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
     list_state.select(selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
 
-    render_footer(frame, chunks[1], &ftitle, &footer, colored);
+    if state.gists_filtering {
+        render_footer_line(
+            frame,
+            chunks[1],
+            &ftitle,
+            input_line("/", &state.gists_filter_query, ""),
+        );
+    } else {
+        render_footer(frame, chunks[1], &ftitle, &footer, colored);
+    }
 
     if state.editing_description {
-        render_centered_modal(
+        render_centered_modal_input(
             frame,
             "Edit description (Enter apply · Esc cancel)",
-            &format!("{}_", state.description_input),
+            "",
+            &state.description_input,
+            "",
             Color::Cyan,
         );
     }
@@ -1023,6 +1045,47 @@ pub(super) fn render_footer(frame: &mut Frame, area: Rect, title: &str, text: &s
     );
 }
 
+/// Like [`render_footer`] but draws a prebuilt styled `line`, used for active text inputs
+/// so the cursor can be reverse-highlighted at its real position.
+pub(super) fn render_footer_line(frame: &mut Frame, area: Rect, title: &str, line: Line) {
+    frame.render_widget(
+        Paragraph::new(line)
+            .wrap(Wrap { trim: true })
+            .block(footer_block(title)),
+        area,
+    );
+}
+
+/// A styled line for an active inline text input: `prefix`, then the input text with a
+/// reverse-video block cursor at its real position, then `suffix`. A cursor at the end
+/// reverses a trailing space so the caret is always visible.
+pub(super) fn input_line(prefix: &str, input: &TextInput, suffix: &str) -> Line<'static> {
+    let chars: Vec<char> = input.chars().collect();
+    let cursor = input.cursor().min(chars.len());
+    let rev = Style::default().add_modifier(Modifier::REVERSED);
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    if !prefix.is_empty() {
+        spans.push(Span::raw(prefix.to_string()));
+    }
+    let before: String = chars[..cursor].iter().collect();
+    if !before.is_empty() {
+        spans.push(Span::raw(before));
+    }
+    if cursor < chars.len() {
+        spans.push(Span::styled(chars[cursor].to_string(), rev));
+        let after: String = chars[cursor + 1..].iter().collect();
+        if !after.is_empty() {
+            spans.push(Span::raw(after));
+        }
+    } else {
+        spans.push(Span::styled(" ".to_string(), rev));
+    }
+    if !suffix.is_empty() {
+        spans.push(Span::raw(suffix.to_string()));
+    }
+    Line::from(spans)
+}
+
 pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
     let footer_body = if state.filtering {
@@ -1152,7 +1215,20 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
         gist_selected,
     );
 
-    render_footer(frame, chunks[1], "", &footer_body, footer_is_command);
+    if state.filtering {
+        let (pane, query) = match state.focus {
+            FocusPane::Local => ("local", &state.local_filter_query),
+            FocusPane::Gist => ("gist", &state.filter_query),
+        };
+        let line = input_line(
+            &format!("filter {pane}: "),
+            query,
+            "   (Tab next pane · Enter apply · Esc clear)",
+        );
+        render_footer_line(frame, chunks[1], "", line);
+    } else {
+        render_footer(frame, chunks[1], "", &footer_body, footer_is_command);
+    }
 }
 
 pub(super) fn render_pane(
@@ -1478,13 +1554,21 @@ pub(super) fn diff_title(state: &AppState) -> String {
     }
 }
 
+/// Label and trailing hint around the create flow's description input. Shared so
+/// `confirm_prompt` (plain text / tests) and `render_confirm` (the cursor-aware modal)
+/// can't drift apart.
+pub(super) const CREATE_DESC_PREFIX: &str = "Description (optional): ";
+pub(super) const CREATE_DESC_SUFFIX: &str = "   ·  Enter next  ·  Esc cancel";
+
 /// The prompt shown inside the centered confirm modal — one line per pending action,
 /// listing the keys that resolve it. Pure so it can be unit-tested.
 pub(super) fn confirm_prompt(state: &AppState) -> String {
     match &state.pending_action {
         Some(PendingAction::Create { .. }) if state.editing_description => {
+            // `_` is the plain-text caret; the rendered modal draws a reverse-video
+            // cursor at its real position instead (see render_confirm).
             format!(
-                "Description (optional): {}_   ·  Enter next  ·  Esc cancel",
+                "{CREATE_DESC_PREFIX}{}_{CREATE_DESC_SUFFIX}",
                 state.description_input
             )
         }
@@ -1652,7 +1736,22 @@ pub(super) fn render_confirm(frame: &mut Frame, state: &AppState) {
         _ => render_diff_pane(frame, frame.area(), state),
     }
     let (title, border) = confirm_modal_style(state);
-    render_centered_modal(frame, title, &confirm_prompt(state), border);
+    // The create flow's description step is an active text input, so it needs the
+    // reverse-video cursor; every other confirm prompt is static text.
+    if matches!(state.pending_action, Some(PendingAction::Create { .. }))
+        && state.editing_description
+    {
+        render_centered_modal_input(
+            frame,
+            title,
+            CREATE_DESC_PREFIX,
+            &state.description_input,
+            CREATE_DESC_SUFFIX,
+            border,
+        );
+    } else {
+        render_centered_modal(frame, title, &confirm_prompt(state), border);
+    }
 }
 
 pub(super) fn is_json_file(path: &std::path::Path) -> bool {
@@ -1662,8 +1761,8 @@ pub(super) fn is_json_file(path: &std::path::Path) -> bool {
         .unwrap_or(false)
 }
 
-pub(super) fn render_centered_modal(frame: &mut Frame, title: &str, body: &str, border: Color) {
-    let area = frame.area();
+/// Centered modal rect sized to fit `body` (clamped to the frame).
+fn centered_modal_rect(area: Rect, body: &str) -> Rect {
     let max_width = area.width.saturating_sub(2).max(1);
     let width = ((area.width as u32 * 60 / 100) as u16).clamp(max_width.min(20), max_width);
     // Inner text width = box width minus the two border columns and the horizontal padding.
@@ -1671,24 +1770,52 @@ pub(super) fn render_centered_modal(frame: &mut Frame, title: &str, body: &str, 
     let body_lines = wrap_line_count(body, inner_width).max(1);
     let max_height = area.height.saturating_sub(2).max(1);
     let height = (body_lines + 2).clamp(max_height.min(3), max_height);
-    let rect = Rect {
+    Rect {
         x: area.width.saturating_sub(width) / 2,
         y: area.height.saturating_sub(height) / 2,
         width,
         height,
-    };
+    }
+}
+
+fn modal_block(title: &str, border: Color) -> Block<'static> {
+    Block::default()
+        .title(title.to_string())
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(border))
+        .padding(Padding::horizontal(1))
+}
+
+pub(super) fn render_centered_modal(frame: &mut Frame, title: &str, body: &str, border: Color) {
+    let rect = centered_modal_rect(frame.area(), body);
     frame.render_widget(Clear, rect);
     frame.render_widget(
         Paragraph::new(body.to_string())
             .wrap(Wrap { trim: true })
-            .block(
-                Block::default()
-                    .title(title.to_string())
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .border_style(Style::default().fg(border))
-                    .padding(Padding::horizontal(1)),
-            ),
+            .block(modal_block(title, border)),
+        rect,
+    );
+}
+
+/// Centered modal whose body is an active text input (`prefix` + text-with-cursor +
+/// `suffix`), so the description editor shows the caret at its real position.
+pub(super) fn render_centered_modal_input(
+    frame: &mut Frame,
+    title: &str,
+    prefix: &str,
+    input: &TextInput,
+    suffix: &str,
+    border: Color,
+) {
+    // Size from the plain text plus one column for the (possibly trailing) cursor cell.
+    let plain = format!("{prefix}{input} {suffix}");
+    let rect = centered_modal_rect(frame.area(), &plain);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(input_line(prefix, input, suffix))
+            .wrap(Wrap { trim: true })
+            .block(modal_block(title, border)),
         rect,
     );
 }

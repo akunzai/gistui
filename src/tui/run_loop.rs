@@ -587,7 +587,7 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     else {
                         continue;
                     };
-                    let description = state.description_input.clone();
+                    let description = state.description_input.to_string();
                     let plan = crate::actions::create_command(&local_path, public, &description);
 
                     spawn_bg(&mut state, &mut bg_rx, "Creating gist…", move || {
@@ -724,7 +724,7 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         continue;
                     };
                     let gist_id = group.id.clone();
-                    let description = state.description_input.clone();
+                    let description = state.description_input.to_string();
                     let plan = crate::actions::edit_description_command(&gist_id, &description);
                     state.editing_description = false;
                     state.description_input.clear();
