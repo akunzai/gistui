@@ -1,5 +1,7 @@
 /target/
 .superpowers/
+# JetBrains IDE project files
+/.idea/
 # Python bytecode + screenshot venv from the demo harness (scripts/demo/)
 __pycache__/
 *.pyc

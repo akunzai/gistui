@@ -1,7 +1,7 @@
 # gistui
 
 [![CI](https://github.com/akunzai/gistui/actions/workflows/ci.yml/badge.svg)](https://github.com/akunzai/gistui/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/gistui.svg)](https://crates.io/crates/gistui)
+[![crates.io](https://badgen.net/crates/v/gistui)](https://crates.io/crates/gistui)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 A terminal UI for managing GitHub Gists. Browse, diff, download, upload, create, edit, and
