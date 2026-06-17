@@ -12,6 +12,17 @@ struct Cli {
     #[arg(long, help = "Print startup checks without launching the TUI")]
     check: bool,
     #[arg(
+        long,
+        help = "Upgrade the running pre-built binary from GitHub Releases (combine with --check or --upgrade-version)"
+    )]
+    upgrade: bool,
+    #[arg(
+        long = "upgrade-version",
+        value_name = "TAG",
+        help = "With --upgrade: install a specific release (v0.12.0 or 0.12.0)"
+    )]
+    upgrade_version: Option<String>,
+    #[arg(
         value_name = "PATH",
         help = "Working directory to pair files against (defaults to the current directory)"
     )]
@@ -20,6 +31,13 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if cli.upgrade {
+        return gistui::upgrade::run(gistui::upgrade::Options {
+            check_only: cli.check,
+            version: cli.upgrade_version,
+        });
+    }
 
     // Validate the working directory before touching the terminal, so a bad path fails
     // cleanly with a non-zero exit instead of half-entering the TUI.
