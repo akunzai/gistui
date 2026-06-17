@@ -865,6 +865,7 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     }
                 }
                 KeyOutcome::PersistDiffContext => persist_diff_context(&mut state),
+                KeyOutcome::ThemeToggle => persist_theme(&mut state),
                 KeyOutcome::None => {}
             }
         }
@@ -1378,6 +1379,23 @@ fn refresh_locals(state: &mut AppState) {
 
 /// Persist the diff-context toggle (`diff_show_full`) to the config file, leaving the
 /// configured `diff_context` radius untouched. IO boundary, called from `run_loop`.
+fn persist_theme(state: &mut AppState) {
+    let result = crate::config::config_path().and_then(|path| {
+        let mut config = crate::config::load_config(&path)?;
+        config.theme = state.theme_choice;
+        crate::config::save_config(&path, &config)?;
+        Ok(())
+    });
+    let name = match state.theme_choice {
+        crate::config::ThemeChoice::Dark => "dark",
+        crate::config::ThemeChoice::Light => "light",
+    };
+    match result {
+        Ok(()) => state.set_status(format!("Theme: {name}")),
+        Err(error) => state.set_status(format!("save config failed: {error}")),
+    }
+}
+
 fn persist_diff_context(state: &mut AppState) {
     let result = crate::config::config_path().and_then(|path| {
         let mut config = crate::config::load_config(&path)?;

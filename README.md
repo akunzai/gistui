@@ -257,6 +257,8 @@ Press `?` in the app for the full keymap — it now opens the **current screen's
 - `/` filter the focused pane (Local pane matches path/filename; Gist pane matches description/id). While filtering: type to match, ↑/↓ move, Tab applies and switches pane, Enter applies, Esc clears, and ←/→/Home/End/Del edit the query text. · `v` cycle visibility (all/public/secret) · `s` cycle the **focused
   pane's** sort (match / name / recent — gists by name/updated, local files by
   name/modified-time) · `t` toggle row view.
+- `T` — toggle between the built-in **dark** and **light** colour themes (saved to config).
+  Use `theme = "light"` in `config.toml` to start in light mode.
 - `Esc`/`q` — go back from an overlay; on the main list, press twice to quit (the first press
   arms the quit, any other key cancels) so a stray key never exits the app.
 - `?` — show the help overlay.

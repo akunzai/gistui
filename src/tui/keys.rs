@@ -8,6 +8,21 @@ const PAGE_SCROLL: u16 = 10;
 
 impl AppState {
     pub fn handle_key(&mut self, code: KeyCode) -> KeyOutcome {
+        // Global theme toggle: skip while any inline text input is active so `T` can still
+        // be typed into filters and description editors.
+        if code == KeyCode::Char('T')
+            && !self.filtering
+            && !self.pins_filtering
+            && !self.gists_filtering
+            && !self.editing_description
+        {
+            self.theme_choice = match self.theme_choice {
+                crate::config::ThemeChoice::Dark => crate::config::ThemeChoice::Light,
+                crate::config::ThemeChoice::Light => crate::config::ThemeChoice::Dark,
+            };
+            self.theme = Theme::for_choice(self.theme_choice);
+            return KeyOutcome::ThemeToggle;
+        }
         match self.screen {
             Screen::List if self.filtering => self.handle_key_filter(code),
             Screen::List => self.handle_key_list(code),

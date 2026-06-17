@@ -14,6 +14,10 @@ diff_context = 3
 # false collapses to diff_context lines. The app rewrites this when you press `c`.
 diff_show_full = false
 
+# Colour theme: "dark" (default) or "light".
+# Use "light" for terminals with a light background colour.
+# theme = "dark"
+
 # Directories skipped when recursive local file discovery is active (r key).
 # Hidden directories (names starting with ".") are always skipped regardless
 # of this list. Add project-specific build output dirs here as needed.

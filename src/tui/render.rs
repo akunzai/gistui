@@ -1,4 +1,4 @@
-use super::*;
+use super::{theme::Theme, *};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
@@ -12,6 +12,12 @@ use ratatui::{
 use similar::{ChangeTag, TextDiff};
 
 pub(super) fn render(frame: &mut Frame, state: &AppState) {
+    // Paint the full canvas so every unfilled cell uses the theme background (no-op for dark
+    // theme where bg=Reset, effective for light theme which sets a grey canvas).
+    frame.render_widget(
+        Block::default().style(state.theme.base_style()),
+        frame.area(),
+    );
     match state.screen {
         Screen::List => render_list(frame, state),
         Screen::Diff => render_diff(frame, state),
@@ -23,7 +29,7 @@ pub(super) fn render(frame: &mut Frame, state: &AppState) {
         Screen::GistDetail => render_gist_detail(frame, state),
     }
     if let Some(ref msg) = state.bg_task_msg {
-        render_loading_overlay(frame, msg, state.spinner_frame);
+        render_loading_overlay(frame, msg, state.spinner_frame, &state.theme);
     }
 }
 
@@ -56,6 +62,7 @@ List screen
   v          cycle gist visibility: all / public / secret
   s          cycle the focused pane's sort: match / name / recent
   t          toggle row view: description / id
+  T          toggle light/dark colour theme (global; saved to config)
   a          flip which pane drives match ranking (anchor); the other pane
              re-ranks against the anchor's selection (focus stays put)
              (📌 = pinned pair · bold = same filename)
@@ -151,6 +158,7 @@ Actions (on the selected local file + gist)
             "\
   Esc / q    close an overlay; from the list, press twice to quit the app
   ?          show this help
+  T          toggle light/dark colour theme (saved to config)
   Up/Down    scroll this help text
   NO_COLOR   set this env var to disable syntax highlighting (preview + diff)"
         }
@@ -170,12 +178,14 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState) {
                     .title("Help — pick a topic (1-8 / ↑↓ Enter · Esc back)")
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
+                    .style(state.theme.base_style())
                     .padding(Padding::horizontal(1)),
             )
+            .style(state.theme.base_style())
             .highlight_style(
                 Style::default()
-                    .bg(Color::Cyan)
-                    .fg(Color::Black)
+                    .bg(state.theme.accent)
+                    .fg(state.theme.fg_on_accent)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("▶ ");
@@ -189,12 +199,14 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState) {
         );
         frame.render_widget(
             Paragraph::new(help_topic_body(state.help_topic))
+                .style(state.theme.base_style())
                 .scroll((state.help_scroll, 0))
                 .block(
                     Block::default()
                         .title(title)
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
+                        .style(state.theme.base_style())
                         .padding(Padding::horizontal(1)),
                 ),
             frame.area(),
@@ -233,7 +245,7 @@ fn diff_ext(state: &AppState) -> Option<String> {
 fn preview_line_spans(state: &AppState) -> Vec<Vec<Span<'static>>> {
     let lines: Vec<String> = state.diff_text.lines().map(str::to_string).collect();
     match (state.syntax_highlight, preview_ext(state)) {
-        (true, Some(ext)) => super::highlight::highlight_buffer(&ext, &lines),
+        (true, Some(ext)) => super::highlight::highlight_buffer(&ext, &lines, &state.theme),
         _ => lines.into_iter().map(|l| vec![Span::raw(l)]).collect(),
     }
 }
@@ -259,6 +271,7 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
         .title(state.preview_title.clone())
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
+        .style(state.theme.base_style())
         .padding(Padding::horizontal(1));
     let line_spans = preview_line_spans(state);
     let total_lines = line_spans.len();
@@ -266,6 +279,7 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
         // Wrapping needs the full line set; vertical scroll goes through Paragraph (no hscroll).
         let body = Text::from(line_spans.into_iter().map(Line::from).collect::<Vec<_>>());
         Paragraph::new(body)
+            .style(state.theme.base_style())
             .scroll((state.diff_scroll, 0))
             .wrap(Wrap { trim: false })
             .block(block)
@@ -277,7 +291,9 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
             .map(|spans| apply_hscroll_spans(spans, state.diff_hscroll as usize))
             .skip(state.diff_scroll as usize)
             .collect();
-        Paragraph::new(Text::from(visible)).block(block)
+        Paragraph::new(Text::from(visible))
+            .style(state.theme.base_style())
+            .block(block)
     };
     frame.render_widget(paragraph, chunks[0]);
     // Only the non-wrap path keeps a 1:1 line↔row mapping for an accurate thumb; under soft
@@ -285,7 +301,7 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
     if !state.preview_wrap {
         render_text_scrollbar(frame, chunks[0], total_lines, state.diff_scroll as usize);
     }
-    render_footer(frame, chunks[1], "", &footer, colored);
+    render_footer(frame, chunks[1], "", &footer, colored, &state.theme);
 }
 
 pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
@@ -321,11 +337,11 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     let items: Vec<ListItem> = if state.pinned.is_empty() {
         vec![
             ListItem::new("  📌 No pinned mappings found (use p to pin a pair)")
-                .style(Style::default().fg(Color::DarkGray)),
+                .style(Style::default().fg(state.theme.dim)),
         ]
     } else if visible.is_empty() {
         vec![ListItem::new("  🔍 No pins match the filter")
-            .style(Style::default().fg(Color::DarkGray))]
+            .style(Style::default().fg(state.theme.dim))]
     } else {
         visible
             .iter()
@@ -368,13 +384,15 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
                 .title(title)
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(state.theme.accent))
+                .style(state.theme.base_style())
                 .padding(Padding::horizontal(1)),
         )
+        .style(state.theme.base_style())
         .highlight_style(
             Style::default()
-                .bg(Color::Cyan)
-                .fg(Color::Black)
+                .bg(state.theme.accent)
+                .fg(state.theme.fg_on_accent)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ");
@@ -389,9 +407,10 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
             chunks[1],
             &ftitle,
             input_line("/", &state.pins_filter_query, ""),
+            &state.theme,
         );
     } else {
-        render_footer(frame, chunks[1], &ftitle, &footer, colored);
+        render_footer(frame, chunks[1], &ftitle, &footer, colored, &state.theme);
     }
 }
 
@@ -460,10 +479,10 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
     let now = unix_now();
     let items: Vec<ListItem> = if groups.is_empty() {
         let msg = if state.gist_groups().is_empty() {
-            ListItem::new("  📭 No gists found").style(Style::default().fg(Color::DarkGray))
+            ListItem::new("  📭 No gists found").style(Style::default().fg(state.theme.dim))
         } else {
             ListItem::new("  🔍 No gists match the filter")
-                .style(Style::default().fg(Color::DarkGray))
+                .style(Style::default().fg(state.theme.dim))
         };
         vec![msg]
     } else {
@@ -499,13 +518,15 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
                 .title(title)
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(state.theme.accent))
+                .style(state.theme.base_style())
                 .padding(Padding::horizontal(1)),
         )
+        .style(state.theme.base_style())
         .highlight_style(
             Style::default()
-                .bg(Color::Cyan)
-                .fg(Color::Black)
+                .bg(state.theme.accent)
+                .fg(state.theme.fg_on_accent)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ");
@@ -520,9 +541,10 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
             chunks[1],
             &ftitle,
             input_line("/", &state.gists_filter_query, ""),
+            &state.theme,
         );
     } else {
-        render_footer(frame, chunks[1], &ftitle, &footer, colored);
+        render_footer(frame, chunks[1], &ftitle, &footer, colored, &state.theme);
     }
 
     if state.editing_description {
@@ -532,7 +554,8 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
             "",
             &state.description_input,
             "",
-            Color::Cyan,
+            state.theme.accent,
+            &state.theme,
         );
     }
 }
@@ -582,6 +605,7 @@ fn file_rows(
     offset: usize,
     visible_rows: usize,
     highlight_cursor: bool,
+    theme: &Theme,
 ) -> Vec<Line<'static>> {
     let mut rows = Vec::new();
     for (i, f) in files
@@ -599,8 +623,8 @@ fn file_rows(
             rows.push(Line::from(Span::styled(
                 format!("▸ {marker} {f}"),
                 Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
+                    .fg(theme.fg_on_accent)
+                    .bg(theme.accent)
                     .add_modifier(Modifier::BOLD),
             )));
         } else {
@@ -644,14 +668,22 @@ pub(super) fn render_gist_info_and_files(
     // Visible file rows = area height minus borders(2), info line, blank, "Files (n)" header (3).
     let visible_rows = (area.height as usize).saturating_sub(5);
     let offset = file_list_scroll(cursor, visible_rows, files.len());
-    lines.extend(file_rows(&files, cursor, offset, visible_rows, false));
+    lines.extend(file_rows(
+        &files,
+        cursor,
+        offset,
+        visible_rows,
+        false,
+        &state.theme,
+    ));
     frame.render_widget(
-        Paragraph::new(lines).block(
+        Paragraph::new(lines).style(state.theme.base_style()).block(
             Block::default()
                 .title(gist_block_title(&group))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(state.theme.accent))
+                .style(state.theme.base_style())
                 .padding(Padding::horizontal(1)),
         ),
         area,
@@ -666,15 +698,16 @@ fn render_detail_header(frame: &mut Frame, area: Rect, state: &AppState, gist_id
     };
     let lines = vec![
         Line::from(gist_info_line(&group, unix_now())),
-        detail_focus_tabs_line(state.detail_focus),
+        detail_focus_tabs_line(state.detail_focus, &state.theme),
     ];
     frame.render_widget(
-        Paragraph::new(lines).block(
+        Paragraph::new(lines).style(state.theme.base_style()).block(
             Block::default()
                 .title(gist_block_title(&group))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(state.theme.accent))
+                .style(state.theme.base_style())
                 .padding(Padding::horizontal(1)),
         ),
         area,
@@ -688,14 +721,15 @@ fn render_gist_file_list(frame: &mut Frame, area: Rect, state: &AppState, gist_i
     let cursor = state.detail_file_cursor.min(files.len().saturating_sub(1));
     let visible_rows = (area.height as usize).saturating_sub(2);
     let offset = file_list_scroll(cursor, visible_rows, files.len());
-    let lines = file_rows(&files, cursor, offset, visible_rows, true);
+    let lines = file_rows(&files, cursor, offset, visible_rows, true, &state.theme);
     frame.render_widget(
-        Paragraph::new(lines).block(
+        Paragraph::new(lines).style(state.theme.base_style()).block(
             Block::default()
                 .title(format!("Files ({})", files.len()))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(Color::Cyan))
+                .border_style(Style::default().fg(state.theme.accent))
+                .style(state.theme.base_style())
                 .padding(Padding::horizontal(1)),
         ),
         area,
@@ -708,7 +742,7 @@ pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppSta
     let body: Vec<Line> = match (&state.detail_comments, &state.detail_comments_error) {
         (None, _) => vec![Line::from(Span::styled(
             "Loading comments…",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(state.theme.dim),
         ))],
         (Some(_), Some(err)) => vec![Line::from(Span::styled(
             format!("comments error: {err}"),
@@ -716,7 +750,7 @@ pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppSta
         ))],
         (Some(comments), None) if comments.is_empty() => vec![Line::from(Span::styled(
             "No comments",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(state.theme.dim),
         ))],
         (Some(comments), None) => {
             let mut lines = Vec::new();
@@ -726,7 +760,7 @@ pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppSta
                     .unwrap_or_else(|| "?".into());
                 lines.push(Line::from(Span::styled(
                     format!("{} · {age}", c.author),
-                    Style::default().fg(Color::Cyan),
+                    Style::default().fg(state.theme.accent),
                 )));
                 for raw in c.body.lines() {
                     lines.push(Line::from(format!("  {raw}")));
@@ -745,6 +779,7 @@ pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppSta
     let total_lines = body.len();
     frame.render_widget(
         Paragraph::new(body)
+            .style(state.theme.base_style())
             .scroll((state.detail_scroll, 0))
             .wrap(Wrap { trim: false })
             .block(
@@ -752,6 +787,7 @@ pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppSta
                     .title(title)
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
+                    .style(state.theme.base_style())
                     .padding(Padding::horizontal(1)),
             ),
         area,
@@ -796,13 +832,13 @@ pub(super) fn detail_focus_tab(focus: DetailFocus) -> usize {
 /// A `Files │ Comments` focus indicator line, with the pane Tab currently drives highlighted.
 /// Rendered just under the gist's basic info (inside the info box) rather than as a floating
 /// strip, so the active focus is visible without a disconnected top row.
-pub(super) fn detail_focus_tabs_line(focus: DetailFocus) -> Line<'static> {
+pub(super) fn detail_focus_tabs_line(focus: DetailFocus, theme: &Theme) -> Line<'static> {
     let active = detail_focus_tab(focus);
     let active_style = Style::default()
-        .fg(Color::Black)
-        .bg(Color::Cyan)
+        .fg(theme.fg_on_accent)
+        .bg(theme.accent)
         .add_modifier(Modifier::BOLD);
-    let idle_style = Style::default().fg(Color::DarkGray);
+    let idle_style = Style::default().fg(theme.dim);
     let mut spans = Vec::new();
     for (i, label) in ["Files", "Comments"].iter().enumerate() {
         if i > 0 {
@@ -839,7 +875,7 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState) {
             DetailFocus::Comments => render_gist_comments(frame, chunks[1], state),
         }
     }
-    render_footer(frame, chunks[2], "", &footer, colored);
+    render_footer(frame, chunks[2], "", &footer, colored, &state.theme);
 }
 
 pub(super) fn local_row_label(path: &std::path::Path, cwd: &std::path::Path) -> String {
@@ -961,19 +997,19 @@ pub(super) fn wrap_line_count(text: &str, width: u16) -> u16 {
 /// from plain navigation at a glance: destructive (delete/remove/unpin) → Red, write/sync
 /// (download/upload/create/sync/…) → Green, everything else (navigation/view) → Cyan. Matched on
 /// whole label words so e.g. `pins` does not read as the `pin` action.
-pub(super) fn action_color(label: &str) -> Color {
+pub(super) fn action_color(label: &str, theme: &Theme) -> Color {
     const DESTRUCTIVE: [&str; 3] = ["delete", "remove", "unpin"];
     const WRITE: [&str; 10] = [
         "download", "upload", "create", "new", "sync", "push", "pull", "pin", "edit", "desc",
     ];
-    let mut color = Color::Cyan;
+    let mut color = theme.accent;
     for word in label.split_whitespace() {
         let word = word.to_ascii_lowercase();
         if DESTRUCTIVE.contains(&word.as_str()) {
             return Color::Red;
         }
         if WRITE.contains(&word.as_str()) {
-            color = Color::Green;
+            color = theme.write_color;
         }
     }
     color
@@ -983,8 +1019,8 @@ pub(super) fn action_color(label: &str) -> Color {
 /// its action category (see [`action_color`]); the descriptive label keeps the terminal's default
 /// brightness so it stays legible, and only the separators are dimmed. Every input character is
 /// preserved verbatim so `wrap_line_count` sizing stays exact.
-pub(super) fn hint_line(text: &str) -> Line<'static> {
-    let dim = Style::default().fg(Color::DarkGray);
+pub(super) fn hint_line(text: &str, theme: &Theme) -> Line<'static> {
+    let dim = Style::default().fg(theme.dim);
     let mut spans: Vec<Span<'static>> = Vec::new();
     for (i, seg) in text.split('·').enumerate() {
         if i > 0 {
@@ -1001,13 +1037,13 @@ pub(super) fn hint_line(text: &str) -> Line<'static> {
         match rest.find(char::is_whitespace) {
             Some(pos) => {
                 let (k, label) = rest.split_at(pos);
-                let key = Style::default().fg(action_color(label));
+                let key = Style::default().fg(action_color(label, theme));
                 spans.push(Span::styled(k.to_string(), key));
                 spans.push(Span::raw(label.to_string()));
             }
             None => spans.push(Span::styled(
                 rest.to_string(),
-                Style::default().fg(action_color("")),
+                Style::default().fg(action_color("", theme)),
             )),
         }
     }
@@ -1016,7 +1052,7 @@ pub(super) fn hint_line(text: &str) -> Line<'static> {
 
 /// The shared borderless footer block: a single dim top divider that carries the left `title` and
 /// the app version pinned to the bottom-right corner of every screen.
-pub(super) fn footer_block(title: &str) -> Block<'static> {
+pub(super) fn footer_block(title: &str, theme: &Theme) -> Block<'static> {
     // Repo URL (scheme stripped — the host/path already names the project) plus the version.
     let repo = env!("CARGO_PKG_REPOSITORY")
         .trim_start_matches("https://")
@@ -1025,37 +1061,53 @@ pub(super) fn footer_block(title: &str) -> Block<'static> {
     Block::default()
         .title(title.to_string())
         .title_top(
-            // Reset (not the dim divider colour) so it reads at full brightness.
             Line::from(label)
                 .right_aligned()
-                .style(Style::default().fg(Color::Reset)),
+                .style(Style::default().fg(theme.fg)),
         )
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(Color::DarkGray))
+        .border_style(Style::default().fg(theme.dim))
+        .style(theme.base_style())
         .padding(Padding::horizontal(1))
 }
 
 /// Render a command footer into `area`. `colored` accents the command keys; pass `false` for
 /// plain text (filter input, status messages) that is not a key/label list.
-pub(super) fn render_footer(frame: &mut Frame, area: Rect, title: &str, text: &str, colored: bool) {
+pub(super) fn render_footer(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    text: &str,
+    colored: bool,
+    theme: &Theme,
+) {
     let para = if colored {
-        Paragraph::new(hint_line(text))
+        Paragraph::new(hint_line(text, theme))
     } else {
         Paragraph::new(text.to_string())
     };
     frame.render_widget(
-        para.wrap(Wrap { trim: true }).block(footer_block(title)),
+        para.style(theme.base_style())
+            .wrap(Wrap { trim: true })
+            .block(footer_block(title, theme)),
         area,
     );
 }
 
 /// Like [`render_footer`] but draws a prebuilt styled `line`, used for active text inputs
 /// so the cursor can be reverse-highlighted at its real position.
-pub(super) fn render_footer_line(frame: &mut Frame, area: Rect, title: &str, line: Line) {
+pub(super) fn render_footer_line(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    line: Line,
+    theme: &Theme,
+) {
     frame.render_widget(
         Paragraph::new(line)
+            .style(theme.base_style())
             .wrap(Wrap { trim: true })
-            .block(footer_block(title)),
+            .block(footer_block(title, theme)),
         area,
     );
 }
@@ -1125,12 +1177,12 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
             "  {} Scanning files…",
             spinner_glyph(state.spinner_frame)
         ))
-        .style(Style::default().fg(Color::DarkGray))]
+        .style(Style::default().fg(state.theme.dim))]
     } else if state.locals.is_empty() {
-        vec![ListItem::new("  📭 No local files found").style(Style::default().fg(Color::DarkGray))]
+        vec![ListItem::new("  📭 No local files found").style(Style::default().fg(state.theme.dim))]
     } else if visible_locals.is_empty() {
         vec![ListItem::new("  🔍 No files match the filter")
-            .style(Style::default().fg(Color::DarkGray))]
+            .style(Style::default().fg(state.theme.dim))]
     } else {
         visible_locals
             .iter()
@@ -1168,6 +1220,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
         local_items,
         local_focused,
         local_selected,
+        &state.theme,
     );
 
     let ranked = state.ranked_gists();
@@ -1176,13 +1229,13 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
             "  {} Loading gists…",
             spinner_glyph(state.spinner_frame)
         ))
-        .style(Style::default().fg(Color::DarkGray))]
+        .style(Style::default().fg(state.theme.dim))]
     } else if ranked.is_empty() {
         let message = if !state.filter_query.is_empty() {
             ListItem::new("  🔍 No gists match the filter")
-                .style(Style::default().fg(Color::DarkGray))
+                .style(Style::default().fg(state.theme.dim))
         } else {
-            ListItem::new("  📭 No gists found").style(Style::default().fg(Color::DarkGray))
+            ListItem::new("  📭 No gists found").style(Style::default().fg(state.theme.dim))
         };
         vec![message]
     } else {
@@ -1217,6 +1270,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
         gist_items,
         gist_focused,
         gist_selected,
+        &state.theme,
     );
 
     if state.filtering {
@@ -1229,9 +1283,16 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
             query,
             "   (Tab next pane · Enter apply · Esc clear)",
         );
-        render_footer_line(frame, chunks[1], "", line);
+        render_footer_line(frame, chunks[1], "", line, &state.theme);
     } else {
-        render_footer(frame, chunks[1], "", &footer_body, footer_is_command);
+        render_footer(
+            frame,
+            chunks[1],
+            "",
+            &footer_body,
+            footer_is_command,
+            &state.theme,
+        );
     }
 }
 
@@ -1242,37 +1303,38 @@ pub(super) fn render_pane(
     items: Vec<ListItem>,
     focused: bool,
     selected: Option<usize>,
+    theme: &Theme,
 ) {
     let item_count = items.len();
     let border_style = if focused {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(theme.accent)
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(theme.dim)
     };
     // The border colour alone signals which pane is active; row text stays at full
     // brightness in both panes so it is always legible.
     // Focused selection is a solid bar (whole row); unfocused just bolds the row.
     let highlight_style = if focused {
         Style::default()
-            .bg(Color::Cyan)
-            .fg(Color::Black)
+            .bg(theme.accent)
+            .fg(theme.fg_on_accent)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)
     };
     let list = List::new(items)
         .block(
             Block::default()
                 .title(title)
-                // The title sits on the top border, so it would otherwise inherit the dimmed
-                // border colour when unfocused; pin it to the terminal default so only the
-                // border line reflects focus, never the title text.
-                .title_style(Style::default().fg(Color::Reset))
+                // Pin title to theme fg so it stays legible in both dark and light modes.
+                .title_style(Style::default().fg(theme.fg))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(border_style)
+                .style(theme.base_style())
                 .padding(Padding::horizontal(1)),
         )
+        .style(theme.base_style())
         .highlight_style(highlight_style)
         .highlight_symbol("▶ ");
 
@@ -1326,19 +1388,24 @@ pub(super) fn apply_hscroll_spans(spans: Vec<Span<'static>>, hscroll: usize) -> 
 }
 
 /// Del line with word-level highlighting: changed words bold-red, unchanged words plain red.
-pub(super) fn inline_del_line(del_line: &str, ins_line: &str, hscroll: usize) -> Line<'static> {
+pub(super) fn inline_del_line(
+    del_line: &str,
+    ins_line: &str,
+    hscroll: usize,
+    del_color: Color,
+) -> Line<'static> {
     let del_content = del_line.get(1..).unwrap_or("");
     let ins_content = ins_line.get(1..).unwrap_or("");
-    let mut spans = vec![Span::styled("-", Style::default().fg(Color::Red))];
+    let mut spans = vec![Span::styled("-", Style::default().fg(del_color))];
     for change in TextDiff::from_words(del_content, ins_content).iter_all_changes() {
         match change.tag() {
             ChangeTag::Delete => spans.push(Span::styled(
                 change.value().to_string(),
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default().fg(del_color).add_modifier(Modifier::BOLD),
             )),
             ChangeTag::Equal => spans.push(Span::styled(
                 change.value().to_string(),
-                Style::default().fg(Color::Red),
+                Style::default().fg(del_color),
             )),
             ChangeTag::Insert => {}
         }
@@ -1347,21 +1414,24 @@ pub(super) fn inline_del_line(del_line: &str, ins_line: &str, hscroll: usize) ->
 }
 
 /// Ins line with word-level highlighting: changed words bold-green, unchanged words plain green.
-pub(super) fn inline_ins_line(del_line: &str, ins_line: &str, hscroll: usize) -> Line<'static> {
+pub(super) fn inline_ins_line(
+    del_line: &str,
+    ins_line: &str,
+    hscroll: usize,
+    ins_color: Color,
+) -> Line<'static> {
     let del_content = del_line.get(1..).unwrap_or("");
     let ins_content = ins_line.get(1..).unwrap_or("");
-    let mut spans = vec![Span::styled("+", Style::default().fg(Color::Green))];
+    let mut spans = vec![Span::styled("+", Style::default().fg(ins_color))];
     for change in TextDiff::from_words(del_content, ins_content).iter_all_changes() {
         match change.tag() {
             ChangeTag::Insert => spans.push(Span::styled(
                 change.value().to_string(),
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(ins_color).add_modifier(Modifier::BOLD),
             )),
             ChangeTag::Equal => spans.push(Span::styled(
                 change.value().to_string(),
-                Style::default().fg(Color::Green),
+                Style::default().fg(ins_color),
             )),
             ChangeTag::Delete => {}
         }
@@ -1374,7 +1444,7 @@ pub(super) fn inline_ins_line(del_line: &str, ins_line: &str, hscroll: usize) ->
 /// `Enter` preview flips direction with focus (see `preview_diff_text`). The side is classified
 /// from the un-scrolled line (anchored right after the marker), then the keyword is coloured in
 /// the horizontally-scrolled slice; the rest stays bold.
-pub(super) fn header_line(line: &str, hscroll: usize) -> Line<'static> {
+pub(super) fn header_line(line: &str, hscroll: usize, theme: &Theme) -> Line<'static> {
     let visible: String = line.chars().skip(hscroll).collect();
     let bold = Style::default().add_modifier(Modifier::BOLD);
 
@@ -1383,9 +1453,9 @@ pub(super) fn header_line(line: &str, hscroll: usize) -> Line<'static> {
         .or_else(|| line.strip_prefix("+++ "))
         .unwrap_or(line);
     let (keyword, color) = if body.starts_with("local") {
-        ("local", Color::Yellow)
+        ("local", theme.notice_color)
     } else if body.starts_with("gist") {
-        ("gist", Color::Blue)
+        ("gist", theme.gist_label_color)
     } else {
         return Line::styled(visible, bold);
     };
@@ -1421,6 +1491,7 @@ pub(super) fn diff_view_highlighted(
     hscroll: u16,
     ext: Option<&str>,
     highlight: bool,
+    theme: &Theme,
 ) -> Text<'static> {
     let raw: Vec<&str> = text.lines().collect();
     let hscroll = hscroll as usize;
@@ -1438,7 +1509,7 @@ pub(super) fn diff_view_highlighted(
                     contents.push(l[1..].to_string());
                 }
             }
-            super::highlight::highlight_buffer(ext, &contents)
+            super::highlight::highlight_buffer(ext, &contents, theme)
                 .into_iter()
                 .zip(idxs)
                 .map(|(spans, idx)| (idx, spans))
@@ -1472,23 +1543,23 @@ pub(super) fn diff_view_highlighted(
             // Del lines: paired ones get inline highlighting, extras plain red.
             for (j, &dl) in del_lines.iter().enumerate() {
                 if j < pair_count {
-                    result.push(inline_del_line(dl, ins_lines[j], hscroll));
+                    result.push(inline_del_line(dl, ins_lines[j], hscroll, theme.del_color));
                 } else {
                     let visible: String = dl.chars().skip(hscroll).collect();
-                    result.push(Line::styled(visible, Style::default().fg(Color::Red)));
+                    result.push(Line::styled(visible, Style::default().fg(theme.del_color)));
                 }
             }
-            // Ins lines: paired ones get inline highlighting, extras plain green.
+            // Ins lines: paired ones get inline highlighting, extras plain.
             for (j, &il) in ins_lines.iter().enumerate() {
                 if j < pair_count {
-                    result.push(inline_ins_line(del_lines[j], il, hscroll));
+                    result.push(inline_ins_line(del_lines[j], il, hscroll, theme.ins_color));
                 } else {
                     let visible: String = il.chars().skip(hscroll).collect();
-                    result.push(Line::styled(visible, Style::default().fg(Color::Green)));
+                    result.push(Line::styled(visible, Style::default().fg(theme.ins_color)));
                 }
             }
         } else if line.starts_with("+++") || line.starts_with("---") {
-            result.push(header_line(line, hscroll));
+            result.push(header_line(line, hscroll, theme));
             i += 1;
         } else if let Some(spans) = ctx_highlight.get(&i) {
             // Syntax-highlighted context line: re-prepend the space marker, then scroll.
@@ -1633,19 +1704,21 @@ pub(super) fn confirm_prompt(state: &AppState) -> String {
     }
 }
 
-/// Title and border colour for the confirm modal. Destructive actions are tinted red so the
-/// stakes read at a glance; everything else is a neutral yellow prompt.
+/// Title and border colour for the confirm modal. Destructive actions are tinted with the
+/// theme's `del_color` so the stakes read at a glance; non-destructive writes use the neutral
+/// `notice_color` prompt.
 pub(super) fn confirm_modal_style(state: &AppState) -> (&'static str, Color) {
+    let theme = &state.theme;
     match &state.pending_action {
         Some(PendingAction::Create { .. }) if state.editing_description => {
-            ("Description", Color::Cyan)
+            ("Description", theme.accent)
         }
-        Some(PendingAction::Create { .. }) => ("Create gist", Color::Yellow),
-        Some(PendingAction::Upload { .. }) => ("Upload", Color::Yellow),
-        Some(PendingAction::Delete { .. }) => ("Delete", Color::Red),
-        Some(PendingAction::RemoveFile { .. }) => ("Remove file", Color::Red),
-        Some(PendingAction::CompactGist { .. }) => ("Compact revisions", Color::Red),
-        _ => ("Overwrite", Color::Red),
+        Some(PendingAction::Create { .. }) => ("Create gist", theme.notice_color),
+        Some(PendingAction::Upload { .. }) => ("Upload", theme.notice_color),
+        Some(PendingAction::Delete { .. }) => ("Delete", theme.del_color),
+        Some(PendingAction::RemoveFile { .. }) => ("Remove file", theme.del_color),
+        Some(PendingAction::CompactGist { .. }) => ("Compact revisions", theme.del_color),
+        _ => ("Overwrite", theme.del_color),
     }
 }
 
@@ -1685,12 +1758,15 @@ pub(super) fn render_diff_pane(frame: &mut Frame, area: Rect, state: &AppState) 
             state.diff_hscroll,
             ext.as_deref(),
             state.syntax_highlight,
+            &state.theme,
         ))
+        .style(state.theme.base_style())
         .block(
             Block::default()
                 .title(diff_title(state))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
+                .style(state.theme.base_style())
                 .padding(Padding::horizontal(1)),
         ),
         area,
@@ -1727,7 +1803,7 @@ pub(super) fn render_diff(frame: &mut Frame, state: &AppState) {
 
     render_diff_pane(frame, chunks[0], state);
 
-    render_footer(frame, chunks[1], "", &footer, true);
+    render_footer(frame, chunks[1], "", &footer, true, &state.theme);
 }
 
 /// `Screen::Confirm`: the diff fills the screen as context behind a centered prompt modal,
@@ -1755,9 +1831,10 @@ pub(super) fn render_confirm(frame: &mut Frame, state: &AppState) {
             &state.description_input,
             CREATE_DESC_SUFFIX,
             border,
+            &state.theme,
         );
     } else {
-        render_centered_modal(frame, title, &confirm_prompt(state), border);
+        render_centered_modal(frame, title, &confirm_prompt(state), border, &state.theme);
     }
 }
 
@@ -1785,22 +1862,30 @@ fn centered_modal_rect(area: Rect, body: &str) -> Rect {
     }
 }
 
-fn modal_block(title: &str, border: Color) -> Block<'static> {
+fn modal_block(title: &str, border: Color, theme: &Theme) -> Block<'static> {
     Block::default()
         .title(title.to_string())
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border))
+        .style(theme.base_style())
         .padding(Padding::horizontal(1))
 }
 
-pub(super) fn render_centered_modal(frame: &mut Frame, title: &str, body: &str, border: Color) {
+pub(super) fn render_centered_modal(
+    frame: &mut Frame,
+    title: &str,
+    body: &str,
+    border: Color,
+    theme: &Theme,
+) {
     let rect = centered_modal_rect(frame.area(), body);
     frame.render_widget(Clear, rect);
     frame.render_widget(
         Paragraph::new(body.to_string())
+            .style(theme.base_style())
             .wrap(Wrap { trim: true })
-            .block(modal_block(title, border)),
+            .block(modal_block(title, border, theme)),
         rect,
     );
 }
@@ -1814,6 +1899,7 @@ pub(super) fn render_centered_modal_input(
     input: &TextInput,
     suffix: &str,
     border: Color,
+    theme: &Theme,
 ) {
     // Size from the plain text plus one column for the (possibly trailing) cursor cell.
     let plain = format!("{prefix}{input} {suffix}");
@@ -1821,8 +1907,9 @@ pub(super) fn render_centered_modal_input(
     frame.render_widget(Clear, rect);
     frame.render_widget(
         Paragraph::new(input_line(prefix, input, suffix))
+            .style(theme.base_style())
             .wrap(Wrap { trim: true })
-            .block(modal_block(title, border)),
+            .block(modal_block(title, border, theme)),
         rect,
     );
 }
@@ -1839,9 +1926,14 @@ pub(super) fn spinner_glyph(frame: usize) -> &'static str {
 }
 
 /// A centered "Working…" box shown while a blocking `gh` action runs.
-pub(super) fn render_loading_overlay(frame: &mut Frame, msg: &str, spinner_frame: usize) {
+pub(super) fn render_loading_overlay(
+    frame: &mut Frame,
+    msg: &str,
+    spinner_frame: usize,
+    theme: &Theme,
+) {
     let body = format!("{} {msg}", spinner_glyph(spinner_frame));
-    render_centered_modal(frame, "Working…", &body, Color::Cyan);
+    render_centered_modal(frame, "Working…", &body, theme.accent, theme);
 }
 
 /// Civil date (year, month, day) from a day count since the Unix epoch — Howard Hinnant's

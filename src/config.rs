@@ -4,6 +4,16 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+/// Which built-in colour theme to use. Set `theme = "light"` in `config.toml` for
+/// light-background terminals; the default `"dark"` suits dark-background terminals.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThemeChoice {
+    #[default]
+    Dark,
+    Light,
+}
+
 fn default_scan_depth() -> u32 {
     2
 }
@@ -51,6 +61,9 @@ pub struct AppConfig {
     /// `false` collapses to `diff_context` lines. Persisted when the user presses `c`.
     #[serde(default)]
     pub diff_show_full: bool,
+    /// Built-in colour theme: `"dark"` (default) or `"light"`.
+    #[serde(default)]
+    pub theme: ThemeChoice,
 }
 
 impl Default for AppConfig {
@@ -61,6 +74,7 @@ impl Default for AppConfig {
             scan_depth: default_scan_depth(),
             diff_context: default_diff_context(),
             diff_show_full: false,
+            theme: ThemeChoice::Dark,
         }
     }
 }
@@ -210,6 +224,7 @@ mod tests {
             scan_depth: default_scan_depth(),
             diff_context: default_diff_context(),
             diff_show_full: false,
+            theme: ThemeChoice::Dark,
         };
 
         save_config(&path, &config).unwrap();

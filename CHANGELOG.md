@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-06-17
+
+- Built-in light/dark colour theme: set `theme = "light"` in `config.toml` for terminals with a light background, or press `T` at any time to toggle and save instantly.
 - Pre-built binary installs can self-upgrade from GitHub Releases: `gistui --upgrade` (latest), `gistui --upgrade --check` (compare only), and `gistui --upgrade --upgrade-version <tag>` (pin a release). Homebrew, Scoop (including the `scoop/shims/gistui.exe` PATH shim), and cargo installs are detected and pointed at their own upgrade commands instead.
 - Pins screen: `o` cycles sort order (default / local path / gist filename); active sort shown in the title bar.
 - Pins screen: after a `d` pull completes, the view stays on Pins instead of returning to the main list.
@@ -104,7 +107,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.10.0...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/akunzai/gistui/releases/tag/v0.11.0
 [0.10.0]: https://github.com/akunzai/gistui/releases/tag/v0.10.0
 [0.9.0]: https://github.com/akunzai/gistui/releases/tag/v0.9.0
 [0.8.0]: https://github.com/akunzai/gistui/releases/tag/v0.8.0
