@@ -305,6 +305,8 @@ pub enum KeyOutcome {
     CopyGistUrl,
     /// Copy the previewed file content to the system clipboard (`Y`, Preview screen).
     CopyPreviewContent,
+    /// Toggle the colour theme between dark and light and persist to config (`T`, global).
+    ThemeToggle,
 }
 
 #[derive(Debug, Clone)]
@@ -429,6 +431,10 @@ pub struct AppState {
     /// gist manager rows. Kept off `GistFile` since the count is a gist-level value, not a
     /// per-file one; empty until the first live fetch lands (cached startup gists show 0).
     pub gist_comment_counts: std::collections::HashMap<String, u32>,
+    /// Active theme selection (persisted to config when toggled with `T`).
+    pub theme_choice: crate::config::ThemeChoice,
+    /// Resolved colour palette for the current theme choice (from config).
+    pub theme: Theme,
 }
 
 fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
@@ -1023,6 +1029,8 @@ pub fn initial_state() -> AppState {
         compact_return_screen: Screen::Gists,
         spinner_frame: 0,
         gist_comment_counts: std::collections::HashMap::new(),
+        theme_choice: crate::config::ThemeChoice::Dark,
+        theme: Theme::DARK,
     }
 }
 
@@ -1037,6 +1045,8 @@ pub fn load_startup_state() -> Result<AppState> {
     state.scan_depth = config.scan_depth;
     state.diff_context = config.diff_context;
     state.diff_show_full = config.diff_show_full;
+    state.theme_choice = config.theme;
+    state.theme = Theme::for_choice(config.theme);
     // Honour NO_COLOR for the syntax-highlight feature only (existing semantic colours stay).
     state.syntax_highlight = std::env::var_os("NO_COLOR").is_none();
     state.locals = crate::local::discover_local_candidates(
@@ -1133,6 +1143,8 @@ mod run_loop;
 use run_loop::run_loop;
 mod text_input;
 pub use text_input::{EditResult, TextInput};
+mod theme;
+pub use theme::Theme;
 
 #[cfg(test)]
 mod tests;
