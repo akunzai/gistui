@@ -150,7 +150,28 @@ ln -sf "$PWD/target/release/gistui" ~/.local/bin/gistui
 gistui            # launch the TUI in the current directory (needs a TTY)
 gistui ~/dotfiles # launch against a specific working directory
 gistui --check    # print gh readiness, then exit (no TUI)
+gistui --upgrade  # upgrade a pre-built release binary in place (see below)
 ```
+
+### Upgrading pre-built binaries
+
+If you installed via `install.sh`, `install.ps1`, or a manual GitHub Release download,
+`gistui` can upgrade itself without re-running the installer:
+
+```bash
+gistui --upgrade                         # upgrade to the latest release
+gistui --upgrade --check                 # print current vs latest; exit 0 if up to date
+gistui --upgrade --upgrade-version v0.12.0  # pin to a specific release (0.12.0 also works)
+```
+
+The upgrader downloads the same checksummed release assets as the install scripts,
+verifies SHA-256, and replaces the **currently running** binary. On Windows the
+running `.exe` cannot be overwritten immediately — gistui stages the new binary and
+finishes the swap after you exit the process.
+
+Package-manager and toolchain installs are **not** self-upgraded; gistui detects them
+and prints the right command instead (`brew upgrade gistui`, `scoop update gistui`,
+`cargo install gistui --force`, or `cargo binstall gistui --force`).
 
 Run `gistui` from the directory whose files you want to pair with your gists, or pass that
 directory as an argument. The path defaults to the current directory; if you pass one that
