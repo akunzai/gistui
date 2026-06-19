@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- README slimmed for scannability: installation and safety reference docs moved to `reference/` (kept out of GitHub Pages `docs/`); contributor/agent sections to `CONTRIBUTING.md` / `AGENTS.md`; Usage keeps essential keys and points to in-app `?` for the complete keymap. Landing page updated (install link-out, current gist-manager copy, doc footer links).
 - Gist detail: `*` stars or unstars the open gist (footer hint + `★ starred` in the info line when starred); the info line also shows `☆ N` (stargazers), `⑂ N` (forks), and `💬 N` (comments) when non-zero.
 - Edit description (`e`), compact revisions (`c`), and delete gist (`X`) moved from the gist manager to gist detail; they appear only for gists you own (silent no-op on others' gists — no read-only warning).
 - Image and other binary gist files cannot be previewed or diffed in the TUI (detected via the list API MIME type and filename); the file list tags them `(binary)` and status suggests `o` (browser) or `d` (download) instead.

@@ -98,34 +98,6 @@
   .term .cmd { color: var(--fg); }
   .hint { margin-top: 12px; font-size: 13px; color: var(--dim); text-align: center; }
 
-  /* Install methods */
-  .methods {
-    margin-top: 16px; display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px;
-  }
-  .method.full { grid-column: 1 / -1; }
-  .method {
-    background: var(--bg-card); border: 1px solid var(--border);
-    border-radius: 10px; padding: 13px 15px;
-  }
-  .method .label {
-    display: flex; align-items: center; gap: 9px;
-    font-size: 13px; color: var(--muted); margin: 0 0 9px;
-  }
-  .method .tool {
-    font-family: "JetBrains Mono", monospace; font-size: 11px; font-weight: 600;
-    color: #0b0d17; padding: 1px 7px; border-radius: 5px;
-  }
-  .method .tool.ps    { background: var(--blue); }
-  .method .tool.scoop { background: var(--cyan); }
-  .method .tool.brew  { background: var(--yellow); }
-  .method .tool.cargo { background: var(--purple); }
-  .method code {
-    display: block; font-size: 12.5px; color: var(--fg);
-    background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
-    padding: 9px 11px; overflow-x: auto; white-space: pre;
-  }
-
   /* Sections */
   section { padding: 56px 0; border-bottom: 1px solid var(--border); }
   h2 { font-size: 26px; margin: 0 0 6px; letter-spacing: -0.3px; }
@@ -181,27 +153,8 @@
         <div class="bar"><i class="r"></i><i class="y"></i><i class="g"></i><span>install.sh</span></div>
         <pre><span class="prompt">$ </span><span class="cmd">curl -fsSL https://raw.githubusercontent.com/akunzai/gistui/main/install.sh | bash</span></pre>
       </div>
-      <p class="hint">Detects your platform, verifies its SHA-256 checksum, and installs to <code>~/.local/bin</code> — Linux, macOS &amp; Windows (Git Bash).</p>
-      <div class="methods">
-        <div class="method">
-          <div class="label"><span class="tool brew">Homebrew</span> macOS · Linux</div>
-          <code>brew install akunzai/tap/gistui</code>
-        </div>
-        <div class="method">
-          <div class="label"><span class="tool cargo">crates.io</span> Rust</div>
-          <code>cargo install gistui
-cargo binstall gistui</code>
-        </div>
-        <div class="method full">
-          <div class="label"><span class="tool ps">PowerShell</span> Windows</div>
-          <code>irm https://raw.githubusercontent.com/akunzai/gistui/main/install.ps1 | iex</code>
-        </div>
-        <div class="method full">
-          <div class="label"><span class="tool scoop">Scoop</span> Windows</div>
-          <code>scoop bucket add akunzai https://github.com/akunzai/scoop-bucket
-scoop install gistui</code>
-        </div>
-      </div>
+      <p class="hint">Detects your platform, verifies its SHA-256 checksum, and installs to <code>~/.local/bin</code> — Linux, macOS &amp; Windows (Git Bash).<br />
+      More paths (Homebrew, Scoop, PowerShell, crates.io, source, <code>gistui --upgrade</code>): <a href="https://github.com/akunzai/gistui/blob/main/reference/INSTALL.md">reference/INSTALL.md</a></p>
     </div>
   </div>
 </header>
@@ -258,12 +211,12 @@ scoop install gistui</code>
         <p>Pin local ↔ gist pairs, see sync status at a glance (synced / local-newer / remote-newer), and smart-sync where the newer side wins.</p>
       </div>
       <div class="card">
-        <h3>Gist manager</h3>
-        <p>Manage gists as a whole: edit descriptions, delete, open in the browser, read comments, and compact a gist's revision history.</p>
+        <h3>Gist manager &amp; detail</h3>
+        <p>Browse all gists or filter starred and forked (<kbd>v</kbd>), star with <kbd>*</kbd>, open gist detail for files and comments. Edit, compact, or delete owned gists from detail; fork others' gists with <kbd>F</kbd>.</p>
       </div>
       <div class="card">
         <h3>Preview &amp; clipboard</h3>
-        <p>Scrollable, syntax-highlighted preview of any gist file; copy a gist's URL or its full content to the system clipboard.</p>
+        <p>Scrollable, syntax-highlighted preview; revision history with incremental diffs. Copy a gist URL or file content to the clipboard. Press <kbd>?</kbd> in the TUI for the full keymap.</p>
       </div>
     </div>
   </div>
@@ -272,7 +225,7 @@ scoop install gistui</code>
 <section id="manager">
   <div class="wrap">
     <h2>Manage gists as a whole</h2>
-    <p class="sub">Press <kbd>g</kbd> for the gist manager — one row per gist, with descriptions, file counts and ages.</p>
+    <p class="sub">Press <kbd>g</kbd> for the gist manager — one row per gist with <code>☆</code> stargazer and <code>⑂</code> fork counts, filter with <kbd>v</kbd>, then <kbd>Enter</kbd> for gist detail.</p>
     <figure>
       <div class="shot"><img src="gist-manager.png" alt="gistui gist manager: a list of gists with descriptions, file counts and relative ages" loading="lazy" /></div>
     </figure>
@@ -293,7 +246,14 @@ scoop install gistui</code>
 
 <footer>
   <div class="wrap">
-    <p><a href="https://github.com/akunzai/gistui">github.com/akunzai/gistui</a> · MIT licensed · built with Rust + ratatui</p>
+    <p>
+      <a href="https://github.com/akunzai/gistui">GitHub</a> ·
+      <a href="https://github.com/akunzai/gistui#usage">Usage</a> ·
+      <a href="https://github.com/akunzai/gistui/blob/main/reference/INSTALL.md">Install</a> ·
+      <a href="https://github.com/akunzai/gistui/blob/main/reference/SAFETY.md">Safety</a> ·
+      <a href="https://github.com/akunzai/gistui/blob/main/CONTRIBUTING.md">Contributing</a>
+    </p>
+    <p>MIT licensed · built with Rust + ratatui</p>
   </div>
 </footer>
 

@@ -30,9 +30,20 @@ cargo check
 cargo clippy --all-targets -- -D warnings
 ```
 
+## Building a release binary
+
+```bash
+cargo build --release
+```
+
+The optimized binary is `target/release/gistui`. It bundles no assets, but still requires
+the `gh` CLI on `PATH` at runtime (`gh` is not vendored). Optionally shrink it with
+`strip target/release/gistui`.
+
 ## Architecture
 
-See [AGENTS.md](AGENTS.md) for the full architecture guide, non-obvious rules, and conventions.
+See [AGENTS.md](AGENTS.md) for the full architecture guide, non-obvious rules, and conventions
+(coding agents should read `AGENTS.md` / `CLAUDE.md` first).
 
 Key points:
 
