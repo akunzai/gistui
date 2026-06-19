@@ -606,6 +606,16 @@ impl AppState {
         }
     }
 
+    /// `owner.login` for a gist id from the in-memory owned or starred lists.
+    pub fn gist_owner_login(&self, gist_id: &str) -> String {
+        self.gists
+            .iter()
+            .chain(self.starred_gists.iter())
+            .find(|g| g.gist_id == gist_id)
+            .map(|g| g.owner_login.clone())
+            .unwrap_or_default()
+    }
+
     /// `raw_url` from the in-memory gist lists for a `(gist_id, filename)` pair.
     pub fn gist_file_raw_url(&self, gist_id: &str, filename: &str) -> Option<String> {
         self.gists

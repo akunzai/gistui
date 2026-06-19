@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Revision diffs (incremental and vs current) fetch file content via `gist.githubusercontent.com/.../raw/{sha}/{file}` when the revision API returns HTTP 502 on large gists (same class of fix as preview `raw_url` fallback).
 - `F` fork is available only in gist detail, and only for gists you do not own (removed from the main list and gist manager).
 - Gist detail comments load only when you open the Comments tab (no upfront fetch on Enter). Gist manager and detail view show `@owner` on gists you do not own. Preview/download falls back to the list API `raw_url` when `gh gist view` fails (e.g. huge starred gists returning HTTP 502). Startup cache now includes starred gists and fork/comment counts; fork counts refresh in the background so the list appears sooner.
 - Starred and forked gists: `v` cycles five visibility modes (all / public / secret / starred / forked); `*` stars or unstars the context gist; `F` forks a gist you do not own into your account. Others' starred gists are read-only (preview, diff, download, browser) — pin, upload, delete, compact, and restore are blocked. The gist manager title shows your starred and owned-fork totals (`★` / `⑂`); rows show `⭐ N` when a gist has forks.

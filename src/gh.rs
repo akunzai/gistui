@@ -379,6 +379,134 @@ pub fn fetch_gist_revision_json_with(
     run_command(runner, &gist_revision_plan(gist_id, version))
 }
 
+/// Canonical gist revision raw URL (`owner` form works for large third-party gists).
+pub fn build_gist_revision_raw_url(
+    owner_login: &str,
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+) -> String {
+    if owner_login.is_empty() {
+        format!("https://gist.githubusercontent.com/{gist_id}/raw/{version}/{filename}")
+    } else {
+        format!(
+            "https://gist.githubusercontent.com/{owner_login}/{gist_id}/raw/{version}/{filename}"
+        )
+    }
+}
+
+fn revision_file_entry<'a>(
+    files: &'a serde_json::Map<String, serde_json::Value>,
+    filename: &str,
+) -> Option<&'a serde_json::Value> {
+    if let Some(entry) = files.get(filename) {
+        return Some(entry);
+    }
+    files
+        .values()
+        .find(|entry| entry.get("filename").and_then(|f| f.as_str()) == Some(filename))
+}
+
+fn revision_entry_raw_url(entry: &serde_json::Value) -> Option<String> {
+    entry
+        .get("raw_url")
+        .and_then(|u| u.as_str())
+        .filter(|u| !u.is_empty())
+        .map(str::to_string)
+}
+
+fn fetch_revision_file_via_raw_url(
+    runner: &dyn CommandRunner,
+    url: &str,
+) -> Result<RevisionFileContent> {
+    run_command(runner, &raw_url_fetch_plan(url)).map(RevisionFileContent::Present)
+}
+
+/// Fetch one file at a gist revision SHA. Uses the revision API when it works; on HTTP
+/// failures or truncated payloads, falls back to the revision `raw_url` or the canonical
+/// `gist.githubusercontent.com/.../raw/{sha}/{file}` URL.
+pub fn fetch_revision_file_with(
+    runner: &dyn CommandRunner,
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+    owner_login: &str,
+) -> Result<RevisionFileContent> {
+    let constructed = build_gist_revision_raw_url(owner_login, gist_id, version, filename);
+    match fetch_gist_revision_json_with(runner, gist_id, version) {
+        Ok(raw) => {
+            let root: serde_json::Value =
+                serde_json::from_str(&raw).context("parse gh gist revision JSON")?;
+            let Some(files) = root.get("files").and_then(|f| f.as_object()) else {
+                return Ok(RevisionFileContent::Absent);
+            };
+            let Some(entry) = revision_file_entry(files, filename) else {
+                return Ok(RevisionFileContent::Absent);
+            };
+            match classify_revision_file(entry)? {
+                RevisionFileContent::Present(content) => Ok(RevisionFileContent::Present(content)),
+                RevisionFileContent::Truncated => revision_entry_raw_url(entry)
+                    .map(|url| fetch_revision_file_via_raw_url(runner, &url))
+                    .unwrap_or_else(|| fetch_revision_file_via_raw_url(runner, &constructed)),
+                RevisionFileContent::Absent => revision_entry_raw_url(entry)
+                    .map(|url| fetch_revision_file_via_raw_url(runner, &url))
+                    .unwrap_or(Ok(RevisionFileContent::Absent)),
+            }
+        }
+        Err(api_err) => fetch_revision_file_via_raw_url(runner, &constructed).with_context(|| {
+            format!("revision API failed ({api_err}); raw URL fallback also failed")
+        }),
+    }
+}
+
+pub fn fetch_revision_file_text(
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+    owner_login: &str,
+) -> Result<String> {
+    fetch_revision_file_text_with(&SystemRunner, gist_id, version, filename, owner_login)
+}
+
+pub fn fetch_revision_file_text_with(
+    runner: &dyn CommandRunner,
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+    owner_login: &str,
+) -> Result<String> {
+    match fetch_revision_file_with(runner, gist_id, version, filename, owner_login)? {
+        RevisionFileContent::Present(content) => Ok(content),
+        RevisionFileContent::Truncated => {
+            bail!("file too large for API preview (>1 MB)")
+        }
+        RevisionFileContent::Absent => bail!("{filename} not present in this revision"),
+    }
+}
+
+pub fn fetch_revision_file_text_optional(
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+    owner_login: &str,
+) -> Result<String> {
+    fetch_revision_file_text_optional_with(&SystemRunner, gist_id, version, filename, owner_login)
+}
+
+pub fn fetch_revision_file_text_optional_with(
+    runner: &dyn CommandRunner,
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+    owner_login: &str,
+) -> Result<String> {
+    match fetch_revision_file_with(runner, gist_id, version, filename, owner_login)? {
+        RevisionFileContent::Present(content) => Ok(content),
+        RevisionFileContent::Truncated => bail!("file too large for API preview (>1 MB)"),
+        RevisionFileContent::Absent => Ok(String::new()),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RevisionFileContent {
     Present(String),
@@ -536,6 +664,67 @@ mod tests {
         let counts = parse_gist_fork_counts(raw).unwrap();
         assert_eq!(counts.get("a").copied(), Some(2));
         assert_eq!(counts.get("b").copied(), Some(0));
+    }
+
+    #[test]
+    fn build_gist_revision_raw_url_includes_owner_when_known() {
+        let url = build_gist_revision_raw_url("karpathy", "abc123", "deadbeef", "notes.md");
+        assert_eq!(
+            url,
+            "https://gist.githubusercontent.com/karpathy/abc123/raw/deadbeef/notes.md"
+        );
+    }
+
+    #[test]
+    fn fetch_revision_file_falls_back_when_revision_api_fails() {
+        use crate::actions::{CommandOutput, CommandPlan, CommandRunner};
+        use std::cell::RefCell;
+
+        struct SeqRunner {
+            outputs: RefCell<Vec<CommandOutput>>,
+            calls: RefCell<Vec<CommandPlan>>,
+            next: RefCell<usize>,
+        }
+
+        impl CommandRunner for SeqRunner {
+            fn run(&self, plan: &CommandPlan) -> Result<CommandOutput> {
+                self.calls.borrow_mut().push(plan.clone());
+                let i = *self.next.borrow();
+                *self.next.borrow_mut() = i + 1;
+                self.outputs
+                    .borrow()
+                    .get(i)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("no output for call {i}"))
+            }
+        }
+
+        let url = build_gist_revision_raw_url("karpathy", "g1", "sha1", "f.md");
+        let runner = SeqRunner {
+            outputs: RefCell::new(vec![
+                CommandOutput {
+                    success: false,
+                    stdout: String::new(),
+                    stderr: "HTTP 502".into(),
+                },
+                CommandOutput {
+                    success: true,
+                    stdout: "revision body".into(),
+                    stderr: String::new(),
+                },
+            ]),
+            calls: RefCell::new(Vec::new()),
+            next: RefCell::new(0),
+        };
+
+        let content = fetch_revision_file_with(&runner, "g1", "sha1", "f.md", "karpathy").unwrap();
+        assert_eq!(
+            content,
+            RevisionFileContent::Present("revision body".into())
+        );
+        let calls = runner.calls.borrow();
+        assert_eq!(calls[0], gist_revision_plan("g1", "sha1"));
+        assert_eq!(calls[1], raw_url_fetch_plan(&url));
     }
 
     #[test]

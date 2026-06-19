@@ -1088,12 +1088,14 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         None => (None, "(initial)".into()),
                     };
                     let new_label = format!("revision {child_label}");
+                    let owner_login = state.gist_owner_login(&gist_id);
                     spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
                         let result = fetch_revision_incremental_pair(
                             &gist_id,
                             &child_version,
                             parent_version.as_deref(),
                             &filename,
+                            &owner_login,
                         );
                         BgTaskOutcome::RevisionDiff {
                             result,
@@ -1115,12 +1117,14 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     let old_label = format!("revision {version_label}");
                     let new_label = format!("current {filename}");
                     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
+                    let owner_login = state.gist_owner_login(&gist_id);
                     spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
                         let result = fetch_revision_pair(
                             &gist_id,
                             &version,
                             &filename,
                             raw_url.as_deref(),
+                            &owner_login,
                             &old_label,
                             &new_label,
                         );
@@ -1142,12 +1146,14 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     let version = revision.version.clone();
                     let version_label = revision_version_label(&revision);
                     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
+                    let owner_login = state.gist_owner_login(&gist_id);
                     spawn_bg(&mut state, &mut bg_rx, "Loading revision…", move || {
                         let result = fetch_revision_pair_for_restore(
                             &gist_id,
                             &version,
                             &filename,
                             raw_url.as_deref(),
+                            &owner_login,
                         );
                         BgTaskOutcome::RestoreRevisionReady {
                             result,
@@ -1364,47 +1370,21 @@ fn revision_version_label(revision: &crate::domain::GistRevision) -> String {
     format!("{sha} ({age} ago)")
 }
 
-fn fetch_revision_file_content(
-    gist_id: &str,
-    version: &str,
-    filename: &str,
-) -> std::result::Result<String, String> {
-    let raw = crate::gh::fetch_gist_revision_json(gist_id, version).map_err(|e| e.to_string())?;
-    match crate::gh::revision_file_content(&raw, filename).map_err(|e| e.to_string())? {
-        crate::gh::RevisionFileContent::Present(content) => Ok(content),
-        crate::gh::RevisionFileContent::Truncated => {
-            Err("file too large for API preview (>1 MB)".into())
-        }
-        crate::gh::RevisionFileContent::Absent => {
-            Err(format!("{filename} not present in this revision"))
-        }
-    }
-}
-
-fn fetch_revision_file_content_optional(
-    gist_id: &str,
-    version: &str,
-    filename: &str,
-) -> std::result::Result<String, String> {
-    let raw = crate::gh::fetch_gist_revision_json(gist_id, version).map_err(|e| e.to_string())?;
-    match crate::gh::revision_file_content(&raw, filename).map_err(|e| e.to_string())? {
-        crate::gh::RevisionFileContent::Present(content) => Ok(content),
-        crate::gh::RevisionFileContent::Truncated => {
-            Err("file too large for API preview (>1 MB)".into())
-        }
-        crate::gh::RevisionFileContent::Absent => Ok(String::new()),
-    }
-}
-
 fn fetch_revision_incremental_pair(
     gist_id: &str,
     child_version: &str,
     parent_version: Option<&str>,
     filename: &str,
+    owner_login: &str,
 ) -> std::result::Result<(String, String), String> {
-    let new_content = fetch_revision_file_content_optional(gist_id, child_version, filename)?;
+    let new_content =
+        crate::gh::fetch_revision_file_text_optional(gist_id, child_version, filename, owner_login)
+            .map_err(|e| e.to_string())?;
     let old_content = match parent_version {
-        Some(parent) => fetch_revision_file_content_optional(gist_id, parent, filename)?,
+        Some(parent) => {
+            crate::gh::fetch_revision_file_text_optional(gist_id, parent, filename, owner_login)
+                .map_err(|e| e.to_string())?
+        }
         None => String::new(),
     };
     Ok((old_content, new_content))
@@ -1415,10 +1395,12 @@ fn fetch_revision_pair(
     version: &str,
     filename: &str,
     raw_url: Option<&str>,
+    owner_login: &str,
     _old_label: &str,
     _new_label: &str,
 ) -> std::result::Result<(String, String), String> {
-    let old_content = fetch_revision_file_content(gist_id, version, filename)?;
+    let old_content = crate::gh::fetch_revision_file_text(gist_id, version, filename, owner_login)
+        .map_err(|e| e.to_string())?;
     let new_content = fetch_gist_content(gist_id, filename, raw_url)?;
     Ok((old_content, new_content))
 }
@@ -1436,8 +1418,9 @@ fn fetch_revision_pair_for_restore(
     version: &str,
     filename: &str,
     raw_url: Option<&str>,
+    owner_login: &str,
 ) -> std::result::Result<(String, String), String> {
-    fetch_revision_pair(gist_id, version, filename, raw_url, "", "")
+    fetch_revision_pair(gist_id, version, filename, raw_url, owner_login, "", "")
 }
 
 fn persist_gist_cache_from_state(state: &AppState) {
