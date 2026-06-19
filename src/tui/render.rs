@@ -60,7 +60,10 @@ List screen
   /          filter the focused pane (Local = path/filename, Gist = description/id)
              while filtering: type to match · ↑↓ move · Tab apply + switch pane
              · Enter apply · Esc clear · ←/→/Home/End move · Del
-  v          cycle gist visibility: all / public / secret
+  v          cycle gist visibility: all / public / secret / starred / forked
+  *          star / unstar the selected gist
+  F          fork a gist you do not own into your account
+             (others' gists are read-only: preview, diff, download, browser — not pin/upload/delete)
   s          cycle the focused pane's sort: match / name / recent
   t          toggle row view: description / id
   T          toggle light/dark colour theme (global; saved to config)
@@ -106,8 +109,11 @@ Actions (on the selected local file + gist)
   Left/Right scroll a long description horizontally
   /          filter gists by description or id (↑↓ move · Enter apply · Esc clear)
   s          cycle sort: updated / created
-  v          cycle visibility: all / public / secret
+  v          cycle visibility: all / public / secret / starred / forked
+  *          star / unstar the selected gist
+  F          fork a gist you do not own into your account
   e          edit the gist description (Enter apply, Esc cancel)
+             (read-only for others' gists — use * or F instead)
              ←/→/Home/End move the text cursor · Del deletes ahead
   Enter      open the gist detail view (info, file list, comments)
   o          open the gist in your web browser
@@ -429,11 +435,25 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     }
 }
 
+fn gist_badge_prefix(starred: bool, forked: bool) -> String {
+    let mut prefix = String::new();
+    if starred {
+        prefix.push('★');
+        prefix.push(' ');
+    }
+    if forked {
+        prefix.push('⑂');
+        prefix.push(' ');
+    }
+    prefix
+}
+
 pub(super) fn gist_group_row_label(
     g: &GistGroup,
     now: u64,
     sort: GistGroupSort,
     comments: u32,
+    starred: bool,
 ) -> String {
     let desc = if g.description.trim().is_empty() {
         "(no description)".to_string()
@@ -459,8 +479,13 @@ pub(super) fn gist_group_row_label(
         String::new()
     };
     format!(
-        "{}  {}  📄 {}{}  🕒 {}",
-        g.id, desc, g.file_count, comments_seg, age
+        "{}{}  {}  📄 {}{}  🕒 {}",
+        gist_badge_prefix(starred, g.fork_of_id.is_some()),
+        g.id,
+        desc,
+        g.file_count,
+        comments_seg,
+        age
     )
 }
 
@@ -479,7 +504,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
     } else {
         (
             String::new(),
-            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · e desc · h history · o browser · c compact · X delete · ? help · q back"
+            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · * star · F fork · e desc · h history · o browser · c compact · X delete · ? help · q back"
                 .to_string(),
             true,
         )
@@ -510,6 +535,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
                         now,
                         state.gists_sort,
                         state.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
+                        state.gist_is_starred(&g.id),
                     ),
                     state.gists_hscroll,
                 ))
@@ -586,8 +612,13 @@ pub(super) fn gist_info_line(group: &GistGroup, now: u64) -> String {
         .unwrap_or_else(|| "?".into());
     // The file count lives in the "Files (N)" section header below, so it's omitted here.
     // The detail view has room, so show the full gist id (not a truncated prefix).
+    let fork_seg = group
+        .fork_of_id
+        .as_deref()
+        .map(|id| format!("fork of {id} · "))
+        .unwrap_or_default();
     format!(
-        "{vis} · created {created} · updated {updated} · {}",
+        "{vis} · created {created} · updated {updated} · {fork_seg}{}",
         group.id
     )
 }
@@ -1078,7 +1109,7 @@ pub(super) fn marked_item(base: String, mark: RowMark, hscroll: u16) -> ListItem
 }
 
 pub(super) fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
-    match view {
+    let base = match view {
         GistView::Description => {
             if g.file.description.trim().is_empty() {
                 g.file.filename.clone()
@@ -1087,7 +1118,26 @@ pub(super) fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
             }
         }
         GistView::Id => format!("{} / {}", g.file.gist_id, g.file.filename),
-    }
+    };
+    format!("{}{}", gist_badge_prefix(false, g.file.is_fork()), base)
+}
+
+pub(super) fn gist_row_display(g: &RankedGistFile, view: GistView, state: &AppState) -> String {
+    let base = match view {
+        GistView::Description => {
+            if g.file.description.trim().is_empty() {
+                g.file.filename.clone()
+            } else {
+                format!("{} — {}", g.file.filename, g.file.description)
+            }
+        }
+        GistView::Id => format!("{} / {}", g.file.gist_id, g.file.filename),
+    };
+    format!(
+        "{}{}",
+        gist_badge_prefix(state.gist_is_starred(&g.file.gist_id), g.file.is_fork()),
+        base
+    )
 }
 
 /// Command hint tailored to the focused pane: local-file actions on the left, gist actions
@@ -1104,6 +1154,8 @@ pub(super) fn commands_hint(focus: FocusPane) -> String {
             "d download",
             "u upload",
             "X remove file",
+            "* star",
+            "F fork",
             "g gists",
         ]),
     }
@@ -1383,7 +1435,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
         ranked
             .iter()
             .map(|g| {
-                let base = gist_row_label(g, state.gist_view);
+                let base = gist_row_display(g, state.gist_view, state);
                 marked_item(base, row_mark(&g.reasons), state.gist_hscroll)
             })
             .collect()

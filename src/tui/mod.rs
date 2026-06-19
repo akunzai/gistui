@@ -145,6 +145,8 @@ pub enum GistTypeFilter {
     All,
     Public,
     Secret,
+    Starred,
+    Forked,
 }
 
 /// Generates a small enum whose variants cycle in declaration order. `next()` advances to the
@@ -250,11 +252,25 @@ impl LocalSort {
 }
 
 impl GistTypeFilter {
-    fn matches(self, public: bool) -> bool {
+    pub fn uses_starred_source(self) -> bool {
+        self == GistTypeFilter::Starred
+    }
+
+    pub fn matches_file(self, file: &GistFile) -> bool {
         match self {
-            GistTypeFilter::All => true,
-            GistTypeFilter::Public => public,
-            GistTypeFilter::Secret => !public,
+            GistTypeFilter::All | GistTypeFilter::Starred => true,
+            GistTypeFilter::Public => file.public,
+            GistTypeFilter::Secret => !file.public,
+            GistTypeFilter::Forked => file.is_fork(),
+        }
+    }
+
+    pub fn matches_group(self, group: &GistGroup) -> bool {
+        match self {
+            GistTypeFilter::All | GistTypeFilter::Starred => true,
+            GistTypeFilter::Public => group.public,
+            GistTypeFilter::Secret => !group.public,
+            GistTypeFilter::Forked => group.fork_of_id.is_some(),
         }
     }
 
@@ -262,7 +278,9 @@ impl GistTypeFilter {
         match self {
             GistTypeFilter::All => GistTypeFilter::Public,
             GistTypeFilter::Public => GistTypeFilter::Secret,
-            GistTypeFilter::Secret => GistTypeFilter::All,
+            GistTypeFilter::Secret => GistTypeFilter::Starred,
+            GistTypeFilter::Starred => GistTypeFilter::Forked,
+            GistTypeFilter::Forked => GistTypeFilter::All,
         }
     }
 
@@ -271,6 +289,8 @@ impl GistTypeFilter {
             GistTypeFilter::All => "all",
             GistTypeFilter::Public => "public",
             GistTypeFilter::Secret => "secret",
+            GistTypeFilter::Starred => "starred",
+            GistTypeFilter::Forked => "forked",
         }
     }
 }
@@ -332,12 +352,20 @@ pub enum KeyOutcome {
     RestoreRevisionPreview,
     /// Apply a confirmed single-file revision restore (`PATCH`).
     ExecuteRestoreRevision,
+    /// Star or unstar the context gist (`*`).
+    ToggleGistStar,
+    /// Fork the context gist into the authenticated account (`F`).
+    ForkGist,
 }
 
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub locals: Vec<LocalCandidate>,
     pub gists: Vec<GistFile>,
+    /// Starred gists from `GET /gists/starred` (may include others' gists).
+    pub starred_gists: Vec<GistFile>,
+    pub starred_gist_ids: std::collections::HashSet<String>,
+    pub current_user_login: Option<String>,
     pub pinned: Vec<PinnedMapping>,
     pub focus: FocusPane,
     /// The pane that DRIVES the match ranking, decoupled from `focus`: the anchored pane
@@ -556,12 +584,58 @@ impl AppState {
         self.update_upload_diff();
     }
 
+    fn list_gist_source(&self) -> &[GistFile] {
+        if self.gist_type_filter.uses_starred_source() {
+            &self.starred_gists
+        } else {
+            &self.gists
+        }
+    }
+
+    fn manager_gist_source(&self) -> &[GistFile] {
+        if self.gists_type_filter.uses_starred_source() {
+            &self.starred_gists
+        } else {
+            &self.gists
+        }
+    }
+
+    pub fn gist_is_owned(&self, gist_id: &str) -> bool {
+        if let Some(me) = self.current_user_login.as_deref() {
+            self.gists
+                .iter()
+                .chain(self.starred_gists.iter())
+                .find(|g| g.gist_id == gist_id)
+                .is_some_and(|g| g.is_owned_by(me))
+        } else {
+            self.gists.iter().any(|g| g.gist_id == gist_id)
+        }
+    }
+
+    pub fn gist_is_starred(&self, gist_id: &str) -> bool {
+        self.starred_gist_ids.contains(gist_id)
+    }
+
+    /// Block mutating actions on gists you do not own. Returns `true` when blocked.
+    pub fn block_if_foreign_gist(&mut self, gist_id: &str, pin: bool) -> bool {
+        if self.gist_is_owned(gist_id) {
+            return false;
+        }
+        let message = if pin {
+            "cannot pin — not your gist"
+        } else {
+            "read-only — not your gist (star or F to fork)"
+        };
+        self.set_status(message.to_string());
+        true
+    }
+
     pub fn ranked_gists(&self) -> Vec<RankedGistFile> {
         let query = self.filter_query.to_lowercase();
         let gists: Vec<GistFile> = self
-            .gists
+            .list_gist_source()
             .iter()
-            .filter(|g| self.gist_type_filter.matches(g.public))
+            .filter(|g| self.gist_type_filter.matches_file(g))
             .filter(|g| {
                 query.is_empty()
                     || g.filename.to_lowercase().contains(&query)
@@ -625,7 +699,7 @@ impl AppState {
         self.ranked_gists().into_iter().nth(self.gist_index)
     }
 
-    /// All gists collapsed to one entry each (raw, unfiltered).
+    /// All gists collapsed to one entry each (raw, unfiltered) from the owned list.
     pub fn gist_groups(&self) -> Vec<GistGroup> {
         group_gists(&self.gists)
     }
@@ -635,10 +709,9 @@ impl AppState {
     /// rendering in `Screen::Gists`.
     pub fn visible_gist_groups(&self) -> Vec<GistGroup> {
         let query = self.gists_filter_query.to_lowercase();
-        let mut groups: Vec<GistGroup> = self
-            .gist_groups()
+        let mut groups: Vec<GistGroup> = group_gists(self.manager_gist_source())
             .into_iter()
-            .filter(|g| self.gists_type_filter.matches(g.public))
+            .filter(|g| self.gists_type_filter.matches_group(g))
             .filter(|g| {
                 query.is_empty()
                     || g.description.to_lowercase().contains(&query)
@@ -668,6 +741,7 @@ impl AppState {
                     unix_now(),
                     self.gists_sort,
                     self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
+                    self.gist_is_starred(&g.id),
                 )
                 .chars()
                 .count()
@@ -738,13 +812,18 @@ impl AppState {
     /// Number of files the given gist holds in the current in-memory list. Used to guard
     /// against removing a gist's only file (GitHub forbids a fileless gist).
     fn gist_file_count(&self, gist_id: &str) -> usize {
-        self.gists.iter().filter(|g| g.gist_id == gist_id).count()
+        self.gists
+            .iter()
+            .chain(self.starred_gists.iter())
+            .filter(|g| g.gist_id == gist_id)
+            .count()
     }
 
     /// Filenames the given gist holds in the current in-memory list (gh order).
     pub fn gist_filenames(&self, gist_id: &str) -> Vec<String> {
         self.gists
             .iter()
+            .chain(self.starred_gists.iter())
             .filter(|g| g.gist_id == gist_id)
             .map(|g| g.filename.clone())
             .collect()
@@ -837,7 +916,14 @@ impl AppState {
     }
 
     pub fn group_by_id(&self, gist_id: &str) -> Option<GistGroup> {
-        self.gist_groups().into_iter().find(|g| g.id == gist_id)
+        let files: Vec<GistFile> = self
+            .gists
+            .iter()
+            .chain(self.starred_gists.iter())
+            .filter(|g| g.gist_id == gist_id)
+            .cloned()
+            .collect();
+        group_gists(&files).into_iter().find(|g| g.id == gist_id)
     }
 
     /// The gist the current screen acts on: the gist-level cursor on `Gists`, the
@@ -865,6 +951,11 @@ impl AppState {
     }
 
     fn upload_intent(&mut self) -> KeyOutcome {
+        if let Some(gist) = self.selected_gist() {
+            if self.block_if_foreign_gist(&gist.file.gist_id, false) {
+                return KeyOutcome::None;
+            }
+        }
         if self.is_pin_diff_context() {
             let Some(local_filename) = self
                 .preview_local
@@ -1071,6 +1162,9 @@ pub fn initial_state() -> AppState {
     AppState {
         locals: Vec::new(),
         gists: Vec::new(),
+        starred_gists: Vec::new(),
+        starred_gist_ids: std::collections::HashSet::new(),
+        current_user_login: None,
         pinned: Vec::new(),
         focus: FocusPane::Local,
         anchor: FocusPane::Local,

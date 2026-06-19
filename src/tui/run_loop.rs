@@ -18,9 +18,13 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
         // Absorb the background gist list once it arrives.
         if state.loading {
             if let Some(ref rx) = gist_rx {
-                if let Ok((gists, comment_counts)) = rx.try_recv() {
+                if let Ok((gists, starred, starred_ids, user_login, comment_counts)) = rx.try_recv()
+                {
                     cache_gists(&gists);
                     state.gists = gists;
+                    state.starred_gists = starred;
+                    state.starred_gist_ids = starred_ids;
+                    state.current_user_login = user_login;
                     state.gist_comment_counts = comment_counts;
                     state.loading = false;
                     if state.gist_index >= state.ranked_gists().len() {
@@ -401,6 +405,32 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         }
                         Err(error) => state.set_status(error),
                     },
+                    BgTaskOutcome::GistStarToggle {
+                        result,
+                        gist_id,
+                        starred,
+                    } => match result {
+                        Ok(()) => {
+                            if starred {
+                                state.starred_gist_ids.insert(gist_id.clone());
+                                state.set_status(format!("starred {gist_id}"));
+                            } else {
+                                state.starred_gist_ids.remove(&gist_id);
+                                state.set_status(format!("unstarred {gist_id}"));
+                            }
+                            state.loading = true;
+                            gist_rx = Some(spawn_gist_fetch());
+                        }
+                        Err(error) => state.set_status(format!("star toggle failed: {error}")),
+                    },
+                    BgTaskOutcome::ForkGist { result, gist_id } => match result {
+                        Ok(()) => {
+                            state.set_status(format!("forked {gist_id} into your account"));
+                            state.loading = true;
+                            gist_rx = Some(spawn_gist_fetch());
+                        }
+                        Err(error) => state.set_status(format!("fork failed: {error}")),
+                    },
                     BgTaskOutcome::RestoreRevisionDone {
                         result,
                         gist_id,
@@ -630,6 +660,8 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                                 public: false,
                                 updated_at: String::new(),
                                 created_at: String::new(),
+                                owner_login: String::new(),
+                                fork_of_id: None,
                             });
                         (local_path, gist_id, gist_file)
                     } else {
@@ -707,6 +739,8 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                             public: false,
                             updated_at: String::new(),
                             created_at: String::new(),
+                            owner_login: String::new(),
+                            fork_of_id: None,
                         };
                         crate::actions::upload_command(&temp_file_path, &target)
                     } else {
@@ -1117,6 +1151,50 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         }
                     });
                 }
+                KeyOutcome::ToggleGistStar => {
+                    let Some(gist_id) = state.context_gist_id() else {
+                        state.set_status("select a gist first");
+                        continue;
+                    };
+                    let starring = !state.gist_is_starred(&gist_id);
+                    let plan = if starring {
+                        crate::actions::star_gist_command(&gist_id)
+                    } else {
+                        crate::actions::unstar_gist_command(&gist_id)
+                    };
+                    let msg = if starring {
+                        "Starring…"
+                    } else {
+                        "Unstarring…"
+                    };
+                    spawn_bg(&mut state, &mut bg_rx, msg, move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        BgTaskOutcome::GistStarToggle {
+                            result,
+                            gist_id,
+                            starred: starring,
+                        }
+                    });
+                }
+                KeyOutcome::ForkGist => {
+                    let Some(gist_id) = state.context_gist_id() else {
+                        state.set_status("select a gist to fork");
+                        continue;
+                    };
+                    if state.gist_is_owned(&gist_id) {
+                        state.set_status("already yours — no fork needed");
+                        continue;
+                    }
+                    let plan = crate::actions::fork_gist_command(&gist_id);
+                    spawn_bg(&mut state, &mut bg_rx, "Forking…", move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        BgTaskOutcome::ForkGist { result, gist_id }
+                    });
+                }
                 KeyOutcome::None => {}
             }
         }
@@ -1215,6 +1293,15 @@ enum BgTaskOutcome {
         gist_id: String,
         filename: String,
     },
+    GistStarToggle {
+        result: std::result::Result<(), String>,
+        gist_id: String,
+        starred: bool,
+    },
+    ForkGist {
+        result: std::result::Result<(), String>,
+        gist_id: String,
+    },
 }
 
 fn revision_version_label(revision: &crate::domain::GistRevision) -> String {
@@ -1306,19 +1393,39 @@ fn cache_gists(gists: &[GistFile]) {
 
 /// Fetches the gist list on a background thread so startup does not block on `gh`.
 /// Mirrors the previous graceful degradation: an empty list on any error.
-fn spawn_gist_fetch(
-) -> std::sync::mpsc::Receiver<(Vec<GistFile>, std::collections::HashMap<String, u32>)> {
+type GistFetchResult = (
+    Vec<GistFile>,
+    Vec<GistFile>,
+    std::collections::HashSet<String>,
+    Option<String>,
+    std::collections::HashMap<String, u32>,
+);
+
+fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<GistFetchResult> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let result = if crate::gh::check_gh_ready().is_ok() {
-            crate::gh::fetch_gist_list_json()
+            let owned = crate::gh::fetch_gist_list_json().ok();
+            let starred_raw = crate::gh::fetch_gist_starred_list_json().ok();
+            let user_login = crate::gh::fetch_current_user_login().ok();
+            let (files, comment_counts) = owned
+                .as_ref()
                 .map(|raw| {
-                    let files = crate::gh::parse_gist_list_json(&raw).unwrap_or_default();
-                    let comment_counts =
-                        crate::gh::parse_gist_comment_counts(&raw).unwrap_or_default();
-                    (files, comment_counts)
+                    (
+                        crate::gh::parse_gist_list_json(raw).unwrap_or_default(),
+                        crate::gh::parse_gist_comment_counts(raw).unwrap_or_default(),
+                    )
                 })
-                .unwrap_or_default()
+                .unwrap_or_default();
+            let starred = starred_raw
+                .as_ref()
+                .map(|raw| crate::gh::parse_gist_list_json(raw).unwrap_or_default())
+                .unwrap_or_default();
+            let starred_ids = starred_raw
+                .as_ref()
+                .and_then(|raw| crate::gh::parse_starred_gist_ids(raw).ok())
+                .unwrap_or_default();
+            (files, starred, starred_ids, user_login, comment_counts)
         } else {
             Default::default()
         };
@@ -1397,6 +1504,8 @@ fn spawn_pin_push(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         public: false,
         updated_at: String::new(),
         created_at: String::new(),
+        owner_login: String::new(),
+        fork_of_id: None,
     };
     let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
     spawn_bg(state, bg_rx, "Loading diff…", move || {
@@ -1427,6 +1536,8 @@ fn spawn_pin_pull(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         public: false,
         updated_at: String::new(),
         created_at: String::new(),
+        owner_login: String::new(),
+        fork_of_id: None,
     };
     let (local_label, gist_label) = diff_labels(Some(&target), &gist_file);
     spawn_bg(state, bg_rx, "Downloading…", move || {
@@ -1468,6 +1579,8 @@ fn spawn_pin_diff(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         public: false,
         updated_at,
         created_at: String::new(),
+        owner_login: String::new(),
+        fork_of_id: None,
     };
     let (local_label, gist_label) = diff_labels(Some(&local_abs), &gist_file);
     let target = local_abs.clone();

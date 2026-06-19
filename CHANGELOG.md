@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Starred and forked gists: `v` cycles five visibility modes (all / public / secret / starred / forked); `*` stars or unstars the context gist; `F` forks a gist you do not own into your account. Others' starred gists are read-only (preview, diff, download, browser) — pin, upload, delete, compact, and restore are blocked.
 - Gist revision history: press `h` on a gist file in the main list, gist manager, or gist detail view to browse revisions (newest first), show the incremental diff for a revision (`Enter`, parent → selected), diff against the current version (`D`), and restore a single file from an older revision (`r`, `y`/`n` confirm — creates a new revision, unlike `c` compact which deletes history). In revision history, `f` cycles the target file on multi-file gists. Revision diffs are read-only (no `d`/`u` download/upload).
 
 ## [0.11.0] — 2026-06-17

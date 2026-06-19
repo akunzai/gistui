@@ -19,10 +19,19 @@ struct GhGist {
     /// available without a per-gist comments fetch.
     #[serde(default)]
     comments: u32,
+    #[serde(default)]
+    owner: Option<GhCommentUser>,
+    #[serde(default)]
+    fork_of: Option<GhGistForkOf>,
     // The REST API returns `files` as an object keyed by filename. BTreeMap keeps
     // the order deterministic (by filename) for stable display and tests.
     #[serde(default)]
     files: BTreeMap<String, GhGistFile>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GhGistForkOf {
+    id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,6 +68,26 @@ pub fn gist_list_plan() -> CommandPlan {
             "--paginate".into(),
             "/gists?per_page=100".into(),
         ],
+    }
+}
+
+/// Plan for listing the authenticated user's starred gists.
+pub fn gist_starred_list_plan() -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "--paginate".into(),
+            "/gists/starred?per_page=100".into(),
+        ],
+    }
+}
+
+/// Plan for the authenticated user's login (ownership checks).
+pub fn current_user_plan() -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec!["api".into(), "user".into(), "--jq".into(), ".login".into()],
     }
 }
 
@@ -117,6 +146,12 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
 
     for gist in gists {
         let description = gist.description.unwrap_or_default();
+        let owner_login = gist
+            .owner
+            .map(|u| u.login)
+            .filter(|l| !l.is_empty())
+            .unwrap_or_default();
+        let fork_of_id = gist.fork_of.map(|f| f.id);
         for file in gist.files.into_values() {
             files.push(GistFile {
                 gist_id: gist.id.clone(),
@@ -125,6 +160,8 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
                 public: gist.public,
                 updated_at: gist.updated_at.clone(),
                 created_at: gist.created_at.clone(),
+                owner_login: owner_login.clone(),
+                fork_of_id: fork_of_id.clone(),
             });
         }
     }
@@ -178,6 +215,33 @@ pub fn fetch_gist_list_json() -> Result<String> {
 
 pub fn fetch_gist_list_json_with(runner: &dyn CommandRunner) -> Result<String> {
     run_command(runner, &gist_list_plan())
+}
+
+pub fn fetch_gist_starred_list_json() -> Result<String> {
+    fetch_gist_starred_list_json_with(&SystemRunner)
+}
+
+pub fn fetch_gist_starred_list_json_with(runner: &dyn CommandRunner) -> Result<String> {
+    run_command(runner, &gist_starred_list_plan())
+}
+
+pub fn fetch_current_user_login() -> Result<String> {
+    fetch_current_user_login_with(&SystemRunner)
+}
+
+pub fn fetch_current_user_login_with(runner: &dyn CommandRunner) -> Result<String> {
+    let raw = run_command(runner, &current_user_plan())?;
+    let login = raw.trim().trim_matches('"').to_string();
+    if login.is_empty() {
+        anyhow::bail!("empty user login from gh api user");
+    }
+    Ok(login)
+}
+
+/// Unique gist ids from a parsed gist-list JSON payload.
+pub fn parse_starred_gist_ids(raw: &str) -> Result<std::collections::HashSet<String>> {
+    let gists: Vec<GhGist> = serde_json::from_str(raw).context("parse gh gist list JSON")?;
+    Ok(gists.into_iter().map(|g| g.id).collect())
 }
 
 pub fn fetch_gist_file_content(gist_id: &str, filename: &str) -> Result<String> {
@@ -325,7 +389,20 @@ mod tests {
         assert_eq!(files[0].filename, "settings.json");
         assert_eq!(files[0].description, "claude config");
         assert!(!files[0].public);
+        assert_eq!(files[0].owner_login, "akunzai");
         assert_eq!(files[1].filename, "statusline.sh");
+        let notes = files.iter().find(|f| f.filename == "notes.md").unwrap();
+        assert_eq!(notes.fork_of_id.as_deref(), Some("upstream99"));
+    }
+
+    #[test]
+    fn parses_starred_gist_ids() {
+        let raw = include_str!("../tests/fixtures/gh/gist-starred.json");
+        let ids = parse_starred_gist_ids(raw).unwrap();
+        assert_eq!(ids.len(), 1);
+        assert!(ids.contains("star111"));
+        let files = parse_gist_list_json(raw).unwrap();
+        assert_eq!(files[0].owner_login, "otherdev");
     }
 
     #[test]

@@ -72,6 +72,12 @@ pub struct GistFile {
     pub public: bool,
     pub updated_at: String,
     pub created_at: String,
+    /// `owner.login` from the gist list API (empty when unknown).
+    #[serde(default)]
+    pub owner_login: String,
+    /// Upstream gist id when this row is a fork under your account.
+    #[serde(default)]
+    pub fork_of_id: Option<String>,
 }
 
 /// A gist-level view of the flat [`GistFile`] rows: one entry per gist, carrying
@@ -84,6 +90,18 @@ pub struct GistGroup {
     pub updated_at: String,
     pub created_at: String,
     pub file_count: usize,
+    pub owner_login: String,
+    pub fork_of_id: Option<String>,
+}
+
+impl GistFile {
+    pub fn is_owned_by(&self, login: &str) -> bool {
+        !login.is_empty() && self.owner_login == login
+    }
+
+    pub fn is_fork(&self) -> bool {
+        self.fork_of_id.is_some()
+    }
 }
 
 /// One entry from `gh api /gists/{id}/commits` — a gist revision (newest-first in the API).
@@ -211,6 +229,8 @@ pub fn group_gists(files: &[GistFile]) -> Vec<GistGroup> {
                 updated_at: file.updated_at.clone(),
                 created_at: file.created_at.clone(),
                 file_count: 1,
+                owner_login: file.owner_login.clone(),
+                fork_of_id: file.fork_of_id.clone(),
             });
         }
     }
@@ -277,6 +297,8 @@ mod tests {
             public,
             updated_at: "2026-06-08T00:00:00Z".into(),
             created_at: "2026-06-08T00:00:00Z".into(),
+            owner_login: "owner".into(),
+            fork_of_id: None,
         }
     }
 

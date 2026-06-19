@@ -240,8 +240,13 @@ impl AppState {
                 self.gists_index = 0;
                 self.gists_hscroll = 0;
             }
+            KeyCode::Char('*') => return self.star_toggle_intent(),
+            KeyCode::Char('F') => return self.fork_intent(),
             KeyCode::Char('e') => {
                 if let Some(group) = groups.get(self.gists_index) {
+                    if self.block_if_foreign_gist(&group.id, false) {
+                        return KeyOutcome::None;
+                    }
                     self.editing_description = true;
                     self.description_input.set(group.description.clone());
                 }
@@ -261,6 +266,11 @@ impl AppState {
                 }
             }
             KeyCode::Char('c') if self.gists_index < groups.len() => {
+                if let Some(group) = groups.get(self.gists_index) {
+                    if self.block_if_foreign_gist(&group.id, false) {
+                        return KeyOutcome::None;
+                    }
+                }
                 // The revision count needs a network call, so analysis happens in run_loop;
                 // the confirm prompt is raised once the count is back.
                 self.compact_return_screen = Screen::Gists;
@@ -268,6 +278,9 @@ impl AppState {
             }
             KeyCode::Char('X') => {
                 if let Some(group) = groups.get(self.gists_index) {
+                    if self.block_if_foreign_gist(&group.id, false) {
+                        return KeyOutcome::None;
+                    }
                     let label = if group.description.is_empty() {
                         group.id.clone()
                     } else {
@@ -311,9 +324,16 @@ impl AppState {
                 }
             }
             KeyCode::Char('c') => {
+                if let Some(id) = self.detail_gist_id.clone() {
+                    if self.block_if_foreign_gist(&id, false) {
+                        return KeyOutcome::None;
+                    }
+                }
                 self.compact_return_screen = Screen::GistDetail;
                 return KeyOutcome::CompactGist;
             }
+            KeyCode::Char('*') => return self.star_toggle_intent(),
+            KeyCode::Char('F') => return self.fork_intent(),
             // 1–9 preview the content of the Nth file in the gist (full-screen preview).
             KeyCode::Char(c @ '1'..='9') => {
                 if let Some(gist_id) = self.detail_gist_id.clone() {
@@ -339,6 +359,9 @@ impl AppState {
                     .clone()
                     .and_then(|id| self.group_by_id(&id))
                 {
+                    if self.block_if_foreign_gist(&group.id, false) {
+                        return KeyOutcome::None;
+                    }
                     let label = if group.description.is_empty() {
                         group.id.clone()
                     } else {
@@ -405,6 +428,11 @@ impl AppState {
                 self.set_status("already at current revision");
             }
             KeyCode::Char('r') if entries_len > 1 && self.revision_index > 0 => {
+                if let Some(id) = self.revision_gist_id.clone() {
+                    if self.block_if_foreign_gist(&id, false) {
+                        return KeyOutcome::None;
+                    }
+                }
                 return KeyOutcome::RestoreRevisionPreview;
             }
             KeyCode::Char('r') if entries_len <= 1 => {
@@ -622,11 +650,12 @@ impl AppState {
                 };
             }
             KeyCode::Char('v') => {
-                // Cycle the gist visibility filter: all -> public -> secret -> all.
                 self.gist_type_filter = self.gist_type_filter.next();
                 self.gist_index = 0;
                 self.gist_hscroll = 0;
             }
+            KeyCode::Char('*') => return self.star_toggle_intent(),
+            KeyCode::Char('F') => return self.fork_intent(),
             KeyCode::Char('s') => self.cycle_focused_sort(),
             KeyCode::Char('r') => {
                 self.local_recursive = !self.local_recursive;
@@ -792,8 +821,32 @@ impl AppState {
         });
         if already {
             KeyOutcome::Unpin
+        } else if self.block_if_foreign_gist(&gist.file.gist_id, true) {
+            KeyOutcome::None
         } else {
             KeyOutcome::Pin
+        }
+    }
+
+    fn star_toggle_intent(&mut self) -> KeyOutcome {
+        if self.context_gist_id().is_some() {
+            KeyOutcome::ToggleGistStar
+        } else {
+            self.set_status("select a gist first");
+            KeyOutcome::None
+        }
+    }
+
+    fn fork_intent(&mut self) -> KeyOutcome {
+        let Some(gist_id) = self.context_gist_id() else {
+            self.set_status("select a gist to fork");
+            return KeyOutcome::None;
+        };
+        if self.gist_is_owned(&gist_id) {
+            self.set_status("already yours — no fork needed");
+            KeyOutcome::None
+        } else {
+            KeyOutcome::ForkGist
         }
     }
 
@@ -806,6 +859,9 @@ impl AppState {
             return;
         };
         let gist_id = gist.file.gist_id.clone();
+        if self.block_if_foreign_gist(&gist_id, false) {
+            return;
+        }
         let filename = gist.file.filename.clone();
         if self.gist_file_count(&gist_id) <= 1 {
             self.status = Some(format!(

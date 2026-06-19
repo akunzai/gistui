@@ -1,0 +1,14 @@
+[
+  {
+    "id": "star111",
+    "description": "someone else's gist",
+    "public": true,
+    "updated_at": "2026-06-09T00:00:00Z",
+    "created_at": "2026-06-01T00:00:00Z",
+    "comments": 0,
+    "owner": { "login": "otherdev" },
+    "files": {
+      "snippet.py": { "filename": "snippet.py", "type": "text/x-python" }
+    }
+  }
+]
