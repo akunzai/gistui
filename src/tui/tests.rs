@@ -453,20 +453,29 @@ fn footer_with_status_prefers_status_else_colourised_hints() {
 
 #[test]
 fn detail_footer_surfaces_status_else_hints() {
-    let (msg, colored) = detail_footer(Some("nothing to compact"), DetailFocus::Comments);
+    let (msg, colored) = detail_footer(Some("nothing to compact"), DetailFocus::Comments, false);
     assert_eq!(msg, "nothing to compact");
     assert!(!colored);
-    let (hint, colored) = detail_footer(None, DetailFocus::Comments);
+    let (hint, colored) = detail_footer(None, DetailFocus::Comments, false);
     assert!(hint.contains("1-9") && hint.contains("compact"));
+    assert!(!hint.contains("F fork"));
     assert!(colored);
 }
 
 #[test]
 fn detail_footer_is_focus_aware() {
-    let (comments, _) = detail_footer(None, DetailFocus::Comments);
+    let (comments, _) = detail_footer(None, DetailFocus::Comments, false);
     assert!(comments.contains("Tab files") && comments.contains("scroll"));
-    let (files, _) = detail_footer(None, DetailFocus::Files);
+    let (files, _) = detail_footer(None, DetailFocus::Files, false);
     assert!(files.contains("Tab comments") && files.contains("preview"));
+}
+
+#[test]
+fn detail_footer_shows_fork_only_for_foreign_gist() {
+    let (owned, _) = detail_footer(None, DetailFocus::Files, false);
+    assert!(!owned.contains("F fork"));
+    let (foreign, _) = detail_footer(None, DetailFocus::Files, true);
+    assert!(foreign.contains("F fork"));
 }
 
 #[test]
@@ -3622,7 +3631,50 @@ fn star_key_returns_toggle_intent() {
 }
 
 #[test]
-fn fork_key_returns_fork_intent_for_foreign_gist() {
+fn fork_key_returns_fork_intent_for_foreign_gist_in_detail() {
+    let mut state = initial_state();
+    state.current_user_login = Some("me".into());
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("foreign".into());
+    state.starred_gists = vec![GistFile {
+        gist_id: "foreign".into(),
+        description: "x".into(),
+        filename: "a.txt".into(),
+        public: true,
+        updated_at: "x".into(),
+        created_at: "x".into(),
+        owner_login: "other".into(),
+        fork_of_id: None,
+
+        raw_url: None,
+    }];
+    assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::ForkGist);
+}
+
+#[test]
+fn fork_key_blocked_for_owned_gist_in_detail() {
+    let mut state = initial_state();
+    state.current_user_login = Some("me".into());
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("mine".into());
+    state.gists = vec![GistFile {
+        gist_id: "mine".into(),
+        description: "x".into(),
+        filename: "a.txt".into(),
+        public: true,
+        updated_at: "x".into(),
+        created_at: "x".into(),
+        owner_login: "me".into(),
+        fork_of_id: None,
+
+        raw_url: None,
+    }];
+    assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::None);
+    assert!(state.status.as_ref().unwrap().contains("already yours"));
+}
+
+#[test]
+fn fork_key_ignored_on_list_and_gist_manager() {
     let mut state = initial_state();
     state.current_user_login = Some("me".into());
     state.starred_gists = vec![GistFile {
@@ -3639,26 +3691,10 @@ fn fork_key_returns_fork_intent_for_foreign_gist() {
     }];
     state.gist_type_filter = GistTypeFilter::Starred;
     state.gist_index = 0;
-    assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::ForkGist);
-}
-
-#[test]
-fn fork_key_blocked_for_owned_gist() {
-    let mut state = initial_state();
-    state.current_user_login = Some("me".into());
-    state.gists = vec![GistFile {
-        gist_id: "mine".into(),
-        description: "x".into(),
-        filename: "a.txt".into(),
-        public: true,
-        updated_at: "x".into(),
-        created_at: "x".into(),
-        owner_login: "me".into(),
-        fork_of_id: None,
-
-        raw_url: None,
-    }];
-    state.gist_index = 0;
     assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::None);
-    assert!(state.status.as_ref().unwrap().contains("already yours"));
+
+    state.screen = Screen::Gists;
+    state.gists_type_filter = GistTypeFilter::Starred;
+    state.gists_index = 0;
+    assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::None);
 }

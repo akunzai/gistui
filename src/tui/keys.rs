@@ -241,7 +241,6 @@ impl AppState {
                 self.gists_hscroll = 0;
             }
             KeyCode::Char('*') => return self.star_toggle_intent(),
-            KeyCode::Char('F') => return self.fork_intent(),
             KeyCode::Char('e') => {
                 if let Some(group) = groups.get(self.gists_index) {
                     if self.block_if_foreign_gist(&group.id, false) {
@@ -662,7 +661,6 @@ impl AppState {
                 self.gist_hscroll = 0;
             }
             KeyCode::Char('*') => return self.star_toggle_intent(),
-            KeyCode::Char('F') => return self.fork_intent(),
             KeyCode::Char('s') => self.cycle_focused_sort(),
             KeyCode::Char('r') => {
                 self.local_recursive = !self.local_recursive;

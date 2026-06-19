@@ -655,7 +655,7 @@ impl AppState {
         let message = if pin {
             "cannot pin — not your gist"
         } else {
-            "read-only — not your gist (star or F to fork)"
+            "read-only — not your gist (* star; F fork in detail)"
         };
         self.set_status(message.to_string());
         true

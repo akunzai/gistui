@@ -62,8 +62,8 @@ List screen
              · Enter apply · Esc clear · ←/→/Home/End move · Del
   v          cycle gist visibility: all / public / secret / starred / forked
   *          star / unstar the selected gist
-  F          fork a gist you do not own into your account
-             (others' gists are read-only: preview, diff, download, browser — not pin/upload/delete)
+             (others' gists are read-only: preview, diff, download, browser — not pin/upload/delete;
+              open gist detail to fork with F)
   s          cycle the focused pane's sort: match / name / recent
   t          toggle row view: description / id
   T          toggle light/dark colour theme (global; saved to config)
@@ -111,9 +111,8 @@ Actions (on the selected local file + gist)
   s          cycle sort: updated / created
   v          cycle visibility: all / public / secret / starred / forked
   *          star / unstar the selected gist
-  F          fork a gist you do not own into your account
   e          edit the gist description (Enter apply, Esc cancel)
-             (read-only for others' gists — use * or F instead)
+             (read-only for others' gists — star with *; fork with F from gist detail)
              ←/→/Home/End move the text cursor · Del deletes ahead
   Enter      open the gist detail view (info, file list, comments)
   o          open the gist in your web browser
@@ -131,6 +130,7 @@ Actions (on the selected local file + gist)
   Enter      preview the cursor-selected file (file list focused)
   1-9        preview the content of the Nth file (full-screen; R refresh, q back)
   h          open revision history for this gist (target = cursor file)
+  F          fork into your account (only when the gist is not yours)
   c          compact revisions (y/n confirm; gist info shown as context)
   o          open the gist in your web browser
   y          copy the gist's URL to the system clipboard
@@ -522,7 +522,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
     } else {
         (
             String::new(),
-            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · * star · F fork · e desc · h history · o browser · c compact · X delete · ? help · q back"
+            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · * star · e desc · h history · o browser · c compact · X delete · ? help · q back"
                 .to_string(),
             true,
         )
@@ -1017,16 +1017,21 @@ pub(super) fn footer_with_status(status: Option<&str>, hints: &str) -> (String, 
 
 /// The detail-view footer: a one-shot `state.status` message (e.g. the compaction result,
 /// including "nothing to compact") when present, else the focus-aware key hints.
-pub(super) fn detail_footer(status: Option<&str>, focus: DetailFocus) -> (String, bool) {
+pub(super) fn detail_footer(
+    status: Option<&str>,
+    focus: DetailFocus,
+    foreign: bool,
+) -> (String, bool) {
+    let fork = if foreign { " · F fork" } else { "" };
     let hints = match focus {
-        DetailFocus::Comments => {
-            "Tab files · ↑↓ scroll · 1-9 preview · h history · c compact · o browser · X delete · ? help · q back"
-        }
-        DetailFocus::Files => {
-            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · h history · c compact · o browser · X delete · ? help · q back"
-        }
+        DetailFocus::Comments => format!(
+            "Tab files · ↑↓ scroll · 1-9 preview · h history · c compact · o browser · X delete{fork} · ? help · q back"
+        ),
+        DetailFocus::Files => format!(
+            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · h history · c compact · o browser · X delete{fork} · ? help · q back"
+        ),
     };
-    footer_with_status(status, hints)
+    footer_with_status(status, &hints)
 }
 
 /// The Files|Comments tab index, mirroring `detail_focus`. Pure so the tab selection is
@@ -1066,7 +1071,11 @@ pub(super) fn detail_focus_tabs_line(focus: DetailFocus, theme: &Theme) -> Line<
 
 pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
-    let (footer, colored) = detail_footer(state.status.as_deref(), state.detail_focus);
+    let foreign = state
+        .detail_gist_id
+        .as_deref()
+        .is_some_and(|id| !state.gist_is_owned(id));
+    let (footer, colored) = detail_footer(state.status.as_deref(), state.detail_focus, foreign);
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     // Fixed 4-row header (borders + basic-info line + focus tabs); the active tab — the file
     // list or the comments, never both — fills the rest above the footer.
@@ -1194,7 +1203,6 @@ pub(super) fn commands_hint(focus: FocusPane) -> String {
             "u upload",
             "X remove file",
             "* star",
-            "F fork",
             "g gists",
         ]),
     }

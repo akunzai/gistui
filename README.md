@@ -256,7 +256,7 @@ Press `?` in the app for the full keymap — it now opens the **current screen's
   and scans in the background so the UI stays responsive.
 - `a` — flip the **anchor** (which pane drives match ranking); independent of focus, so you
   can focus the ranked pane to pick a file without the order resetting.
-- `/` filter the focused pane (Local pane matches path/filename; Gist pane matches description/id). While filtering: type to match, ↑/↓ move, Tab applies and switches pane, Enter applies, Esc clears, and ←/→/Home/End/Del edit the query text. · `v` cycle visibility (all/public/secret/starred/forked) · `*` star/unstar · `F` fork a gist you do not own · `s` cycle the **focused
+- `/` filter the focused pane (Local pane matches path/filename; Gist pane matches description/id). While filtering: type to match, ↑/↓ move, Tab applies and switches pane, Enter applies, Esc clears, and ←/→/Home/End/Del edit the query text. · `v` cycle visibility (all/public/secret/starred/forked) · `*` star/unstar · `s` cycle the **focused
   pane's** sort (match / name / recent — gists by name/updated, local files by
   name/modified-time) · `t` toggle row view.
 - `T` — toggle between the built-in **dark** and **light** colour themes (saved to config).
@@ -286,8 +286,8 @@ the gist owning the currently selected file. From here you manage gists as a who
   - `1`–`9` still preview the content of the Nth file directly, full-screen (`↑↓←→` scroll,
     `R` refresh, `w` wrap, `q`/`Esc` back).
   - `h` revision history (browse, incremental diff, diff vs current, restore the cursor file from an older revision) ·
-    `c` compact · `o` browser · `y` copy gist URL · `X` delete the entire gist (`y`/`n` confirm) ·
-    `q`/`Esc` back to the gist manager.
+    `F` fork into your account (only when the gist is not yours) · `c` compact · `o` browser · `y` copy gist URL ·
+    `X` delete the entire gist (`y`/`n` confirm) · `q`/`Esc` back to the gist manager.
 - `X` — delete the entire gist and all its files, after a `y`/`n` confirmation.
 - `o` — open the gist on gist.github.com in your browser.
 - `y` — copy the gist's URL to the system clipboard.
@@ -304,7 +304,7 @@ the gist owning the currently selected file. From here you manage gists as a who
   revisions. Irreversible. (When triggered from the detail view, the confirmation prompt shows
   the gist's info as context.) Requires the git credential helper that `gh auth setup-git`
   configures; if it is missing, compaction reports an actionable error pointing you to that command.
-- `s` cycle sort (updated / created) · `v` cycle visibility (all/public/secret/starred/forked) · `*` star/unstar · `F` fork · `/` filter
+- `s` cycle sort (updated / created) · `v` cycle visibility (all/public/secret/starred/forked) · `*` star/unstar · `/` filter
   by description or id (↑/↓ move · Enter apply · Esc clear · ←/→/Home/End/Del edit query) · `Left`/`Right` scroll a long description.
   The title shows your starred-gist and owned-fork totals (`★ N` / `⑂ N`); rows show `💬` / `⭐` counts when non-zero.
 - `q`/`Esc` — back to the list.
@@ -313,7 +313,7 @@ the gist owning the currently selected file. From here you manage gists as a who
 
 ## Safety rules
 
-- Gists you do not own (e.g. from the starred filter) are **read-only**: you can preview, diff, download, and open in the browser, but pin, upload, remove-file, delete, compact, and revision restore are refused. Press `F` to fork one into your account first.
+- Gists you do not own (e.g. from the starred filter) are **read-only**: you can preview, diff, download, and open in the browser, but pin, upload, remove-file, delete, compact, and revision restore are refused. Open **gist detail** (`Enter` in the gist manager) and press `F` to fork one into your account.
 - Downloads only ever write to `./<gist-filename>` in the current working directory.
 - An existing file (local download target or remote gist file) is never overwritten without
   first showing its diff and confirmation. Confirmations appear as a centered prompt over
