@@ -6,6 +6,13 @@ use std::io;
 pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut state = load_startup_state()?;
     let mut gist_rx = Some(spawn_gist_fetch());
+    let mut fork_rx: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>> =
+        None;
+    let mut star_rx: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>> =
+        None;
+    let mut fork_meta_rx: Option<
+        std::sync::mpsc::Receiver<std::collections::HashMap<String, Option<String>>>,
+    > = None;
     let mut local_rx: Option<std::sync::mpsc::Receiver<Vec<LocalCandidate>>> = None;
     let mut bg_rx: Option<std::sync::mpsc::Receiver<BgTaskOutcome>> = None;
 
@@ -18,9 +25,29 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
         // Absorb the background gist list once it arrives.
         if state.loading {
             if let Some(ref rx) = gist_rx {
-                if let Ok((gists, comment_counts)) = rx.try_recv() {
-                    cache_gists(&gists);
+                if let Ok((
+                    gists,
+                    starred,
+                    starred_ids,
+                    user_login,
+                    comment_counts,
+                    owned_raw,
+                    starred_raw,
+                )) = rx.try_recv()
+                {
+                    persist_gist_cache_from_state_fields(
+                        &gists,
+                        &starred,
+                        &starred_ids,
+                        &user_login,
+                        &comment_counts,
+                        &state.gist_fork_counts,
+                        &state.gist_star_counts,
+                    );
                     state.gists = gists;
+                    state.starred_gists = starred;
+                    state.starred_gist_ids = starred_ids;
+                    state.current_user_login = user_login;
                     state.gist_comment_counts = comment_counts;
                     state.loading = false;
                     if state.gist_index >= state.ranked_gists().len() {
@@ -31,7 +58,48 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         state.gists_index = count - 1;
                     }
                     gist_rx = None;
+                    let gist_ids: std::collections::HashSet<String> = state
+                        .gists
+                        .iter()
+                        .chain(state.starred_gists.iter())
+                        .map(|g| g.gist_id.clone())
+                        .collect();
+                    fork_rx = Some(spawn_fork_count_fetch(
+                        owned_raw,
+                        starred_raw,
+                        gist_ids.clone(),
+                    ));
+                    fork_meta_rx = Some(spawn_fork_metadata_fetch(
+                        state.gists.iter().map(|g| g.gist_id.clone()).collect(),
+                    ));
+                    let node_ids =
+                        crate::gh::merge_gist_node_id_maps(&state.gists, &state.starred_gists);
+                    star_rx = Some(spawn_star_count_fetch(node_ids));
                 }
+            }
+        }
+
+        if let Some(ref rx) = fork_rx {
+            if let Ok(fork_counts) = rx.try_recv() {
+                state.gist_fork_counts = fork_counts;
+                persist_gist_cache_from_state(&state);
+                fork_rx = None;
+            }
+        }
+
+        if let Some(ref rx) = star_rx {
+            if let Ok(star_counts) = rx.try_recv() {
+                state.gist_star_counts = star_counts;
+                persist_gist_cache_from_state(&state);
+                star_rx = None;
+            }
+        }
+
+        if let Some(ref rx) = fork_meta_rx {
+            if let Ok(fork_of) = rx.try_recv() {
+                crate::gh::apply_fork_of_ids(&mut state.gists, &fork_of);
+                persist_gist_cache_from_state(&state);
+                fork_meta_rx = None;
             }
         }
 
@@ -401,6 +469,32 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         }
                         Err(error) => state.set_status(error),
                     },
+                    BgTaskOutcome::GistStarToggle {
+                        result,
+                        gist_id,
+                        starred,
+                    } => match result {
+                        Ok(()) => {
+                            if starred {
+                                state.starred_gist_ids.insert(gist_id.clone());
+                                state.set_status(format!("starred {gist_id}"));
+                            } else {
+                                state.starred_gist_ids.remove(&gist_id);
+                                state.set_status(format!("unstarred {gist_id}"));
+                            }
+                            state.loading = true;
+                            gist_rx = Some(spawn_gist_fetch());
+                        }
+                        Err(error) => state.set_status(format!("star toggle failed: {error}")),
+                    },
+                    BgTaskOutcome::ForkGist { result, gist_id } => match result {
+                        Ok(()) => {
+                            state.set_status(format!("forked {gist_id} into your account"));
+                            state.loading = true;
+                            gist_rx = Some(spawn_gist_fetch());
+                        }
+                        Err(error) => state.set_status(format!("fork failed: {error}")),
+                    },
                     BgTaskOutcome::RestoreRevisionDone {
                         result,
                         gist_id,
@@ -479,13 +573,13 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     let gist = ranked.file.clone();
                     let gist_id = gist.gist_id.clone();
                     let filename = gist.filename.clone();
+                    let raw_url = gist.raw_url.clone();
                     let (local_label, gist_label) = diff_labels(local_path.as_deref(), &gist);
                     let target = state.cwd.join(&filename);
                     let upload_orientation = state.focus == FocusPane::Local;
 
                     spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
-                        let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
-                            .map_err(|e| e.to_string());
+                        let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
                         BgTaskOutcome::PreviewDiff {
                             result,
                             local_path,
@@ -504,12 +598,12 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     let gist = ranked.file.clone();
                     let gist_id = gist.gist_id.clone();
                     let filename = gist.filename.clone();
+                    let raw_url = gist.raw_url.clone();
                     let target = state.cwd.join(&filename);
                     let (local_label, gist_label) = diff_labels(Some(&target), &gist);
 
                     spawn_bg(&mut state, &mut bg_rx, "Downloading…", move || {
-                        let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
-                            .map_err(|e| e.to_string());
+                        let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
                         BgTaskOutcome::DownloadSelected {
                             result,
                             target,
@@ -526,13 +620,22 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     };
                     let gist_id = group.id.clone();
                     state.screen = Screen::GistDetail;
-                    state.detail_gist_id = Some(gist_id.clone());
+                    state.detail_gist_id = Some(gist_id);
                     state.detail_comments = None;
+                    state.detail_comments_loading = false;
                     state.detail_comments_error = None;
                     state.detail_scroll = 0;
                     state.detail_focus = DetailFocus::Files;
                     state.detail_file_cursor = 0;
-
+                }
+                KeyOutcome::FetchComments => {
+                    let Some(gist_id) = state.detail_gist_id.clone() else {
+                        continue;
+                    };
+                    if state.detail_comments.is_some() || state.detail_comments_loading {
+                        continue;
+                    }
+                    state.detail_comments_loading = true;
                     let fetch_id = gist_id.clone();
                     spawn_bg(&mut state, &mut bg_rx, "Loading comments…", move || {
                         let result = crate::gh::fetch_gist_comments_json(&fetch_id)
@@ -630,6 +733,11 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                                 public: false,
                                 updated_at: String::new(),
                                 created_at: String::new(),
+                                owner_login: String::new(),
+                                fork_of_id: None,
+                                raw_url: None,
+                                content_type: None,
+                                node_id: None,
                             });
                         (local_path, gist_id, gist_file)
                     } else {
@@ -648,11 +756,11 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         state.set_status("local file has no name");
                         continue;
                     };
+                    let raw_url = gist_file.raw_url.clone();
                     let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
 
                     spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
-                        let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
-                            .map_err(|e| e.to_string());
+                        let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
                         BgTaskOutcome::UploadPreview {
                             result,
                             gist_id,
@@ -707,6 +815,11 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                             public: false,
                             updated_at: String::new(),
                             created_at: String::new(),
+                            owner_login: String::new(),
+                            fork_of_id: None,
+                            raw_url: None,
+                            content_type: None,
+                            node_id: None,
                         };
                         crate::actions::upload_command(&temp_file_path, &target)
                     } else {
@@ -771,10 +884,11 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     } else {
                         let gist_id = key.0.clone();
                         let filename = key.1.clone();
+                        let raw_url = state.gist_file_raw_url(&gist_id, &filename);
                         let preview_title = format!("Preview: {gist_id} / {filename}");
                         spawn_bg(&mut state, &mut bg_rx, "Loading preview…", move || {
-                            let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
-                                .map_err(|e| e.to_string());
+                            let result =
+                                fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
                             BgTaskOutcome::PreviewContent {
                                 result,
                                 key,
@@ -788,10 +902,11 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         state.gist_content_cache.remove(&key);
                         let gist_id = key.0.clone();
                         let filename = key.1.clone();
+                        let raw_url = state.gist_file_raw_url(&gist_id, &filename);
                         let preview_title = format!("Preview: {gist_id} / {filename}");
                         spawn_bg(&mut state, &mut bg_rx, "Loading preview…", move || {
-                            let result = crate::gh::fetch_gist_file_content(&gist_id, &filename)
-                                .map_err(|e| e.to_string());
+                            let result =
+                                fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
                             BgTaskOutcome::PreviewContent {
                                 result,
                                 key,
@@ -868,11 +983,14 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     );
                 }
                 KeyOutcome::ApplyDescription => {
-                    let Some(group) = state.selected_group() else {
+                    let gist_id = state
+                        .detail_gist_id
+                        .clone()
+                        .or_else(|| state.selected_group().map(|g| g.id.clone()));
+                    let Some(gist_id) = gist_id else {
                         state.editing_description = false;
                         continue;
                     };
-                    let gist_id = group.id.clone();
                     let description = state.description_input.to_string();
                     let plan = crate::actions::edit_description_command(&gist_id, &description);
                     state.editing_description = false;
@@ -1020,12 +1138,14 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         None => (None, "(initial)".into()),
                     };
                     let new_label = format!("revision {child_label}");
+                    let owner_login = state.gist_owner_login(&gist_id);
                     spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
                         let result = fetch_revision_incremental_pair(
                             &gist_id,
                             &child_version,
                             parent_version.as_deref(),
                             &filename,
+                            &owner_login,
                         );
                         BgTaskOutcome::RevisionDiff {
                             result,
@@ -1046,9 +1166,17 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     let version_label = revision_version_label(&revision);
                     let old_label = format!("revision {version_label}");
                     let new_label = format!("current {filename}");
+                    let raw_url = state.gist_file_raw_url(&gist_id, &filename);
+                    let owner_login = state.gist_owner_login(&gist_id);
                     spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
                         let result = fetch_revision_pair(
-                            &gist_id, &version, &filename, &old_label, &new_label,
+                            &gist_id,
+                            &version,
+                            &filename,
+                            raw_url.as_deref(),
+                            &owner_login,
+                            &old_label,
+                            &new_label,
                         );
                         BgTaskOutcome::RevisionDiff {
                             result,
@@ -1067,8 +1195,16 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     let filename = state.revision_target_file.clone();
                     let version = revision.version.clone();
                     let version_label = revision_version_label(&revision);
+                    let raw_url = state.gist_file_raw_url(&gist_id, &filename);
+                    let owner_login = state.gist_owner_login(&gist_id);
                     spawn_bg(&mut state, &mut bg_rx, "Loading revision…", move || {
-                        let result = fetch_revision_pair_for_restore(&gist_id, &version, &filename);
+                        let result = fetch_revision_pair_for_restore(
+                            &gist_id,
+                            &version,
+                            &filename,
+                            raw_url.as_deref(),
+                            &owner_login,
+                        );
                         BgTaskOutcome::RestoreRevisionReady {
                             result,
                             gist_id,
@@ -1115,6 +1251,50 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                             gist_id,
                             filename,
                         }
+                    });
+                }
+                KeyOutcome::ToggleGistStar => {
+                    let Some(gist_id) = state.context_gist_id() else {
+                        state.set_status("select a gist first");
+                        continue;
+                    };
+                    let starring = !state.gist_is_starred(&gist_id);
+                    let plan = if starring {
+                        crate::actions::star_gist_command(&gist_id)
+                    } else {
+                        crate::actions::unstar_gist_command(&gist_id)
+                    };
+                    let msg = if starring {
+                        "Starring…"
+                    } else {
+                        "Unstarring…"
+                    };
+                    spawn_bg(&mut state, &mut bg_rx, msg, move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        BgTaskOutcome::GistStarToggle {
+                            result,
+                            gist_id,
+                            starred: starring,
+                        }
+                    });
+                }
+                KeyOutcome::ForkGist => {
+                    let Some(gist_id) = state.context_gist_id() else {
+                        state.set_status("select a gist to fork");
+                        continue;
+                    };
+                    if state.gist_is_owned(&gist_id) {
+                        state.set_status("already yours — no fork needed");
+                        continue;
+                    }
+                    let plan = crate::actions::fork_gist_command(&gist_id);
+                    spawn_bg(&mut state, &mut bg_rx, "Forking…", move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        BgTaskOutcome::ForkGist { result, gist_id }
                     });
                 }
                 KeyOutcome::None => {}
@@ -1215,6 +1395,15 @@ enum BgTaskOutcome {
         gist_id: String,
         filename: String,
     },
+    GistStarToggle {
+        result: std::result::Result<(), String>,
+        gist_id: String,
+        starred: bool,
+    },
+    ForkGist {
+        result: std::result::Result<(), String>,
+        gist_id: String,
+    },
 }
 
 fn revision_version_label(revision: &crate::domain::GistRevision) -> String {
@@ -1231,47 +1420,21 @@ fn revision_version_label(revision: &crate::domain::GistRevision) -> String {
     format!("{sha} ({age} ago)")
 }
 
-fn fetch_revision_file_content(
-    gist_id: &str,
-    version: &str,
-    filename: &str,
-) -> std::result::Result<String, String> {
-    let raw = crate::gh::fetch_gist_revision_json(gist_id, version).map_err(|e| e.to_string())?;
-    match crate::gh::revision_file_content(&raw, filename).map_err(|e| e.to_string())? {
-        crate::gh::RevisionFileContent::Present(content) => Ok(content),
-        crate::gh::RevisionFileContent::Truncated => {
-            Err("file too large for API preview (>1 MB)".into())
-        }
-        crate::gh::RevisionFileContent::Absent => {
-            Err(format!("{filename} not present in this revision"))
-        }
-    }
-}
-
-fn fetch_revision_file_content_optional(
-    gist_id: &str,
-    version: &str,
-    filename: &str,
-) -> std::result::Result<String, String> {
-    let raw = crate::gh::fetch_gist_revision_json(gist_id, version).map_err(|e| e.to_string())?;
-    match crate::gh::revision_file_content(&raw, filename).map_err(|e| e.to_string())? {
-        crate::gh::RevisionFileContent::Present(content) => Ok(content),
-        crate::gh::RevisionFileContent::Truncated => {
-            Err("file too large for API preview (>1 MB)".into())
-        }
-        crate::gh::RevisionFileContent::Absent => Ok(String::new()),
-    }
-}
-
 fn fetch_revision_incremental_pair(
     gist_id: &str,
     child_version: &str,
     parent_version: Option<&str>,
     filename: &str,
+    owner_login: &str,
 ) -> std::result::Result<(String, String), String> {
-    let new_content = fetch_revision_file_content_optional(gist_id, child_version, filename)?;
+    let new_content =
+        crate::gh::fetch_revision_file_text_optional(gist_id, child_version, filename, owner_login)
+            .map_err(|e| e.to_string())?;
     let old_content = match parent_version {
-        Some(parent) => fetch_revision_file_content_optional(gist_id, parent, filename)?,
+        Some(parent) => {
+            crate::gh::fetch_revision_file_text_optional(gist_id, parent, filename, owner_login)
+                .map_err(|e| e.to_string())?
+        }
         None => String::new(),
     };
     Ok((old_content, new_content))
@@ -1281,48 +1444,163 @@ fn fetch_revision_pair(
     gist_id: &str,
     version: &str,
     filename: &str,
+    raw_url: Option<&str>,
+    owner_login: &str,
     _old_label: &str,
     _new_label: &str,
 ) -> std::result::Result<(String, String), String> {
-    let old_content = fetch_revision_file_content(gist_id, version, filename)?;
-    let new_content =
-        crate::gh::fetch_gist_file_content(gist_id, filename).map_err(|e| e.to_string())?;
+    let old_content = crate::gh::fetch_revision_file_text(gist_id, version, filename, owner_login)
+        .map_err(|e| e.to_string())?;
+    let new_content = fetch_gist_content(gist_id, filename, raw_url)?;
     Ok((old_content, new_content))
+}
+
+fn fetch_gist_content(
+    gist_id: &str,
+    filename: &str,
+    raw_url: Option<&str>,
+) -> std::result::Result<String, String> {
+    crate::gh::fetch_gist_file_content(gist_id, filename, raw_url).map_err(|e| e.to_string())
 }
 
 fn fetch_revision_pair_for_restore(
     gist_id: &str,
     version: &str,
     filename: &str,
+    raw_url: Option<&str>,
+    owner_login: &str,
 ) -> std::result::Result<(String, String), String> {
-    fetch_revision_pair(gist_id, version, filename, "", "")
+    fetch_revision_pair(gist_id, version, filename, raw_url, owner_login, "", "")
 }
 
-fn cache_gists(gists: &[GistFile]) {
+fn persist_gist_cache_from_state(state: &AppState) {
+    persist_gist_cache_from_state_fields(
+        &state.gists,
+        &state.starred_gists,
+        &state.starred_gist_ids,
+        &state.current_user_login,
+        &state.gist_comment_counts,
+        &state.gist_fork_counts,
+        &state.gist_star_counts,
+    );
+}
+
+fn persist_gist_cache_from_state_fields(
+    owned: &[GistFile],
+    starred: &[GistFile],
+    starred_ids: &std::collections::HashSet<String>,
+    user_login: &Option<String>,
+    comment_counts: &std::collections::HashMap<String, u32>,
+    fork_counts: &std::collections::HashMap<String, u32>,
+    star_counts: &std::collections::HashMap<String, u32>,
+) {
     if let Ok(path) = crate::cache::cache_path() {
-        crate::cache::save_cached_gists(&path, gists);
+        let cache = crate::cache::GistListCache {
+            owned: owned.to_vec(),
+            starred: starred.to_vec(),
+            starred_ids: starred_ids.iter().cloned().collect(),
+            user_login: user_login.clone(),
+            comment_counts: comment_counts.clone(),
+            fork_counts: fork_counts.clone(),
+            star_counts: star_counts.clone(),
+        };
+        crate::cache::save_gist_cache(&path, &cache);
     }
 }
 
 /// Fetches the gist list on a background thread so startup does not block on `gh`.
-/// Mirrors the previous graceful degradation: an empty list on any error.
-fn spawn_gist_fetch(
-) -> std::sync::mpsc::Receiver<(Vec<GistFile>, std::collections::HashMap<String, u32>)> {
+/// Fork counts are fetched separately so the UI can render lists without waiting.
+type GistFetchResult = (
+    Vec<GistFile>,
+    Vec<GistFile>,
+    std::collections::HashSet<String>,
+    Option<String>,
+    std::collections::HashMap<String, u32>,
+    Option<String>,
+    Option<String>,
+);
+
+fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<GistFetchResult> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let result = if crate::gh::check_gh_ready().is_ok() {
-            crate::gh::fetch_gist_list_json()
+            let owned = crate::gh::fetch_gist_list_json().ok();
+            let starred_raw = crate::gh::fetch_gist_starred_list_json().ok();
+            let user_login = crate::gh::fetch_current_user_login().ok();
+            let (files, mut comment_counts) = owned
+                .as_ref()
                 .map(|raw| {
-                    let files = crate::gh::parse_gist_list_json(&raw).unwrap_or_default();
-                    let comment_counts =
-                        crate::gh::parse_gist_comment_counts(&raw).unwrap_or_default();
-                    (files, comment_counts)
+                    (
+                        crate::gh::parse_gist_list_json(raw).unwrap_or_default(),
+                        crate::gh::parse_gist_comment_counts(raw).unwrap_or_default(),
+                    )
                 })
-                .unwrap_or_default()
+                .unwrap_or_default();
+            if let Some(raw) = starred_raw.as_ref() {
+                if let Ok(starred_comments) = crate::gh::parse_gist_comment_counts(raw) {
+                    comment_counts.extend(starred_comments);
+                }
+            }
+            let starred = starred_raw
+                .as_ref()
+                .map(|raw| crate::gh::parse_gist_list_json(raw).unwrap_or_default())
+                .unwrap_or_default();
+            let starred_ids = starred_raw
+                .as_ref()
+                .and_then(|raw| crate::gh::parse_starred_gist_ids(raw).ok())
+                .unwrap_or_default();
+            (
+                files,
+                starred,
+                starred_ids,
+                user_login,
+                comment_counts,
+                owned,
+                starred_raw,
+            )
         } else {
             Default::default()
         };
         let _ = tx.send(result);
+    });
+    rx
+}
+
+fn spawn_fork_count_fetch(
+    owned_raw: Option<String>,
+    starred_raw: Option<String>,
+    gist_ids: std::collections::HashSet<String>,
+) -> std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let counts = crate::gh::collect_gist_fork_counts(
+            owned_raw.as_deref(),
+            starred_raw.as_deref(),
+            gist_ids,
+        );
+        let _ = tx.send(counts);
+    });
+    rx
+}
+
+fn spawn_star_count_fetch(
+    node_ids: std::collections::HashMap<String, String>,
+) -> std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let counts = crate::gh::collect_gist_star_counts(node_ids);
+        let _ = tx.send(counts);
+    });
+    rx
+}
+
+fn spawn_fork_metadata_fetch(
+    owned_ids: std::collections::HashSet<String>,
+) -> std::sync::mpsc::Receiver<std::collections::HashMap<String, Option<String>>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let fork_of = crate::gh::collect_owned_fork_of_ids(owned_ids);
+        let _ = tx.send(fork_of);
     });
     rx
 }
@@ -1390,6 +1668,7 @@ fn spawn_pin_push(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         filename: filename.clone(),
         local_path: local_path.clone(),
     });
+    let raw_url = state.gist_file_raw_url(&gist_id, &filename);
     let gist_file = GistFile {
         gist_id: gist_id.clone(),
         description: String::new(),
@@ -1397,11 +1676,15 @@ fn spawn_pin_push(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         public: false,
         updated_at: String::new(),
         created_at: String::new(),
+        owner_login: String::new(),
+        fork_of_id: None,
+        raw_url: raw_url.clone(),
+        content_type: None,
+        node_id: None,
     };
     let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
     spawn_bg(state, bg_rx, "Loading diff…", move || {
-        let result =
-            crate::gh::fetch_gist_file_content(&gist_id, &filename).map_err(|e| e.to_string());
+        let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
         BgTaskOutcome::UploadPreview {
             result,
             gist_id,
@@ -1420,6 +1703,7 @@ fn spawn_pin_pull(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
     let target = pin_local_abs(state, m);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
+    let raw_url = state.gist_file_raw_url(&gist_id, &filename);
     let gist_file = GistFile {
         gist_id: gist_id.clone(),
         description: String::new(),
@@ -1427,11 +1711,15 @@ fn spawn_pin_pull(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         public: false,
         updated_at: String::new(),
         created_at: String::new(),
+        owner_login: String::new(),
+        fork_of_id: None,
+        raw_url: raw_url.clone(),
+        content_type: None,
+        node_id: None,
     };
     let (local_label, gist_label) = diff_labels(Some(&target), &gist_file);
     spawn_bg(state, bg_rx, "Downloading…", move || {
-        let result =
-            crate::gh::fetch_gist_file_content(&gist_id, &filename).map_err(|e| e.to_string());
+        let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
         BgTaskOutcome::DownloadSelected {
             result,
             target,
@@ -1461,6 +1749,7 @@ fn spawn_pin_diff(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         .find(|g| g.gist_id == gist_id && g.filename == filename)
         .map(|g| g.updated_at.clone())
         .unwrap_or_default();
+    let raw_url = state.gist_file_raw_url(&gist_id, &filename);
     let gist_file = GistFile {
         gist_id: gist_id.clone(),
         description: String::new(),
@@ -1468,12 +1757,16 @@ fn spawn_pin_diff(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         public: false,
         updated_at,
         created_at: String::new(),
+        owner_login: String::new(),
+        fork_of_id: None,
+        raw_url: raw_url.clone(),
+        content_type: None,
+        node_id: None,
     };
     let (local_label, gist_label) = diff_labels(Some(&local_abs), &gist_file);
     let target = local_abs.clone();
     spawn_bg(state, bg_rx, "Loading diff…", move || {
-        let result =
-            crate::gh::fetch_gist_file_content(&gist_id, &filename).map_err(|e| e.to_string());
+        let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
         BgTaskOutcome::PreviewDiff {
             result,
             local_path: Some(local_abs),

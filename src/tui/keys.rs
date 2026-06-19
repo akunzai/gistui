@@ -149,7 +149,26 @@ impl AppState {
                 self.pins_hscroll = self.pins_hscroll.saturating_sub(1);
             }
             KeyCode::Char('/') => self.pins_filtering = true,
-            KeyCode::Enter if !self.pinned.is_empty() => return KeyOutcome::PreviewPinDiff,
+            KeyCode::Enter if !self.pinned.is_empty() => {
+                if let Some(idx) = self.selected_pin_index() {
+                    let (gist_id, gist_filename, local_path) = {
+                        let pin = &self.pinned[idx];
+                        (
+                            pin.gist_id.clone(),
+                            pin.gist_filename.clone(),
+                            pin.local_path.clone(),
+                        )
+                    };
+                    if self.block_if_non_previewable_diff(
+                        &gist_id,
+                        &gist_filename,
+                        Some(local_path.as_path()),
+                    ) {
+                        return KeyOutcome::None;
+                    }
+                }
+                return KeyOutcome::PreviewPinDiff;
+            }
             KeyCode::Char('x') if !self.pinned.is_empty() => return KeyOutcome::UnpinAtPin,
             KeyCode::Char('s') if !self.pinned.is_empty() => return KeyOutcome::SyncPinAuto,
             KeyCode::Char('u') if !self.pinned.is_empty() => return KeyOutcome::SyncPinPush,
@@ -167,20 +186,6 @@ impl AppState {
 
     fn handle_key_gists(&mut self, code: KeyCode) -> KeyOutcome {
         self.status = None;
-        // Inline description editor: capture text until Enter (apply) or Esc (cancel).
-        if self.editing_description {
-            match code {
-                KeyCode::Esc => {
-                    self.editing_description = false;
-                    self.description_input.clear();
-                }
-                KeyCode::Enter => return KeyOutcome::ApplyDescription,
-                _ => {
-                    self.description_input.apply_edit(code);
-                }
-            }
-            return KeyOutcome::None;
-        }
         // Inline text filter: live-navigate with arrows; Tab is a no-op (single pane).
         if self.gists_filtering {
             match code {
@@ -240,12 +245,7 @@ impl AppState {
                 self.gists_index = 0;
                 self.gists_hscroll = 0;
             }
-            KeyCode::Char('e') => {
-                if let Some(group) = groups.get(self.gists_index) {
-                    self.editing_description = true;
-                    self.description_input.set(group.description.clone());
-                }
-            }
+            KeyCode::Char('*') => return self.star_toggle_intent(),
             KeyCode::Enter if self.gists_index < groups.len() => {
                 return KeyOutcome::OpenGistDetail;
             }
@@ -260,32 +260,6 @@ impl AppState {
                     return KeyOutcome::FetchRevisions;
                 }
             }
-            KeyCode::Char('c') if self.gists_index < groups.len() => {
-                // The revision count needs a network call, so analysis happens in run_loop;
-                // the confirm prompt is raised once the count is back.
-                self.compact_return_screen = Screen::Gists;
-                return KeyOutcome::CompactGist;
-            }
-            KeyCode::Char('X') => {
-                if let Some(group) = groups.get(self.gists_index) {
-                    let label = if group.description.is_empty() {
-                        group.id.clone()
-                    } else {
-                        group.description.clone()
-                    };
-                    self.diff_text = format!(
-                        "Delete gist {} ({} file(s)): {label}.\n\nThis permanently removes the entire gist and all its files.",
-                        group.id, group.file_count
-                    );
-                    self.diff_scroll = 0;
-                    self.diff_hscroll = 0;
-                    self.pending_action = Some(PendingAction::Delete {
-                        gist_id: group.id.clone(),
-                        label,
-                    });
-                    self.screen = Screen::Confirm;
-                }
-            }
             KeyCode::Char('?') => self.open_help(),
             _ => {}
         }
@@ -295,6 +269,19 @@ impl AppState {
     /// Pure key handling for `Screen::GistDetail`: scroll comments, compact, browser, back.
     fn handle_key_detail(&mut self, code: KeyCode) -> KeyOutcome {
         self.status = None;
+        if self.editing_description {
+            match code {
+                KeyCode::Esc => {
+                    self.editing_description = false;
+                    self.description_input.clear();
+                }
+                KeyCode::Enter => return KeyOutcome::ApplyDescription,
+                _ => {
+                    self.description_input.apply_edit(code);
+                }
+            }
+            return KeyOutcome::None;
+        }
         match code {
             KeyCode::Char('q') | KeyCode::Esc => {
                 self.screen = Screen::Gists;
@@ -310,15 +297,38 @@ impl AppState {
                     return KeyOutcome::FetchRevisions;
                 }
             }
+            KeyCode::Char('e') => {
+                let Some(id) = self.detail_gist_id.clone() else {
+                    return KeyOutcome::None;
+                };
+                if !self.gist_is_owned(&id) {
+                    return KeyOutcome::None;
+                }
+                if let Some(group) = self.group_by_id(&id) {
+                    self.editing_description = true;
+                    self.description_input.set(group.description.clone());
+                }
+            }
             KeyCode::Char('c') => {
+                let Some(id) = self.detail_gist_id.clone() else {
+                    return KeyOutcome::None;
+                };
+                if !self.gist_is_owned(&id) {
+                    return KeyOutcome::None;
+                }
                 self.compact_return_screen = Screen::GistDetail;
                 return KeyOutcome::CompactGist;
             }
+            KeyCode::Char('*') => return self.star_toggle_intent(),
+            KeyCode::Char('F') => return self.fork_intent(),
             // 1–9 preview the content of the Nth file in the gist (full-screen preview).
             KeyCode::Char(c @ '1'..='9') => {
                 if let Some(gist_id) = self.detail_gist_id.clone() {
                     let index = (c as u8 - b'1') as usize;
                     if let Some(filename) = self.gist_filenames(&gist_id).into_iter().nth(index) {
+                        if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
+                            return KeyOutcome::None;
+                        }
                         self.preview_request = Some((gist_id, filename));
                         self.preview_return = Screen::GistDetail;
                         return KeyOutcome::PreviewContent;
@@ -330,13 +340,20 @@ impl AppState {
                     DetailFocus::Comments => DetailFocus::Files,
                     DetailFocus::Files => DetailFocus::Comments,
                 };
+                if self.detail_focus == DetailFocus::Comments
+                    && self.detail_comments.is_none()
+                    && !self.detail_comments_loading
+                {
+                    return KeyOutcome::FetchComments;
+                }
             }
-            // X deletes the whole gist (y/n confirm), mirroring the gist manager. Reuses the
-            // shared Delete confirm path, which lands on the list once the gist is gone.
+            // X deletes the whole gist (y/n confirm). Reuses the shared Delete confirm path,
+            // which lands on the list once the gist is gone. Owned gists only (no-op otherwise).
             KeyCode::Char('X') => {
                 if let Some(group) = self
                     .detail_gist_id
                     .clone()
+                    .filter(|id| self.gist_is_owned(id))
                     .and_then(|id| self.group_by_id(&id))
                 {
                     let label = if group.description.is_empty() {
@@ -361,6 +378,9 @@ impl AppState {
                 if let Some(gist_id) = self.detail_gist_id.clone() {
                     let cursor = self.detail_file_cursor;
                     if let Some(filename) = self.gist_filenames(&gist_id).into_iter().nth(cursor) {
+                        if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
+                            return KeyOutcome::None;
+                        }
                         self.preview_request = Some((gist_id, filename));
                         self.preview_return = Screen::GistDetail;
                         return KeyOutcome::PreviewContent;
@@ -397,14 +417,37 @@ impl AppState {
                 self.revision_hscroll = self.revision_hscroll.saturating_sub(1);
             }
             KeyCode::Right => self.revision_hscroll = self.revision_hscroll.saturating_add(1),
-            KeyCode::Enter if entries_len > 0 => return KeyOutcome::RevisionDiffIncremental,
+            KeyCode::Enter if entries_len > 0 => {
+                if let (Some(id), file) = (
+                    self.revision_gist_id.clone(),
+                    self.revision_target_file.clone(),
+                ) {
+                    if self.block_if_non_previewable_gist_file(&id, &file) {
+                        return KeyOutcome::None;
+                    }
+                }
+                return KeyOutcome::RevisionDiffIncremental;
+            }
             KeyCode::Char('D') if entries_len > 0 && self.revision_index > 0 => {
+                if let (Some(id), file) = (
+                    self.revision_gist_id.clone(),
+                    self.revision_target_file.clone(),
+                ) {
+                    if self.block_if_non_previewable_gist_file(&id, &file) {
+                        return KeyOutcome::None;
+                    }
+                }
                 return KeyOutcome::RevisionDiff;
             }
             KeyCode::Char('D') if entries_len > 0 => {
                 self.set_status("already at current revision");
             }
             KeyCode::Char('r') if entries_len > 1 && self.revision_index > 0 => {
+                if let Some(id) = self.revision_gist_id.clone() {
+                    if !self.gist_is_owned(&id) {
+                        return KeyOutcome::None;
+                    }
+                }
                 return KeyOutcome::RestoreRevisionPreview;
             }
             KeyCode::Char('r') if entries_len <= 1 => {
@@ -460,6 +503,7 @@ impl AppState {
         if self.detail_gist_id.as_deref() != Some(gist_id) {
             return;
         }
+        self.detail_comments_loading = false;
         match result {
             Ok(comments) => {
                 self.detail_comments = Some(comments);
@@ -622,11 +666,11 @@ impl AppState {
                 };
             }
             KeyCode::Char('v') => {
-                // Cycle the gist visibility filter: all -> public -> secret -> all.
                 self.gist_type_filter = self.gist_type_filter.next();
                 self.gist_index = 0;
                 self.gist_hscroll = 0;
             }
+            KeyCode::Char('*') => return self.star_toggle_intent(),
             KeyCode::Char('s') => self.cycle_focused_sort(),
             KeyCode::Char('r') => {
                 self.local_recursive = !self.local_recursive;
@@ -656,7 +700,11 @@ impl AppState {
                 }
                 self.status = Some("select a local file to edit".into());
             }
-            KeyCode::Char(' ') if self.selected_gist().is_some() => {
+            KeyCode::Char(' ') if let Some(gist) = self.selected_gist() => {
+                if self.block_if_non_previewable_gist_file(&gist.file.gist_id, &gist.file.filename)
+                {
+                    return KeyOutcome::None;
+                }
                 self.preview_return = Screen::List;
                 return KeyOutcome::PreviewContent;
             }
@@ -668,6 +716,17 @@ impl AppState {
             // Enter works from either pane: it diffs the selected local file against the
             // selected gist (the top match when focus is on the local pane).
             KeyCode::Enter if self.gist_index < self.ranked_gists().len() => {
+                let Some(gist) = self.selected_gist() else {
+                    return KeyOutcome::None;
+                };
+                let local_path = self.selected_local().map(|l| l.path.clone());
+                if self.block_if_non_previewable_diff(
+                    &gist.file.gist_id,
+                    &gist.file.filename,
+                    local_path.as_deref(),
+                ) {
+                    return KeyOutcome::None;
+                }
                 return KeyOutcome::PreviewDiff;
             }
             KeyCode::Char('p') => return self.pin_toggle_intent(),
@@ -792,8 +851,32 @@ impl AppState {
         });
         if already {
             KeyOutcome::Unpin
+        } else if self.block_if_foreign_gist(&gist.file.gist_id, true) {
+            KeyOutcome::None
         } else {
             KeyOutcome::Pin
+        }
+    }
+
+    fn star_toggle_intent(&mut self) -> KeyOutcome {
+        if self.context_gist_id().is_some() {
+            KeyOutcome::ToggleGistStar
+        } else {
+            self.set_status("select a gist first");
+            KeyOutcome::None
+        }
+    }
+
+    fn fork_intent(&mut self) -> KeyOutcome {
+        let Some(gist_id) = self.context_gist_id() else {
+            self.set_status("select a gist to fork");
+            return KeyOutcome::None;
+        };
+        if self.gist_is_owned(&gist_id) {
+            self.set_status("already yours — no fork needed");
+            KeyOutcome::None
+        } else {
+            KeyOutcome::ForkGist
         }
     }
 
@@ -806,6 +889,9 @@ impl AppState {
             return;
         };
         let gist_id = gist.file.gist_id.clone();
+        if self.block_if_foreign_gist(&gist_id, false) {
+            return;
+        }
         let filename = gist.file.filename.clone();
         if self.gist_file_count(&gist_id) <= 1 {
             self.status = Some(format!(

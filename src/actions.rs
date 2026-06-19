@@ -255,6 +255,45 @@ pub fn restore_revision_json(filename: &str, content: &str) -> String {
     .to_string()
 }
 
+/// Star a gist (`PUT /gists/{id}/star`).
+pub fn star_gist_command(gist_id: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "--method".into(),
+            "PUT".into(),
+            format!("/gists/{gist_id}/star"),
+        ],
+    }
+}
+
+/// Unstar a gist (`DELETE /gists/{id}/star`).
+pub fn unstar_gist_command(gist_id: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "--method".into(),
+            "DELETE".into(),
+            format!("/gists/{gist_id}/star"),
+        ],
+    }
+}
+
+/// Fork a gist into the authenticated user's account (`POST /gists/{id}/forks`).
+pub fn fork_gist_command(gist_id: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "--method".into(),
+            "POST".into(),
+            format!("/gists/{gist_id}/forks"),
+        ],
+    }
+}
+
 /// `gh api --method PATCH` plan that uploads old file content as a new gist revision.
 pub fn restore_revision_command(gist_id: &str, input_path: &Path) -> CommandPlan {
     CommandPlan {
@@ -547,6 +586,14 @@ mod tests {
             public: false,
             updated_at: "2026-06-08T00:00:00Z".into(),
             created_at: "2026-06-08T00:00:00Z".into(),
+            owner_login: String::new(),
+            fork_of_id: None,
+
+            raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         }
     }
 
@@ -911,5 +958,48 @@ mod tests {
         let loaded = load_config(&config_path).unwrap();
         assert_eq!(loaded.pinned[0].local_path, local_path);
         assert_eq!(loaded.pinned[0].gist_id, "abc123");
+    }
+
+    #[test]
+    fn star_gist_command_puts_star_endpoint() {
+        let plan = star_gist_command("abc123");
+        assert_eq!(plan.program, "gh");
+        assert_eq!(
+            plan.args,
+            vec![
+                "api".to_string(),
+                "--method".to_string(),
+                "PUT".to_string(),
+                "/gists/abc123/star".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn unstar_gist_command_deletes_star_endpoint() {
+        let plan = unstar_gist_command("abc123");
+        assert_eq!(
+            plan.args,
+            vec![
+                "api".to_string(),
+                "--method".to_string(),
+                "DELETE".to_string(),
+                "/gists/abc123/star".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn fork_gist_command_posts_forks_endpoint() {
+        let plan = fork_gist_command("abc123");
+        assert_eq!(
+            plan.args,
+            vec![
+                "api".to_string(),
+                "--method".to_string(),
+                "POST".to_string(),
+                "/gists/abc123/forks".to_string(),
+            ]
+        );
     }
 }

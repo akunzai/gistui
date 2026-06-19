@@ -145,6 +145,8 @@ pub enum GistTypeFilter {
     All,
     Public,
     Secret,
+    Starred,
+    Forked,
 }
 
 /// Generates a small enum whose variants cycle in declaration order. `next()` advances to the
@@ -250,11 +252,25 @@ impl LocalSort {
 }
 
 impl GistTypeFilter {
-    fn matches(self, public: bool) -> bool {
+    pub fn uses_starred_source(self) -> bool {
+        self == GistTypeFilter::Starred
+    }
+
+    pub fn matches_file(self, file: &GistFile) -> bool {
         match self {
-            GistTypeFilter::All => true,
-            GistTypeFilter::Public => public,
-            GistTypeFilter::Secret => !public,
+            GistTypeFilter::All | GistTypeFilter::Starred => true,
+            GistTypeFilter::Public => file.public,
+            GistTypeFilter::Secret => !file.public,
+            GistTypeFilter::Forked => file.is_fork(),
+        }
+    }
+
+    pub fn matches_group(self, group: &GistGroup) -> bool {
+        match self {
+            GistTypeFilter::All | GistTypeFilter::Starred => true,
+            GistTypeFilter::Public => group.public,
+            GistTypeFilter::Secret => !group.public,
+            GistTypeFilter::Forked => group.fork_of_id.is_some(),
         }
     }
 
@@ -262,7 +278,9 @@ impl GistTypeFilter {
         match self {
             GistTypeFilter::All => GistTypeFilter::Public,
             GistTypeFilter::Public => GistTypeFilter::Secret,
-            GistTypeFilter::Secret => GistTypeFilter::All,
+            GistTypeFilter::Secret => GistTypeFilter::Starred,
+            GistTypeFilter::Starred => GistTypeFilter::Forked,
+            GistTypeFilter::Forked => GistTypeFilter::All,
         }
     }
 
@@ -271,6 +289,8 @@ impl GistTypeFilter {
             GistTypeFilter::All => "all",
             GistTypeFilter::Public => "public",
             GistTypeFilter::Secret => "secret",
+            GistTypeFilter::Starred => "starred",
+            GistTypeFilter::Forked => "forked",
         }
     }
 }
@@ -294,8 +314,10 @@ pub enum KeyOutcome {
     EditUpload,
     ExecuteDelete,
     ExecuteRemoveFile,
-    /// Open the selected gist's detail screen and fetch its comments in the background.
+    /// Open the selected gist's detail screen (comments load when the Comments tab is opened).
     OpenGistDetail,
+    /// Fetch comments for the gist shown on `Screen::GistDetail` (lazy, on Comments tab).
+    FetchComments,
     /// Analyse the selected Gist-manager gist's revision count, then ask to confirm a compaction.
     CompactGist,
     /// Run the confirmed compaction (clone → squash → force-push) on the pending gist.
@@ -332,12 +354,20 @@ pub enum KeyOutcome {
     RestoreRevisionPreview,
     /// Apply a confirmed single-file revision restore (`PATCH`).
     ExecuteRestoreRevision,
+    /// Star or unstar the context gist (`*`).
+    ToggleGistStar,
+    /// Fork the context gist into the authenticated account (`F`).
+    ForkGist,
 }
 
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub locals: Vec<LocalCandidate>,
     pub gists: Vec<GistFile>,
+    /// Starred gists from `GET /gists/starred` (may include others' gists).
+    pub starred_gists: Vec<GistFile>,
+    pub starred_gist_ids: std::collections::HashSet<String>,
+    pub current_user_login: Option<String>,
     pub pinned: Vec<PinnedMapping>,
     pub focus: FocusPane,
     /// The pane that DRIVES the match ranking, decoupled from `focus`: the anchored pane
@@ -437,8 +467,10 @@ pub struct AppState {
     pub diff_return: Screen,
     /// The gist currently shown in `Screen::GistDetail`; also guards stale comment responses.
     pub detail_gist_id: Option<String>,
-    /// Comments: `None` means loading, `Some` is the fetched result.
+    /// Comments: `None` until the Comments tab is opened; `Some` is the fetched result.
     pub detail_comments: Option<Vec<GistComment>>,
+    /// True while a comment fetch is in flight (after the user opens the Comments tab).
+    pub detail_comments_loading: bool,
     /// Comment-fetch error message, if any.
     pub detail_comments_error: Option<String>,
     /// Comment-pane scroll offset.
@@ -456,6 +488,10 @@ pub struct AppState {
     /// gist manager rows. Kept off `GistFile` since the count is a gist-level value, not a
     /// per-file one; empty until the first live fetch lands (cached startup gists show 0).
     pub gist_comment_counts: std::collections::HashMap<String, u32>,
+    /// Per-gist fork counts (`gist_id` → how many users forked it), from `/gists/{id}/forks`.
+    pub gist_fork_counts: std::collections::HashMap<String, u32>,
+    /// Per-gist stargazer counts (`gist_id` → count), from GraphQL `stargazerCount`.
+    pub gist_star_counts: std::collections::HashMap<String, u32>,
     /// Active theme selection (persisted to config when toggled with `T`).
     pub theme_choice: crate::config::ThemeChoice,
     /// Resolved colour palette for the current theme choice (from config).
@@ -556,12 +592,102 @@ impl AppState {
         self.update_upload_diff();
     }
 
+    fn list_gist_source(&self) -> &[GistFile] {
+        if self.gist_type_filter.uses_starred_source() {
+            &self.starred_gists
+        } else {
+            &self.gists
+        }
+    }
+
+    fn manager_gist_source(&self) -> &[GistFile] {
+        if self.gists_type_filter.uses_starred_source() {
+            &self.starred_gists
+        } else {
+            &self.gists
+        }
+    }
+
+    /// `owner.login` for a gist id from the in-memory owned or starred lists.
+    pub fn gist_owner_login(&self, gist_id: &str) -> String {
+        self.gists
+            .iter()
+            .chain(self.starred_gists.iter())
+            .find(|g| g.gist_id == gist_id)
+            .map(|g| g.owner_login.clone())
+            .unwrap_or_default()
+    }
+
+    /// `raw_url` from the in-memory gist lists for a `(gist_id, filename)` pair.
+    pub fn gist_file_raw_url(&self, gist_id: &str, filename: &str) -> Option<String> {
+        self.gists
+            .iter()
+            .chain(self.starred_gists.iter())
+            .find(|g| g.gist_id == gist_id && g.filename == filename)
+            .and_then(|g| g.raw_url.clone())
+    }
+
+    pub fn gist_is_owned(&self, gist_id: &str) -> bool {
+        if let Some(me) = self.current_user_login.as_deref() {
+            self.gists
+                .iter()
+                .chain(self.starred_gists.iter())
+                .find(|g| g.gist_id == gist_id)
+                .is_some_and(|g| g.is_owned_by(me))
+        } else {
+            self.gists.iter().any(|g| g.gist_id == gist_id)
+        }
+    }
+
+    pub fn gist_is_starred(&self, gist_id: &str) -> bool {
+        self.starred_gist_ids.contains(gist_id)
+    }
+
+    /// Per-gist comment, stargazer, and fork counts for row/detail labels.
+    pub fn gist_counts(&self, gist_id: &str) -> (u32, u32, u32) {
+        (
+            self.gist_comment_counts.get(gist_id).copied().unwrap_or(0),
+            self.gist_star_counts.get(gist_id).copied().unwrap_or(0),
+            self.gist_fork_counts.get(gist_id).copied().unwrap_or(0),
+        )
+    }
+
+    /// Gists you have starred (unique ids from the starred list fetch).
+    pub fn starred_gist_count(&self) -> usize {
+        self.starred_gist_ids.len()
+    }
+
+    /// Owned gists that are forks of an upstream gist.
+    pub fn owned_fork_gist_count(&self) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        for g in &self.gists {
+            if g.is_fork() {
+                seen.insert(g.gist_id.as_str());
+            }
+        }
+        seen.len()
+    }
+
+    /// Block mutating actions on gists you do not own. Returns `true` when blocked.
+    pub fn block_if_foreign_gist(&mut self, gist_id: &str, pin: bool) -> bool {
+        if self.gist_is_owned(gist_id) {
+            return false;
+        }
+        let message = if pin {
+            "cannot pin — not your gist"
+        } else {
+            "read-only — not your gist (* star; open detail and F to fork)"
+        };
+        self.set_status(message.to_string());
+        true
+    }
+
     pub fn ranked_gists(&self) -> Vec<RankedGistFile> {
         let query = self.filter_query.to_lowercase();
         let gists: Vec<GistFile> = self
-            .gists
+            .list_gist_source()
             .iter()
-            .filter(|g| self.gist_type_filter.matches(g.public))
+            .filter(|g| self.gist_type_filter.matches_file(g))
             .filter(|g| {
                 query.is_empty()
                     || g.filename.to_lowercase().contains(&query)
@@ -625,7 +751,7 @@ impl AppState {
         self.ranked_gists().into_iter().nth(self.gist_index)
     }
 
-    /// All gists collapsed to one entry each (raw, unfiltered).
+    /// All gists collapsed to one entry each (raw, unfiltered) from the owned list.
     pub fn gist_groups(&self) -> Vec<GistGroup> {
         group_gists(&self.gists)
     }
@@ -635,10 +761,9 @@ impl AppState {
     /// rendering in `Screen::Gists`.
     pub fn visible_gist_groups(&self) -> Vec<GistGroup> {
         let query = self.gists_filter_query.to_lowercase();
-        let mut groups: Vec<GistGroup> = self
-            .gist_groups()
+        let mut groups: Vec<GistGroup> = group_gists(self.manager_gist_source())
             .into_iter()
-            .filter(|g| self.gists_type_filter.matches(g.public))
+            .filter(|g| self.gists_type_filter.matches_group(g))
             .filter(|g| {
                 query.is_empty()
                     || g.description.to_lowercase().contains(&query)
@@ -667,7 +792,13 @@ impl AppState {
                     g,
                     unix_now(),
                     self.gists_sort,
-                    self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
+                    (
+                        self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
+                        self.gist_star_counts.get(&g.id).copied().unwrap_or(0),
+                        self.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
+                    ),
+                    self.gist_is_starred(&g.id),
+                    self.current_user_login.as_deref(),
                 )
                 .chars()
                 .count()
@@ -738,15 +869,83 @@ impl AppState {
     /// Number of files the given gist holds in the current in-memory list. Used to guard
     /// against removing a gist's only file (GitHub forbids a fileless gist).
     fn gist_file_count(&self, gist_id: &str) -> usize {
-        self.gists.iter().filter(|g| g.gist_id == gist_id).count()
+        self.gists
+            .iter()
+            .chain(self.starred_gists.iter())
+            .filter(|g| g.gist_id == gist_id)
+            .count()
     }
 
     /// Filenames the given gist holds in the current in-memory list (gh order).
     pub fn gist_filenames(&self, gist_id: &str) -> Vec<String> {
         self.gists
             .iter()
+            .chain(self.starred_gists.iter())
             .filter(|g| g.gist_id == gist_id)
             .map(|g| g.filename.clone())
+            .collect()
+    }
+
+    pub fn gist_file_content_type(&self, gist_id: &str, filename: &str) -> Option<String> {
+        self.gists
+            .iter()
+            .chain(self.starred_gists.iter())
+            .find(|g| g.gist_id == gist_id && g.filename == filename)
+            .and_then(|g| g.content_type.clone())
+    }
+
+    pub fn gist_file_is_text_previewable(&self, gist_id: &str, filename: &str) -> bool {
+        crate::domain::gist_file_is_text_previewable(
+            filename,
+            self.gist_file_content_type(gist_id, filename).as_deref(),
+        )
+    }
+
+    /// Returns true when preview/diff should be blocked for this gist file (sets `status`).
+    pub fn block_if_non_previewable_gist_file(&mut self, gist_id: &str, filename: &str) -> bool {
+        if self.gist_file_is_text_previewable(gist_id, filename) {
+            return false;
+        }
+        self.status = Some(crate::domain::non_previewable_status(
+            filename,
+            self.gist_file_content_type(gist_id, filename).as_deref(),
+        ));
+        true
+    }
+
+    /// Like [`Self::block_if_non_previewable_gist_file`], but also rejects binary-looking local files.
+    pub fn block_if_non_previewable_diff(
+        &mut self,
+        gist_id: &str,
+        filename: &str,
+        local_path: Option<&std::path::Path>,
+    ) -> bool {
+        if self.block_if_non_previewable_gist_file(gist_id, filename) {
+            return true;
+        }
+        if let Some(path) = local_path {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if !crate::domain::gist_file_is_text_previewable(name, None) {
+                    self.status =
+                        Some("cannot diff — local file looks binary (use d to download)".into());
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Detail-view file labels; non-text files are tagged `(binary)`.
+    pub fn gist_file_display_names(&self, gist_id: &str) -> Vec<String> {
+        self.gist_filenames(gist_id)
+            .into_iter()
+            .map(|f| {
+                if self.gist_file_is_text_previewable(gist_id, &f) {
+                    f
+                } else {
+                    format!("{f} (binary)")
+                }
+            })
             .collect()
     }
 
@@ -837,7 +1036,14 @@ impl AppState {
     }
 
     pub fn group_by_id(&self, gist_id: &str) -> Option<GistGroup> {
-        self.gist_groups().into_iter().find(|g| g.id == gist_id)
+        let files: Vec<GistFile> = self
+            .gists
+            .iter()
+            .chain(self.starred_gists.iter())
+            .filter(|g| g.gist_id == gist_id)
+            .cloned()
+            .collect();
+        group_gists(&files).into_iter().find(|g| g.id == gist_id)
     }
 
     /// The gist the current screen acts on: the gist-level cursor on `Gists`, the
@@ -865,6 +1071,11 @@ impl AppState {
     }
 
     fn upload_intent(&mut self) -> KeyOutcome {
+        if let Some(gist) = self.selected_gist() {
+            if self.block_if_foreign_gist(&gist.file.gist_id, false) {
+                return KeyOutcome::None;
+            }
+        }
         if self.is_pin_diff_context() {
             let Some(local_filename) = self
                 .preview_local
@@ -1071,6 +1282,9 @@ pub fn initial_state() -> AppState {
     AppState {
         locals: Vec::new(),
         gists: Vec::new(),
+        starred_gists: Vec::new(),
+        starred_gist_ids: std::collections::HashSet::new(),
+        current_user_login: None,
         pinned: Vec::new(),
         focus: FocusPane::Local,
         anchor: FocusPane::Local,
@@ -1145,6 +1359,7 @@ pub fn initial_state() -> AppState {
         diff_return: Screen::List,
         detail_gist_id: None,
         detail_comments: None,
+        detail_comments_loading: false,
         detail_comments_error: None,
         detail_scroll: 0,
         detail_focus: DetailFocus::Files,
@@ -1152,6 +1367,8 @@ pub fn initial_state() -> AppState {
         compact_return_screen: Screen::Gists,
         spinner_frame: 0,
         gist_comment_counts: std::collections::HashMap::new(),
+        gist_fork_counts: std::collections::HashMap::new(),
+        gist_star_counts: std::collections::HashMap::new(),
         theme_choice: crate::config::ThemeChoice::Dark,
         theme: Theme::DARK,
         revision_gist_id: None,
@@ -1192,10 +1409,17 @@ pub fn load_startup_state() -> Result<AppState> {
     state.focus = FocusPane::Gist;
     // The gist list is fetched off-thread by run_loop so the TUI appears instantly.
     state.loading = true;
-    // Show last-known gists immediately from the on-disk cache; the background fetch
-    // refreshes them once it completes.
+    // Show last-known gists (owned + starred + counts) from cache; background fetch refreshes.
     if let Ok(path) = crate::cache::cache_path() {
-        state.gists = crate::cache::load_cached_gists(&path);
+        if let Some(cache) = crate::cache::load_gist_cache(&path) {
+            state.starred_gist_ids = cache.starred_ids_set();
+            state.gists = cache.owned;
+            state.starred_gists = cache.starred;
+            state.current_user_login = cache.user_login;
+            state.gist_comment_counts = cache.comment_counts;
+            state.gist_fork_counts = cache.fork_counts;
+            state.gist_star_counts = cache.star_counts;
+        }
     }
 
     Ok(state)

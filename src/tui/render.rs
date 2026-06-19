@@ -60,7 +60,10 @@ List screen
   /          filter the focused pane (Local = path/filename, Gist = description/id)
              while filtering: type to match · ↑↓ move · Tab apply + switch pane
              · Enter apply · Esc clear · ←/→/Home/End move · Del
-  v          cycle gist visibility: all / public / secret
+  v          cycle gist visibility: all / public / secret / starred / forked
+  *          star / unstar the selected gist
+             (others' gists are read-only: preview, diff, download, browser — not pin/upload/delete;
+              open gist detail to fork with F)
   s          cycle the focused pane's sort: match / name / recent
   t          toggle row view: description / id
   T          toggle light/dark colour theme (global; saved to config)
@@ -72,7 +75,8 @@ Actions (on the selected local file + gist)
   Enter      diff the local file against the gist; direction follows the focused
              pane — Gist pane = download view, Local pane = upload view
              (--- old / +++ new; local label = yellow, gist label = blue)
-  Space      preview the gist file's content (R in preview to force-refresh)
+  Space      preview the gist file's content (R in preview to force-refresh;
+             blocked for images/binary — use o or d instead)
   h          open revision history for the selected gist file
   d          download the gist into the cwd
   u          upload the local file into the gist
@@ -106,30 +110,38 @@ Actions (on the selected local file + gist)
   Left/Right scroll a long description horizontally
   /          filter gists by description or id (↑↓ move · Enter apply · Esc clear)
   s          cycle sort: updated / created
-  v          cycle visibility: all / public / secret
-  e          edit the gist description (Enter apply, Esc cancel)
-             ←/→/Home/End move the text cursor · Del deletes ahead
+  v          cycle visibility: all / public / secret / starred / forked
+  *          star / unstar the selected gist
   Enter      open the gist detail view (info, file list, comments)
   o          open the gist in your web browser
   y          copy the gist's URL to the system clipboard
   h          open revision history (browse, diff, restore)
-  c          compact revisions: squash history to one commit (force-push, y/n confirm)
-  X          delete the entire gist and all its files (y/n confirm)
-  q / Esc    back to the list"
+  q / Esc    back to the list
+             (edit description, compact, delete: gist detail only, owned gists)
+  Rows show ☆ N (stargazers), ⑂ N (forks), 💬 N (comments) when non-zero;
+  ★ prefix = you starred it; ⑂ prefix = this gist is a fork."
         }
         HelpTopic::GistDetail => {
             "\
   Tab        switch tab: Files / Comments (one shows at a time; opens on Files)
   Up/Down    move the file cursor (Files tab) or scroll comments (Comments tab)
   PageUp/Dn  page comments / file cursor by 10
-  Enter      preview the cursor-selected file (file list focused)
+  Enter      preview the cursor-selected file (file list focused; blocked for binary)
   1-9        preview the content of the Nth file (full-screen; R refresh, q back)
+             non-text files are tagged (binary) in the list
   h          open revision history for this gist (target = cursor file)
-  c          compact revisions (y/n confirm; gist info shown as context)
+  *          star / unstar this gist
   o          open the gist in your web browser
   y          copy the gist's URL to the system clipboard
+  q / Esc    back to the gist manager
+  Info line shows ☆ N (stargazers), ⑂ N (forks), 💬 N (comments) when non-zero
+  Owned gists only:
+  e          edit the gist description (Enter apply, Esc cancel)
+             ←/→/Home/End move the text cursor · Del deletes ahead
+  c          compact revisions (y/n confirm; gist info shown as context)
   X          delete the entire gist and all its files (y/n confirm)
-  q / Esc    back to the gist manager"
+  Others' gists:
+  F          fork into your account"
         }
         HelpTopic::Revisions => {
             "\
@@ -429,12 +441,38 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     }
 }
 
+fn gist_badge_prefix(starred: bool, forked: bool) -> String {
+    let mut prefix = String::new();
+    if starred {
+        prefix.push('★');
+        prefix.push(' ');
+    }
+    if forked {
+        prefix.push('⑂');
+        prefix.push(' ');
+    }
+    prefix
+}
+
+fn gist_owner_prefix(group: &GistGroup, current_user: Option<&str>) -> String {
+    if group.owner_login.is_empty() {
+        return String::new();
+    }
+    if current_user == Some(group.owner_login.as_str()) {
+        return String::new();
+    }
+    format!("@{}  ", group.owner_login)
+}
+
 pub(super) fn gist_group_row_label(
     g: &GistGroup,
     now: u64,
     sort: GistGroupSort,
-    comments: u32,
+    counts: (u32, u32, u32),
+    starred: bool,
+    current_user: Option<&str>,
 ) -> String {
+    let (comments, stars, forks) = counts;
     let desc = if g.description.trim().is_empty() {
         "(no description)".to_string()
     } else {
@@ -451,16 +489,33 @@ pub(super) fn gist_group_row_label(
     let age = crate::domain::parse_rfc3339_to_unix(timestamp)
         .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
         .unwrap_or_else(|| "?".into());
-    // Only surface the 💬 marker when the gist actually has comments, to keep the common
-    // zero-comment rows clean.
+    // Only surface markers when non-zero so the common quiet rows stay clean.
     let comments_seg = if comments > 0 {
         format!("  💬 {comments}")
     } else {
         String::new()
     };
+    let stars_seg = if stars > 0 {
+        format!("  ☆ {stars}")
+    } else {
+        String::new()
+    };
+    let forks_seg = if forks > 0 {
+        format!("  ⑂ {forks}")
+    } else {
+        String::new()
+    };
     format!(
-        "{}  {}  📄 {}{}  🕒 {}",
-        g.id, desc, g.file_count, comments_seg, age
+        "{}{}{}  {}  📄 {}{}{}{}  🕒 {}",
+        gist_badge_prefix(starred, g.fork_of_id.is_some()),
+        gist_owner_prefix(g, current_user),
+        g.id,
+        desc,
+        g.file_count,
+        comments_seg,
+        stars_seg,
+        forks_seg,
+        age
     )
 }
 
@@ -479,7 +534,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
     } else {
         (
             String::new(),
-            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · e desc · h history · o browser · c compact · X delete · ? help · q back"
+            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · * star · h history · o browser · ? help · q back"
                 .to_string(),
             true,
         )
@@ -509,7 +564,13 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
                         g,
                         now,
                         state.gists_sort,
-                        state.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
+                        (
+                            state.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
+                            state.gist_star_counts.get(&g.id).copied().unwrap_or(0),
+                            state.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
+                        ),
+                        state.gist_is_starred(&g.id),
+                        state.current_user_login.as_deref(),
                     ),
                     state.gists_hscroll,
                 ))
@@ -519,10 +580,12 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
 
     let selected = (!groups.is_empty()).then_some(state.gists_index);
     let mut title = format!(
-        "Gists {}  ·  sort:{}  ·  type:{}",
+        "Gists {}  ·  sort:{}  ·  type:{}  ·  ★ {}  ·  ⑂ {}",
         count_label(groups.len(), state.gist_groups().len()),
         state.gists_sort.label(),
-        state.gists_type_filter.label()
+        state.gists_type_filter.label(),
+        state.starred_gist_count(),
+        state.owned_fork_gist_count()
     );
     if !state.gists_filter_query.is_empty() {
         title.push_str(&format!("  ·  /{}", state.gists_filter_query));
@@ -561,23 +624,39 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
     } else {
         render_footer(frame, chunks[1], &ftitle, &footer, colored, &state.theme);
     }
+}
 
-    if state.editing_description {
-        render_centered_modal_input(
-            frame,
-            "Edit description (Enter apply · Esc cancel)",
-            "",
-            &state.description_input,
-            "",
-            state.theme.accent,
-            &state.theme,
-        );
+fn gist_info_counts_seg(comments: u32, stars: u32, forks: u32) -> String {
+    let mut parts = Vec::new();
+    if stars > 0 {
+        parts.push(format!("☆ {stars}"));
+    }
+    if forks > 0 {
+        parts.push(format!("⑂ {forks}"));
+    }
+    if comments > 0 {
+        parts.push(format!("💬 {comments}"));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("{} · ", parts.join(" · "))
     }
 }
 
 /// One-line info summary for the detail header.
-pub(super) fn gist_info_line(group: &GistGroup, now: u64) -> String {
+pub(super) fn gist_info_line(
+    group: &GistGroup,
+    now: u64,
+    current_user: Option<&str>,
+    starred: bool,
+    counts: (u32, u32, u32),
+) -> String {
+    let (comments, stars, forks) = counts;
+    let star_seg = if starred { "★ starred · " } else { "" };
     let vis = if group.public { "public" } else { "secret" };
+    let owner_seg = gist_owner_prefix(group, current_user);
+    let counts_seg = gist_info_counts_seg(comments, stars, forks);
     let created = crate::domain::parse_rfc3339_to_unix(&group.created_at)
         .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
         .unwrap_or_else(|| "?".into());
@@ -586,8 +665,13 @@ pub(super) fn gist_info_line(group: &GistGroup, now: u64) -> String {
         .unwrap_or_else(|| "?".into());
     // The file count lives in the "Files (N)" section header below, so it's omitted here.
     // The detail view has room, so show the full gist id (not a truncated prefix).
+    let fork_seg = group
+        .fork_of_id
+        .as_deref()
+        .map(|id| format!("fork of {id} · "))
+        .unwrap_or_default();
     format!(
-        "{vis} · created {created} · updated {updated} · {}",
+        "{star_seg}{owner_seg}{vis} · {counts_seg}created {created} · updated {updated} · {fork_seg}{}",
         group.id
     )
 }
@@ -795,9 +879,15 @@ pub(super) fn render_gist_info_and_files(
     let Some(group) = state.group_by_id(gist_id) else {
         return;
     };
-    let files = state.gist_filenames(gist_id);
+    let files = state.gist_file_display_names(gist_id);
     let mut lines: Vec<Line> = vec![
-        Line::from(gist_info_line(&group, unix_now())),
+        Line::from(gist_info_line(
+            &group,
+            unix_now(),
+            state.current_user_login.as_deref(),
+            state.gist_is_starred(gist_id),
+            state.gist_counts(gist_id),
+        )),
         Line::from(""),
         Line::from(Span::styled(
             format!("Files ({})", files.len()),
@@ -837,7 +927,13 @@ fn render_detail_header(frame: &mut Frame, area: Rect, state: &AppState, gist_id
         return;
     };
     let lines = vec![
-        Line::from(gist_info_line(&group, unix_now())),
+        Line::from(gist_info_line(
+            &group,
+            unix_now(),
+            state.current_user_login.as_deref(),
+            state.gist_is_starred(gist_id),
+            state.gist_counts(gist_id),
+        )),
         detail_focus_tabs_line(state.detail_focus, &state.theme),
     ];
     frame.render_widget(
@@ -857,7 +953,7 @@ fn render_detail_header(frame: &mut Frame, area: Rect, state: &AppState, gist_id
 /// The gist detail's Files tab: the numbered, cursor-highlighted, scrollable file list,
 /// titled with the file count.
 fn render_gist_file_list(frame: &mut Frame, area: Rect, state: &AppState, gist_id: &str) {
-    let files = state.gist_filenames(gist_id);
+    let files = state.gist_file_display_names(gist_id);
     let cursor = state.detail_file_cursor.min(files.len().saturating_sub(1));
     let visible_rows = (area.height as usize).saturating_sub(2);
     let offset = file_list_scroll(cursor, visible_rows, files.len());
@@ -879,20 +975,28 @@ fn render_gist_file_list(frame: &mut Frame, area: Rect, state: &AppState, gist_i
 /// Comments pane: loading / error / empty / list (plain text wrapped to width, scrollable).
 pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppState) {
     let now = unix_now();
-    let body: Vec<Line> = match (&state.detail_comments, &state.detail_comments_error) {
-        (None, _) => vec![Line::from(Span::styled(
+    let body: Vec<Line> = match (
+        &state.detail_comments,
+        state.detail_comments_loading,
+        &state.detail_comments_error,
+    ) {
+        (None, true, _) => vec![Line::from(Span::styled(
             "Loading comments…",
             Style::default().fg(state.theme.dim),
         ))],
-        (Some(_), Some(err)) => vec![Line::from(Span::styled(
+        (None, false, _) => vec![Line::from(Span::styled(
+            "Tab here to load comments",
+            Style::default().fg(state.theme.dim),
+        ))],
+        (Some(_), _, Some(err)) => vec![Line::from(Span::styled(
             format!("comments error: {err}"),
             Style::default().fg(Color::Red),
         ))],
-        (Some(comments), None) if comments.is_empty() => vec![Line::from(Span::styled(
+        (Some(comments), _, None) if comments.is_empty() => vec![Line::from(Span::styled(
             "No comments",
             Style::default().fg(state.theme.dim),
         ))],
-        (Some(comments), None) => {
+        (Some(comments), _, None) => {
             let mut lines = Vec::new();
             for c in comments {
                 let age = crate::domain::parse_rfc3339_to_unix(&c.created_at)
@@ -947,16 +1051,25 @@ pub(super) fn footer_with_status(status: Option<&str>, hints: &str) -> (String, 
 
 /// The detail-view footer: a one-shot `state.status` message (e.g. the compaction result,
 /// including "nothing to compact") when present, else the focus-aware key hints.
-pub(super) fn detail_footer(status: Option<&str>, focus: DetailFocus) -> (String, bool) {
-    let hints = match focus {
-        DetailFocus::Comments => {
-            "Tab files · ↑↓ scroll · 1-9 preview · h history · c compact · o browser · X delete · ? help · q back"
-        }
-        DetailFocus::Files => {
-            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · h history · c compact · o browser · X delete · ? help · q back"
-        }
+pub(super) fn detail_footer(
+    status: Option<&str>,
+    focus: DetailFocus,
+    owned: bool,
+) -> (String, bool) {
+    let manage = if owned {
+        " · e desc · c compact · X delete"
+    } else {
+        " · F fork"
     };
-    footer_with_status(status, hints)
+    let hints = match focus {
+        DetailFocus::Comments => format!(
+            "Tab files · ↑↓ scroll · 1-9 preview · h history · * star · o browser{manage} · ? help · q back"
+        ),
+        DetailFocus::Files => format!(
+            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · h history · * star · o browser{manage} · ? help · q back"
+        ),
+    };
+    footer_with_status(status, &hints)
 }
 
 /// The Files|Comments tab index, mirroring `detail_focus`. Pure so the tab selection is
@@ -996,7 +1109,11 @@ pub(super) fn detail_focus_tabs_line(focus: DetailFocus, theme: &Theme) -> Line<
 
 pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState) {
     let area = frame.area();
-    let (footer, colored) = detail_footer(state.status.as_deref(), state.detail_focus);
+    let owned = state
+        .detail_gist_id
+        .as_deref()
+        .is_some_and(|id| state.gist_is_owned(id));
+    let (footer, colored) = detail_footer(state.status.as_deref(), state.detail_focus, owned);
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     // Fixed 4-row header (borders + basic-info line + focus tabs); the active tab — the file
     // list or the comments, never both — fills the rest above the footer.
@@ -1016,6 +1133,18 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState) {
         }
     }
     render_footer(frame, chunks[2], "", &footer, colored, &state.theme);
+
+    if state.editing_description {
+        render_centered_modal_input(
+            frame,
+            "Edit description (Enter apply · Esc cancel)",
+            "",
+            &state.description_input,
+            "",
+            state.theme.accent,
+            &state.theme,
+        );
+    }
 }
 
 pub(super) fn local_row_label(path: &std::path::Path, cwd: &std::path::Path) -> String {
@@ -1078,7 +1207,7 @@ pub(super) fn marked_item(base: String, mark: RowMark, hscroll: u16) -> ListItem
 }
 
 pub(super) fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
-    match view {
+    let base = match view {
         GistView::Description => {
             if g.file.description.trim().is_empty() {
                 g.file.filename.clone()
@@ -1087,7 +1216,26 @@ pub(super) fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
             }
         }
         GistView::Id => format!("{} / {}", g.file.gist_id, g.file.filename),
-    }
+    };
+    format!("{}{}", gist_badge_prefix(false, g.file.is_fork()), base)
+}
+
+pub(super) fn gist_row_display(g: &RankedGistFile, view: GistView, state: &AppState) -> String {
+    let base = match view {
+        GistView::Description => {
+            if g.file.description.trim().is_empty() {
+                g.file.filename.clone()
+            } else {
+                format!("{} — {}", g.file.filename, g.file.description)
+            }
+        }
+        GistView::Id => format!("{} / {}", g.file.gist_id, g.file.filename),
+    };
+    format!(
+        "{}{}",
+        gist_badge_prefix(state.gist_is_starred(&g.file.gist_id), g.file.is_fork()),
+        base
+    )
 }
 
 /// Command hint tailored to the focused pane: local-file actions on the left, gist actions
@@ -1104,6 +1252,7 @@ pub(super) fn commands_hint(focus: FocusPane) -> String {
             "d download",
             "u upload",
             "X remove file",
+            "* star",
             "g gists",
         ]),
     }
@@ -1383,7 +1532,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
         ranked
             .iter()
             .map(|g| {
-                let base = gist_row_label(g, state.gist_view);
+                let base = gist_row_display(g, state.gist_view, state);
                 marked_item(base, row_mark(&g.reasons), state.gist_hscroll)
             })
             .collect()

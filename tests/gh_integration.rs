@@ -86,7 +86,7 @@ fn fetch_gist_list_surfaces_stderr_on_failure() {
 fn fetch_gist_file_content_returns_stdout_and_plans_view() {
     let runner = FakeRunner::new(vec![FakeRunner::ok("hello = true\n")]);
 
-    let content = fetch_gist_file_content_with(&runner, "abc123", "config.toml").unwrap();
+    let content = fetch_gist_file_content_with(&runner, "abc123", "config.toml", None).unwrap();
 
     assert_eq!(content, "hello = true\n");
     assert_eq!(
@@ -99,7 +99,7 @@ fn fetch_gist_file_content_returns_stdout_and_plans_view() {
 fn fetch_gist_file_content_surfaces_stderr_on_failure() {
     let runner = FakeRunner::new(vec![FakeRunner::fail("could not find gist")]);
 
-    let err = fetch_gist_file_content_with(&runner, "missing", "x").unwrap_err();
+    let err = fetch_gist_file_content_with(&runner, "missing", "x", None).unwrap_err();
     assert!(err.to_string().contains("could not find gist"));
 }
 
@@ -141,6 +141,11 @@ fn run_command_executes_planned_write_action() {
         public: false,
         updated_at: "2026-06-08T00:00:00Z".into(),
         created_at: "2026-06-08T00:00:00Z".into(),
+        owner_login: String::new(),
+        fork_of_id: None,
+        raw_url: None,
+        content_type: None,
+        node_id: None,
     };
     let plan = upload_command(PathBuf::from("/tmp/settings.json").as_path(), &target);
     let runner = FakeRunner::new(vec![FakeRunner::ok("https://gist.github.com/abc123\n")]);

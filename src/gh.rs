@@ -2,7 +2,7 @@ use crate::actions::{run_command, CommandPlan, CommandRunner, SystemRunner};
 use crate::domain::{GistComment, GistFile, GistRevision, GistRevisionChangeStatus};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Deserialize)]
 struct GhGist {
@@ -19,6 +19,15 @@ struct GhGist {
     /// available without a per-gist comments fetch.
     #[serde(default)]
     comments: u32,
+    #[serde(default)]
+    node_id: Option<String>,
+    #[serde(default)]
+    owner: Option<GhCommentUser>,
+    #[serde(default)]
+    fork_of: Option<GhGistForkOf>,
+    /// Present on full gist objects; omitted from the list response (counts default to 0).
+    #[serde(default)]
+    forks: Vec<serde_json::Value>,
     // The REST API returns `files` as an object keyed by filename. BTreeMap keeps
     // the order deterministic (by filename) for stable display and tests.
     #[serde(default)]
@@ -26,8 +35,17 @@ struct GhGist {
 }
 
 #[derive(Debug, Deserialize)]
+struct GhGistForkOf {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct GhGistFile {
     filename: String,
+    #[serde(default)]
+    raw_url: Option<String>,
+    #[serde(default, rename = "type")]
+    content_type: Option<String>,
 }
 
 /// Plan for `gh --version` (used to confirm `gh` is installed and runnable).
@@ -59,6 +77,26 @@ pub fn gist_list_plan() -> CommandPlan {
             "--paginate".into(),
             "/gists?per_page=100".into(),
         ],
+    }
+}
+
+/// Plan for listing the authenticated user's starred gists.
+pub fn gist_starred_list_plan() -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "--paginate".into(),
+            "/gists/starred?per_page=100".into(),
+        ],
+    }
+}
+
+/// Plan for the authenticated user's login (ownership checks).
+pub fn current_user_plan() -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec!["api".into(), "user".into(), "--jq".into(), ".login".into()],
     }
 }
 
@@ -117,6 +155,12 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
 
     for gist in gists {
         let description = gist.description.unwrap_or_default();
+        let owner_login = gist
+            .owner
+            .map(|u| u.login)
+            .filter(|l| !l.is_empty())
+            .unwrap_or_default();
+        let fork_of_id = gist.fork_of.map(|f| f.id);
         for file in gist.files.into_values() {
             files.push(GistFile {
                 gist_id: gist.id.clone(),
@@ -125,6 +169,11 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
                 public: gist.public,
                 updated_at: gist.updated_at.clone(),
                 created_at: gist.created_at.clone(),
+                owner_login: owner_login.clone(),
+                fork_of_id: fork_of_id.clone(),
+                raw_url: file.raw_url.clone(),
+                content_type: file.content_type.clone(),
+                node_id: gist.node_id.clone(),
             });
         }
     }
@@ -132,11 +181,283 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
     Ok(files)
 }
 
+/// Unique `gist_id → node_id` pairs from flat gist rows (first wins).
+pub fn gist_node_id_map(files: &[GistFile]) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for file in files {
+        if let Some(nid) = file.node_id.as_ref().filter(|s| !s.is_empty()) {
+            map.entry(file.gist_id.clone())
+                .or_insert_with(|| nid.clone());
+        }
+    }
+    map
+}
+
+/// Merge node-id maps from owned and starred gist rows.
+pub fn merge_gist_node_id_maps(
+    owned: &[GistFile],
+    starred: &[GistFile],
+) -> HashMap<String, String> {
+    let mut map = gist_node_id_map(owned);
+    for (id, nid) in gist_node_id_map(starred) {
+        map.entry(id).or_insert(nid);
+    }
+    map
+}
+
 /// Map each gist id to its comment count, parsed from the same gist-list JSON. The count rides
 /// along in the list response, so this needs no extra `gh` call.
 pub fn parse_gist_comment_counts(raw: &str) -> Result<HashMap<String, u32>> {
     let gists: Vec<GhGist> = serde_json::from_str(raw).context("parse gh gist list JSON")?;
     Ok(gists.into_iter().map(|g| (g.id, g.comments)).collect())
+}
+
+/// Map each gist id to how many forks it has. Uses the `forks` array when the JSON
+/// includes it (full gist); list responses omit it and return 0.
+pub fn parse_gist_fork_counts(raw: &str) -> Result<HashMap<String, u32>> {
+    let gists: Vec<GhGist> = serde_json::from_str(raw).context("parse gh gist list JSON")?;
+    Ok(gists
+        .into_iter()
+        .map(|g| (g.id, g.forks.len() as u32))
+        .collect())
+}
+
+/// Plan for listing every fork of a gist (paginated; gh concatenates pages).
+pub fn gist_forks_plan(gist_id: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "--paginate".into(),
+            format!("/gists/{gist_id}/forks?per_page=100"),
+        ],
+    }
+}
+
+pub fn fetch_gist_fork_count(gist_id: &str) -> Result<u32> {
+    fetch_gist_fork_count_with(&SystemRunner, gist_id)
+}
+
+pub fn fetch_gist_fork_count_with(runner: &dyn CommandRunner, gist_id: &str) -> Result<u32> {
+    let raw = run_command(runner, &gist_forks_plan(gist_id))?;
+    let forks: Vec<serde_json::Value> = serde_json::from_str(&raw).context("parse gist forks")?;
+    Ok(forks.len() as u32)
+}
+
+/// GraphQL query: the REST gist *list* omits `fork_of`, but `isFork` is reliable here.
+const GIST_FORK_FLAGS_QUERY: &str = "{ viewer { gists(first: 100) { nodes { name isFork } } } }";
+
+pub fn gist_fork_flags_graphql_plan() -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "graphql".into(),
+            "-f".into(),
+            format!("query={GIST_FORK_FLAGS_QUERY}"),
+        ],
+    }
+}
+
+/// Plan for a single gist (`fork_of` is present on the full object, not the list).
+pub fn gist_detail_plan(gist_id: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec!["api".into(), format!("/gists/{gist_id}")],
+    }
+}
+
+pub fn fetch_forked_gist_ids_graphql() -> Result<HashSet<String>> {
+    fetch_forked_gist_ids_graphql_with(&SystemRunner)
+}
+
+pub fn fetch_forked_gist_ids_graphql_with(runner: &dyn CommandRunner) -> Result<HashSet<String>> {
+    let raw = run_command(runner, &gist_fork_flags_graphql_plan())?;
+    parse_forked_gist_ids_graphql(&raw)
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphqlForkFlagsResponse {
+    data: GraphqlForkFlagsData,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphqlForkFlagsData {
+    viewer: GraphqlForkFlagsViewer,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphqlForkFlagsViewer {
+    gists: GraphqlForkFlagsConnection,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphqlForkFlagsConnection {
+    nodes: Vec<GraphqlForkFlagsNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphqlForkFlagsNode {
+    /// Gist id (hex), not the filename.
+    name: String,
+    #[serde(rename = "isFork")]
+    is_fork: bool,
+}
+
+/// Owned gist ids flagged as forks by the GraphQL viewer query.
+pub fn parse_forked_gist_ids_graphql(raw: &str) -> Result<HashSet<String>> {
+    let resp: GraphqlForkFlagsResponse =
+        serde_json::from_str(raw).context("parse gist fork flags GraphQL")?;
+    Ok(resp
+        .data
+        .viewer
+        .gists
+        .nodes
+        .into_iter()
+        .filter(|n| n.is_fork)
+        .map(|n| n.name)
+        .collect())
+}
+
+pub fn fetch_gist_fork_of_id(gist_id: &str) -> Result<Option<String>> {
+    fetch_gist_fork_of_id_with(&SystemRunner, gist_id)
+}
+
+pub fn fetch_gist_fork_of_id_with(
+    runner: &dyn CommandRunner,
+    gist_id: &str,
+) -> Result<Option<String>> {
+    let raw = run_command(runner, &gist_detail_plan(gist_id))?;
+    let gist: GhGist = serde_json::from_str(&raw).context("parse gh gist detail JSON")?;
+    Ok(gist.fork_of.map(|f| f.id))
+}
+
+/// Map owned gist id → upstream `fork_of` id. Uses GraphQL `isFork` (one call) then
+/// `GET /gists/{id}` only for the handful of owned forks (list JSON omits `fork_of`).
+pub fn collect_owned_fork_of_ids(owned_ids: HashSet<String>) -> HashMap<String, Option<String>> {
+    let fork_ids = match fetch_forked_gist_ids_graphql() {
+        Ok(ids) => ids,
+        Err(_) => return HashMap::new(),
+    };
+    let mut out = HashMap::new();
+    for id in fork_ids.intersection(&owned_ids) {
+        if let Ok(fork_of) = fetch_gist_fork_of_id(id) {
+            out.insert(id.clone(), fork_of);
+        }
+    }
+    out
+}
+
+/// Stamp `fork_of_id` onto every [`GistFile`] row for gists present in `fork_of`.
+pub fn apply_fork_of_ids(gists: &mut [GistFile], fork_of: &HashMap<String, Option<String>>) {
+    for g in gists.iter_mut() {
+        if let Some(upstream) = fork_of.get(&g.gist_id) {
+            g.fork_of_id = upstream.clone();
+        }
+    }
+}
+
+/// Fill fork counts. List JSON usually omits `forks`, so each id is probed via
+/// `/gists/{id}/forks` when the parsed count is zero. Merges owned and starred list JSON.
+pub fn collect_gist_fork_counts(
+    owned_raw: Option<&str>,
+    starred_raw: Option<&str>,
+    gist_ids: impl IntoIterator<Item = String>,
+) -> HashMap<String, u32> {
+    let mut counts = owned_raw
+        .and_then(|raw| parse_gist_fork_counts(raw).ok())
+        .unwrap_or_default();
+    if let Some(raw) = starred_raw {
+        if let Ok(starred) = parse_gist_fork_counts(raw) {
+            counts.extend(starred);
+        }
+    }
+    for id in gist_ids {
+        if counts.get(&id).copied().unwrap_or(0) > 0 {
+            continue;
+        }
+        if let Ok(n) = fetch_gist_fork_count(&id) {
+            if n > 0 {
+                counts.insert(id, n);
+            }
+        }
+    }
+    counts
+}
+
+const STARGAZER_GRAPHQL_CHUNK: usize = 40;
+
+/// Build a batched GraphQL query (`n0`…`n{k}` aliases) for stargazer counts.
+pub fn build_stargazer_graphql_query(node_ids: &[String]) -> String {
+    let mut query = String::from("query { ");
+    for (i, id) in node_ids.iter().enumerate() {
+        query.push_str(&format!(
+            "n{i}: node(id: \"{id}\") {{ ... on Gist {{ name stargazerCount }} }} "
+        ));
+    }
+    query.push('}');
+    query
+}
+
+pub fn gist_stargazer_graphql_plan(query: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "graphql".into(),
+            "-f".into(),
+            format!("query={query}"),
+        ],
+    }
+}
+
+/// Parse alias-keyed GraphQL data (`n0`, `n1`, …) into `gist_id → stargazerCount`.
+pub fn parse_stargazer_counts_graphql(raw: &str) -> Result<HashMap<String, u32>> {
+    let v: serde_json::Value = serde_json::from_str(raw).context("parse stargazer GraphQL")?;
+    let data = v
+        .get("data")
+        .and_then(|d| d.as_object())
+        .context("GraphQL data object")?;
+    let mut out = HashMap::new();
+    for node in data.values() {
+        if node.is_null() {
+            continue;
+        }
+        let Some(name) = node.get("name").and_then(|n| n.as_str()) else {
+            continue;
+        };
+        let count = node
+            .get("stargazerCount")
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0) as u32;
+        if count > 0 {
+            out.insert(name.to_string(), count);
+        }
+    }
+    Ok(out)
+}
+
+pub fn collect_gist_star_counts(node_ids: HashMap<String, String>) -> HashMap<String, u32> {
+    collect_gist_star_counts_with(&SystemRunner, node_ids)
+}
+
+pub fn collect_gist_star_counts_with(
+    runner: &dyn CommandRunner,
+    node_ids: HashMap<String, String>,
+) -> HashMap<String, u32> {
+    let ids: Vec<String> = node_ids.into_values().collect();
+    let mut out = HashMap::new();
+    for chunk in ids.chunks(STARGAZER_GRAPHQL_CHUNK) {
+        let query = build_stargazer_graphql_query(chunk);
+        let raw = match run_command(runner, &gist_stargazer_graphql_plan(&query)) {
+            Ok(raw) => raw,
+            Err(_) => continue,
+        };
+        if let Ok(batch) = parse_stargazer_counts_graphql(&raw) {
+            out.extend(batch);
+        }
+    }
+    out
 }
 
 #[derive(Debug, Deserialize)]
@@ -180,16 +501,66 @@ pub fn fetch_gist_list_json_with(runner: &dyn CommandRunner) -> Result<String> {
     run_command(runner, &gist_list_plan())
 }
 
-pub fn fetch_gist_file_content(gist_id: &str, filename: &str) -> Result<String> {
-    fetch_gist_file_content_with(&SystemRunner, gist_id, filename)
+pub fn fetch_gist_starred_list_json() -> Result<String> {
+    fetch_gist_starred_list_json_with(&SystemRunner)
+}
+
+pub fn fetch_gist_starred_list_json_with(runner: &dyn CommandRunner) -> Result<String> {
+    run_command(runner, &gist_starred_list_plan())
+}
+
+pub fn fetch_current_user_login() -> Result<String> {
+    fetch_current_user_login_with(&SystemRunner)
+}
+
+pub fn fetch_current_user_login_with(runner: &dyn CommandRunner) -> Result<String> {
+    let raw = run_command(runner, &current_user_plan())?;
+    let login = raw.trim().trim_matches('"').to_string();
+    if login.is_empty() {
+        anyhow::bail!("empty user login from gh api user");
+    }
+    Ok(login)
+}
+
+/// Unique gist ids from a parsed gist-list JSON payload.
+pub fn parse_starred_gist_ids(raw: &str) -> Result<std::collections::HashSet<String>> {
+    let gists: Vec<GhGist> = serde_json::from_str(raw).context("parse gh gist list JSON")?;
+    Ok(gists.into_iter().map(|g| g.id).collect())
+}
+
+/// Plan for fetching gist file bytes from a list-response `raw_url` (no auth).
+pub fn raw_url_fetch_plan(url: &str) -> CommandPlan {
+    CommandPlan {
+        program: "curl".into(),
+        args: vec!["-sL".into(), url.into()],
+    }
+}
+
+pub fn fetch_gist_file_content(
+    gist_id: &str,
+    filename: &str,
+    raw_url: Option<&str>,
+) -> Result<String> {
+    fetch_gist_file_content_with(&SystemRunner, gist_id, filename, raw_url)
 }
 
 pub fn fetch_gist_file_content_with(
     runner: &dyn CommandRunner,
     gist_id: &str,
     filename: &str,
+    raw_url: Option<&str>,
 ) -> Result<String> {
-    run_command(runner, &gist_view_plan(gist_id, filename))
+    match run_command(runner, &gist_view_plan(gist_id, filename)) {
+        Ok(content) => Ok(content),
+        Err(primary) => {
+            if let Some(url) = raw_url.filter(|u| !u.is_empty()) {
+                run_command(runner, &raw_url_fetch_plan(url))
+                    .with_context(|| format!("{primary}; raw_url fallback also failed"))
+            } else {
+                Err(primary)
+            }
+        }
+    }
 }
 
 /// Plan for listing every revision of a gist via the REST API.
@@ -230,6 +601,134 @@ pub fn fetch_gist_revision_json_with(
     version: &str,
 ) -> Result<String> {
     run_command(runner, &gist_revision_plan(gist_id, version))
+}
+
+/// Canonical gist revision raw URL (`owner` form works for large third-party gists).
+pub fn build_gist_revision_raw_url(
+    owner_login: &str,
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+) -> String {
+    if owner_login.is_empty() {
+        format!("https://gist.githubusercontent.com/{gist_id}/raw/{version}/{filename}")
+    } else {
+        format!(
+            "https://gist.githubusercontent.com/{owner_login}/{gist_id}/raw/{version}/{filename}"
+        )
+    }
+}
+
+fn revision_file_entry<'a>(
+    files: &'a serde_json::Map<String, serde_json::Value>,
+    filename: &str,
+) -> Option<&'a serde_json::Value> {
+    if let Some(entry) = files.get(filename) {
+        return Some(entry);
+    }
+    files
+        .values()
+        .find(|entry| entry.get("filename").and_then(|f| f.as_str()) == Some(filename))
+}
+
+fn revision_entry_raw_url(entry: &serde_json::Value) -> Option<String> {
+    entry
+        .get("raw_url")
+        .and_then(|u| u.as_str())
+        .filter(|u| !u.is_empty())
+        .map(str::to_string)
+}
+
+fn fetch_revision_file_via_raw_url(
+    runner: &dyn CommandRunner,
+    url: &str,
+) -> Result<RevisionFileContent> {
+    run_command(runner, &raw_url_fetch_plan(url)).map(RevisionFileContent::Present)
+}
+
+/// Fetch one file at a gist revision SHA. Uses the revision API when it works; on HTTP
+/// failures or truncated payloads, falls back to the revision `raw_url` or the canonical
+/// `gist.githubusercontent.com/.../raw/{sha}/{file}` URL.
+pub fn fetch_revision_file_with(
+    runner: &dyn CommandRunner,
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+    owner_login: &str,
+) -> Result<RevisionFileContent> {
+    let constructed = build_gist_revision_raw_url(owner_login, gist_id, version, filename);
+    match fetch_gist_revision_json_with(runner, gist_id, version) {
+        Ok(raw) => {
+            let root: serde_json::Value =
+                serde_json::from_str(&raw).context("parse gh gist revision JSON")?;
+            let Some(files) = root.get("files").and_then(|f| f.as_object()) else {
+                return Ok(RevisionFileContent::Absent);
+            };
+            let Some(entry) = revision_file_entry(files, filename) else {
+                return Ok(RevisionFileContent::Absent);
+            };
+            match classify_revision_file(entry)? {
+                RevisionFileContent::Present(content) => Ok(RevisionFileContent::Present(content)),
+                RevisionFileContent::Truncated => revision_entry_raw_url(entry)
+                    .map(|url| fetch_revision_file_via_raw_url(runner, &url))
+                    .unwrap_or_else(|| fetch_revision_file_via_raw_url(runner, &constructed)),
+                RevisionFileContent::Absent => revision_entry_raw_url(entry)
+                    .map(|url| fetch_revision_file_via_raw_url(runner, &url))
+                    .unwrap_or(Ok(RevisionFileContent::Absent)),
+            }
+        }
+        Err(api_err) => fetch_revision_file_via_raw_url(runner, &constructed).with_context(|| {
+            format!("revision API failed ({api_err}); raw URL fallback also failed")
+        }),
+    }
+}
+
+pub fn fetch_revision_file_text(
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+    owner_login: &str,
+) -> Result<String> {
+    fetch_revision_file_text_with(&SystemRunner, gist_id, version, filename, owner_login)
+}
+
+pub fn fetch_revision_file_text_with(
+    runner: &dyn CommandRunner,
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+    owner_login: &str,
+) -> Result<String> {
+    match fetch_revision_file_with(runner, gist_id, version, filename, owner_login)? {
+        RevisionFileContent::Present(content) => Ok(content),
+        RevisionFileContent::Truncated => {
+            bail!("file too large for API preview (>1 MB)")
+        }
+        RevisionFileContent::Absent => bail!("{filename} not present in this revision"),
+    }
+}
+
+pub fn fetch_revision_file_text_optional(
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+    owner_login: &str,
+) -> Result<String> {
+    fetch_revision_file_text_optional_with(&SystemRunner, gist_id, version, filename, owner_login)
+}
+
+pub fn fetch_revision_file_text_optional_with(
+    runner: &dyn CommandRunner,
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+    owner_login: &str,
+) -> Result<String> {
+    match fetch_revision_file_with(runner, gist_id, version, filename, owner_login)? {
+        RevisionFileContent::Present(content) => Ok(content),
+        RevisionFileContent::Truncated => bail!("file too large for API preview (>1 MB)"),
+        RevisionFileContent::Absent => Ok(String::new()),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,7 +824,22 @@ mod tests {
         assert_eq!(files[0].filename, "settings.json");
         assert_eq!(files[0].description, "claude config");
         assert!(!files[0].public);
+        assert_eq!(files[0].owner_login, "akunzai");
+        assert_eq!(files[0].content_type.as_deref(), Some("application/json"));
         assert_eq!(files[1].filename, "statusline.sh");
+        assert_eq!(files[1].content_type.as_deref(), Some("text/x-shellscript"));
+        let notes = files.iter().find(|f| f.filename == "notes.md").unwrap();
+        assert_eq!(notes.fork_of_id.as_deref(), Some("upstream99"));
+    }
+
+    #[test]
+    fn parses_starred_gist_ids() {
+        let raw = include_str!("../tests/fixtures/gh/gist-starred.json");
+        let ids = parse_starred_gist_ids(raw).unwrap();
+        assert_eq!(ids.len(), 1);
+        assert!(ids.contains("star111"));
+        let files = parse_gist_list_json(raw).unwrap();
+        assert_eq!(files[0].owner_login, "otherdev");
     }
 
     #[test]
@@ -368,6 +882,204 @@ mod tests {
             revision_file_content(truncated, "missing.txt").unwrap(),
             RevisionFileContent::Absent
         );
+    }
+
+    #[test]
+    fn parses_stargazer_counts_graphql_aliases() {
+        let raw = r#"{
+            "data": {
+                "n0": {"name": "abc123", "stargazerCount": 3},
+                "n1": null,
+                "n2": {"name": "def456", "stargazerCount": 0}
+            }
+        }"#;
+        let counts = parse_stargazer_counts_graphql(raw).unwrap();
+        assert_eq!(counts.get("abc123").copied(), Some(3));
+        assert!(!counts.contains_key("def456"));
+    }
+
+    #[test]
+    fn build_stargazer_graphql_query_aliases_nodes() {
+        let q = build_stargazer_graphql_query(&["G_a".into(), "G_b".into()]);
+        assert!(q.contains(r#"n0: node(id: "G_a")"#));
+        assert!(q.contains(r#"n1: node(id: "G_b")"#));
+        assert!(q.contains("stargazerCount"));
+    }
+
+    #[test]
+    fn parses_fork_counts_from_forks_array() {
+        let raw = r#"[{"id":"a","comments":0,"forks":[{},{}]},{"id":"b","comments":0}]"#;
+        let counts = parse_gist_fork_counts(raw).unwrap();
+        assert_eq!(counts.get("a").copied(), Some(2));
+        assert_eq!(counts.get("b").copied(), Some(0));
+    }
+
+    #[test]
+    fn parses_forked_gist_ids_from_graphql() {
+        let raw = r#"{
+            "data": {
+                "viewer": {
+                    "gists": {
+                        "nodes": [
+                            {"name": "owned1", "isFork": false},
+                            {"name": "fork1", "isFork": true},
+                            {"name": "fork2", "isFork": true}
+                        ]
+                    }
+                }
+            }
+        }"#;
+        let ids = parse_forked_gist_ids_graphql(raw).unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains("fork1"));
+        assert!(ids.contains("fork2"));
+    }
+
+    #[test]
+    fn apply_fork_of_ids_stamps_all_file_rows() {
+        let mut gists = vec![
+            GistFile {
+                gist_id: "fork1".into(),
+                description: String::new(),
+                filename: "a.txt".into(),
+                public: true,
+                updated_at: String::new(),
+                created_at: String::new(),
+                owner_login: "me".into(),
+                fork_of_id: None,
+                raw_url: None,
+                content_type: None,
+                node_id: None,
+            },
+            GistFile {
+                gist_id: "fork1".into(),
+                description: String::new(),
+                filename: "b.txt".into(),
+                public: true,
+                updated_at: String::new(),
+                created_at: String::new(),
+                owner_login: "me".into(),
+                fork_of_id: None,
+                raw_url: None,
+                content_type: None,
+                node_id: None,
+            },
+        ];
+        let fork_of = [("fork1".into(), Some("upstream".into()))].into();
+        apply_fork_of_ids(&mut gists, &fork_of);
+        assert!(gists
+            .iter()
+            .all(|g| g.fork_of_id.as_deref() == Some("upstream")));
+    }
+
+    #[test]
+    fn build_gist_revision_raw_url_includes_owner_when_known() {
+        let url = build_gist_revision_raw_url("karpathy", "abc123", "deadbeef", "notes.md");
+        assert_eq!(
+            url,
+            "https://gist.githubusercontent.com/karpathy/abc123/raw/deadbeef/notes.md"
+        );
+    }
+
+    #[test]
+    fn fetch_revision_file_falls_back_when_revision_api_fails() {
+        use crate::actions::{CommandOutput, CommandPlan, CommandRunner};
+        use std::cell::RefCell;
+
+        struct SeqRunner {
+            outputs: RefCell<Vec<CommandOutput>>,
+            calls: RefCell<Vec<CommandPlan>>,
+            next: RefCell<usize>,
+        }
+
+        impl CommandRunner for SeqRunner {
+            fn run(&self, plan: &CommandPlan) -> Result<CommandOutput> {
+                self.calls.borrow_mut().push(plan.clone());
+                let i = *self.next.borrow();
+                *self.next.borrow_mut() = i + 1;
+                self.outputs
+                    .borrow()
+                    .get(i)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("no output for call {i}"))
+            }
+        }
+
+        let url = build_gist_revision_raw_url("karpathy", "g1", "sha1", "f.md");
+        let runner = SeqRunner {
+            outputs: RefCell::new(vec![
+                CommandOutput {
+                    success: false,
+                    stdout: String::new(),
+                    stderr: "HTTP 502".into(),
+                },
+                CommandOutput {
+                    success: true,
+                    stdout: "revision body".into(),
+                    stderr: String::new(),
+                },
+            ]),
+            calls: RefCell::new(Vec::new()),
+            next: RefCell::new(0),
+        };
+
+        let content = fetch_revision_file_with(&runner, "g1", "sha1", "f.md", "karpathy").unwrap();
+        assert_eq!(
+            content,
+            RevisionFileContent::Present("revision body".into())
+        );
+        let calls = runner.calls.borrow();
+        assert_eq!(calls[0], gist_revision_plan("g1", "sha1"));
+        assert_eq!(calls[1], raw_url_fetch_plan(&url));
+    }
+
+    #[test]
+    fn fetch_gist_file_content_falls_back_to_raw_url() {
+        use crate::actions::{CommandOutput, CommandPlan, CommandRunner};
+        use std::cell::RefCell;
+
+        struct SeqRunner {
+            outputs: RefCell<Vec<CommandOutput>>,
+            calls: RefCell<Vec<CommandPlan>>,
+            next: RefCell<usize>,
+        }
+
+        impl CommandRunner for SeqRunner {
+            fn run(&self, plan: &CommandPlan) -> Result<CommandOutput> {
+                self.calls.borrow_mut().push(plan.clone());
+                let i = *self.next.borrow();
+                *self.next.borrow_mut() = i + 1;
+                self.outputs
+                    .borrow()
+                    .get(i)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("no output for call {i}"))
+            }
+        }
+
+        let url = "https://gist.githubusercontent.com/u/id/raw/hash/file.md";
+        let runner = SeqRunner {
+            outputs: RefCell::new(vec![
+                CommandOutput {
+                    success: false,
+                    stdout: String::new(),
+                    stderr: "HTTP 502".into(),
+                },
+                CommandOutput {
+                    success: true,
+                    stdout: "big content".into(),
+                    stderr: String::new(),
+                },
+            ]),
+            calls: RefCell::new(Vec::new()),
+            next: RefCell::new(0),
+        };
+
+        let content = fetch_gist_file_content_with(&runner, "id", "file.md", Some(url)).unwrap();
+        assert_eq!(content, "big content");
+        let calls = runner.calls.borrow();
+        assert_eq!(calls[0], gist_view_plan("id", "file.md"));
+        assert_eq!(calls[1], raw_url_fetch_plan(url));
     }
 
     #[test]
