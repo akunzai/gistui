@@ -23,6 +23,9 @@ struct GhGist {
     owner: Option<GhCommentUser>,
     #[serde(default)]
     fork_of: Option<GhGistForkOf>,
+    /// Present on full gist objects; omitted from the list response (counts default to 0).
+    #[serde(default)]
+    forks: Vec<serde_json::Value>,
     // The REST API returns `files` as an object keyed by filename. BTreeMap keeps
     // the order deterministic (by filename) for stable display and tests.
     #[serde(default)]
@@ -174,6 +177,60 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
 pub fn parse_gist_comment_counts(raw: &str) -> Result<HashMap<String, u32>> {
     let gists: Vec<GhGist> = serde_json::from_str(raw).context("parse gh gist list JSON")?;
     Ok(gists.into_iter().map(|g| (g.id, g.comments)).collect())
+}
+
+/// Map each gist id to how many forks it has. Uses the `forks` array when the JSON
+/// includes it (full gist); list responses omit it and return 0.
+pub fn parse_gist_fork_counts(raw: &str) -> Result<HashMap<String, u32>> {
+    let gists: Vec<GhGist> = serde_json::from_str(raw).context("parse gh gist list JSON")?;
+    Ok(gists
+        .into_iter()
+        .map(|g| (g.id, g.forks.len() as u32))
+        .collect())
+}
+
+/// Plan for listing every fork of a gist (paginated; gh concatenates pages).
+pub fn gist_forks_plan(gist_id: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "--paginate".into(),
+            format!("/gists/{gist_id}/forks?per_page=100"),
+        ],
+    }
+}
+
+pub fn fetch_gist_fork_count(gist_id: &str) -> Result<u32> {
+    fetch_gist_fork_count_with(&SystemRunner, gist_id)
+}
+
+pub fn fetch_gist_fork_count_with(runner: &dyn CommandRunner, gist_id: &str) -> Result<u32> {
+    let raw = run_command(runner, &gist_forks_plan(gist_id))?;
+    let forks: Vec<serde_json::Value> = serde_json::from_str(&raw).context("parse gist forks")?;
+    Ok(forks.len() as u32)
+}
+
+/// Fill fork counts for owned gists. List JSON usually omits `forks`, so each id is
+/// probed via `/gists/{id}/forks` when the parsed count is zero.
+pub fn collect_gist_fork_counts(
+    owned_raw: Option<&str>,
+    gist_ids: impl IntoIterator<Item = String>,
+) -> HashMap<String, u32> {
+    let mut counts = owned_raw
+        .and_then(|raw| parse_gist_fork_counts(raw).ok())
+        .unwrap_or_default();
+    for id in gist_ids {
+        if counts.get(&id).copied().unwrap_or(0) > 0 {
+            continue;
+        }
+        if let Ok(n) = fetch_gist_fork_count(&id) {
+            if n > 0 {
+                counts.insert(id, n);
+            }
+        }
+    }
+    counts
 }
 
 #[derive(Debug, Deserialize)]
@@ -445,6 +502,14 @@ mod tests {
             revision_file_content(truncated, "missing.txt").unwrap(),
             RevisionFileContent::Absent
         );
+    }
+
+    #[test]
+    fn parses_fork_counts_from_forks_array() {
+        let raw = r#"[{"id":"a","comments":0,"forks":[{},{}]},{"id":"b","comments":0}]"#;
+        let counts = parse_gist_fork_counts(raw).unwrap();
+        assert_eq!(counts.get("a").copied(), Some(2));
+        assert_eq!(counts.get("b").copied(), Some(0));
     }
 
     #[test]

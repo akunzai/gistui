@@ -2789,8 +2789,8 @@ fn gist_group_row_age_tracks_active_sort() {
     let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
     // Sorting by updated shows the updated age (1 day ago); sorting by created shows the
     // created age (10 days ago → "1w"), so the 🕒 column matches the ordering key.
-    let updated = gist_group_row_label(&group, now, GistGroupSort::Updated, 0, false);
-    let created = gist_group_row_label(&group, now, GistGroupSort::Created, 0, false);
+    let updated = gist_group_row_label(&group, now, GistGroupSort::Updated, 0, 0, false);
+    let created = gist_group_row_label(&group, now, GistGroupSort::Created, 0, 0, false);
     assert!(updated.ends_with("🕒 1d"), "{updated}");
     assert!(created.ends_with("🕒 1w"), "{created}");
 }
@@ -2808,8 +2808,29 @@ fn gist_group_row_shows_comment_marker_only_when_present() {
         fork_of_id: None,
     };
     let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
-    assert!(!gist_group_row_label(&group, now, GistGroupSort::Updated, 0, false).contains('💬'));
-    assert!(gist_group_row_label(&group, now, GistGroupSort::Updated, 3, false).contains("💬 3"));
+    assert!(!gist_group_row_label(&group, now, GistGroupSort::Updated, 0, 0, false).contains('💬'));
+    assert!(
+        gist_group_row_label(&group, now, GistGroupSort::Updated, 3, 0, false).contains("💬 3")
+    );
+}
+
+#[test]
+fn gist_group_row_shows_fork_marker_only_when_present() {
+    let group = GistGroup {
+        id: "g1".into(),
+        description: "demo".into(),
+        public: false,
+        updated_at: "2026-06-10T00:00:00Z".into(),
+        created_at: "2026-06-01T00:00:00Z".into(),
+        file_count: 2,
+        owner_login: String::new(),
+        fork_of_id: None,
+    };
+    let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+    assert!(!gist_group_row_label(&group, now, GistGroupSort::Updated, 0, 0, false).contains('⭐'));
+    assert!(
+        gist_group_row_label(&group, now, GistGroupSort::Updated, 0, 2, false).contains("⭐ 2")
+    );
 }
 
 #[test]

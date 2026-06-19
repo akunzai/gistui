@@ -453,6 +453,7 @@ pub(super) fn gist_group_row_label(
     now: u64,
     sort: GistGroupSort,
     comments: u32,
+    forks: u32,
     starred: bool,
 ) -> String {
     let desc = if g.description.trim().is_empty() {
@@ -471,20 +472,25 @@ pub(super) fn gist_group_row_label(
     let age = crate::domain::parse_rfc3339_to_unix(timestamp)
         .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
         .unwrap_or_else(|| "?".into());
-    // Only surface the 💬 marker when the gist actually has comments, to keep the common
-    // zero-comment rows clean.
+    // Only surface markers when non-zero so the common quiet rows stay clean.
     let comments_seg = if comments > 0 {
         format!("  💬 {comments}")
     } else {
         String::new()
     };
+    let forks_seg = if forks > 0 {
+        format!("  ⭐ {forks}")
+    } else {
+        String::new()
+    };
     format!(
-        "{}{}  {}  📄 {}{}  🕒 {}",
+        "{}{}  {}  📄 {}{}{}  🕒 {}",
         gist_badge_prefix(starred, g.fork_of_id.is_some()),
         g.id,
         desc,
         g.file_count,
         comments_seg,
+        forks_seg,
         age
     )
 }
@@ -535,6 +541,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
                         now,
                         state.gists_sort,
                         state.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
+                        state.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
                         state.gist_is_starred(&g.id),
                     ),
                     state.gists_hscroll,
@@ -545,10 +552,12 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
 
     let selected = (!groups.is_empty()).then_some(state.gists_index);
     let mut title = format!(
-        "Gists {}  ·  sort:{}  ·  type:{}",
+        "Gists {}  ·  sort:{}  ·  type:{}  ·  ★ {}  ·  ⑂ {}",
         count_label(groups.len(), state.gist_groups().len()),
         state.gists_sort.label(),
-        state.gists_type_filter.label()
+        state.gists_type_filter.label(),
+        state.starred_gist_count(),
+        state.owned_fork_gist_count()
     );
     if !state.gists_filter_query.is_empty() {
         title.push_str(&format!("  ·  /{}", state.gists_filter_query));

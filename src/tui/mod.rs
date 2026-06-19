@@ -484,6 +484,8 @@ pub struct AppState {
     /// gist manager rows. Kept off `GistFile` since the count is a gist-level value, not a
     /// per-file one; empty until the first live fetch lands (cached startup gists show 0).
     pub gist_comment_counts: std::collections::HashMap<String, u32>,
+    /// Per-gist fork counts (`gist_id` → how many users forked it), from `/gists/{id}/forks`.
+    pub gist_fork_counts: std::collections::HashMap<String, u32>,
     /// Active theme selection (persisted to config when toggled with `T`).
     pub theme_choice: crate::config::ThemeChoice,
     /// Resolved colour palette for the current theme choice (from config).
@@ -616,6 +618,22 @@ impl AppState {
         self.starred_gist_ids.contains(gist_id)
     }
 
+    /// Gists you have starred (unique ids from the starred list fetch).
+    pub fn starred_gist_count(&self) -> usize {
+        self.starred_gist_ids.len()
+    }
+
+    /// Owned gists that are forks of an upstream gist.
+    pub fn owned_fork_gist_count(&self) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        for g in &self.gists {
+            if g.is_fork() {
+                seen.insert(g.gist_id.as_str());
+            }
+        }
+        seen.len()
+    }
+
     /// Block mutating actions on gists you do not own. Returns `true` when blocked.
     pub fn block_if_foreign_gist(&mut self, gist_id: &str, pin: bool) -> bool {
         if self.gist_is_owned(gist_id) {
@@ -741,6 +759,7 @@ impl AppState {
                     unix_now(),
                     self.gists_sort,
                     self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
+                    self.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
                     self.gist_is_starred(&g.id),
                 )
                 .chars()
@@ -1246,6 +1265,7 @@ pub fn initial_state() -> AppState {
         compact_return_screen: Screen::Gists,
         spinner_frame: 0,
         gist_comment_counts: std::collections::HashMap::new(),
+        gist_fork_counts: std::collections::HashMap::new(),
         theme_choice: crate::config::ThemeChoice::Dark,
         theme: Theme::DARK,
         revision_gist_id: None,

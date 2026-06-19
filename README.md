@@ -306,6 +306,7 @@ the gist owning the currently selected file. From here you manage gists as a who
   configures; if it is missing, compaction reports an actionable error pointing you to that command.
 - `s` cycle sort (updated / created) · `v` cycle visibility (all/public/secret/starred/forked) · `*` star/unstar · `F` fork · `/` filter
   by description or id (↑/↓ move · Enter apply · Esc clear · ←/→/Home/End/Del edit query) · `Left`/`Right` scroll a long description.
+  The title shows your starred-gist and owned-fork totals (`★ N` / `⑂ N`); rows show `💬` / `⭐` counts when non-zero.
 - `q`/`Esc` — back to the list.
 
 </details>

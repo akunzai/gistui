@@ -18,7 +18,8 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
         // Absorb the background gist list once it arrives.
         if state.loading {
             if let Some(ref rx) = gist_rx {
-                if let Ok((gists, starred, starred_ids, user_login, comment_counts)) = rx.try_recv()
+                if let Ok((gists, starred, starred_ids, user_login, comment_counts, fork_counts)) =
+                    rx.try_recv()
                 {
                     cache_gists(&gists);
                     state.gists = gists;
@@ -26,6 +27,7 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     state.starred_gist_ids = starred_ids;
                     state.current_user_login = user_login;
                     state.gist_comment_counts = comment_counts;
+                    state.gist_fork_counts = fork_counts;
                     state.loading = false;
                     if state.gist_index >= state.ranked_gists().len() {
                         state.gist_index = 0;
@@ -1399,6 +1401,7 @@ type GistFetchResult = (
     std::collections::HashSet<String>,
     Option<String>,
     std::collections::HashMap<String, u32>,
+    std::collections::HashMap<String, u32>,
 );
 
 fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<GistFetchResult> {
@@ -1417,6 +1420,9 @@ fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<GistFetchResult> {
                     )
                 })
                 .unwrap_or_default();
+            let gist_ids: std::collections::HashSet<String> =
+                files.iter().map(|g| g.gist_id.clone()).collect();
+            let fork_counts = crate::gh::collect_gist_fork_counts(owned.as_deref(), gist_ids);
             let starred = starred_raw
                 .as_ref()
                 .map(|raw| crate::gh::parse_gist_list_json(raw).unwrap_or_default())
@@ -1425,7 +1431,14 @@ fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<GistFetchResult> {
                 .as_ref()
                 .and_then(|raw| crate::gh::parse_starred_gist_ids(raw).ok())
                 .unwrap_or_default();
-            (files, starred, starred_ids, user_login, comment_counts)
+            (
+                files,
+                starred,
+                starred_ids,
+                user_login,
+                comment_counts,
+                fork_counts,
+            )
         } else {
             Default::default()
         };
