@@ -44,12 +44,13 @@ runs), and it is deleted on exit.
 
 ## Storyboard
 
-Browse with ranking ⭐ → pin a pair + the Pins view → cycle visibility (`v`) →
-**syntax-highlighted preview** (`Space`, a TOML file) → diff with word-level
-highlight, **syntax-highlighted context** and the `c` context toggle → upload
-with the confirm diff → the **download overwrite gate** (`d` → diff → `d` →
-`y/n`) → help (`?`). The fixtures pair a TOML and a shell file so the
-highlighting shows across two languages.
+Browse with ranking → pin a pair + the Pins view → **syntax-highlighted preview**
+(`Space`, a TOML file) → shell-script diff with word-level highlight and
+**syntax-highlighted context** (`c` context toggle) → upload with the confirm
+diff → the **download overwrite gate** (`d` → diff → `d` → `y/n`) → help (`?`).
+The recording uses an isolated `XDG_CONFIG_HOME` + `XDG_CACHE_HOME` so a stale
+host cache cannot leak starred-gist badges into the demo, and unsets `NO_COLOR`
+so diff/preview syntax highlighting is captured even when the host shell disables it.
 
 ## Requirements
 

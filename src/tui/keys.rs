@@ -1,16 +1,56 @@
 use super::*;
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers};
+
+/// Vim-style navigation alias alongside arrow / page keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NavAction {
+    Up,
+    Down,
+    Left,
+    Right,
+    PageUp,
+    PageDown,
+}
+
+fn nav_action(code: KeyCode, modifiers: KeyModifiers) -> Option<NavAction> {
+    let ctrl = modifiers.contains(KeyModifiers::CONTROL);
+    match code {
+        KeyCode::Up if !ctrl => Some(NavAction::Up),
+        KeyCode::Char('k') if !ctrl => Some(NavAction::Up),
+        KeyCode::Down if !ctrl => Some(NavAction::Down),
+        KeyCode::Char('j') if !ctrl => Some(NavAction::Down),
+        KeyCode::Left if !ctrl => Some(NavAction::Left),
+        KeyCode::Char('h') if !ctrl => Some(NavAction::Left),
+        KeyCode::Right if !ctrl => Some(NavAction::Right),
+        KeyCode::Char('l') if !ctrl => Some(NavAction::Right),
+        KeyCode::PageUp if !ctrl => Some(NavAction::PageUp),
+        KeyCode::Char('b') if ctrl => Some(NavAction::PageUp),
+        KeyCode::PageDown if !ctrl => Some(NavAction::PageDown),
+        KeyCode::Char('f') if ctrl => Some(NavAction::PageDown),
+        _ => None,
+    }
+}
 
 /// Lines moved per PageUp/PageDown in the scrollable views. Matches the gist-detail paging step
 /// (`detail_nav(10)`); `handle_key` is pure and cannot read the viewport height, so a fixed step
 /// keeps paging predictable without threading terminal size into the key logic.
 const PAGE_SCROLL: u16 = 10;
 
+/// `T` theme toggle accepts a plain capital key (Caps Lock) or Shift+T; reject Ctrl/Alt combos.
+fn theme_toggle_modifiers_ok(modifiers: KeyModifiers) -> bool {
+    modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
+}
+
 impl AppState {
     pub fn handle_key(&mut self, code: KeyCode) -> KeyOutcome {
+        self.handle_key_with(code, KeyModifiers::NONE)
+    }
+
+    pub fn handle_key_with(&mut self, code: KeyCode, modifiers: KeyModifiers) -> KeyOutcome {
         // Global theme toggle: skip while any inline text input is active so `T` can still
         // be typed into filters and description editors.
         if code == KeyCode::Char('T')
+            && theme_toggle_modifiers_ok(modifiers)
             && !self.filtering
             && !self.pins_filtering
             && !self.gists_filtering
@@ -22,6 +62,12 @@ impl AppState {
             };
             self.theme = Theme::for_choice(self.theme_choice);
             return KeyOutcome::ThemeToggle;
+        }
+        if let Some(action) = nav_action(code, modifiers) {
+            if self.apply_navigation(action) {
+                self.dismiss_ephemeral_screen_state();
+                return KeyOutcome::None;
+            }
         }
         match self.screen {
             Screen::List if self.filtering => self.handle_key_filter(code),
@@ -46,16 +92,232 @@ impl AppState {
         self.screen = Screen::Help;
     }
 
+    /// Arrow / hjkl / Ctrl+b/f navigation. Returns true when the key was consumed.
+    /// Filter and text-input modes keep `hjkl` as typed characters (arrows still move
+    /// selection while filtering — handled in the filter branches).
+    fn apply_navigation(&mut self, action: NavAction) -> bool {
+        if self.editing_description {
+            return false;
+        }
+        // While filtering, arrows/hjkl are typed or handled in the filter branches; page keys
+        // still jump the live selection by PAGE_SCROLL.
+        if (self.filtering || self.pins_filtering || self.gists_filtering)
+            && !matches!(action, NavAction::PageUp | NavAction::PageDown)
+        {
+            return false;
+        }
+        match self.screen {
+            Screen::Help => {
+                let topics = HelpTopic::all();
+                if self.help_index_open {
+                    match action {
+                        NavAction::Up => {
+                            self.help_index_sel = self.help_index_sel.saturating_sub(1)
+                        }
+                        NavAction::Down => {
+                            if self.help_index_sel + 1 < topics.len() {
+                                self.help_index_sel += 1;
+                            }
+                        }
+                        _ => return false,
+                    }
+                } else {
+                    match action {
+                        NavAction::Up => {
+                            self.help_scroll = self.help_scroll.saturating_sub(1);
+                        }
+                        NavAction::Down => {
+                            self.help_scroll = self.help_scroll.saturating_add(1);
+                        }
+                        NavAction::PageUp => {
+                            self.help_scroll = self.help_scroll.saturating_sub(PAGE_SCROLL);
+                        }
+                        NavAction::PageDown => {
+                            self.help_scroll = self.help_scroll.saturating_add(PAGE_SCROLL);
+                        }
+                        _ => return false,
+                    }
+                }
+                true
+            }
+            Screen::Pins => {
+                let len = self.visible_pin_indices().len();
+                match action {
+                    NavAction::Down => {
+                        if self.pins_index + 1 < len {
+                            self.pins_index += 1;
+                            self.pins_hscroll = 0;
+                        }
+                    }
+                    NavAction::Up => {
+                        if self.pins_index > 0 {
+                            self.pins_index -= 1;
+                            self.pins_hscroll = 0;
+                        }
+                    }
+                    NavAction::Right => {
+                        self.pins_hscroll = (self.pins_hscroll + 1).min(self.pins_hscroll_max());
+                    }
+                    NavAction::Left => {
+                        self.pins_hscroll = self.pins_hscroll.saturating_sub(1);
+                    }
+                    NavAction::PageDown => {
+                        if len > 0 {
+                            let max = len - 1;
+                            self.pins_index = (self.pins_index + PAGE_SCROLL as usize).min(max);
+                            self.pins_hscroll = 0;
+                        }
+                    }
+                    NavAction::PageUp => {
+                        self.pins_index = self.pins_index.saturating_sub(PAGE_SCROLL as usize);
+                        self.pins_hscroll = 0;
+                    }
+                }
+                true
+            }
+            Screen::Gists => {
+                let groups = self.visible_gist_groups();
+                match action {
+                    NavAction::Down => {
+                        if self.gists_index + 1 < groups.len() {
+                            self.gists_index += 1;
+                            self.gists_hscroll = 0;
+                        }
+                    }
+                    NavAction::Up => {
+                        if self.gists_index > 0 {
+                            self.gists_index -= 1;
+                            self.gists_hscroll = 0;
+                        }
+                    }
+                    NavAction::Right => {
+                        self.gists_hscroll = (self.gists_hscroll + 1).min(self.gists_hscroll_max());
+                    }
+                    NavAction::Left => {
+                        self.gists_hscroll = self.gists_hscroll.saturating_sub(1);
+                    }
+                    NavAction::PageDown => {
+                        let len = groups.len();
+                        if len > 0 {
+                            let max = len - 1;
+                            self.gists_index = (self.gists_index + PAGE_SCROLL as usize).min(max);
+                            self.gists_hscroll = 0;
+                        }
+                    }
+                    NavAction::PageUp => {
+                        self.gists_index = self.gists_index.saturating_sub(PAGE_SCROLL as usize);
+                        self.gists_hscroll = 0;
+                    }
+                }
+                true
+            }
+            Screen::GistDetail => {
+                match action {
+                    NavAction::Down => self.detail_nav(1),
+                    NavAction::Up => self.detail_nav(-1),
+                    NavAction::PageDown => self.detail_nav(10),
+                    NavAction::PageUp => self.detail_nav(-10),
+                    _ => return false,
+                }
+                true
+            }
+            Screen::Revisions => {
+                let entries_len = self.revision_entries.as_ref().map(|e| e.len()).unwrap_or(0);
+                if entries_len == 0 {
+                    return false;
+                }
+                match action {
+                    NavAction::Down => {
+                        self.revision_index = (self.revision_index + 1).min(entries_len - 1);
+                    }
+                    NavAction::Up => {
+                        self.revision_index = self.revision_index.saturating_sub(1);
+                    }
+                    NavAction::PageDown => {
+                        self.revision_index =
+                            (self.revision_index + PAGE_SCROLL as usize).min(entries_len - 1);
+                    }
+                    NavAction::PageUp => {
+                        self.revision_index =
+                            self.revision_index.saturating_sub(PAGE_SCROLL as usize);
+                    }
+                    NavAction::Left => {
+                        self.revision_hscroll = self.revision_hscroll.saturating_sub(1);
+                    }
+                    NavAction::Right => {
+                        self.revision_hscroll = self.revision_hscroll.saturating_add(1);
+                    }
+                }
+                true
+            }
+            Screen::List => {
+                match action {
+                    NavAction::Down => self.list_move_focused(true),
+                    NavAction::Up => self.list_move_focused(false),
+                    NavAction::PageDown => self.list_page_focused(true),
+                    NavAction::PageUp => self.list_page_focused(false),
+                    NavAction::Left => self.scroll_focused_left(),
+                    NavAction::Right => self.scroll_focused_right(),
+                }
+                true
+            }
+            Screen::Diff => {
+                match action {
+                    NavAction::Down => self.scroll_diff_down(),
+                    NavAction::Up => self.scroll_diff_up(),
+                    NavAction::PageDown => self.scroll_diff_page_down(PAGE_SCROLL),
+                    NavAction::PageUp => self.scroll_diff_page_up(PAGE_SCROLL),
+                    NavAction::Right => self.scroll_diff_right(),
+                    NavAction::Left => self.scroll_diff_left(),
+                }
+                true
+            }
+            Screen::Preview => {
+                match action {
+                    NavAction::Down => self.scroll_diff_down(),
+                    NavAction::Up => self.scroll_diff_up(),
+                    NavAction::PageDown => self.scroll_diff_page_down(PAGE_SCROLL),
+                    NavAction::PageUp => self.scroll_diff_page_up(PAGE_SCROLL),
+                    NavAction::Right => self.scroll_diff_right(),
+                    NavAction::Left => self.scroll_diff_left(),
+                }
+                true
+            }
+            Screen::Confirm => {
+                match action {
+                    NavAction::Down => self.scroll_diff_down(),
+                    NavAction::Up => self.scroll_diff_up(),
+                    NavAction::PageDown => self.scroll_diff_page_down(PAGE_SCROLL),
+                    NavAction::PageUp => self.scroll_diff_page_up(PAGE_SCROLL),
+                    NavAction::Right => self.scroll_diff_right(),
+                    NavAction::Left => self.scroll_diff_left(),
+                }
+                true
+            }
+        }
+    }
+
+    /// Screens that clear a one-shot status (and the list quit arm) on any key — including
+    /// navigation keys handled before the per-screen handler runs.
+    fn dismiss_ephemeral_screen_state(&mut self) {
+        match self.screen {
+            Screen::List => {
+                self.status = None;
+                self.quit_armed = false;
+            }
+            Screen::Pins
+            | Screen::Gists
+            | Screen::GistDetail
+            | Screen::Revisions
+            | Screen::Preview => self.status = None,
+            _ => {}
+        }
+    }
+
     fn handle_key_help(&mut self, code: KeyCode) -> KeyOutcome {
         let topics = HelpTopic::all();
         if self.help_index_open {
             match code {
-                KeyCode::Up => self.help_index_sel = self.help_index_sel.saturating_sub(1),
-                KeyCode::Down => {
-                    if self.help_index_sel + 1 < topics.len() {
-                        self.help_index_sel += 1;
-                    }
-                }
                 KeyCode::Enter => {
                     self.help_topic = topics[self.help_index_sel];
                     self.help_index_open = false;
@@ -75,8 +337,6 @@ impl AppState {
             }
         } else {
             match code {
-                KeyCode::Down => self.help_scroll = self.help_scroll.saturating_add(1),
-                KeyCode::Up => self.help_scroll = self.help_scroll.saturating_sub(1),
                 KeyCode::Tab => {
                     self.help_index_sel = topics
                         .iter()
@@ -134,20 +394,6 @@ impl AppState {
         }
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
-            KeyCode::Down if self.pins_index + 1 < self.visible_pin_indices().len() => {
-                self.pins_index += 1;
-                self.pins_hscroll = 0;
-            }
-            KeyCode::Up if self.pins_index > 0 => {
-                self.pins_index -= 1;
-                self.pins_hscroll = 0;
-            }
-            KeyCode::Right => {
-                self.pins_hscroll = (self.pins_hscroll + 1).min(self.pins_hscroll_max());
-            }
-            KeyCode::Left => {
-                self.pins_hscroll = self.pins_hscroll.saturating_sub(1);
-            }
             KeyCode::Char('/') => self.pins_filtering = true,
             KeyCode::Enter if !self.pinned.is_empty() => {
                 if let Some(idx) = self.selected_pin_index() {
@@ -219,21 +465,6 @@ impl AppState {
         let groups = self.visible_gist_groups();
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
-            KeyCode::Down if self.gists_index + 1 < groups.len() => {
-                self.gists_index += 1;
-                self.gists_hscroll = 0;
-            }
-            KeyCode::Up if self.gists_index > 0 => {
-                self.gists_index -= 1;
-                self.gists_hscroll = 0;
-            }
-            KeyCode::Right => {
-                let max = self.gists_hscroll_max();
-                if self.gists_hscroll < max {
-                    self.gists_hscroll += 1;
-                }
-            }
-            KeyCode::Left => self.gists_hscroll = self.gists_hscroll.saturating_sub(1),
             KeyCode::Char('/') => self.gists_filtering = true,
             KeyCode::Char('s') => {
                 self.gists_sort = self.gists_sort.next();
@@ -255,7 +486,7 @@ impl AppState {
             KeyCode::Char('y') if self.gists_index < groups.len() => {
                 return KeyOutcome::CopyGistUrl
             }
-            KeyCode::Char('h') if self.gists_index < groups.len() => {
+            KeyCode::Char('H') if self.gists_index < groups.len() => {
                 if self.open_revisions(Screen::Gists) {
                     return KeyOutcome::FetchRevisions;
                 }
@@ -286,13 +517,9 @@ impl AppState {
             KeyCode::Char('q') | KeyCode::Esc => {
                 self.screen = Screen::Gists;
             }
-            KeyCode::Down => self.detail_nav(1),
-            KeyCode::Up => self.detail_nav(-1),
-            KeyCode::PageDown => self.detail_nav(10),
-            KeyCode::PageUp => self.detail_nav(-10),
             KeyCode::Char('o') => return KeyOutcome::OpenBrowser,
             KeyCode::Char('y') => return KeyOutcome::CopyGistUrl,
-            KeyCode::Char('h') => {
+            KeyCode::Char('H') => {
                 if self.open_revisions(Screen::GistDetail) {
                     return KeyOutcome::FetchRevisions;
                 }
@@ -400,23 +627,6 @@ impl AppState {
             KeyCode::Char('q') | KeyCode::Esc => {
                 self.screen = self.revision_return_screen;
             }
-            KeyCode::Down if entries_len > 0 => {
-                self.revision_index = (self.revision_index + 1).min(entries_len - 1);
-            }
-            KeyCode::Up if entries_len > 0 => {
-                self.revision_index = self.revision_index.saturating_sub(1);
-            }
-            KeyCode::PageDown if entries_len > 0 => {
-                self.revision_index =
-                    (self.revision_index + PAGE_SCROLL as usize).min(entries_len - 1);
-            }
-            KeyCode::PageUp if entries_len > 0 => {
-                self.revision_index = self.revision_index.saturating_sub(PAGE_SCROLL as usize);
-            }
-            KeyCode::Left => {
-                self.revision_hscroll = self.revision_hscroll.saturating_sub(1);
-            }
-            KeyCode::Right => self.revision_hscroll = self.revision_hscroll.saturating_add(1),
             KeyCode::Enter if entries_len > 0 => {
                 if let (Some(id), file) = (
                     self.revision_gist_id.clone(),
@@ -456,7 +666,7 @@ impl AppState {
             KeyCode::Char('r') if self.revision_index == 0 => {
                 self.set_status("already at current revision");
             }
-            KeyCode::Char('f') if !self.cycle_revision_target_file() => {
+            KeyCode::Char('F') if !self.cycle_revision_target_file() => {
                 self.set_status("only one file in this gist");
             }
             KeyCode::Char('?') => self.open_help(),
@@ -534,12 +744,6 @@ impl AppState {
             KeyCode::Char('w') => self.preview_wrap = !self.preview_wrap,
             KeyCode::Char('y') => return KeyOutcome::CopyGistUrl,
             KeyCode::Char('Y') => return KeyOutcome::CopyPreviewContent,
-            KeyCode::Down => self.scroll_diff_down(),
-            KeyCode::Up => self.scroll_diff_up(),
-            KeyCode::PageDown => self.scroll_diff_page_down(PAGE_SCROLL),
-            KeyCode::PageUp => self.scroll_diff_page_up(PAGE_SCROLL),
-            KeyCode::Right => self.scroll_diff_right(),
-            KeyCode::Left => self.scroll_diff_left(),
             _ => {}
         }
         KeyOutcome::None
@@ -655,10 +859,6 @@ impl AppState {
                 // Reset the newly-ranked (non-driver) pane to its top match.
                 self.reset_ranked_pane();
             }
-            KeyCode::Down => self.list_move_focused(true),
-            KeyCode::Up => self.list_move_focused(false),
-            KeyCode::Right => self.scroll_focused_right(),
-            KeyCode::Left => self.scroll_focused_left(),
             KeyCode::Char('t') => {
                 self.gist_view = match self.gist_view {
                     GistView::Description => GistView::Id,
@@ -688,7 +888,7 @@ impl AppState {
             }
             KeyCode::Char('S') => return KeyOutcome::SyncSelectedPair,
             KeyCode::Char('g') => self.open_gist_manager(),
-            KeyCode::Char('h') if self.gist_index < self.ranked_gists().len() => {
+            KeyCode::Char('H') if self.gist_index < self.ranked_gists().len() => {
                 if self.open_revisions(Screen::List) {
                     return KeyOutcome::FetchRevisions;
                 }
@@ -749,6 +949,45 @@ impl AppState {
             FocusPane::Gist => {
                 self.gist_index = 0;
                 self.gist_hscroll = 0;
+            }
+        }
+    }
+
+    /// Page the focused list-pane selection by [`PAGE_SCROLL`] rows (clamped at bounds).
+    fn list_page_focused(&mut self, forward: bool) {
+        let step = PAGE_SCROLL as usize;
+        match self.focus {
+            FocusPane::Local => {
+                let len = self.visible_locals().len();
+                if len == 0 {
+                    return;
+                }
+                let max = len - 1;
+                self.local_index = if forward {
+                    (self.local_index + step).min(max)
+                } else {
+                    self.local_index.saturating_sub(step)
+                };
+                self.local_hscroll = 0;
+                if self.anchor == FocusPane::Local {
+                    self.reset_ranked_pane();
+                }
+            }
+            FocusPane::Gist => {
+                let len = self.ranked_gists().len();
+                if len == 0 {
+                    return;
+                }
+                let max = len - 1;
+                self.gist_index = if forward {
+                    (self.gist_index + step).min(max)
+                } else {
+                    self.gist_index.saturating_sub(step)
+                };
+                self.gist_hscroll = 0;
+                if self.anchor == FocusPane::Gist {
+                    self.reset_ranked_pane();
+                }
             }
         }
     }
@@ -948,12 +1187,6 @@ impl AppState {
                 self.screen = ret;
                 self.diff_return = Screen::List;
             }
-            KeyCode::Down => self.scroll_diff_down(),
-            KeyCode::Up => self.scroll_diff_up(),
-            KeyCode::PageDown => self.scroll_diff_page_down(PAGE_SCROLL),
-            KeyCode::PageUp => self.scroll_diff_page_up(PAGE_SCROLL),
-            KeyCode::Right => self.scroll_diff_right(),
-            KeyCode::Left => self.scroll_diff_left(),
             // Identical files have nothing to sync, so download/upload are not offered.
             // Revision-history diffs are read-only (no local file pairing).
             KeyCode::Char('d') if self.diff_allows_sync() && !self.diff_identical => {
@@ -982,35 +1215,6 @@ impl AppState {
     fn handle_key_confirm(&mut self, code: KeyCode) -> KeyOutcome {
         // While typing the create flow's description, arrows drive the text cursor (handled
         // below), not the background diff scroll.
-        if !self.editing_description {
-            match code {
-                KeyCode::Down => {
-                    self.scroll_diff_down();
-                    return KeyOutcome::None;
-                }
-                KeyCode::Up => {
-                    self.scroll_diff_up();
-                    return KeyOutcome::None;
-                }
-                KeyCode::PageDown => {
-                    self.scroll_diff_page_down(PAGE_SCROLL);
-                    return KeyOutcome::None;
-                }
-                KeyCode::PageUp => {
-                    self.scroll_diff_page_up(PAGE_SCROLL);
-                    return KeyOutcome::None;
-                }
-                KeyCode::Right => {
-                    self.scroll_diff_right();
-                    return KeyOutcome::None;
-                }
-                KeyCode::Left => {
-                    self.scroll_diff_left();
-                    return KeyOutcome::None;
-                }
-                _ => {}
-            }
-        }
         match self.pending_action.clone() {
             Some(PendingAction::Download) => match code {
                 KeyCode::Char('y') => return KeyOutcome::Download,

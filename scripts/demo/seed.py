@@ -24,6 +24,9 @@ GISTS = {
         "public": True,
         "updated_at": "2026-06-09T18:20:00Z",
         "created_at": "2026-03-01T00:00:00Z",
+        "node_id": "GIST_g_aaa111",
+        "stargazers": 14,
+        "forks": 1,
         "comments": 2,
         "files": {
             "starship.toml": (
@@ -43,6 +46,8 @@ GISTS = {
         "public": True,
         "updated_at": "2026-06-08T09:00:00Z",
         "created_at": "2026-02-10T00:00:00Z",
+        "node_id": "GIST_g_bbb222",
+        "stargazers": 6,
         "files": {
             "aliases.sh": (
                 "#!/usr/bin/env bash\n"
@@ -65,6 +70,7 @@ GISTS = {
         "public": False,
         "updated_at": "2026-05-30T12:00:00Z",
         "created_at": "2026-01-15T00:00:00Z",
+        "node_id": "GIST_g_ccc333",
         "files": {
             "tmux.conf": (
                 "set -g mouse on\n"
@@ -78,6 +84,8 @@ GISTS = {
         "public": True,
         "updated_at": "2026-06-07T15:30:00Z",
         "created_at": "2026-04-01T00:00:00Z",
+        "node_id": "GIST_g_ddd444",
+        "stargazers": 3,
         "files": {"hello.py": 'print("Hello, world!")\n'},
     },
     "g_eee555": {
@@ -85,6 +93,7 @@ GISTS = {
         "public": False,
         "updated_at": "2026-04-20T08:00:00Z",
         "created_at": "2026-04-20T08:00:00Z",
+        "node_id": "GIST_g_eee555",
         "files": {
             "notes.md": (
                 "# Reading list\n\n"
@@ -138,8 +147,9 @@ LOCAL = {
 
 def main():
     if XDG.exists():
-        shutil.rmtree(XDG)  # drop persisted pins from a previous run
+        shutil.rmtree(XDG)  # drop persisted pins + cache from a previous run
     XDG.mkdir(parents=True, exist_ok=True)
+    (XDG / "cache").mkdir(parents=True, exist_ok=True)
     STATE.parent.mkdir(parents=True, exist_ok=True)
     WORK.mkdir(parents=True, exist_ok=True)
 
