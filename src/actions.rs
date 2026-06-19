@@ -245,6 +245,31 @@ pub fn parse_revision_count(stdout: &str) -> Option<usize> {
     stdout.trim().parse().ok()
 }
 
+/// JSON body for restoring a single file from an old gist revision via `PATCH /gists/{id}`.
+pub fn restore_revision_json(filename: &str, content: &str) -> String {
+    serde_json::json!({
+        "files": {
+            filename: { "content": content }
+        }
+    })
+    .to_string()
+}
+
+/// `gh api --method PATCH` plan that uploads old file content as a new gist revision.
+pub fn restore_revision_command(gist_id: &str, input_path: &Path) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "--method".into(),
+            "PATCH".into(),
+            format!("/gists/{gist_id}"),
+            "--input".into(),
+            input_path.display().to_string(),
+        ],
+    }
+}
+
 /// Clones `gist_id` into `dir` as a git working copy (the gist's revisions are its commits).
 ///
 /// Cloned over HTTPS (not `gh gist clone`, which follows the user's `git_protocol` and may
@@ -629,6 +654,30 @@ mod tests {
         let plan = delete_command("abc123");
         assert_eq!(plan.program, "gh");
         assert_eq!(plan.args, vec!["gist", "delete", "--yes", "abc123"]);
+    }
+
+    #[test]
+    fn restore_revision_json_wraps_file_content() {
+        let body = restore_revision_json("config.toml", "old line\n");
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["files"]["config.toml"]["content"], "old line\n");
+    }
+
+    #[test]
+    fn restore_revision_command_patches_via_input_file() {
+        let plan = restore_revision_command("abc123", Path::new("/tmp/restore.json"));
+        assert_eq!(plan.program, "gh");
+        assert_eq!(
+            plan.args,
+            vec![
+                "api",
+                "--method",
+                "PATCH",
+                "/gists/abc123",
+                "--input",
+                "/tmp/restore.json"
+            ]
+        );
     }
 
     #[test]

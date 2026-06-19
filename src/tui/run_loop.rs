@@ -322,6 +322,125 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     BgTaskOutcome::CommentsFetched { gist_id, result } => {
                         state.apply_fetched_comments(&gist_id, result);
                     }
+                    BgTaskOutcome::RevisionsFetched { gist_id, result } => {
+                        if state.revision_gist_id.as_deref() != Some(gist_id.as_str()) {
+                            continue;
+                        }
+                        match result {
+                            Ok(entries) => {
+                                state.revision_fetch_error = None;
+                                state.revision_entries = Some(entries);
+                                if state
+                                    .revision_entries
+                                    .as_ref()
+                                    .is_some_and(|e| e.len() <= 1)
+                                {
+                                    state.set_status("only one revision — nothing to restore");
+                                }
+                            }
+                            Err(error) => {
+                                state.revision_entries = Some(Vec::new());
+                                state.revision_fetch_error = Some(error);
+                            }
+                        }
+                    }
+                    BgTaskOutcome::RevisionDiff {
+                        result,
+                        old_label,
+                        new_label,
+                    } => match result {
+                        Ok((old_content, new_content)) => {
+                            let diff = crate::diff::unified_diff(
+                                &old_label,
+                                &old_content,
+                                &new_label,
+                                &new_content,
+                            );
+                            state.diff_text = diff;
+                            state.diff_scroll = 0;
+                            state.diff_hscroll = 0;
+                            state.diff_identical = old_content == new_content;
+                            state.diff_return = Screen::Revisions;
+                            state.pending_action = None;
+                            state.screen = Screen::Diff;
+                        }
+                        Err(error) => state.set_status(error),
+                    },
+                    BgTaskOutcome::RestoreRevisionReady {
+                        result,
+                        gist_id,
+                        filename,
+                        version,
+                        version_label,
+                    } => match result {
+                        Ok((revision_content, current_content)) => {
+                            if revision_content == current_content {
+                                state.set_status("revision matches current — nothing to restore");
+                                continue;
+                            }
+                            let old_label = format!("revision {version_label}");
+                            let new_label = format!("current {filename}");
+                            let diff = crate::diff::unified_diff(
+                                &old_label,
+                                &revision_content,
+                                &new_label,
+                                &current_content,
+                            );
+                            state.diff_text = diff;
+                            state.diff_scroll = 0;
+                            state.diff_hscroll = 0;
+                            state.diff_identical = false;
+                            state.pending_action = Some(PendingAction::RestoreRevision {
+                                gist_id,
+                                filename,
+                                version,
+                                version_label,
+                                content: revision_content,
+                            });
+                            state.screen = Screen::Confirm;
+                        }
+                        Err(error) => state.set_status(error),
+                    },
+                    BgTaskOutcome::RestoreRevisionDone {
+                        result,
+                        gist_id,
+                        filename,
+                    } => match result {
+                        Ok(_) => {
+                            state
+                                .gist_content_cache
+                                .remove(&(gist_id.clone(), filename.clone()));
+                            state.set_status(format!(
+                                "Restored {filename} from old revision (new revision created)"
+                            ));
+                            state.pending_action = None;
+                            state.screen = Screen::Revisions;
+                            state.revision_index = 0;
+                            state.revision_entries = None;
+                            state.loading = true;
+                            gist_rx = Some(spawn_gist_fetch());
+                            if let Some(gist_id) = state.revision_gist_id.clone() {
+                                spawn_bg(
+                                    &mut state,
+                                    &mut bg_rx,
+                                    "Loading revisions…",
+                                    move || {
+                                        let result = crate::gh::fetch_gist_commits_json(&gist_id)
+                                            .map_err(|e| e.to_string())
+                                            .and_then(|raw| {
+                                                crate::gh::parse_gist_commits_json(&raw)
+                                                    .map_err(|e| e.to_string())
+                                            });
+                                        BgTaskOutcome::RevisionsFetched { gist_id, result }
+                                    },
+                                );
+                            }
+                        }
+                        Err(error) => {
+                            state.set_status(format!("restore failed: {error}"));
+                            state.screen = Screen::Confirm;
+                        }
+                    },
                 }
             }
         }
@@ -866,6 +985,138 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                 }
                 KeyOutcome::PersistDiffContext => persist_diff_context(&mut state),
                 KeyOutcome::ThemeToggle => persist_theme(&mut state),
+                KeyOutcome::FetchRevisions => {
+                    let Some(gist_id) = state.revision_gist_id.clone() else {
+                        continue;
+                    };
+                    spawn_bg(&mut state, &mut bg_rx, "Loading revisions…", move || {
+                        let result = crate::gh::fetch_gist_commits_json(&gist_id)
+                            .map_err(|e| e.to_string())
+                            .and_then(|raw| {
+                                crate::gh::parse_gist_commits_json(&raw).map_err(|e| e.to_string())
+                            });
+                        BgTaskOutcome::RevisionsFetched { gist_id, result }
+                    });
+                }
+                KeyOutcome::RevisionDiffIncremental => {
+                    let Some(gist_id) = state.revision_gist_id.clone() else {
+                        continue;
+                    };
+                    let Some(child) = state.selected_revision().cloned() else {
+                        continue;
+                    };
+                    let filename = state.revision_target_file.clone();
+                    let child_version = child.version.clone();
+                    let child_label = revision_version_label(&child);
+                    let parent = state
+                        .revision_entries
+                        .as_ref()
+                        .and_then(|entries| entries.get(state.revision_index + 1).cloned());
+                    let (parent_version, old_label) = match parent {
+                        Some(parent) => {
+                            let label = revision_version_label(&parent);
+                            (Some(parent.version), format!("revision {label}"))
+                        }
+                        None => (None, "(initial)".into()),
+                    };
+                    let new_label = format!("revision {child_label}");
+                    spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
+                        let result = fetch_revision_incremental_pair(
+                            &gist_id,
+                            &child_version,
+                            parent_version.as_deref(),
+                            &filename,
+                        );
+                        BgTaskOutcome::RevisionDiff {
+                            result,
+                            old_label,
+                            new_label,
+                        }
+                    });
+                }
+                KeyOutcome::RevisionDiff => {
+                    let Some(gist_id) = state.revision_gist_id.clone() else {
+                        continue;
+                    };
+                    let Some(revision) = state.selected_revision().cloned() else {
+                        continue;
+                    };
+                    let filename = state.revision_target_file.clone();
+                    let version = revision.version.clone();
+                    let version_label = revision_version_label(&revision);
+                    let old_label = format!("revision {version_label}");
+                    let new_label = format!("current {filename}");
+                    spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
+                        let result = fetch_revision_pair(
+                            &gist_id, &version, &filename, &old_label, &new_label,
+                        );
+                        BgTaskOutcome::RevisionDiff {
+                            result,
+                            old_label,
+                            new_label,
+                        }
+                    });
+                }
+                KeyOutcome::RestoreRevisionPreview => {
+                    let Some(gist_id) = state.revision_gist_id.clone() else {
+                        continue;
+                    };
+                    let Some(revision) = state.selected_revision().cloned() else {
+                        continue;
+                    };
+                    let filename = state.revision_target_file.clone();
+                    let version = revision.version.clone();
+                    let version_label = revision_version_label(&revision);
+                    spawn_bg(&mut state, &mut bg_rx, "Loading revision…", move || {
+                        let result = fetch_revision_pair_for_restore(&gist_id, &version, &filename);
+                        BgTaskOutcome::RestoreRevisionReady {
+                            result,
+                            gist_id,
+                            filename,
+                            version,
+                            version_label,
+                        }
+                    });
+                }
+                KeyOutcome::ExecuteRestoreRevision => {
+                    let Some(PendingAction::RestoreRevision {
+                        gist_id,
+                        filename,
+                        content,
+                        ..
+                    }) = state.pending_action.clone()
+                    else {
+                        continue;
+                    };
+                    let timestamp = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos())
+                        .unwrap_or(0);
+                    let temp_dir = state.cwd.join(format!(".gistui_restore_{timestamp}"));
+                    if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+                        state.set_status(format!("failed to create temp dir: {e}"));
+                        continue;
+                    }
+                    let json_path = temp_dir.join("restore.json");
+                    let body = crate::actions::restore_revision_json(&filename, &content);
+                    if let Err(e) = std::fs::write(&json_path, &body) {
+                        state.set_status(format!("failed to write restore payload: {e}"));
+                        let _ = std::fs::remove_dir_all(&temp_dir);
+                        continue;
+                    }
+                    let plan = crate::actions::restore_revision_command(&gist_id, &json_path);
+                    spawn_bg(&mut state, &mut bg_rx, "Restoring revision…", move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        let _ = std::fs::remove_dir_all(&temp_dir);
+                        BgTaskOutcome::RestoreRevisionDone {
+                            result,
+                            gist_id,
+                            filename,
+                        }
+                    });
+                }
                 KeyOutcome::None => {}
             }
         }
@@ -943,6 +1194,108 @@ enum BgTaskOutcome {
         gist_id: String,
         result: Result<Vec<GistComment>, String>,
     },
+    RevisionsFetched {
+        gist_id: String,
+        result: std::result::Result<Vec<crate::domain::GistRevision>, String>,
+    },
+    RevisionDiff {
+        result: std::result::Result<(String, String), String>,
+        old_label: String,
+        new_label: String,
+    },
+    RestoreRevisionReady {
+        result: std::result::Result<(String, String), String>,
+        gist_id: String,
+        filename: String,
+        version: String,
+        version_label: String,
+    },
+    RestoreRevisionDone {
+        result: std::result::Result<(), String>,
+        gist_id: String,
+        filename: String,
+    },
+}
+
+fn revision_version_label(revision: &crate::domain::GistRevision) -> String {
+    let sha = crate::domain::short_sha(&revision.version);
+    let age = crate::domain::parse_rfc3339_to_unix(&revision.committed_at)
+        .map(|t| {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            crate::domain::humanize_age(now as i64 - t as i64)
+        })
+        .unwrap_or_else(|| "?".into());
+    format!("{sha} ({age} ago)")
+}
+
+fn fetch_revision_file_content(
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+) -> std::result::Result<String, String> {
+    let raw = crate::gh::fetch_gist_revision_json(gist_id, version).map_err(|e| e.to_string())?;
+    match crate::gh::revision_file_content(&raw, filename).map_err(|e| e.to_string())? {
+        crate::gh::RevisionFileContent::Present(content) => Ok(content),
+        crate::gh::RevisionFileContent::Truncated => {
+            Err("file too large for API preview (>1 MB)".into())
+        }
+        crate::gh::RevisionFileContent::Absent => {
+            Err(format!("{filename} not present in this revision"))
+        }
+    }
+}
+
+fn fetch_revision_file_content_optional(
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+) -> std::result::Result<String, String> {
+    let raw = crate::gh::fetch_gist_revision_json(gist_id, version).map_err(|e| e.to_string())?;
+    match crate::gh::revision_file_content(&raw, filename).map_err(|e| e.to_string())? {
+        crate::gh::RevisionFileContent::Present(content) => Ok(content),
+        crate::gh::RevisionFileContent::Truncated => {
+            Err("file too large for API preview (>1 MB)".into())
+        }
+        crate::gh::RevisionFileContent::Absent => Ok(String::new()),
+    }
+}
+
+fn fetch_revision_incremental_pair(
+    gist_id: &str,
+    child_version: &str,
+    parent_version: Option<&str>,
+    filename: &str,
+) -> std::result::Result<(String, String), String> {
+    let new_content = fetch_revision_file_content_optional(gist_id, child_version, filename)?;
+    let old_content = match parent_version {
+        Some(parent) => fetch_revision_file_content_optional(gist_id, parent, filename)?,
+        None => String::new(),
+    };
+    Ok((old_content, new_content))
+}
+
+fn fetch_revision_pair(
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+    _old_label: &str,
+    _new_label: &str,
+) -> std::result::Result<(String, String), String> {
+    let old_content = fetch_revision_file_content(gist_id, version, filename)?;
+    let new_content =
+        crate::gh::fetch_gist_file_content(gist_id, filename).map_err(|e| e.to_string())?;
+    Ok((old_content, new_content))
+}
+
+fn fetch_revision_pair_for_restore(
+    gist_id: &str,
+    version: &str,
+    filename: &str,
+) -> std::result::Result<(String, String), String> {
+    fetch_revision_pair(gist_id, version, filename, "", "")
 }
 
 fn cache_gists(gists: &[GistFile]) {

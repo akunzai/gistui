@@ -1,4 +1,6 @@
-use crate::domain::{group_gists, GistComment, GistFile, GistGroup, LocalCandidate, PinnedMapping};
+use crate::domain::{
+    group_gists, GistComment, GistFile, GistGroup, GistRevision, LocalCandidate, PinnedMapping,
+};
 use crate::ranking::{rank_gist_files, rank_local_files, MatchReason, RankedGistFile, RankedLocal};
 use anyhow::Result;
 use crossterm::{
@@ -26,6 +28,8 @@ pub enum Screen {
     Gists,
     /// Single-gist detail: basic info + file list + comments (entered from Gists with Enter).
     GistDetail,
+    /// Revision history for one gist (entered with `h` from Gist detail or Gist manager).
+    Revisions,
 }
 
 /// A help topic — one per key-dense area. Ordered for the index list and `1`-`8` quick-jump.
@@ -38,18 +42,20 @@ pub enum HelpTopic {
     Diff,
     Preview,
     Upload,
+    Revisions,
     General,
 }
 
 impl HelpTopic {
     /// All topics in index / quick-jump order.
-    pub fn all() -> [HelpTopic; 8] {
+    pub fn all() -> [HelpTopic; 9] {
         use HelpTopic::*;
         [
             List,
             Pins,
             GistManager,
             GistDetail,
+            Revisions,
             Diff,
             Preview,
             Upload,
@@ -64,6 +70,7 @@ impl HelpTopic {
             HelpTopic::Pins => "Pinned Mappings",
             HelpTopic::GistManager => "Gist manager",
             HelpTopic::GistDetail => "Gist detail",
+            HelpTopic::Revisions => "Revision history",
             HelpTopic::Diff => "Diff view",
             HelpTopic::Preview => "Preview",
             HelpTopic::Upload => "Upload confirmation",
@@ -78,6 +85,7 @@ impl HelpTopic {
             Screen::Pins => HelpTopic::Pins,
             Screen::Gists => HelpTopic::GistManager,
             Screen::GistDetail => HelpTopic::GistDetail,
+            Screen::Revisions => HelpTopic::Revisions,
             _ => HelpTopic::List,
         }
     }
@@ -116,6 +124,13 @@ pub enum PendingAction {
         gist_id: String,
         label: String,
         count: usize,
+    },
+    RestoreRevision {
+        gist_id: String,
+        filename: String,
+        version: String,
+        version_label: String,
+        content: String,
     },
 }
 
@@ -307,6 +322,16 @@ pub enum KeyOutcome {
     CopyPreviewContent,
     /// Toggle the colour theme between dark and light and persist to config (`T`, global).
     ThemeToggle,
+    /// Fetch the revision list for the gist opened on `Screen::Revisions`.
+    FetchRevisions,
+    /// Diff the target file: parent revision → selected revision (incremental).
+    RevisionDiffIncremental,
+    /// Diff the target file: selected revision vs current head.
+    RevisionDiff,
+    /// Fetch revision + head content and stage a restore confirm.
+    RestoreRevisionPreview,
+    /// Apply a confirmed single-file revision restore (`PATCH`).
+    ExecuteRestoreRevision,
 }
 
 #[derive(Debug, Clone)]
@@ -435,6 +460,19 @@ pub struct AppState {
     pub theme_choice: crate::config::ThemeChoice,
     /// Resolved colour palette for the current theme choice (from config).
     pub theme: Theme,
+    /// Gist whose revisions are shown on `Screen::Revisions`.
+    pub revision_gist_id: Option<String>,
+    /// Fetched revision rows (`None` while the initial list fetch is in flight).
+    pub revision_entries: Option<Vec<GistRevision>>,
+    /// Cursor into `revision_entries` (0 = current head).
+    pub revision_index: usize,
+    pub revision_hscroll: u16,
+    /// File within the gist that preview/diff/restore target.
+    pub revision_target_file: String,
+    /// Where `q`/`Esc` returns from `Screen::Revisions`.
+    pub revision_return_screen: Screen,
+    /// Error from the commits-list fetch, if any.
+    pub revision_fetch_error: Option<String>,
 }
 
 fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
@@ -713,6 +751,91 @@ impl AppState {
     }
 
     /// Look up a gist group by id (unaffected by filtering); used by detail + confirm background.
+    /// Open `Screen::Revisions` for the gist on `return_screen`. Returns false when no gist
+    /// is selected or the gist has no files.
+    pub fn open_revisions(&mut self, return_screen: Screen) -> bool {
+        let gist_id = match return_screen {
+            Screen::List => self.selected_gist().map(|g| g.file.gist_id.clone()),
+            Screen::GistDetail => self.detail_gist_id.clone(),
+            Screen::Gists => self.selected_group().map(|g| g.id.clone()),
+            _ => None,
+        };
+        let Some(gist_id) = gist_id else {
+            return false;
+        };
+        let filenames = self.gist_filenames(&gist_id);
+        let target_file = match return_screen {
+            Screen::List => self
+                .selected_gist()
+                .map(|g| g.file.filename.clone())
+                .filter(|f| filenames.iter().any(|name| name == f)),
+            Screen::GistDetail => filenames
+                .into_iter()
+                .nth(self.detail_file_cursor)
+                .or_else(|| self.gist_filenames(&gist_id).first().cloned()),
+            Screen::Gists => filenames.first().cloned(),
+            _ => None,
+        };
+        let Some(target_file) = target_file else {
+            return false;
+        };
+        self.revision_gist_id = Some(gist_id);
+        self.revision_target_file = target_file;
+        self.revision_return_screen = return_screen;
+        self.revision_index = 0;
+        self.revision_hscroll = 0;
+        self.revision_entries = None;
+        self.revision_fetch_error = None;
+        self.screen = Screen::Revisions;
+        true
+    }
+
+    pub fn selected_revision(&self) -> Option<&GistRevision> {
+        let entries = self.revision_entries.as_ref()?;
+        entries.get(self.revision_index)
+    }
+
+    /// Advance `revision_target_file` to the next filename in this gist (wraps). Returns
+    /// false when the gist has at most one file.
+    pub fn cycle_revision_target_file(&mut self) -> bool {
+        let Some(gist_id) = self.revision_gist_id.clone() else {
+            return false;
+        };
+        let files = self.gist_filenames(&gist_id);
+        if files.len() <= 1 {
+            return false;
+        }
+        let current = files
+            .iter()
+            .position(|f| f == &self.revision_target_file)
+            .unwrap_or(0);
+        self.revision_target_file = files[(current + 1) % files.len()].clone();
+        true
+    }
+
+    /// True when the diff view supports local↔gist download/upload (`d`/`u`). Revision-history
+    /// diffs (returning to `Screen::Revisions`) are read-only comparisons.
+    pub fn diff_allows_sync(&self) -> bool {
+        self.diff_return != Screen::Revisions
+    }
+
+    /// Footer label for the revision-history target file, including `(n/total)` when multi-file.
+    pub fn revision_target_file_label(&self) -> String {
+        let Some(gist_id) = self.revision_gist_id.as_deref() else {
+            return self.revision_target_file.clone();
+        };
+        let files = self.gist_filenames(gist_id);
+        if files.len() <= 1 {
+            return self.revision_target_file.clone();
+        }
+        let pos = files
+            .iter()
+            .position(|f| f == &self.revision_target_file)
+            .map(|i| i + 1)
+            .unwrap_or(1);
+        format!("{} ({pos}/{})", self.revision_target_file, files.len())
+    }
+
     pub fn group_by_id(&self, gist_id: &str) -> Option<GistGroup> {
         self.gist_groups().into_iter().find(|g| g.id == gist_id)
     }
@@ -1031,6 +1154,13 @@ pub fn initial_state() -> AppState {
         gist_comment_counts: std::collections::HashMap::new(),
         theme_choice: crate::config::ThemeChoice::Dark,
         theme: Theme::DARK,
+        revision_gist_id: None,
+        revision_entries: None,
+        revision_index: 0,
+        revision_hscroll: 0,
+        revision_target_file: String::new(),
+        revision_return_screen: Screen::GistDetail,
+        revision_fetch_error: None,
     }
 }
 

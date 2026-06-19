@@ -1147,6 +1147,7 @@ fn commands_hint_is_focus_aware() {
     assert!(!local.contains("d download"));
 
     let gist = commands_hint(FocusPane::Gist);
+    assert!(gist.contains("h history"));
     assert!(gist.contains("d download"));
     assert!(gist.contains("g gists"));
     assert!(!gist.contains("e edit"));
@@ -2982,9 +2983,10 @@ fn pins_filter_input_behaviors() {
 #[test]
 fn help_topic_all_is_ordered_and_titled() {
     let all = HelpTopic::all();
-    assert_eq!(all.len(), 8);
+    assert_eq!(all.len(), 9);
     assert_eq!(all[0], HelpTopic::List);
-    assert_eq!(all[7], HelpTopic::General);
+    assert_eq!(all[4], HelpTopic::Revisions);
+    assert_eq!(all[8], HelpTopic::General);
     assert_eq!(HelpTopic::Pins.title(), "Pinned Mappings");
 }
 
@@ -2997,7 +2999,202 @@ fn help_topic_for_screen_maps_key_dense_screens() {
         HelpTopic::for_screen(Screen::GistDetail),
         HelpTopic::GistDetail
     );
+    assert_eq!(
+        HelpTopic::for_screen(Screen::Revisions),
+        HelpTopic::Revisions
+    );
     assert_eq!(HelpTopic::for_screen(Screen::Diff), HelpTopic::List);
+}
+
+#[test]
+fn h_from_list_opens_revisions_for_selected_gist_file() {
+    let mut state = list_state_with_matches();
+    state.focus = FocusPane::Gist;
+    state.gist_index = 0;
+    let outcome = state.handle_key(KeyCode::Char('h'));
+    assert_eq!(outcome, KeyOutcome::FetchRevisions);
+    assert_eq!(state.screen, Screen::Revisions);
+    assert_eq!(state.revision_gist_id.as_deref(), Some("a"));
+    assert_eq!(state.revision_target_file, "settings.json");
+    assert_eq!(state.revision_return_screen, Screen::List);
+}
+
+#[test]
+fn h_from_gist_detail_opens_revisions_and_fetches() {
+    let mut state = state_with_gists();
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("g1".into());
+    state.detail_file_cursor = 1;
+    let outcome = state.handle_key(KeyCode::Char('h'));
+    assert_eq!(outcome, KeyOutcome::FetchRevisions);
+    assert_eq!(state.screen, Screen::Revisions);
+    assert_eq!(state.revision_gist_id.as_deref(), Some("g1"));
+    assert_eq!(state.revision_target_file, "b.txt");
+    assert_eq!(state.revision_return_screen, Screen::GistDetail);
+    assert!(state.revision_entries.is_none());
+}
+
+#[test]
+fn revisions_r_on_head_is_blocked() {
+    let mut state = state_with_gists();
+    state.screen = Screen::Revisions;
+    state.revision_entries = Some(vec![crate::domain::GistRevision {
+        version: "abc".into(),
+        committed_at: "2026-06-10T00:00:00Z".into(),
+        user: "u".into(),
+        change_status: crate::domain::GistRevisionChangeStatus {
+            total: 1,
+            additions: 1,
+            deletions: 0,
+        },
+    }]);
+    state.handle_key(KeyCode::Char('r'));
+    assert_eq!(
+        state.status.as_deref(),
+        Some("only one revision — nothing to restore")
+    );
+}
+
+#[test]
+fn revisions_capital_d_on_current_shows_status() {
+    let mut state = state_with_gists();
+    state.screen = Screen::Revisions;
+    state.revision_index = 0;
+    state.revision_entries = Some(vec![
+        crate::domain::GistRevision {
+            version: "v2".into(),
+            committed_at: "2026-06-10T00:00:00Z".into(),
+            user: "u".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 1,
+                additions: 1,
+                deletions: 0,
+            },
+        },
+        crate::domain::GistRevision {
+            version: "v1".into(),
+            committed_at: "2026-06-01T00:00:00Z".into(),
+            user: "u".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 2,
+                additions: 2,
+                deletions: 0,
+            },
+        },
+    ]);
+    assert_eq!(state.handle_key(KeyCode::Char('D')), KeyOutcome::None);
+    assert_eq!(state.status.as_deref(), Some("already at current revision"));
+    state.revision_index = 1;
+    assert_eq!(
+        state.handle_key(KeyCode::Char('D')),
+        KeyOutcome::RevisionDiff
+    );
+}
+
+#[test]
+fn revisions_enter_triggers_incremental_diff() {
+    let mut state = state_with_gists();
+    state.screen = Screen::Revisions;
+    state.revision_index = 0;
+    state.revision_entries = Some(vec![
+        crate::domain::GistRevision {
+            version: "v2".into(),
+            committed_at: "2026-06-10T00:00:00Z".into(),
+            user: "u".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 1,
+                additions: 1,
+                deletions: 0,
+            },
+        },
+        crate::domain::GistRevision {
+            version: "v1".into(),
+            committed_at: "2026-06-01T00:00:00Z".into(),
+            user: "u".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 2,
+                additions: 2,
+                deletions: 0,
+            },
+        },
+    ]);
+    assert_eq!(
+        state.handle_key(KeyCode::Enter),
+        KeyOutcome::RevisionDiffIncremental
+    );
+    state.revision_index = 1;
+    assert_eq!(
+        state.handle_key(KeyCode::Enter),
+        KeyOutcome::RevisionDiffIncremental
+    );
+}
+
+#[test]
+fn revision_diff_omits_download_upload() {
+    let mut state = initial_state();
+    state.screen = Screen::Diff;
+    state.diff_return = Screen::Revisions;
+    state.diff_identical = false;
+    let footer = diff_footer(&state);
+    assert!(!footer.contains("download"));
+    assert!(!footer.contains("upload"));
+    assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
+    assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::None);
+}
+
+#[test]
+fn revisions_f_cycles_target_file() {
+    let mut state = state_with_gists();
+    state.screen = Screen::Revisions;
+    state.revision_gist_id = Some("g1".into());
+    state.revision_target_file = "a.txt".into();
+    state.revision_entries = Some(vec![]);
+    state.handle_key(KeyCode::Char('f'));
+    assert_eq!(state.revision_target_file, "b.txt");
+    state.handle_key(KeyCode::Char('f'));
+    assert_eq!(state.revision_target_file, "a.txt");
+    assert_eq!(state.revision_target_file_label(), "a.txt (1/2)");
+}
+
+#[test]
+fn revisions_f_on_single_file_gist_shows_status() {
+    let mut state = initial_state();
+    state.gists = vec![GistFile {
+        gist_id: "g1".into(),
+        description: "solo".into(),
+        filename: "only.txt".into(),
+        public: false,
+        updated_at: "x".into(),
+        created_at: "x".into(),
+    }];
+    state.screen = Screen::Revisions;
+    state.revision_gist_id = Some("g1".into());
+    state.revision_target_file = "only.txt".into();
+    state.revision_entries = Some(vec![]);
+    state.handle_key(KeyCode::Char('f'));
+    assert_eq!(state.status.as_deref(), Some("only one file in this gist"));
+}
+
+#[test]
+fn restore_revision_confirm_prompt_and_y_intent() {
+    let mut state = state_with_gists();
+    state.screen = Screen::Confirm;
+    state.pending_action = Some(PendingAction::RestoreRevision {
+        gist_id: "g1".into(),
+        filename: "a.txt".into(),
+        version: "oldsha".into(),
+        version_label: "oldsha (3d ago)".into(),
+        content: "old\n".into(),
+    });
+    assert_eq!(
+        confirm_modal_style(&state),
+        ("Restore revision", Color::Yellow)
+    );
+    assert!(confirm_prompt(&state).contains("Restore a.txt to revision oldsha (3d ago)"));
+    assert_eq!(
+        state.handle_key(KeyCode::Char('y')),
+        KeyOutcome::ExecuteRestoreRevision
+    );
 }
 
 #[test]
