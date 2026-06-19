@@ -10,8 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Fixed: `T` theme toggle stopped working after vim navigation began passing real key modifiers (Shift+T was ignored).
+## [0.12.0] — 2026-06-19
+
 - Vim-style navigation: `h`/`j`/`k`/`l` move and scroll alongside arrow keys; `Ctrl+b` / `Ctrl+f` page up/down by 10 (same as PageUp/PageDown) on every scrollable screen, including the main list (Files/Gists panes), Pins, and Gist manager. Revision history is now `H` (was `h`); cycling the revision target file is `F` (was `f`).
+- Fixed: `T` theme toggle stopped working after vim navigation began passing real key modifiers (Shift+T was ignored).
 - README slimmed for scannability: installation and safety reference docs moved to `reference/` (kept out of GitHub Pages `docs/`); contributor/agent sections to `CONTRIBUTING.md` / `AGENTS.md`; Usage keeps essential keys and points to in-app `?` for the complete keymap. Landing page updated (install link-out, current gist-manager copy, doc footer links).
 - Gist detail: `*` stars or unstars the open gist (footer hint + `★ starred` in the info line when starred); the info line also shows `☆ N` (stargazers), `⑂ N` (forks), and `💬 N` (comments) when non-zero.
 - Edit description (`e`), compact revisions (`c`), and delete gist (`X`) moved from the gist manager to gist detail; they appear only for gists you own (silent no-op on others' gists — no read-only warning).
@@ -120,7 +122,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.11.0...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/akunzai/gistui/releases/tag/v0.12.0
 [0.11.0]: https://github.com/akunzai/gistui/releases/tag/v0.11.0
 [0.10.0]: https://github.com/akunzai/gistui/releases/tag/v0.10.0
 [0.9.0]: https://github.com/akunzai/gistui/releases/tag/v0.9.0

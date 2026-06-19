@@ -11,9 +11,20 @@ import datetime
 import json
 import os
 import pathlib
+import re
 import sys
 
 STATE = pathlib.Path(os.environ["GISTUI_DEMO_HOME"]) / "state" / "gists.json"
+DEMO_USER = "demo"
+
+# MIME hints so preview/diff syntax highlighting picks the right highlighter.
+FILE_TYPES = {
+    "starship.toml": "text/plain",
+    "aliases.sh": "application/x-shellscript",
+    "hello.py": "text/x-python",
+    "tmux.conf": "text/plain",
+    "notes.md": "text/markdown",
+}
 
 
 def load():
@@ -28,38 +39,126 @@ def now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def gist_api_row(gid, g):
+    fork_n = int(g.get("forks", 0))
+    return {
+        "id": gid,
+        "node_id": g.get("node_id", f"GIST_{gid}"),
+        "description": g.get("description"),
+        "public": g.get("public", False),
+        "updated_at": g.get("updated_at", ""),
+        "created_at": g.get("created_at", ""),
+        "comments": g.get("comments", 0),
+        "owner": {"login": DEMO_USER},
+        "forks": [{"id": f"{gid}_fork{i}"} for i in range(fork_n)],
+        "files": {
+            fn: {
+                "filename": fn,
+                "type": FILE_TYPES.get(fn, "text/plain"),
+            }
+            for fn in g["files"]
+        },
+    }
+
+
+def gist_list(starred_only=False):
+    d = load()
+    rows = [gist_api_row(gid, g) for gid, g in d["gists"].items()]
+    if starred_only:
+        # Keep the main list free of ★ badges; starred gists are a separate concern.
+        return []
+    return rows
+
+
+def node_stargazer_count(node_id):
+    d = load()
+    for g in d["gists"].values():
+        if g.get("node_id") == node_id:
+            return int(g.get("stargazers", 0))
+    return 0
+
+
+def graphql_response(query):
+    if "viewer" in query and "isFork" in query:
+        d = load()
+        nodes = [
+            {"name": gid, "isFork": bool(g.get("is_fork", False))}
+            for gid, g in d["gists"].items()
+        ]
+        return {"data": {"viewer": {"gists": {"nodes": nodes}}}}
+
+    if "stargazerCount" in query:
+        d = load()
+        by_node = {g.get("node_id"): gid for gid, g in d["gists"].items()}
+        node_ids = re.findall(r'node\(id: "([^"]+)"\)', query)
+        data = {}
+        for i, node_id in enumerate(node_ids):
+            gid = by_node.get(node_id, node_id)
+            data[f"n{i}"] = {
+                "name": gid,
+                "stargazerCount": node_stargazer_count(node_id),
+            }
+        return {"data": data}
+
+    return {"data": {}}
+
+
 def main():
     a = sys.argv[1:]
 
-    # readiness checks: gh --version / gh auth status
     if a == ["--version"]:
         print("gh version 2.62.0 (2026-01-01)")
         return 0
     if a[:2] == ["auth", "status"]:
         sys.stderr.write(
-            "github.com\n  ✓ Logged in to github.com account demo (keyring)\n"
+            f"github.com\n  ✓ Logged in to github.com account {DEMO_USER} (keyring)\n"
         )
         return 0
 
-    # list: gh api --paginate /gists?per_page=100
-    if a[:2] == ["api", "--paginate"] and a[2].startswith("/gists"):
-        d = load()
-        out = [
-            {
-                "id": gid,
-                "description": g.get("description"),
-                "public": g.get("public", False),
-                "updated_at": g.get("updated_at", ""),
-                "created_at": g.get("created_at", ""),
-                "comments": g.get("comments", 0),
-                "files": {fn: {"filename": fn} for fn in g["files"]},
-            }
-            for gid, g in d["gists"].items()
-        ]
-        print(json.dumps(out))
+    if a[:3] == ["api", "user", "--jq"] and a[3] == ".login":
+        print(DEMO_USER)
         return 0
 
-    # description edit: gh api --method PATCH /gists/<id> -f description=...
+    if a[:2] == ["api", "graphql"]:
+        query = ""
+        for i, arg in enumerate(a):
+            if arg == "-f" and i + 1 < len(a) and a[i + 1].startswith("query="):
+                query = a[i + 1].split("query=", 1)[1]
+                break
+        print(json.dumps(graphql_response(query)))
+        return 0
+
+    if a[:2] == ["api", "--paginate"] and len(a) > 2:
+        path = a[2]
+        if path.startswith("/gists/starred"):
+            print(json.dumps(gist_list(starred_only=True)))
+            return 0
+        if path.startswith("/gists"):
+            print(json.dumps(gist_list(starred_only=False)))
+            return 0
+
+    if len(a) >= 3 and a[:2] == ["api"] and a[2].startswith("/gists/"):
+        tail = a[2].split("/gists/", 1)[1]
+        if "/" in tail:
+            gid, rest = tail.split("/", 1)
+            if rest == "comments":
+                print("[]")
+                return 0
+            if rest.startswith("forks"):
+                d = load()
+                g = d["gists"].get(gid, {})
+                n = int(g.get("forks", 0))
+                print(json.dumps([{"id": f"{gid}_fork{i}"} for i in range(n)]))
+                return 0
+        else:
+            gid = tail
+            d = load()
+            g = d["gists"].get(gid)
+            if g:
+                print(json.dumps(gist_api_row(gid, g)))
+                return 0
+        return 0
+
     if a[:1] == ["api"] and "--method" in a and "PATCH" in a:
         gid = a[a.index("PATCH") + 1].split("/gists/")[-1]
         desc = a[a.index("-f") + 1].split("description=", 1)[-1] if "-f" in a else ""
@@ -74,7 +173,7 @@ def main():
     if a[:2] == ["gist", "view"]:
         gid = a[2]
         if "--web" in a:
-            return 0  # would open a browser; no-op for the recording
+            return 0
         if "--filename" in a and "--raw" in a:
             fn = a[a.index("--filename") + 1]
             d = load()

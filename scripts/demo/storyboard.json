@@ -5,23 +5,18 @@
   ["key", "P"], ["wait", 2.4],
   ["key", "esc"], ["wait", 1.0],
 
-  ["key", "v"], ["wait", 1.0],
-  ["key", "v"], ["wait", 1.0],
-  ["key", "v"], ["wait", 1.1],
+  ["key", " "], ["wait", 2.8],
+  ["key", "esc"], ["wait", 0.8],
 
-  ["key", "down"], ["key", "down"], ["key", "down"], ["wait", 0.6],
-  ["key", " "], ["wait", 3.0],
-  ["key", "esc"], ["wait", 0.7],
-  ["key", "up"], ["key", "up"], ["key", "up"], ["wait", 0.6],
-
-  ["key", "enter"], ["wait", 2.4],
-  ["key", "c"], ["wait", 2.4],
+  ["key", "down"], ["key", "down"], ["wait", 0.8],
+  ["key", "enter"], ["wait", 3.0],
+  ["key", "c"], ["wait", 2.8],
   ["key", "esc"], ["wait", 1.0],
 
   ["key", "u"], ["wait", 2.5],
   ["key", "y"], ["wait", 2.6],
 
-  ["key", "down"], ["key", "down"], ["key", "down"], ["wait", 0.8],
+  ["key", "down"], ["wait", 0.6],
   ["key", "d"], ["wait", 2.5],
   ["key", "d"], ["wait", 2.0],
   ["key", "y"], ["wait", 1.8],

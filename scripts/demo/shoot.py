@@ -62,8 +62,10 @@ def main():
     steps = json.loads(open(STEPS_FILE).read())
 
     env = dict(os.environ)
+    env.pop("NO_COLOR", None)  # host shells often set this; shots must show syntax colours
     env["PATH"] = FAKEBIN + ":" + env["PATH"]  # gistui's `gh` resolves to fake-gh
     env["XDG_CONFIG_HOME"] = os.path.join(HOME, "xdg")
+    env["XDG_CACHE_HOME"] = os.path.join(HOME, "xdg", "cache")
     env["TERM"] = "xterm-256color"
     env["COLUMNS"] = str(COLS)
     env["LINES"] = str(ROWS)
