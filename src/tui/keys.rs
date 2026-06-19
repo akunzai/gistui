@@ -350,6 +350,12 @@ impl AppState {
                     DetailFocus::Comments => DetailFocus::Files,
                     DetailFocus::Files => DetailFocus::Comments,
                 };
+                if self.detail_focus == DetailFocus::Comments
+                    && self.detail_comments.is_none()
+                    && !self.detail_comments_loading
+                {
+                    return KeyOutcome::FetchComments;
+                }
             }
             // X deletes the whole gist (y/n confirm), mirroring the gist manager. Reuses the
             // shared Delete confirm path, which lands on the list once the gist is gone.
@@ -488,6 +494,7 @@ impl AppState {
         if self.detail_gist_id.as_deref() != Some(gist_id) {
             return;
         }
+        self.detail_comments_loading = false;
         match result {
             Ok(comments) => {
                 self.detail_comments = Some(comments);

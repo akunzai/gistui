@@ -132,6 +132,8 @@ mod tests {
             created_at: "2026-06-08T00:00:00Z".into(),
             owner_login: String::new(),
             fork_of_id: None,
+
+            raw_url: None,
         }
     }
 

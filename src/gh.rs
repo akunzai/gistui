@@ -40,6 +40,8 @@ struct GhGistForkOf {
 #[derive(Debug, Deserialize)]
 struct GhGistFile {
     filename: String,
+    #[serde(default)]
+    raw_url: Option<String>,
 }
 
 /// Plan for `gh --version` (used to confirm `gh` is installed and runnable).
@@ -165,6 +167,7 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
                 created_at: gist.created_at.clone(),
                 owner_login: owner_login.clone(),
                 fork_of_id: fork_of_id.clone(),
+                raw_url: file.raw_url.clone(),
             });
         }
     }
@@ -301,16 +304,39 @@ pub fn parse_starred_gist_ids(raw: &str) -> Result<std::collections::HashSet<Str
     Ok(gists.into_iter().map(|g| g.id).collect())
 }
 
-pub fn fetch_gist_file_content(gist_id: &str, filename: &str) -> Result<String> {
-    fetch_gist_file_content_with(&SystemRunner, gist_id, filename)
+/// Plan for fetching gist file bytes from a list-response `raw_url` (no auth).
+pub fn raw_url_fetch_plan(url: &str) -> CommandPlan {
+    CommandPlan {
+        program: "curl".into(),
+        args: vec!["-sL".into(), url.into()],
+    }
+}
+
+pub fn fetch_gist_file_content(
+    gist_id: &str,
+    filename: &str,
+    raw_url: Option<&str>,
+) -> Result<String> {
+    fetch_gist_file_content_with(&SystemRunner, gist_id, filename, raw_url)
 }
 
 pub fn fetch_gist_file_content_with(
     runner: &dyn CommandRunner,
     gist_id: &str,
     filename: &str,
+    raw_url: Option<&str>,
 ) -> Result<String> {
-    run_command(runner, &gist_view_plan(gist_id, filename))
+    match run_command(runner, &gist_view_plan(gist_id, filename)) {
+        Ok(content) => Ok(content),
+        Err(primary) => {
+            if let Some(url) = raw_url.filter(|u| !u.is_empty()) {
+                run_command(runner, &raw_url_fetch_plan(url))
+                    .with_context(|| format!("{primary}; raw_url fallback also failed"))
+            } else {
+                Err(primary)
+            }
+        }
+    }
 }
 
 /// Plan for listing every revision of a gist via the REST API.
@@ -510,6 +536,55 @@ mod tests {
         let counts = parse_gist_fork_counts(raw).unwrap();
         assert_eq!(counts.get("a").copied(), Some(2));
         assert_eq!(counts.get("b").copied(), Some(0));
+    }
+
+    #[test]
+    fn fetch_gist_file_content_falls_back_to_raw_url() {
+        use crate::actions::{CommandOutput, CommandPlan, CommandRunner};
+        use std::cell::RefCell;
+
+        struct SeqRunner {
+            outputs: RefCell<Vec<CommandOutput>>,
+            calls: RefCell<Vec<CommandPlan>>,
+            next: RefCell<usize>,
+        }
+
+        impl CommandRunner for SeqRunner {
+            fn run(&self, plan: &CommandPlan) -> Result<CommandOutput> {
+                self.calls.borrow_mut().push(plan.clone());
+                let i = *self.next.borrow();
+                *self.next.borrow_mut() = i + 1;
+                self.outputs
+                    .borrow()
+                    .get(i)
+                    .cloned()
+                    .ok_or_else(|| anyhow::anyhow!("no output for call {i}"))
+            }
+        }
+
+        let url = "https://gist.githubusercontent.com/u/id/raw/hash/file.md";
+        let runner = SeqRunner {
+            outputs: RefCell::new(vec![
+                CommandOutput {
+                    success: false,
+                    stdout: String::new(),
+                    stderr: "HTTP 502".into(),
+                },
+                CommandOutput {
+                    success: true,
+                    stdout: "big content".into(),
+                    stderr: String::new(),
+                },
+            ]),
+            calls: RefCell::new(Vec::new()),
+            next: RefCell::new(0),
+        };
+
+        let content = fetch_gist_file_content_with(&runner, "id", "file.md", Some(url)).unwrap();
+        assert_eq!(content, "big content");
+        let calls = runner.calls.borrow();
+        assert_eq!(calls[0], gist_view_plan("id", "file.md"));
+        assert_eq!(calls[1], raw_url_fetch_plan(url));
     }
 
     #[test]

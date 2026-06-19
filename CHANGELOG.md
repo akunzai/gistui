@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Gist detail comments load only when you open the Comments tab (no upfront fetch on Enter). Gist manager and detail view show `@owner` on gists you do not own. Preview/download falls back to the list API `raw_url` when `gh gist view` fails (e.g. huge starred gists returning HTTP 502). Startup cache now includes starred gists and fork/comment counts; fork counts refresh in the background so the list appears sooner.
 - Starred and forked gists: `v` cycles five visibility modes (all / public / secret / starred / forked); `*` stars or unstars the context gist; `F` forks a gist you do not own into your account. Others' starred gists are read-only (preview, diff, download, browser) — pin, upload, delete, compact, and restore are blocked. The gist manager title shows your starred and owned-fork totals (`★` / `⑂`); rows show `⭐ N` when a gist has forks.
 - Gist revision history: press `h` on a gist file in the main list, gist manager, or gist detail view to browse revisions (newest first), show the incremental diff for a revision (`Enter`, parent → selected), diff against the current version (`D`), and restore a single file from an older revision (`r`, `y`/`n` confirm — creates a new revision, unlike `c` compact which deletes history). In revision history, `f` cycles the target file on multi-file gists. Revision diffs are read-only (no `d`/`u` download/upload).
 

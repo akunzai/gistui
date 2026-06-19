@@ -448,6 +448,16 @@ fn gist_badge_prefix(starred: bool, forked: bool) -> String {
     prefix
 }
 
+fn gist_owner_prefix(group: &GistGroup, current_user: Option<&str>) -> String {
+    if group.owner_login.is_empty() {
+        return String::new();
+    }
+    if current_user == Some(group.owner_login.as_str()) {
+        return String::new();
+    }
+    format!("@{}  ", group.owner_login)
+}
+
 pub(super) fn gist_group_row_label(
     g: &GistGroup,
     now: u64,
@@ -455,6 +465,7 @@ pub(super) fn gist_group_row_label(
     comments: u32,
     forks: u32,
     starred: bool,
+    current_user: Option<&str>,
 ) -> String {
     let desc = if g.description.trim().is_empty() {
         "(no description)".to_string()
@@ -484,8 +495,9 @@ pub(super) fn gist_group_row_label(
         String::new()
     };
     format!(
-        "{}{}  {}  📄 {}{}{}  🕒 {}",
+        "{}{}{}  {}  📄 {}{}{}  🕒 {}",
         gist_badge_prefix(starred, g.fork_of_id.is_some()),
+        gist_owner_prefix(g, current_user),
         g.id,
         desc,
         g.file_count,
@@ -543,6 +555,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
                         state.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
                         state.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
                         state.gist_is_starred(&g.id),
+                        state.current_user_login.as_deref(),
                     ),
                     state.gists_hscroll,
                 ))
@@ -611,8 +624,9 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
 }
 
 /// One-line info summary for the detail header.
-pub(super) fn gist_info_line(group: &GistGroup, now: u64) -> String {
+pub(super) fn gist_info_line(group: &GistGroup, now: u64, current_user: Option<&str>) -> String {
     let vis = if group.public { "public" } else { "secret" };
+    let owner_seg = gist_owner_prefix(group, current_user);
     let created = crate::domain::parse_rfc3339_to_unix(&group.created_at)
         .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
         .unwrap_or_else(|| "?".into());
@@ -627,7 +641,7 @@ pub(super) fn gist_info_line(group: &GistGroup, now: u64) -> String {
         .map(|id| format!("fork of {id} · "))
         .unwrap_or_default();
     format!(
-        "{vis} · created {created} · updated {updated} · {fork_seg}{}",
+        "{owner_seg}{vis} · created {created} · updated {updated} · {fork_seg}{}",
         group.id
     )
 }
@@ -837,7 +851,11 @@ pub(super) fn render_gist_info_and_files(
     };
     let files = state.gist_filenames(gist_id);
     let mut lines: Vec<Line> = vec![
-        Line::from(gist_info_line(&group, unix_now())),
+        Line::from(gist_info_line(
+            &group,
+            unix_now(),
+            state.current_user_login.as_deref(),
+        )),
         Line::from(""),
         Line::from(Span::styled(
             format!("Files ({})", files.len()),
@@ -877,7 +895,11 @@ fn render_detail_header(frame: &mut Frame, area: Rect, state: &AppState, gist_id
         return;
     };
     let lines = vec![
-        Line::from(gist_info_line(&group, unix_now())),
+        Line::from(gist_info_line(
+            &group,
+            unix_now(),
+            state.current_user_login.as_deref(),
+        )),
         detail_focus_tabs_line(state.detail_focus, &state.theme),
     ];
     frame.render_widget(
@@ -919,20 +941,28 @@ fn render_gist_file_list(frame: &mut Frame, area: Rect, state: &AppState, gist_i
 /// Comments pane: loading / error / empty / list (plain text wrapped to width, scrollable).
 pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppState) {
     let now = unix_now();
-    let body: Vec<Line> = match (&state.detail_comments, &state.detail_comments_error) {
-        (None, _) => vec![Line::from(Span::styled(
+    let body: Vec<Line> = match (
+        &state.detail_comments,
+        state.detail_comments_loading,
+        &state.detail_comments_error,
+    ) {
+        (None, true, _) => vec![Line::from(Span::styled(
             "Loading comments…",
             Style::default().fg(state.theme.dim),
         ))],
-        (Some(_), Some(err)) => vec![Line::from(Span::styled(
+        (None, false, _) => vec![Line::from(Span::styled(
+            "Tab here to load comments",
+            Style::default().fg(state.theme.dim),
+        ))],
+        (Some(_), _, Some(err)) => vec![Line::from(Span::styled(
             format!("comments error: {err}"),
             Style::default().fg(Color::Red),
         ))],
-        (Some(comments), None) if comments.is_empty() => vec![Line::from(Span::styled(
+        (Some(comments), _, None) if comments.is_empty() => vec![Line::from(Span::styled(
             "No comments",
             Style::default().fg(state.theme.dim),
         ))],
-        (Some(comments), None) => {
+        (Some(comments), _, None) => {
             let mut lines = Vec::new();
             for c in comments {
                 let age = crate::domain::parse_rfc3339_to_unix(&c.created_at)

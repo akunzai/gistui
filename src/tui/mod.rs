@@ -314,8 +314,10 @@ pub enum KeyOutcome {
     EditUpload,
     ExecuteDelete,
     ExecuteRemoveFile,
-    /// Open the selected gist's detail screen and fetch its comments in the background.
+    /// Open the selected gist's detail screen (comments load when the Comments tab is opened).
     OpenGistDetail,
+    /// Fetch comments for the gist shown on `Screen::GistDetail` (lazy, on Comments tab).
+    FetchComments,
     /// Analyse the selected Gist-manager gist's revision count, then ask to confirm a compaction.
     CompactGist,
     /// Run the confirmed compaction (clone → squash → force-push) on the pending gist.
@@ -465,8 +467,10 @@ pub struct AppState {
     pub diff_return: Screen,
     /// The gist currently shown in `Screen::GistDetail`; also guards stale comment responses.
     pub detail_gist_id: Option<String>,
-    /// Comments: `None` means loading, `Some` is the fetched result.
+    /// Comments: `None` until the Comments tab is opened; `Some` is the fetched result.
     pub detail_comments: Option<Vec<GistComment>>,
+    /// True while a comment fetch is in flight (after the user opens the Comments tab).
+    pub detail_comments_loading: bool,
     /// Comment-fetch error message, if any.
     pub detail_comments_error: Option<String>,
     /// Comment-pane scroll offset.
@@ -600,6 +604,15 @@ impl AppState {
         } else {
             &self.gists
         }
+    }
+
+    /// `raw_url` from the in-memory gist lists for a `(gist_id, filename)` pair.
+    pub fn gist_file_raw_url(&self, gist_id: &str, filename: &str) -> Option<String> {
+        self.gists
+            .iter()
+            .chain(self.starred_gists.iter())
+            .find(|g| g.gist_id == gist_id && g.filename == filename)
+            .and_then(|g| g.raw_url.clone())
     }
 
     pub fn gist_is_owned(&self, gist_id: &str) -> bool {
@@ -761,6 +774,7 @@ impl AppState {
                     self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
                     self.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
                     self.gist_is_starred(&g.id),
+                    self.current_user_login.as_deref(),
                 )
                 .chars()
                 .count()
@@ -1258,6 +1272,7 @@ pub fn initial_state() -> AppState {
         diff_return: Screen::List,
         detail_gist_id: None,
         detail_comments: None,
+        detail_comments_loading: false,
         detail_comments_error: None,
         detail_scroll: 0,
         detail_focus: DetailFocus::Files,
@@ -1306,10 +1321,16 @@ pub fn load_startup_state() -> Result<AppState> {
     state.focus = FocusPane::Gist;
     // The gist list is fetched off-thread by run_loop so the TUI appears instantly.
     state.loading = true;
-    // Show last-known gists immediately from the on-disk cache; the background fetch
-    // refreshes them once it completes.
+    // Show last-known gists (owned + starred + counts) from cache; background fetch refreshes.
     if let Ok(path) = crate::cache::cache_path() {
-        state.gists = crate::cache::load_cached_gists(&path);
+        if let Some(cache) = crate::cache::load_gist_cache(&path) {
+            state.starred_gist_ids = cache.starred_ids_set();
+            state.gists = cache.owned;
+            state.starred_gists = cache.starred;
+            state.current_user_login = cache.user_login;
+            state.gist_comment_counts = cache.comment_counts;
+            state.gist_fork_counts = cache.fork_counts;
+        }
     }
 
     Ok(state)

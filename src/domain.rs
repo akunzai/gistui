@@ -78,6 +78,9 @@ pub struct GistFile {
     /// Upstream gist id when this row is a fork under your account.
     #[serde(default)]
     pub fork_of_id: Option<String>,
+    /// Direct raw URL from the gist list API; used when `gh gist view` fails on huge gists.
+    #[serde(default)]
+    pub raw_url: Option<String>,
 }
 
 /// A gist-level view of the flat [`GistFile`] rows: one entry per gist, carrying
@@ -299,6 +302,8 @@ mod tests {
             created_at: "2026-06-08T00:00:00Z".into(),
             owner_login: "owner".into(),
             fork_of_id: None,
+
+            raw_url: None,
         }
     }
 
