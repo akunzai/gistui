@@ -87,7 +87,7 @@ impl AppState {
         self.screen = Screen::Help;
     }
 
-    /// Arrow / hjkl / Ctrl+B/F navigation. Returns true when the key was consumed.
+    /// Arrow / hjkl / Ctrl+b/f navigation. Returns true when the key was consumed.
     /// Filter and text-input modes keep `hjkl` as typed characters (arrows still move
     /// selection while filtering — handled in the filter branches).
     fn apply_navigation(&mut self, action: NavAction) -> bool {

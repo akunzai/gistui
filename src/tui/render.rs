@@ -54,7 +54,7 @@ Navigation
   1 / 2      jump to the Local / Gist pane
   Up/Down    move the selection (also j / k)
   Left/Right scroll a long row horizontally (also h / l)
-  Ctrl+B/F   page up / down by 10 (also PageUp / PageDown)
+  Ctrl+b/f   page up / down by 10 (also PageUp / PageDown)
 
 List screen
   r          toggle recursive file discovery (skips hidden + configured dirs)
@@ -126,7 +126,7 @@ Actions (on the selected local file + gist)
             "\
   Tab        switch tab: Files / Comments (one shows at a time; opens on Files)
   Up/Down    move the file cursor (Files tab) or scroll comments (also j / k)
-  PageUp/Dn  page comments / file cursor by 10 (also Ctrl+B / Ctrl+F)
+  PageUp/Dn  page comments / file cursor by 10 (also Ctrl+b / Ctrl+f)
   Enter      preview the cursor-selected file (file list focused; blocked for binary)
   1-9        preview the content of the Nth file (full-screen; R refresh, q back)
              non-text files are tagged (binary) in the list
@@ -147,7 +147,7 @@ Actions (on the selected local file + gist)
         HelpTopic::Revisions => {
             "\
   Up/Down    move between revisions (also j / k; newest first; row 0 = current)
-  PageUp/Dn  page by 10 (also Ctrl+B / Ctrl+F)
+  PageUp/Dn  page by 10 (also Ctrl+b / Ctrl+f)
   Left/Right scroll a long row horizontally (also h / l)
   Enter      diff this revision vs its parent (incremental; initial = all additions)
   F          cycle the target file (multi-file gists; wraps)
@@ -158,7 +158,7 @@ Actions (on the selected local file + gist)
         HelpTopic::Diff => {
             "\
   Up/Down/Left/Right  scroll the diff (also j / k / h / l)
-  PageUp/Dn  scroll the diff by 10 lines (also Ctrl+B / Ctrl+F)
+  PageUp/Dn  scroll the diff by 10 lines (also Ctrl+b / Ctrl+f)
   c          toggle context: configured radius <-> full file (remembered)
   d / u      download / upload from the diff
   syntax     unchanged context lines are syntax-highlighted by file type
@@ -167,7 +167,7 @@ Actions (on the selected local file + gist)
         HelpTopic::Preview => {
             "\
   Up/Down/Left/Right  scroll (also j / k / h / l; Left/Right only when wrap is off)
-  PageUp/Dn  scroll by 10 lines (also Ctrl+B / Ctrl+F)
+  PageUp/Dn  scroll by 10 lines (also Ctrl+b / Ctrl+f)
   w          toggle soft line wrapping (remembered for the session)
   y          copy the gist URL · Y copy the file content to the clipboard
   syntax     known file types are syntax-highlighted
