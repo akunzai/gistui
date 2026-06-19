@@ -59,7 +59,7 @@ Navigation
 List screen
   r          toggle recursive file discovery (skips hidden + configured dirs)
   /          filter the focused pane (Local = path/filename, Gist = description/id)
-             while filtering: type to match · ↑↓ move · Tab apply + switch pane
+             while filtering: type to match · ↑↓ move · PgUp/PgDn page · Tab apply + switch pane
              · Enter apply · Esc clear · ←/→/Home/End move · Del
   v          cycle gist visibility: all / public / secret / starred / forked
   *          star / unstar the selected gist
@@ -93,8 +93,9 @@ Actions (on the selected local file + gist)
         HelpTopic::Pins => {
             "\
   Up/Down    move between pins (also j / k)
+  PageUp/Dn  page by 10 (also Ctrl+b / Ctrl+f)
   Left/Right scroll a long local path horizontally (also h / l; ~ = home)
-  /          filter pins by path or filename (↑↓ move · Enter apply · Esc clear)
+  /          filter pins by path or filename (↑↓ move · PgUp/PgDn page · Enter apply · Esc clear)
              ←/→/Home/End move the text cursor · Del deletes ahead
   o          cycle sort: default / local path / gist filename
   Enter      diff the selected pair (then d pull / u push from the diff)
@@ -108,8 +109,9 @@ Actions (on the selected local file + gist)
         HelpTopic::GistManager => {
             "\
   Up/Down    move between gists (also j / k)
+  PageUp/Dn  page by 10 (also Ctrl+b / Ctrl+f)
   Left/Right scroll a long description horizontally (also h / l)
-  /          filter gists by description or id (↑↓ move · Enter apply · Esc clear)
+  /          filter gists by description or id (↑↓ move · PgUp/PgDn page · Enter apply · Esc clear)
   s          cycle sort: updated / created
   v          cycle visibility: all / public / secret / starred / forked
   *          star / unstar the selected gist

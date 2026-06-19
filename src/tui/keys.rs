@@ -94,7 +94,11 @@ impl AppState {
         if self.editing_description {
             return false;
         }
-        if self.filtering || self.pins_filtering || self.gists_filtering {
+        // While filtering, arrows/hjkl are typed or handled in the filter branches; page keys
+        // still jump the live selection by PAGE_SCROLL.
+        if (self.filtering || self.pins_filtering || self.gists_filtering)
+            && !matches!(action, NavAction::PageUp | NavAction::PageDown)
+        {
             return false;
         }
         match self.screen {
@@ -152,7 +156,17 @@ impl AppState {
                     NavAction::Left => {
                         self.pins_hscroll = self.pins_hscroll.saturating_sub(1);
                     }
-                    _ => return false,
+                    NavAction::PageDown => {
+                        if len > 0 {
+                            let max = len - 1;
+                            self.pins_index = (self.pins_index + PAGE_SCROLL as usize).min(max);
+                            self.pins_hscroll = 0;
+                        }
+                    }
+                    NavAction::PageUp => {
+                        self.pins_index = self.pins_index.saturating_sub(PAGE_SCROLL as usize);
+                        self.pins_hscroll = 0;
+                    }
                 }
                 true
             }
@@ -177,7 +191,18 @@ impl AppState {
                     NavAction::Left => {
                         self.gists_hscroll = self.gists_hscroll.saturating_sub(1);
                     }
-                    _ => return false,
+                    NavAction::PageDown => {
+                        let len = groups.len();
+                        if len > 0 {
+                            let max = len - 1;
+                            self.gists_index = (self.gists_index + PAGE_SCROLL as usize).min(max);
+                            self.gists_hscroll = 0;
+                        }
+                    }
+                    NavAction::PageUp => {
+                        self.gists_index = self.gists_index.saturating_sub(PAGE_SCROLL as usize);
+                        self.gists_hscroll = 0;
+                    }
                 }
                 true
             }
@@ -224,9 +249,10 @@ impl AppState {
                 match action {
                     NavAction::Down => self.list_move_focused(true),
                     NavAction::Up => self.list_move_focused(false),
+                    NavAction::PageDown => self.list_page_focused(true),
+                    NavAction::PageUp => self.list_page_focused(false),
                     NavAction::Left => self.scroll_focused_left(),
                     NavAction::Right => self.scroll_focused_right(),
-                    _ => return false,
                 }
                 true
             }
@@ -918,6 +944,45 @@ impl AppState {
             FocusPane::Gist => {
                 self.gist_index = 0;
                 self.gist_hscroll = 0;
+            }
+        }
+    }
+
+    /// Page the focused list-pane selection by [`PAGE_SCROLL`] rows (clamped at bounds).
+    fn list_page_focused(&mut self, forward: bool) {
+        let step = PAGE_SCROLL as usize;
+        match self.focus {
+            FocusPane::Local => {
+                let len = self.visible_locals().len();
+                if len == 0 {
+                    return;
+                }
+                let max = len - 1;
+                self.local_index = if forward {
+                    (self.local_index + step).min(max)
+                } else {
+                    self.local_index.saturating_sub(step)
+                };
+                self.local_hscroll = 0;
+                if self.anchor == FocusPane::Local {
+                    self.reset_ranked_pane();
+                }
+            }
+            FocusPane::Gist => {
+                let len = self.ranked_gists().len();
+                if len == 0 {
+                    return;
+                }
+                let max = len - 1;
+                self.gist_index = if forward {
+                    (self.gist_index + step).min(max)
+                } else {
+                    self.gist_index.saturating_sub(step)
+                };
+                self.gist_hscroll = 0;
+                if self.anchor == FocusPane::Gist {
+                    self.reset_ranked_pane();
+                }
             }
         }
     }

@@ -65,7 +65,7 @@ without resetting order. Pinned pairs show `📌`; same-filename candidates are 
 
 | Key | Action |
 |-----|--------|
-| `Tab` / `1`/`2` | switch or jump panes · `↑`/`↓` or `j`/`k` move · `←`/`→` or `h`/`l` scroll a long row |
+| `Tab` / `1`/`2` | switch or jump panes · `↑`/`↓` or `j`/`k` move · `PgUp`/`PgDn` or `Ctrl+b`/`Ctrl+f` page · `←`/`→` or `h`/`l` scroll a long row |
 | `Enter` | diff local ↔ gist (then `d` download / `u` upload) |
 | `Space` | preview gist content (syntax-highlighted; binary blocked) |
 | `d` / `u` | download gist file / upload local file into gist |

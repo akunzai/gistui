@@ -3693,6 +3693,79 @@ fn ctrl_f_pages_gist_detail_files() {
 }
 
 #[test]
+fn list_page_keys_jump_local_selection() {
+    let paths: Vec<String> = (0..15).map(|i| format!("/cwd/f{i:02}.txt")).collect();
+    let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+    let mut state = state_with_local_paths(&path_refs);
+    state.focus = FocusPane::Local;
+    state.handle_key(KeyCode::PageDown);
+    assert_eq!(state.local_index, 10);
+    state.handle_key(KeyCode::PageDown);
+    assert_eq!(state.local_index, 14);
+    state.handle_key(KeyCode::PageUp);
+    assert_eq!(state.local_index, 4);
+}
+
+#[test]
+fn pins_page_keys_jump_selection() {
+    use crossterm::event::KeyModifiers;
+    let mut state = initial_state();
+    state.screen = Screen::Pins;
+    state.pinned = (0..12)
+        .map(|i| PinnedMapping {
+            local_path: PathBuf::from(format!("/cwd/p{i}.txt")),
+            gist_id: format!("g{i}"),
+            gist_filename: format!("f{i}.txt"),
+            direction: None,
+            last_seen_hash: None,
+        })
+        .collect();
+    state.handle_key_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
+    assert_eq!(state.pins_index, 10);
+    state.handle_key(KeyCode::PageUp);
+    assert_eq!(state.pins_index, 0);
+}
+
+#[test]
+fn gists_page_keys_jump_selection() {
+    let mut state = initial_state();
+    state.screen = Screen::Gists;
+    state.gists = (0..12)
+        .map(|i| GistFile {
+            gist_id: format!("g{i}"),
+            description: format!("gist {i}"),
+            filename: "a.txt".into(),
+            public: true,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            owner_login: String::new(),
+            fork_of_id: None,
+            raw_url: None,
+            content_type: None,
+            node_id: None,
+        })
+        .collect();
+    state.handle_key(KeyCode::PageDown);
+    assert_eq!(state.gists_index, 10);
+    state.handle_key(KeyCode::PageDown);
+    assert_eq!(state.gists_index, 11);
+}
+
+#[test]
+fn list_filter_ctrl_f_pages_without_typing_f() {
+    use crossterm::event::KeyModifiers;
+    let paths: Vec<String> = (0..12).map(|i| format!("/cwd/f{i:02}.txt")).collect();
+    let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+    let mut state = state_with_local_paths(&path_refs);
+    state.focus = FocusPane::Local;
+    state.filtering = true;
+    state.local_filter_query.set("f");
+    state.handle_key_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
+    assert_eq!(state.local_index, 10);
+    assert_eq!(state.local_filter_query, "f");
+}
+
+#[test]
 fn lowercase_h_does_not_open_revision_history() {
     let mut state = list_state_with_matches();
     state.focus = FocusPane::Gist;
