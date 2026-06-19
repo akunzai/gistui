@@ -41,7 +41,7 @@ def now():
 
 def gist_api_row(gid, g):
     fork_n = int(g.get("forks", 0))
-    return {
+    row = {
         "id": gid,
         "node_id": g.get("node_id", f"GIST_{gid}"),
         "description": g.get("description"),
@@ -59,15 +59,17 @@ def gist_api_row(gid, g):
             for fn in g["files"]
         },
     }
+    if g.get("is_fork") and g.get("fork_of_id"):
+        row["fork_of"] = {"id": g["fork_of_id"]}
+    return row
 
 
 def gist_list(starred_only=False):
     d = load()
-    rows = [gist_api_row(gid, g) for gid, g in d["gists"].items()]
     if starred_only:
-        # Keep the main list free of ★ badges; starred gists are a separate concern.
-        return []
-    return rows
+        return [gist_api_row(gid, g) for gid, g in d["gists"].items()
+                if g.get("starred", False)]
+    return [gist_api_row(gid, g) for gid, g in d["gists"].items()]
 
 
 def node_stargazer_count(node_id):

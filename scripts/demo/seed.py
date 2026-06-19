@@ -28,6 +28,7 @@ GISTS = {
         "stargazers": 14,
         "forks": 1,
         "comments": 2,
+        "starred": True,
         "files": {
             "starship.toml": (
                 "# Starship prompt\n"
@@ -86,6 +87,7 @@ GISTS = {
         "created_at": "2026-04-01T00:00:00Z",
         "node_id": "GIST_g_ddd444",
         "stargazers": 3,
+        "starred": True,
         "files": {"hello.py": 'print("Hello, world!")\n'},
     },
     "g_eee555": {
@@ -94,6 +96,8 @@ GISTS = {
         "updated_at": "2026-04-20T08:00:00Z",
         "created_at": "2026-04-20T08:00:00Z",
         "node_id": "GIST_g_eee555",
+        "is_fork": True,
+        "fork_of_id": "upstream_gist_abc",
         "files": {
             "notes.md": (
                 "# Reading list\n\n"
