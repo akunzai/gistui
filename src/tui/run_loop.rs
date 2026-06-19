@@ -8,6 +8,9 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
     let mut gist_rx = Some(spawn_gist_fetch());
     let mut fork_rx: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>> =
         None;
+    let mut fork_meta_rx: Option<
+        std::sync::mpsc::Receiver<std::collections::HashMap<String, Option<String>>>,
+    > = None;
     let mut local_rx: Option<std::sync::mpsc::Receiver<Vec<LocalCandidate>>> = None;
     let mut bg_rx: Option<std::sync::mpsc::Receiver<BgTaskOutcome>> = None;
 
@@ -47,7 +50,8 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     gist_rx = None;
                     let gist_ids: std::collections::HashSet<String> =
                         state.gists.iter().map(|g| g.gist_id.clone()).collect();
-                    fork_rx = Some(spawn_fork_count_fetch(owned_raw, gist_ids));
+                    fork_rx = Some(spawn_fork_count_fetch(owned_raw, gist_ids.clone()));
+                    fork_meta_rx = Some(spawn_fork_metadata_fetch(gist_ids));
                 }
             }
         }
@@ -57,6 +61,14 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                 state.gist_fork_counts = fork_counts;
                 persist_gist_cache_from_state(&state);
                 fork_rx = None;
+            }
+        }
+
+        if let Some(ref rx) = fork_meta_rx {
+            if let Ok(fork_of) = rx.try_recv() {
+                crate::gh::apply_fork_of_ids(&mut state.gists, &fork_of);
+                persist_gist_cache_from_state(&state);
+                fork_meta_rx = None;
             }
         }
 
@@ -1514,6 +1526,17 @@ fn spawn_fork_count_fetch(
     std::thread::spawn(move || {
         let counts = crate::gh::collect_gist_fork_counts(owned_raw.as_deref(), gist_ids);
         let _ = tx.send(counts);
+    });
+    rx
+}
+
+fn spawn_fork_metadata_fetch(
+    owned_ids: std::collections::HashSet<String>,
+) -> std::sync::mpsc::Receiver<std::collections::HashMap<String, Option<String>>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let fork_of = crate::gh::collect_owned_fork_of_ids(owned_ids);
+        let _ = tx.send(fork_of);
     });
     rx
 }

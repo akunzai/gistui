@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Owned forks now appear under the `forked` visibility filter: the gist list API omits `fork_of`, so gistui detects them via GraphQL `isFork` and fills the upstream id from the full gist object (fixes missing forks such as old forked scripts that still show on gist.github.com).
 - Revision diffs (incremental and vs current) fetch file content via `gist.githubusercontent.com/.../raw/{sha}/{file}` when the revision API returns HTTP 502 on large gists (same class of fix as preview `raw_url` fallback).
 - `F` fork is available only in gist detail, and only for gists you do not own (removed from the main list and gist manager).
 - Gist detail comments load only when you open the Comments tab (no upfront fetch on Enter). Gist manager and detail view show `@owner` on gists you do not own. Preview/download falls back to the list API `raw_url` when `gh gist view` fails (e.g. huge starred gists returning HTTP 502). Startup cache now includes starred gists and fork/comment counts; fork counts refresh in the background so the list appears sooner.

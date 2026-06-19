@@ -2,7 +2,7 @@ use crate::actions::{run_command, CommandPlan, CommandRunner, SystemRunner};
 use crate::domain::{GistComment, GistFile, GistRevision, GistRevisionChangeStatus};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 #[derive(Debug, Deserialize)]
 struct GhGist {
@@ -212,6 +212,119 @@ pub fn fetch_gist_fork_count_with(runner: &dyn CommandRunner, gist_id: &str) -> 
     let raw = run_command(runner, &gist_forks_plan(gist_id))?;
     let forks: Vec<serde_json::Value> = serde_json::from_str(&raw).context("parse gist forks")?;
     Ok(forks.len() as u32)
+}
+
+/// GraphQL query: the REST gist *list* omits `fork_of`, but `isFork` is reliable here.
+const GIST_FORK_FLAGS_QUERY: &str = "{ viewer { gists(first: 100) { nodes { name isFork } } } }";
+
+pub fn gist_fork_flags_graphql_plan() -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "graphql".into(),
+            "-f".into(),
+            format!("query={GIST_FORK_FLAGS_QUERY}"),
+        ],
+    }
+}
+
+/// Plan for a single gist (`fork_of` is present on the full object, not the list).
+pub fn gist_detail_plan(gist_id: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec!["api".into(), format!("/gists/{gist_id}")],
+    }
+}
+
+pub fn fetch_forked_gist_ids_graphql() -> Result<HashSet<String>> {
+    fetch_forked_gist_ids_graphql_with(&SystemRunner)
+}
+
+pub fn fetch_forked_gist_ids_graphql_with(runner: &dyn CommandRunner) -> Result<HashSet<String>> {
+    let raw = run_command(runner, &gist_fork_flags_graphql_plan())?;
+    parse_forked_gist_ids_graphql(&raw)
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphqlForkFlagsResponse {
+    data: GraphqlForkFlagsData,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphqlForkFlagsData {
+    viewer: GraphqlForkFlagsViewer,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphqlForkFlagsViewer {
+    gists: GraphqlForkFlagsConnection,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphqlForkFlagsConnection {
+    nodes: Vec<GraphqlForkFlagsNode>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GraphqlForkFlagsNode {
+    /// Gist id (hex), not the filename.
+    name: String,
+    #[serde(rename = "isFork")]
+    is_fork: bool,
+}
+
+/// Owned gist ids flagged as forks by the GraphQL viewer query.
+pub fn parse_forked_gist_ids_graphql(raw: &str) -> Result<HashSet<String>> {
+    let resp: GraphqlForkFlagsResponse =
+        serde_json::from_str(raw).context("parse gist fork flags GraphQL")?;
+    Ok(resp
+        .data
+        .viewer
+        .gists
+        .nodes
+        .into_iter()
+        .filter(|n| n.is_fork)
+        .map(|n| n.name)
+        .collect())
+}
+
+pub fn fetch_gist_fork_of_id(gist_id: &str) -> Result<Option<String>> {
+    fetch_gist_fork_of_id_with(&SystemRunner, gist_id)
+}
+
+pub fn fetch_gist_fork_of_id_with(
+    runner: &dyn CommandRunner,
+    gist_id: &str,
+) -> Result<Option<String>> {
+    let raw = run_command(runner, &gist_detail_plan(gist_id))?;
+    let gist: GhGist = serde_json::from_str(&raw).context("parse gh gist detail JSON")?;
+    Ok(gist.fork_of.map(|f| f.id))
+}
+
+/// Map owned gist id → upstream `fork_of` id. Uses GraphQL `isFork` (one call) then
+/// `GET /gists/{id}` only for the handful of owned forks (list JSON omits `fork_of`).
+pub fn collect_owned_fork_of_ids(owned_ids: HashSet<String>) -> HashMap<String, Option<String>> {
+    let fork_ids = match fetch_forked_gist_ids_graphql() {
+        Ok(ids) => ids,
+        Err(_) => return HashMap::new(),
+    };
+    let mut out = HashMap::new();
+    for id in fork_ids.intersection(&owned_ids) {
+        if let Ok(fork_of) = fetch_gist_fork_of_id(id) {
+            out.insert(id.clone(), fork_of);
+        }
+    }
+    out
+}
+
+/// Stamp `fork_of_id` onto every [`GistFile`] row for gists present in `fork_of`.
+pub fn apply_fork_of_ids(gists: &mut [GistFile], fork_of: &HashMap<String, Option<String>>) {
+    for g in gists.iter_mut() {
+        if let Some(upstream) = fork_of.get(&g.gist_id) {
+            g.fork_of_id = upstream.clone();
+        }
+    }
 }
 
 /// Fill fork counts for owned gists. List JSON usually omits `forks`, so each id is
@@ -664,6 +777,60 @@ mod tests {
         let counts = parse_gist_fork_counts(raw).unwrap();
         assert_eq!(counts.get("a").copied(), Some(2));
         assert_eq!(counts.get("b").copied(), Some(0));
+    }
+
+    #[test]
+    fn parses_forked_gist_ids_from_graphql() {
+        let raw = r#"{
+            "data": {
+                "viewer": {
+                    "gists": {
+                        "nodes": [
+                            {"name": "owned1", "isFork": false},
+                            {"name": "fork1", "isFork": true},
+                            {"name": "fork2", "isFork": true}
+                        ]
+                    }
+                }
+            }
+        }"#;
+        let ids = parse_forked_gist_ids_graphql(raw).unwrap();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains("fork1"));
+        assert!(ids.contains("fork2"));
+    }
+
+    #[test]
+    fn apply_fork_of_ids_stamps_all_file_rows() {
+        let mut gists = vec![
+            GistFile {
+                gist_id: "fork1".into(),
+                description: String::new(),
+                filename: "a.txt".into(),
+                public: true,
+                updated_at: String::new(),
+                created_at: String::new(),
+                owner_login: "me".into(),
+                fork_of_id: None,
+                raw_url: None,
+            },
+            GistFile {
+                gist_id: "fork1".into(),
+                description: String::new(),
+                filename: "b.txt".into(),
+                public: true,
+                updated_at: String::new(),
+                created_at: String::new(),
+                owner_login: "me".into(),
+                fork_of_id: None,
+                raw_url: None,
+            },
+        ];
+        let fork_of = [("fork1".into(), Some("upstream".into()))].into();
+        apply_fork_of_ids(&mut gists, &fork_of);
+        assert!(gists
+            .iter()
+            .all(|g| g.fork_of_id.as_deref() == Some("upstream")));
     }
 
     #[test]
