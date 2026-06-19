@@ -490,6 +490,8 @@ pub struct AppState {
     pub gist_comment_counts: std::collections::HashMap<String, u32>,
     /// Per-gist fork counts (`gist_id` → how many users forked it), from `/gists/{id}/forks`.
     pub gist_fork_counts: std::collections::HashMap<String, u32>,
+    /// Per-gist stargazer counts (`gist_id` → count), from GraphQL `stargazerCount`.
+    pub gist_star_counts: std::collections::HashMap<String, u32>,
     /// Active theme selection (persisted to config when toggled with `T`).
     pub theme_choice: crate::config::ThemeChoice,
     /// Resolved colour palette for the current theme choice (from config).
@@ -641,6 +643,15 @@ impl AppState {
         self.starred_gist_ids.contains(gist_id)
     }
 
+    /// Per-gist comment, stargazer, and fork counts for row/detail labels.
+    pub fn gist_counts(&self, gist_id: &str) -> (u32, u32, u32) {
+        (
+            self.gist_comment_counts.get(gist_id).copied().unwrap_or(0),
+            self.gist_star_counts.get(gist_id).copied().unwrap_or(0),
+            self.gist_fork_counts.get(gist_id).copied().unwrap_or(0),
+        )
+    }
+
     /// Gists you have starred (unique ids from the starred list fetch).
     pub fn starred_gist_count(&self) -> usize {
         self.starred_gist_ids.len()
@@ -665,7 +676,7 @@ impl AppState {
         let message = if pin {
             "cannot pin — not your gist"
         } else {
-            "read-only — not your gist (* star; F fork in detail)"
+            "read-only — not your gist (* star; open detail and F to fork)"
         };
         self.set_status(message.to_string());
         true
@@ -781,8 +792,11 @@ impl AppState {
                     g,
                     unix_now(),
                     self.gists_sort,
-                    self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
-                    self.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
+                    (
+                        self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
+                        self.gist_star_counts.get(&g.id).copied().unwrap_or(0),
+                        self.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
+                    ),
                     self.gist_is_starred(&g.id),
                     self.current_user_login.as_deref(),
                 )
@@ -869,6 +883,69 @@ impl AppState {
             .chain(self.starred_gists.iter())
             .filter(|g| g.gist_id == gist_id)
             .map(|g| g.filename.clone())
+            .collect()
+    }
+
+    pub fn gist_file_content_type(&self, gist_id: &str, filename: &str) -> Option<String> {
+        self.gists
+            .iter()
+            .chain(self.starred_gists.iter())
+            .find(|g| g.gist_id == gist_id && g.filename == filename)
+            .and_then(|g| g.content_type.clone())
+    }
+
+    pub fn gist_file_is_text_previewable(&self, gist_id: &str, filename: &str) -> bool {
+        crate::domain::gist_file_is_text_previewable(
+            filename,
+            self.gist_file_content_type(gist_id, filename).as_deref(),
+        )
+    }
+
+    /// Returns true when preview/diff should be blocked for this gist file (sets `status`).
+    pub fn block_if_non_previewable_gist_file(&mut self, gist_id: &str, filename: &str) -> bool {
+        if self.gist_file_is_text_previewable(gist_id, filename) {
+            return false;
+        }
+        self.status = Some(crate::domain::non_previewable_status(
+            filename,
+            self.gist_file_content_type(gist_id, filename).as_deref(),
+        ));
+        true
+    }
+
+    /// Like [`Self::block_if_non_previewable_gist_file`], but also rejects binary-looking local files.
+    pub fn block_if_non_previewable_diff(
+        &mut self,
+        gist_id: &str,
+        filename: &str,
+        local_path: Option<&std::path::Path>,
+    ) -> bool {
+        if self.block_if_non_previewable_gist_file(gist_id, filename) {
+            return true;
+        }
+        if let Some(path) = local_path {
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if !crate::domain::gist_file_is_text_previewable(name, None) {
+                    self.status =
+                        Some("cannot diff — local file looks binary (use d to download)".into());
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Detail-view file labels; non-text files are tagged `(binary)`.
+    pub fn gist_file_display_names(&self, gist_id: &str) -> Vec<String> {
+        self.gist_filenames(gist_id)
+            .into_iter()
+            .map(|f| {
+                if self.gist_file_is_text_previewable(gist_id, &f) {
+                    f
+                } else {
+                    format!("{f} (binary)")
+                }
+            })
             .collect()
     }
 
@@ -1291,6 +1368,7 @@ pub fn initial_state() -> AppState {
         spinner_frame: 0,
         gist_comment_counts: std::collections::HashMap::new(),
         gist_fork_counts: std::collections::HashMap::new(),
+        gist_star_counts: std::collections::HashMap::new(),
         theme_choice: crate::config::ThemeChoice::Dark,
         theme: Theme::DARK,
         revision_gist_id: None,
@@ -1340,6 +1418,7 @@ pub fn load_startup_state() -> Result<AppState> {
             state.current_user_login = cache.user_login;
             state.gist_comment_counts = cache.comment_counts;
             state.gist_fork_counts = cache.fork_counts;
+            state.gist_star_counts = cache.star_counts;
         }
     }
 

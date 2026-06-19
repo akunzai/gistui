@@ -17,6 +17,10 @@ fn state_with_gists() -> AppState {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
         GistFile {
             gist_id: "g1".into(),
@@ -29,6 +33,10 @@ fn state_with_gists() -> AppState {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
     ];
     state.gists_index = 0;
@@ -49,6 +57,10 @@ fn state_with_many_files(n: usize) -> AppState {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         })
         .collect();
     state
@@ -131,6 +143,10 @@ fn list_state_with_matches() -> AppState {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
         GistFile {
             gist_id: "b".into(),
@@ -143,6 +159,10 @@ fn list_state_with_matches() -> AppState {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
     ];
     state.local_index = 0;
@@ -343,6 +363,7 @@ fn detail_scroll_saturates_at_zero() {
 fn detail_c_triggers_compaction_and_records_origin() {
     let mut state = state_with_gists();
     state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("g1".into());
     let outcome = state.handle_key(KeyCode::Char('c'));
     assert!(matches!(outcome, KeyOutcome::CompactGist));
     assert_eq!(state.compact_return_screen, Screen::GistDetail);
@@ -453,10 +474,10 @@ fn footer_with_status_prefers_status_else_colourised_hints() {
 
 #[test]
 fn detail_footer_surfaces_status_else_hints() {
-    let (msg, colored) = detail_footer(Some("nothing to compact"), DetailFocus::Comments, false);
+    let (msg, colored) = detail_footer(Some("nothing to compact"), DetailFocus::Comments, true);
     assert_eq!(msg, "nothing to compact");
     assert!(!colored);
-    let (hint, colored) = detail_footer(None, DetailFocus::Comments, false);
+    let (hint, colored) = detail_footer(None, DetailFocus::Comments, true);
     assert!(hint.contains("1-9") && hint.contains("compact"));
     assert!(!hint.contains("F fork"));
     assert!(colored);
@@ -464,18 +485,33 @@ fn detail_footer_surfaces_status_else_hints() {
 
 #[test]
 fn detail_footer_is_focus_aware() {
-    let (comments, _) = detail_footer(None, DetailFocus::Comments, false);
+    let (comments, _) = detail_footer(None, DetailFocus::Comments, true);
     assert!(comments.contains("Tab files") && comments.contains("scroll"));
-    let (files, _) = detail_footer(None, DetailFocus::Files, false);
+    let (files, _) = detail_footer(None, DetailFocus::Files, true);
     assert!(files.contains("Tab comments") && files.contains("preview"));
 }
 
 #[test]
-fn detail_footer_shows_fork_only_for_foreign_gist() {
-    let (owned, _) = detail_footer(None, DetailFocus::Files, false);
+fn detail_footer_shows_manage_keys_for_owned_and_fork_for_foreign() {
+    let (owned, _) = detail_footer(None, DetailFocus::Files, true);
+    assert!(owned.contains("e desc") && owned.contains("compact"));
+    assert!(owned.contains("* star"));
     assert!(!owned.contains("F fork"));
-    let (foreign, _) = detail_footer(None, DetailFocus::Files, true);
+    let (foreign, _) = detail_footer(None, DetailFocus::Files, false);
     assert!(foreign.contains("F fork"));
+    assert!(foreign.contains("* star"));
+    assert!(!foreign.contains("compact"));
+}
+
+#[test]
+fn star_key_in_detail_returns_toggle_intent() {
+    let mut state = state_with_gists();
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("g1".into());
+    assert_eq!(
+        state.handle_key(KeyCode::Char('*')),
+        KeyOutcome::ToggleGistStar
+    );
 }
 
 #[test]
@@ -622,6 +658,10 @@ fn gist_row_label_switches_with_view() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
         score: 1,
         reasons: Vec::new(),
@@ -694,6 +734,10 @@ fn reverse_ranking_orders_locals_by_selected_gist() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     state.locals = vec![
         LocalCandidate {
@@ -787,6 +831,10 @@ fn ranking_helpers_terminate_in_either_anchor() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     state.locals = vec![LocalCandidate {
         path: PathBuf::from("f"),
@@ -817,6 +865,10 @@ fn sort_by_name_and_recent_reorders_gists() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
         GistFile {
             gist_id: "a".into(),
@@ -829,6 +881,10 @@ fn sort_by_name_and_recent_reorders_gists() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
     ];
     // No local selected -> Match keeps gh list order (zeta, alpha).
@@ -857,6 +913,10 @@ fn gist_type_filter_limits_ranked_gists() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
         GistFile {
             gist_id: "sec".into(),
@@ -869,6 +929,10 @@ fn gist_type_filter_limits_ranked_gists() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
     ];
     assert_eq!(state.ranked_gists().len(), 2);
@@ -898,6 +962,10 @@ fn state_with_two_gists() -> AppState {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
         GistFile {
             gist_id: "b".into(),
@@ -910,6 +978,10 @@ fn state_with_two_gists() -> AppState {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
     ];
     state.focus = FocusPane::Gist;
@@ -986,6 +1058,30 @@ fn space_on_selected_gist_returns_preview_content() {
         state.handle_key(KeyCode::Char(' ')),
         KeyOutcome::PreviewContent
     );
+}
+
+#[test]
+fn space_blocks_preview_for_image_gist_file() {
+    let mut state = state_with_two_gists();
+    state.gists[0].filename = "logo.png".into();
+    state.gists[0].content_type = Some("image/png".into());
+    assert_eq!(state.handle_key(KeyCode::Char(' ')), KeyOutcome::None);
+    assert!(state
+        .status
+        .as_deref()
+        .is_some_and(|s| s.contains("image file")));
+}
+
+#[test]
+fn enter_blocks_diff_for_image_gist_file() {
+    let mut state = state_with_two_gists();
+    state.gists[0].filename = "photo.jpg".into();
+    state.gists[0].content_type = Some("image/jpeg".into());
+    assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
+    assert!(state
+        .status
+        .as_deref()
+        .is_some_and(|s| s.contains("image file")));
 }
 
 #[test]
@@ -1338,6 +1434,10 @@ fn gist_row_label_falls_back_to_filename_when_description_empty() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
         score: 0,
         reasons: Vec::new(),
@@ -1359,6 +1459,10 @@ fn left_right_scrolls_focused_gist_pane() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     state.focus = FocusPane::Gist;
     assert_eq!(state.gist_hscroll, 0);
@@ -1385,6 +1489,10 @@ fn gist_hscroll_caps_at_longest_row() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     state.focus = FocusPane::Gist;
     let row = gist_row_label(&state.ranked_gists()[0], state.gist_view);
@@ -1410,6 +1518,10 @@ fn moving_gist_selection_resets_hscroll() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
         GistFile {
             gist_id: "b".into(),
@@ -1422,6 +1534,10 @@ fn moving_gist_selection_resets_hscroll() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
     ];
     state.focus = FocusPane::Gist;
@@ -1452,6 +1568,10 @@ fn no_local_selected_lists_all_gists_unranked() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
         GistFile {
             gist_id: "b".into(),
@@ -1464,6 +1584,10 @@ fn no_local_selected_lists_all_gists_unranked() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
     ];
     let ranked = state.ranked_gists();
@@ -1488,6 +1612,10 @@ fn enter_with_no_local_but_gist_selected_returns_preview() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     state.focus = FocusPane::Gist;
     assert!(state.locals.is_empty());
@@ -1521,6 +1649,10 @@ fn local_selection_changes_ranked_gists() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
         GistFile {
             gist_id: "b".into(),
@@ -1533,6 +1665,10 @@ fn local_selection_changes_ranked_gists() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
     ];
 
@@ -1579,6 +1715,10 @@ fn state_with_selection() -> AppState {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     state.focus = FocusPane::Gist;
     state
@@ -1940,6 +2080,10 @@ fn u_adds_when_gist_lacks_filename() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     state.focus = FocusPane::Gist;
     assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::UploadAdd);
@@ -1964,6 +2108,10 @@ fn u_previews_when_gist_has_same_filename() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     state.focus = FocusPane::Gist;
     assert_eq!(
@@ -2031,9 +2179,12 @@ fn preview_y_copies_url_and_capital_y_copies_content() {
 }
 
 #[test]
-fn c_in_gist_view_requests_compaction() {
+fn c_in_detail_requests_compaction_not_gist_manager() {
     let mut state = state_with_two_gists();
     state.screen = Screen::Gists;
+    assert_eq!(state.handle_key(KeyCode::Char('c')), KeyOutcome::None);
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("a".into());
     assert_eq!(
         state.handle_key(KeyCode::Char('c')),
         KeyOutcome::CompactGist
@@ -2099,6 +2250,10 @@ fn u_in_diff_screen_returns_upload_intent() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     state.screen = Screen::Diff;
     // The gist has no "config" file -> case B -> add directly.
@@ -2203,6 +2358,10 @@ fn x_removes_selected_file_from_a_multifile_gist() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
         GistFile {
             gist_id: "abc123".into(),
@@ -2215,6 +2374,10 @@ fn x_removes_selected_file_from_a_multifile_gist() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
     ];
     // X stages a single-file removal (not a whole-gist delete) and asks to confirm.
@@ -2245,6 +2408,10 @@ fn x_on_a_gists_only_file_is_blocked() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     // Removing the only file would leave a fileless gist, which GitHub forbids.
     assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
@@ -2315,10 +2482,10 @@ fn g_with_no_gists_is_blocked() {
 }
 
 #[test]
-fn gist_view_e_edits_description_with_prefill_and_enter_applies() {
+fn detail_e_edits_description_with_prefill_and_enter_applies() {
     let mut state = state_with_two_gists();
-    state.screen = Screen::Gists;
-    state.gists_index = 0;
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("a".into());
     state.handle_key(KeyCode::Char('e'));
     assert!(state.editing_description);
     // Prefilled with the current description.
@@ -2362,10 +2529,10 @@ fn input_line_cursor_at_end_reverses_trailing_space() {
 }
 
 #[test]
-fn gist_view_description_edits_mid_string_with_cursor_keys() {
+fn detail_description_edits_mid_string_with_cursor_keys() {
     let mut state = state_with_two_gists();
-    state.screen = Screen::Gists;
-    state.gists_index = 0;
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("a".into());
     state.handle_key(KeyCode::Char('e'));
     assert_eq!(state.description_input, "My Ghostty config");
     // Jump to the start, step right past "My", and insert without retyping the rest.
@@ -2404,9 +2571,10 @@ fn create_description_edits_mid_string_with_cursor_keys() {
 }
 
 #[test]
-fn gist_view_esc_cancels_description_edit() {
+fn detail_esc_cancels_description_edit() {
     let mut state = state_with_two_gists();
-    state.screen = Screen::Gists;
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("a".into());
     state.handle_key(KeyCode::Char('e'));
     assert!(state.editing_description);
     state.handle_key(KeyCode::Esc);
@@ -2415,10 +2583,10 @@ fn gist_view_esc_cancels_description_edit() {
 }
 
 #[test]
-fn gist_view_x_stages_whole_gist_delete() {
+fn detail_x_stages_whole_gist_delete() {
     let mut state = state_with_two_gists();
-    state.screen = Screen::Gists;
-    state.gists_index = 1;
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("b".into());
     assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
     assert_eq!(state.screen, Screen::Confirm);
     assert_eq!(
@@ -2500,6 +2668,10 @@ fn gist_view_s_cycles_sort_updated_then_created() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
         GistFile {
             gist_id: "new-upd".into(),
@@ -2512,6 +2684,10 @@ fn gist_view_s_cycles_sort_updated_then_created() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
     ];
     // Default: sort by updated (newest first).
@@ -2816,6 +2992,10 @@ fn list_screen_capital_s_syncs_selected_pair() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     assert_eq!(
         state.handle_key(KeyCode::Char('S')),
@@ -2880,8 +3060,8 @@ fn gist_group_row_age_tracks_active_sort() {
     let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
     // Sorting by updated shows the updated age (1 day ago); sorting by created shows the
     // created age (10 days ago → "1w"), so the 🕒 column matches the ordering key.
-    let updated = gist_group_row_label(&group, now, GistGroupSort::Updated, 0, 0, false, None);
-    let created = gist_group_row_label(&group, now, GistGroupSort::Created, 0, 0, false, None);
+    let updated = gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), false, None);
+    let created = gist_group_row_label(&group, now, GistGroupSort::Created, (0, 0, 0), false, None);
     assert!(updated.ends_with("🕒 1d"), "{updated}");
     assert!(created.ends_with("🕒 1w"), "{created}");
 }
@@ -2900,11 +3080,11 @@ fn gist_group_row_shows_comment_marker_only_when_present() {
     };
     let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
     assert!(
-        !gist_group_row_label(&group, now, GistGroupSort::Updated, 0, 0, false, None)
+        !gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), false, None)
             .contains('💬')
     );
     assert!(
-        gist_group_row_label(&group, now, GistGroupSort::Updated, 3, 0, false, None)
+        gist_group_row_label(&group, now, GistGroupSort::Updated, (3, 0, 0), false, None)
             .contains("💬 3")
     );
 }
@@ -2922,15 +3102,20 @@ fn gist_group_row_shows_foreign_owner() {
         fork_of_id: None,
     };
     let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
-    let foreign =
-        gist_group_row_label(&group, now, GistGroupSort::Updated, 0, 0, false, Some("me"));
+    let foreign = gist_group_row_label(
+        &group,
+        now,
+        GistGroupSort::Updated,
+        (0, 0, 0),
+        false,
+        Some("me"),
+    );
     assert!(foreign.contains("@karpathy"));
     let own = gist_group_row_label(
         &group,
         now,
         GistGroupSort::Updated,
-        0,
-        0,
+        (0, 0, 0),
         false,
         Some("karpathy"),
     );
@@ -2951,13 +3136,60 @@ fn gist_group_row_shows_fork_marker_only_when_present() {
     };
     let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
     assert!(
-        !gist_group_row_label(&group, now, GistGroupSort::Updated, 0, 0, false, None)
-            .contains('⭐')
+        !gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), false, None)
+            .contains('⑂')
     );
     assert!(
-        gist_group_row_label(&group, now, GistGroupSort::Updated, 0, 2, false, None)
-            .contains("⭐ 2")
+        gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 2), false, None)
+            .contains("⑂ 2")
     );
+}
+
+#[test]
+fn gist_group_row_shows_star_marker_only_when_present() {
+    let group = GistGroup {
+        id: "g1".into(),
+        description: "demo".into(),
+        public: false,
+        updated_at: "2026-06-10T00:00:00Z".into(),
+        created_at: "2026-06-01T00:00:00Z".into(),
+        file_count: 2,
+        owner_login: String::new(),
+        fork_of_id: None,
+    };
+    let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+    assert!(
+        !gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), false, None)
+            .contains('☆')
+    );
+    assert!(
+        gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 3, 0), false, None)
+            .contains("☆ 3")
+    );
+}
+
+#[test]
+fn gist_info_line_shows_counts_when_nonzero() {
+    let group = GistGroup {
+        id: "616796de59282c8bfdae3005511c588e".into(),
+        description: "demo".into(),
+        public: true,
+        updated_at: "2026-06-10T00:00:00Z".into(),
+        created_at: "2026-06-01T00:00:00Z".into(),
+        file_count: 1,
+        owner_login: String::new(),
+        fork_of_id: None,
+    };
+    let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+    let quiet = gist_info_line(&group, now, None, false, (0, 0, 0));
+    assert!(!quiet.contains('☆'));
+    assert!(!quiet.contains('⑂'));
+    assert!(!quiet.contains('💬'));
+
+    let rich = gist_info_line(&group, now, None, true, (2, 3, 1));
+    assert!(rich.starts_with("★ starred · "));
+    assert!(rich.contains("☆ 3 · ⑂ 1 · 💬 2"));
+    assert!(rich.contains(&group.id));
 }
 
 #[test]
@@ -3072,6 +3304,10 @@ fn gists_screen_state() -> AppState {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
         GistFile {
             gist_id: "g2".into(),
@@ -3084,6 +3320,10 @@ fn gists_screen_state() -> AppState {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
     ];
     state.screen = Screen::Gists;
@@ -3408,6 +3648,10 @@ fn revisions_f_on_single_file_gist_shows_status() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     state.screen = Screen::Revisions;
     state.revision_gist_id = Some("g1".into());
@@ -3557,6 +3801,10 @@ fn forked_filter_shows_only_forks() {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
         GistFile {
             gist_id: "forked".into(),
@@ -3569,6 +3817,10 @@ fn forked_filter_shows_only_forks() {
             fork_of_id: Some("upstream".into()),
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         },
     ];
     state.current_user_login = Some("me".into());
@@ -3601,6 +3853,10 @@ fn foreign_gist_blocks_pin() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     state.local_index = 0;
     state.gist_index = 0;
@@ -3622,6 +3878,10 @@ fn star_key_returns_toggle_intent() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     state.gist_index = 0;
     assert_eq!(
@@ -3647,6 +3907,10 @@ fn fork_key_returns_fork_intent_for_foreign_gist_in_detail() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::ForkGist);
 }
@@ -3668,9 +3932,38 @@ fn fork_key_blocked_for_owned_gist_in_detail() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::None);
     assert!(state.status.as_ref().unwrap().contains("already yours"));
+}
+
+#[test]
+fn foreign_detail_mutate_keys_are_silent_noop() {
+    let mut state = initial_state();
+    state.current_user_login = Some("me".into());
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("foreign".into());
+    state.starred_gists = vec![GistFile {
+        gist_id: "foreign".into(),
+        description: "x".into(),
+        filename: "a.txt".into(),
+        public: true,
+        updated_at: "x".into(),
+        created_at: "x".into(),
+        owner_login: "other".into(),
+        fork_of_id: None,
+        raw_url: None,
+        content_type: None,
+        node_id: None,
+    }];
+    assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::None);
+    assert_eq!(state.handle_key(KeyCode::Char('c')), KeyOutcome::None);
+    assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
+    assert!(state.status.is_none());
 }
 
 #[test]
@@ -3688,6 +3981,10 @@ fn fork_key_ignored_on_list_and_gist_manager() {
         fork_of_id: None,
 
         raw_url: None,
+
+        content_type: None,
+
+        node_id: None,
     }];
     state.gist_type_filter = GistTypeFilter::Starred;
     state.gist_index = 0;

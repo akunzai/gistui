@@ -26,6 +26,8 @@ pub struct GistListCache {
     pub comment_counts: HashMap<String, u32>,
     #[serde(default)]
     pub fork_counts: HashMap<String, u32>,
+    #[serde(default)]
+    pub star_counts: HashMap<String, u32>,
 }
 
 impl GistListCache {
@@ -91,6 +93,8 @@ mod tests {
             owner_login: String::new(),
             fork_of_id: None,
             raw_url: None,
+            content_type: None,
+            node_id: None,
         }
     }
 
@@ -105,6 +109,7 @@ mod tests {
             user_login: Some("me".into()),
             comment_counts: [("a".into(), 2)].into(),
             fork_counts: [("a".into(), 1)].into(),
+            star_counts: [("a".into(), 3)].into(),
         };
 
         save_gist_cache(&path, &cache);

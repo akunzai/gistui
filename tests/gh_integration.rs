@@ -144,6 +144,8 @@ fn run_command_executes_planned_write_action() {
         owner_login: String::new(),
         fork_of_id: None,
         raw_url: None,
+        content_type: None,
+        node_id: None,
     };
     let plan = upload_command(PathBuf::from("/tmp/settings.json").as_path(), &target);
     let runner = FakeRunner::new(vec![FakeRunner::ok("https://gist.github.com/abc123\n")]);

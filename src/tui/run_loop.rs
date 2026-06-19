@@ -8,6 +8,8 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
     let mut gist_rx = Some(spawn_gist_fetch());
     let mut fork_rx: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>> =
         None;
+    let mut star_rx: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>> =
+        None;
     let mut fork_meta_rx: Option<
         std::sync::mpsc::Receiver<std::collections::HashMap<String, Option<String>>>,
     > = None;
@@ -23,8 +25,15 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
         // Absorb the background gist list once it arrives.
         if state.loading {
             if let Some(ref rx) = gist_rx {
-                if let Ok((gists, starred, starred_ids, user_login, comment_counts, owned_raw)) =
-                    rx.try_recv()
+                if let Ok((
+                    gists,
+                    starred,
+                    starred_ids,
+                    user_login,
+                    comment_counts,
+                    owned_raw,
+                    starred_raw,
+                )) = rx.try_recv()
                 {
                     persist_gist_cache_from_state_fields(
                         &gists,
@@ -33,6 +42,7 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         &user_login,
                         &comment_counts,
                         &state.gist_fork_counts,
+                        &state.gist_star_counts,
                     );
                     state.gists = gists;
                     state.starred_gists = starred;
@@ -48,10 +58,23 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                         state.gists_index = count - 1;
                     }
                     gist_rx = None;
-                    let gist_ids: std::collections::HashSet<String> =
-                        state.gists.iter().map(|g| g.gist_id.clone()).collect();
-                    fork_rx = Some(spawn_fork_count_fetch(owned_raw, gist_ids.clone()));
-                    fork_meta_rx = Some(spawn_fork_metadata_fetch(gist_ids));
+                    let gist_ids: std::collections::HashSet<String> = state
+                        .gists
+                        .iter()
+                        .chain(state.starred_gists.iter())
+                        .map(|g| g.gist_id.clone())
+                        .collect();
+                    fork_rx = Some(spawn_fork_count_fetch(
+                        owned_raw,
+                        starred_raw,
+                        gist_ids.clone(),
+                    ));
+                    fork_meta_rx = Some(spawn_fork_metadata_fetch(
+                        state.gists.iter().map(|g| g.gist_id.clone()).collect(),
+                    ));
+                    let node_ids =
+                        crate::gh::merge_gist_node_id_maps(&state.gists, &state.starred_gists);
+                    star_rx = Some(spawn_star_count_fetch(node_ids));
                 }
             }
         }
@@ -61,6 +84,14 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                 state.gist_fork_counts = fork_counts;
                 persist_gist_cache_from_state(&state);
                 fork_rx = None;
+            }
+        }
+
+        if let Some(ref rx) = star_rx {
+            if let Ok(star_counts) = rx.try_recv() {
+                state.gist_star_counts = star_counts;
+                persist_gist_cache_from_state(&state);
+                star_rx = None;
             }
         }
 
@@ -705,6 +736,8 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                                 owner_login: String::new(),
                                 fork_of_id: None,
                                 raw_url: None,
+                                content_type: None,
+                                node_id: None,
                             });
                         (local_path, gist_id, gist_file)
                     } else {
@@ -785,6 +818,8 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                             owner_login: String::new(),
                             fork_of_id: None,
                             raw_url: None,
+                            content_type: None,
+                            node_id: None,
                         };
                         crate::actions::upload_command(&temp_file_path, &target)
                     } else {
@@ -948,11 +983,14 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                     );
                 }
                 KeyOutcome::ApplyDescription => {
-                    let Some(group) = state.selected_group() else {
+                    let gist_id = state
+                        .detail_gist_id
+                        .clone()
+                        .or_else(|| state.selected_group().map(|g| g.id.clone()));
+                    let Some(gist_id) = gist_id else {
                         state.editing_description = false;
                         continue;
                     };
-                    let gist_id = group.id.clone();
                     let description = state.description_input.to_string();
                     let plan = crate::actions::edit_description_command(&gist_id, &description);
                     state.editing_description = false;
@@ -1443,6 +1481,7 @@ fn persist_gist_cache_from_state(state: &AppState) {
         &state.current_user_login,
         &state.gist_comment_counts,
         &state.gist_fork_counts,
+        &state.gist_star_counts,
     );
 }
 
@@ -1453,6 +1492,7 @@ fn persist_gist_cache_from_state_fields(
     user_login: &Option<String>,
     comment_counts: &std::collections::HashMap<String, u32>,
     fork_counts: &std::collections::HashMap<String, u32>,
+    star_counts: &std::collections::HashMap<String, u32>,
 ) {
     if let Ok(path) = crate::cache::cache_path() {
         let cache = crate::cache::GistListCache {
@@ -1462,6 +1502,7 @@ fn persist_gist_cache_from_state_fields(
             user_login: user_login.clone(),
             comment_counts: comment_counts.clone(),
             fork_counts: fork_counts.clone(),
+            star_counts: star_counts.clone(),
         };
         crate::cache::save_gist_cache(&path, &cache);
     }
@@ -1476,6 +1517,7 @@ type GistFetchResult = (
     Option<String>,
     std::collections::HashMap<String, u32>,
     Option<String>,
+    Option<String>,
 );
 
 fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<GistFetchResult> {
@@ -1485,7 +1527,7 @@ fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<GistFetchResult> {
             let owned = crate::gh::fetch_gist_list_json().ok();
             let starred_raw = crate::gh::fetch_gist_starred_list_json().ok();
             let user_login = crate::gh::fetch_current_user_login().ok();
-            let (files, comment_counts) = owned
+            let (files, mut comment_counts) = owned
                 .as_ref()
                 .map(|raw| {
                     (
@@ -1494,6 +1536,11 @@ fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<GistFetchResult> {
                     )
                 })
                 .unwrap_or_default();
+            if let Some(raw) = starred_raw.as_ref() {
+                if let Ok(starred_comments) = crate::gh::parse_gist_comment_counts(raw) {
+                    comment_counts.extend(starred_comments);
+                }
+            }
             let starred = starred_raw
                 .as_ref()
                 .map(|raw| crate::gh::parse_gist_list_json(raw).unwrap_or_default())
@@ -1509,6 +1556,7 @@ fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<GistFetchResult> {
                 user_login,
                 comment_counts,
                 owned,
+                starred_raw,
             )
         } else {
             Default::default()
@@ -1520,11 +1568,27 @@ fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<GistFetchResult> {
 
 fn spawn_fork_count_fetch(
     owned_raw: Option<String>,
+    starred_raw: Option<String>,
     gist_ids: std::collections::HashSet<String>,
 ) -> std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let counts = crate::gh::collect_gist_fork_counts(owned_raw.as_deref(), gist_ids);
+        let counts = crate::gh::collect_gist_fork_counts(
+            owned_raw.as_deref(),
+            starred_raw.as_deref(),
+            gist_ids,
+        );
+        let _ = tx.send(counts);
+    });
+    rx
+}
+
+fn spawn_star_count_fetch(
+    node_ids: std::collections::HashMap<String, String>,
+) -> std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let counts = crate::gh::collect_gist_star_counts(node_ids);
         let _ = tx.send(counts);
     });
     rx
@@ -1615,6 +1679,8 @@ fn spawn_pin_push(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         owner_login: String::new(),
         fork_of_id: None,
         raw_url: raw_url.clone(),
+        content_type: None,
+        node_id: None,
     };
     let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
     spawn_bg(state, bg_rx, "Loading diff…", move || {
@@ -1648,6 +1714,8 @@ fn spawn_pin_pull(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         owner_login: String::new(),
         fork_of_id: None,
         raw_url: raw_url.clone(),
+        content_type: None,
+        node_id: None,
     };
     let (local_label, gist_label) = diff_labels(Some(&target), &gist_file);
     spawn_bg(state, bg_rx, "Downloading…", move || {
@@ -1692,6 +1760,8 @@ fn spawn_pin_diff(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         owner_login: String::new(),
         fork_of_id: None,
         raw_url: raw_url.clone(),
+        content_type: None,
+        node_id: None,
     };
     let (local_label, gist_label) = diff_labels(Some(&local_abs), &gist_file);
     let target = local_abs.clone();

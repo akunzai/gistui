@@ -81,6 +81,143 @@ pub struct GistFile {
     /// Direct raw URL from the gist list API; used when `gh gist view` fails on huge gists.
     #[serde(default)]
     pub raw_url: Option<String>,
+    /// MIME type from the gist list API (`files[].type`), when present.
+    #[serde(default)]
+    pub content_type: Option<String>,
+    /// GraphQL global id from the gist list API (`node_id`), for stargazer counts.
+    #[serde(default)]
+    pub node_id: Option<String>,
+}
+
+/// File extensions that are treated as non-text for preview/diff (images, archives, media, …).
+const BINARY_EXTENSIONS: &[&str] = &[
+    "avif", "bmp", "bz2", "deb", "dll", "dmg", "dylib", "eot", "exe", "flac", "gif", "gz", "heic",
+    "heif", "ico", "iso", "jpeg", "jpg", "mkv", "mov", "mp3", "mp4", "ogg", "otf", "pdf", "png",
+    "rar", "rpm", "so", "tar", "tif", "tiff", "ttf", "wav", "wasm", "webm", "webp", "woff",
+    "woff2", "xz", "zip", "7z",
+];
+
+fn mime_is_non_text(mime: &str) -> bool {
+    let lower = mime.to_ascii_lowercase();
+    if lower.starts_with("image/")
+        || lower.starts_with("audio/")
+        || lower.starts_with("video/")
+        || lower.starts_with("font/")
+    {
+        return true;
+    }
+    matches!(
+        lower.as_str(),
+        "application/octet-stream"
+            | "application/pdf"
+            | "application/zip"
+            | "application/gzip"
+            | "application/x-gzip"
+            | "application/x-tar"
+            | "application/x-bzip2"
+            | "application/x-7z-compressed"
+            | "application/vnd.microsoft.portable-executable"
+            | "application/wasm"
+    )
+}
+
+fn mime_is_text(mime: &str) -> bool {
+    let lower = mime.to_ascii_lowercase();
+    if lower.starts_with("text/") {
+        return true;
+    }
+    if lower.starts_with("application/x-") && !mime_is_non_text(&lower) {
+        // GitHub gist script types: application/x-python, application/x-sh, …
+        return true;
+    }
+    matches!(
+        lower.as_str(),
+        "application/json"
+            | "application/javascript"
+            | "application/ld+json"
+            | "application/xml"
+            | "application/yaml"
+            | "application/x-yaml"
+            | "application/graphql"
+    )
+}
+
+/// True when the filename extension is a known binary/image type.
+pub fn extension_looks_binary(filename: &str) -> bool {
+    std::path::Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| {
+            BINARY_EXTENSIONS
+                .iter()
+                .any(|&deny| e.eq_ignore_ascii_case(deny))
+        })
+}
+
+/// Whether gistui can show this gist file as text in preview/diff views.
+/// Uses the list API MIME type when available, otherwise the filename extension.
+pub fn gist_file_is_text_previewable(filename: &str, content_type: Option<&str>) -> bool {
+    if let Some(mime) = content_type.filter(|s| !s.is_empty()) {
+        if mime_is_non_text(mime) {
+            return false;
+        }
+        if mime_is_text(mime) {
+            return true;
+        }
+    }
+    !extension_looks_binary(filename)
+}
+
+/// Short reason for blocking preview/diff (e.g. "image file", "binary file").
+pub fn gist_file_non_previewable_reason(
+    filename: &str,
+    content_type: Option<&str>,
+) -> &'static str {
+    if content_type
+        .filter(|s| !s.is_empty())
+        .is_some_and(|m| m.to_ascii_lowercase().starts_with("image/"))
+    {
+        return "image file";
+    }
+    if extension_looks_binary(filename) {
+        let ext = std::path::Path::new(filename)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase);
+        if matches!(
+            ext.as_deref(),
+            Some(
+                "png"
+                    | "jpg"
+                    | "jpeg"
+                    | "gif"
+                    | "webp"
+                    | "ico"
+                    | "bmp"
+                    | "tif"
+                    | "tiff"
+                    | "heic"
+                    | "heif"
+                    | "avif"
+            )
+        ) {
+            return "image file";
+        }
+        return "binary file";
+    }
+    if content_type
+        .filter(|s| !s.is_empty())
+        .is_some_and(mime_is_non_text)
+    {
+        return "binary file";
+    }
+    "non-text file"
+}
+
+/// Status line when preview/diff is blocked for a gist file.
+pub fn non_previewable_status(filename: &str, content_type: Option<&str>) -> String {
+    let reason = gist_file_non_previewable_reason(filename, content_type);
+    format!("cannot preview — {reason} (use o for browser or d to download)")
 }
 
 /// A gist-level view of the flat [`GistFile`] rows: one entry per gist, carrying
@@ -304,7 +441,43 @@ mod tests {
             fork_of_id: None,
 
             raw_url: None,
+            content_type: None,
+            node_id: None,
         }
+    }
+
+    #[test]
+    fn gist_file_previewable_uses_mime_and_extension() {
+        assert!(gist_file_is_text_previewable(
+            "notes.md",
+            Some("text/markdown")
+        ));
+        assert!(gist_file_is_text_previewable(
+            "data.json",
+            Some("application/json")
+        ));
+        assert!(!gist_file_is_text_previewable(
+            "logo.png",
+            Some("image/png")
+        ));
+        assert!(!gist_file_is_text_previewable("photo.jpg", None));
+        assert!(gist_file_is_text_previewable("script.py", None));
+        assert!(!gist_file_is_text_previewable(
+            "script.py",
+            Some("image/png")
+        ));
+    }
+
+    #[test]
+    fn non_previewable_reason_labels_images() {
+        assert_eq!(
+            gist_file_non_previewable_reason("x.png", Some("image/png")),
+            "image file"
+        );
+        assert_eq!(
+            gist_file_non_previewable_reason("data.bin", Some("application/octet-stream")),
+            "binary file"
+        );
     }
 
     #[test]

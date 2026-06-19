@@ -590,6 +590,10 @@ mod tests {
             fork_of_id: None,
 
             raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
         }
     }
 

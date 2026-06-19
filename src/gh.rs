@@ -20,6 +20,8 @@ struct GhGist {
     #[serde(default)]
     comments: u32,
     #[serde(default)]
+    node_id: Option<String>,
+    #[serde(default)]
     owner: Option<GhCommentUser>,
     #[serde(default)]
     fork_of: Option<GhGistForkOf>,
@@ -42,6 +44,8 @@ struct GhGistFile {
     filename: String,
     #[serde(default)]
     raw_url: Option<String>,
+    #[serde(default, rename = "type")]
+    content_type: Option<String>,
 }
 
 /// Plan for `gh --version` (used to confirm `gh` is installed and runnable).
@@ -168,11 +172,37 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
                 owner_login: owner_login.clone(),
                 fork_of_id: fork_of_id.clone(),
                 raw_url: file.raw_url.clone(),
+                content_type: file.content_type.clone(),
+                node_id: gist.node_id.clone(),
             });
         }
     }
 
     Ok(files)
+}
+
+/// Unique `gist_id → node_id` pairs from flat gist rows (first wins).
+pub fn gist_node_id_map(files: &[GistFile]) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    for file in files {
+        if let Some(nid) = file.node_id.as_ref().filter(|s| !s.is_empty()) {
+            map.entry(file.gist_id.clone())
+                .or_insert_with(|| nid.clone());
+        }
+    }
+    map
+}
+
+/// Merge node-id maps from owned and starred gist rows.
+pub fn merge_gist_node_id_maps(
+    owned: &[GistFile],
+    starred: &[GistFile],
+) -> HashMap<String, String> {
+    let mut map = gist_node_id_map(owned);
+    for (id, nid) in gist_node_id_map(starred) {
+        map.entry(id).or_insert(nid);
+    }
+    map
 }
 
 /// Map each gist id to its comment count, parsed from the same gist-list JSON. The count rides
@@ -327,15 +357,21 @@ pub fn apply_fork_of_ids(gists: &mut [GistFile], fork_of: &HashMap<String, Optio
     }
 }
 
-/// Fill fork counts for owned gists. List JSON usually omits `forks`, so each id is
-/// probed via `/gists/{id}/forks` when the parsed count is zero.
+/// Fill fork counts. List JSON usually omits `forks`, so each id is probed via
+/// `/gists/{id}/forks` when the parsed count is zero. Merges owned and starred list JSON.
 pub fn collect_gist_fork_counts(
     owned_raw: Option<&str>,
+    starred_raw: Option<&str>,
     gist_ids: impl IntoIterator<Item = String>,
 ) -> HashMap<String, u32> {
     let mut counts = owned_raw
         .and_then(|raw| parse_gist_fork_counts(raw).ok())
         .unwrap_or_default();
+    if let Some(raw) = starred_raw {
+        if let Ok(starred) = parse_gist_fork_counts(raw) {
+            counts.extend(starred);
+        }
+    }
     for id in gist_ids {
         if counts.get(&id).copied().unwrap_or(0) > 0 {
             continue;
@@ -347,6 +383,81 @@ pub fn collect_gist_fork_counts(
         }
     }
     counts
+}
+
+const STARGAZER_GRAPHQL_CHUNK: usize = 40;
+
+/// Build a batched GraphQL query (`n0`…`n{k}` aliases) for stargazer counts.
+pub fn build_stargazer_graphql_query(node_ids: &[String]) -> String {
+    let mut query = String::from("query { ");
+    for (i, id) in node_ids.iter().enumerate() {
+        query.push_str(&format!(
+            "n{i}: node(id: \"{id}\") {{ ... on Gist {{ name stargazerCount }} }} "
+        ));
+    }
+    query.push('}');
+    query
+}
+
+pub fn gist_stargazer_graphql_plan(query: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "graphql".into(),
+            "-f".into(),
+            format!("query={query}"),
+        ],
+    }
+}
+
+/// Parse alias-keyed GraphQL data (`n0`, `n1`, …) into `gist_id → stargazerCount`.
+pub fn parse_stargazer_counts_graphql(raw: &str) -> Result<HashMap<String, u32>> {
+    let v: serde_json::Value = serde_json::from_str(raw).context("parse stargazer GraphQL")?;
+    let data = v
+        .get("data")
+        .and_then(|d| d.as_object())
+        .context("GraphQL data object")?;
+    let mut out = HashMap::new();
+    for node in data.values() {
+        if node.is_null() {
+            continue;
+        }
+        let Some(name) = node.get("name").and_then(|n| n.as_str()) else {
+            continue;
+        };
+        let count = node
+            .get("stargazerCount")
+            .and_then(|n| n.as_u64())
+            .unwrap_or(0) as u32;
+        if count > 0 {
+            out.insert(name.to_string(), count);
+        }
+    }
+    Ok(out)
+}
+
+pub fn collect_gist_star_counts(node_ids: HashMap<String, String>) -> HashMap<String, u32> {
+    collect_gist_star_counts_with(&SystemRunner, node_ids)
+}
+
+pub fn collect_gist_star_counts_with(
+    runner: &dyn CommandRunner,
+    node_ids: HashMap<String, String>,
+) -> HashMap<String, u32> {
+    let ids: Vec<String> = node_ids.into_values().collect();
+    let mut out = HashMap::new();
+    for chunk in ids.chunks(STARGAZER_GRAPHQL_CHUNK) {
+        let query = build_stargazer_graphql_query(chunk);
+        let raw = match run_command(runner, &gist_stargazer_graphql_plan(&query)) {
+            Ok(raw) => raw,
+            Err(_) => continue,
+        };
+        if let Ok(batch) = parse_stargazer_counts_graphql(&raw) {
+            out.extend(batch);
+        }
+    }
+    out
 }
 
 #[derive(Debug, Deserialize)]
@@ -714,7 +825,9 @@ mod tests {
         assert_eq!(files[0].description, "claude config");
         assert!(!files[0].public);
         assert_eq!(files[0].owner_login, "akunzai");
+        assert_eq!(files[0].content_type.as_deref(), Some("application/json"));
         assert_eq!(files[1].filename, "statusline.sh");
+        assert_eq!(files[1].content_type.as_deref(), Some("text/x-shellscript"));
         let notes = files.iter().find(|f| f.filename == "notes.md").unwrap();
         assert_eq!(notes.fork_of_id.as_deref(), Some("upstream99"));
     }
@@ -772,6 +885,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_stargazer_counts_graphql_aliases() {
+        let raw = r#"{
+            "data": {
+                "n0": {"name": "abc123", "stargazerCount": 3},
+                "n1": null,
+                "n2": {"name": "def456", "stargazerCount": 0}
+            }
+        }"#;
+        let counts = parse_stargazer_counts_graphql(raw).unwrap();
+        assert_eq!(counts.get("abc123").copied(), Some(3));
+        assert!(!counts.contains_key("def456"));
+    }
+
+    #[test]
+    fn build_stargazer_graphql_query_aliases_nodes() {
+        let q = build_stargazer_graphql_query(&["G_a".into(), "G_b".into()]);
+        assert!(q.contains(r#"n0: node(id: "G_a")"#));
+        assert!(q.contains(r#"n1: node(id: "G_b")"#));
+        assert!(q.contains("stargazerCount"));
+    }
+
+    #[test]
     fn parses_fork_counts_from_forks_array() {
         let raw = r#"[{"id":"a","comments":0,"forks":[{},{}]},{"id":"b","comments":0}]"#;
         let counts = parse_gist_fork_counts(raw).unwrap();
@@ -813,6 +948,8 @@ mod tests {
                 owner_login: "me".into(),
                 fork_of_id: None,
                 raw_url: None,
+                content_type: None,
+                node_id: None,
             },
             GistFile {
                 gist_id: "fork1".into(),
@@ -824,6 +961,8 @@ mod tests {
                 owner_login: "me".into(),
                 fork_of_id: None,
                 raw_url: None,
+                content_type: None,
+                node_id: None,
             },
         ];
         let fork_of = [("fork1".into(), Some("upstream".into()))].into();

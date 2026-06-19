@@ -199,7 +199,8 @@ Press `?` in the app for the full keymap — it now opens the **current screen's
 ### Actions
 
 - `Enter` (on a gist) — preview the unified diff between the selected local file and the
-  gist, with `+`/`-` colour and **word-level inline highlighting** of changed words. The
+  gist, with `+`/`-` colour and **word-level inline highlighting** of changed words (blocked
+  when either side looks binary — same rule as `Space`). The
   diff direction follows the **focused pane**: focus the Gists pane for a *download* view
   (`--- local` / `+++ gist`), or the Local pane for an *upload* view (`--- gist` /
   `+++ local`). The `---`/`+++` header labels are tinted so each side stays identifiable
@@ -249,7 +250,9 @@ Press `?` in the app for the full keymap — it now opens the **current screen's
   force-refresh, bypassing the session cache; `w` to toggle soft line wrapping for long lines,
   remembered for the session). Known file types are **syntax-highlighted** by extension. Scroll
   with the arrow keys, or `PageUp`/`PageDown` to jump 10 lines at a time. Inside the preview, `y`
-  copies the gist URL and `Y` copies the full file content to the clipboard.
+  copies the gist URL and `Y` copies the full file content to the clipboard. **Images and other
+  binary files** are not rendered in the terminal — preview and diff are blocked (the detail file
+  list tags them `(binary)`); use `o` to open in the browser or `d` to download.
 - `h` (on a gist file) — open **revision history** for that file (same screen as from the gist
   manager/detail; `f` cycles files when the gist has more than one).
 - `r` — toggle **recursive** local file discovery; the pane title shows `[↓]` while active
@@ -273,11 +276,9 @@ unranked so you can still preview and download into the current directory.
 Press `g` to open the **gist manager** — a gist-level view (one row per gist) that lands on
 the gist owning the currently selected file. From here you manage gists as a whole:
 
-- `e` — edit the gist's description (type, `Enter` applies, `Esc` cancels;
-  `←`/`→`/`Home`/`End`/`Del` edit text mid-string instead of only at the end).
 - `Enter` — open the **gist detail view**: a header with basic info (description, visibility,
-  created/updated age, short id) and a `Files │ Comments` tab strip, with the active tab's
-  content below. Opens on the **Files** tab.
+  created/updated age, gist id, and `☆`/`⑂`/`💬` counts when non-zero) and a `Files │ Comments`
+  tab strip, with the active tab's content below. Opens on the **Files** tab.
   - `Tab` switch tab between the file list and the comments (only one shows at a time).
   - `↑`/`↓` move the file cursor (Files tab) or scroll comments (Comments tab) · `PageUp`/`PageDown`
     page either by 10.
@@ -286,9 +287,10 @@ the gist owning the currently selected file. From here you manage gists as a who
   - `1`–`9` still preview the content of the Nth file directly, full-screen (`↑↓←→` scroll,
     `R` refresh, `w` wrap, `q`/`Esc` back).
   - `h` revision history (browse, incremental diff, diff vs current, restore the cursor file from an older revision) ·
-    `F` fork into your account (only when the gist is not yours) · `c` compact · `o` browser · `y` copy gist URL ·
-    `X` delete the entire gist (`y`/`n` confirm) · `q`/`Esc` back to the gist manager.
-- `X` — delete the entire gist and all its files, after a `y`/`n` confirmation.
+    `*` star / unstar (info line shows `★ starred` when active) · `o` browser · `y` copy gist URL ·
+    `q`/`Esc` back to the gist manager.
+  - **Owned gists only:** `e` edit description · `c` compact revisions · `X` delete the entire gist (`y`/`n` confirm).
+  - **Others' gists:** `F` fork into your account (mutate keys are hidden — pressing them is a silent no-op).
 - `o` — open the gist on gist.github.com in your browser.
 - `y` — copy the gist's URL to the system clipboard.
 - `h` — open **revision history** for the selected gist: browse revisions (newest first),
@@ -298,22 +300,16 @@ the gist owning the currently selected file. From here you manage gists as a who
   detail, the target file is the one under the cursor; from the gist manager, it starts on
   the gist's first file. Press `f` in revision history to cycle the target file when a gist
   has more than one. Restore uploads old content as a **new** revision (history is kept).
-- `c` — compact revisions: after showing the revision count and a `y`/`n` confirmation, the
-  gist is cloned to a temp dir over HTTPS (authenticating through your `gh` token, never SSH
-  keys), its history squashed to a single commit, and force-pushed — collapsing all older
-  revisions. Irreversible. (When triggered from the detail view, the confirmation prompt shows
-  the gist's info as context.) Requires the git credential helper that `gh auth setup-git`
-  configures; if it is missing, compaction reports an actionable error pointing you to that command.
 - `s` cycle sort (updated / created) · `v` cycle visibility (all/public/secret/starred/forked) · `*` star/unstar · `/` filter
   by description or id (↑/↓ move · Enter apply · Esc clear · ←/→/Home/End/Del edit query) · `Left`/`Right` scroll a long description.
-  The title shows your starred-gist and owned-fork totals (`★ N` / `⑂ N`); rows show `💬` / `⭐` counts when non-zero.
+  The title shows your starred-gist and owned-fork totals (`★ N` / `⑂ N`); rows show `☆ N` (stargazers), `⑂ N` (forks), and `💬 N` (comments) when non-zero.
 - `q`/`Esc` — back to the list.
 
 </details>
 
 ## Safety rules
 
-- Gists you do not own (e.g. from the starred filter) are **read-only**: you can preview, diff, download, and open in the browser, but pin, upload, remove-file, delete, compact, and revision restore are refused. Open **gist detail** (`Enter` in the gist manager) and press `F` to fork one into your account.
+- Gists you do not own (e.g. from the starred filter) are **read-only**: you can preview, diff, download, and open in the browser, but pin, upload, and remove-file are refused with a status message. Edit description, compact, delete, and revision restore are only offered in **gist detail** for gists you own; on others' gists those keys are hidden (silent no-op). Open gist detail and press `F` to fork one into your account.
 - Downloads only ever write to `./<gist-filename>` in the current working directory.
 - An existing file (local download target or remote gist file) is never overwritten without
   first showing its diff and confirmation. Confirmations appear as a centered prompt over
