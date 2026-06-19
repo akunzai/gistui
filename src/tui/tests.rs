@@ -3693,6 +3693,16 @@ fn ctrl_f_pages_gist_detail_files() {
 }
 
 #[test]
+fn shift_t_toggles_theme() {
+    use crossterm::event::KeyModifiers;
+    let mut state = initial_state();
+    assert_eq!(state.theme_choice, crate::config::ThemeChoice::Dark);
+    let outcome = state.handle_key_with(KeyCode::Char('T'), KeyModifiers::SHIFT);
+    assert_eq!(outcome, KeyOutcome::ThemeToggle);
+    assert_eq!(state.theme_choice, crate::config::ThemeChoice::Light);
+}
+
+#[test]
 fn list_page_keys_jump_local_selection() {
     let paths: Vec<String> = (0..15).map(|i| format!("/cwd/f{i:02}.txt")).collect();
     let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();

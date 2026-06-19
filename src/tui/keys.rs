@@ -36,6 +36,11 @@ fn nav_action(code: KeyCode, modifiers: KeyModifiers) -> Option<NavAction> {
 /// keeps paging predictable without threading terminal size into the key logic.
 const PAGE_SCROLL: u16 = 10;
 
+/// `T` theme toggle accepts a plain capital key (Caps Lock) or Shift+T; reject Ctrl/Alt combos.
+fn theme_toggle_modifiers_ok(modifiers: KeyModifiers) -> bool {
+    modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
+}
+
 impl AppState {
     pub fn handle_key(&mut self, code: KeyCode) -> KeyOutcome {
         self.handle_key_with(code, KeyModifiers::NONE)
@@ -45,7 +50,7 @@ impl AppState {
         // Global theme toggle: skip while any inline text input is active so `T` can still
         // be typed into filters and description editors.
         if code == KeyCode::Char('T')
-            && modifiers.is_empty()
+            && theme_toggle_modifiers_ok(modifiers)
             && !self.filtering
             && !self.pins_filtering
             && !self.gists_filtering
