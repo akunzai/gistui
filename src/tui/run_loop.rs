@@ -560,7 +560,7 @@ pub(super) fn run_loop(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) ->
                 continue;
             }
 
-            match state.handle_key(key.code) {
+            match state.handle_key_with(key.code, key.modifiers) {
                 KeyOutcome::Quit => break,
                 KeyOutcome::PreviewDiff => {
                     let Some(ranked) = state.selected_gist() else {

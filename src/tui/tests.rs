@@ -1326,7 +1326,7 @@ fn commands_hint_is_focus_aware() {
     assert!(!local.contains("d download"));
 
     let gist = commands_hint(FocusPane::Gist);
-    assert!(gist.contains("h history"));
+    assert!(gist.contains("H history"));
     assert!(gist.contains("d download"));
     assert!(gist.contains("g gists"));
     assert!(!gist.contains("e edit"));
@@ -3485,11 +3485,11 @@ fn help_topic_for_screen_maps_key_dense_screens() {
 }
 
 #[test]
-fn h_from_list_opens_revisions_for_selected_gist_file() {
+fn capital_h_from_list_opens_revisions_for_selected_gist_file() {
     let mut state = list_state_with_matches();
     state.focus = FocusPane::Gist;
     state.gist_index = 0;
-    let outcome = state.handle_key(KeyCode::Char('h'));
+    let outcome = state.handle_key(KeyCode::Char('H'));
     assert_eq!(outcome, KeyOutcome::FetchRevisions);
     assert_eq!(state.screen, Screen::Revisions);
     assert_eq!(state.revision_gist_id.as_deref(), Some("a"));
@@ -3498,12 +3498,12 @@ fn h_from_list_opens_revisions_for_selected_gist_file() {
 }
 
 #[test]
-fn h_from_gist_detail_opens_revisions_and_fetches() {
+fn capital_h_from_gist_detail_opens_revisions_and_fetches() {
     let mut state = state_with_gists();
     state.screen = Screen::GistDetail;
     state.detail_gist_id = Some("g1".into());
     state.detail_file_cursor = 1;
-    let outcome = state.handle_key(KeyCode::Char('h'));
+    let outcome = state.handle_key(KeyCode::Char('H'));
     assert_eq!(outcome, KeyOutcome::FetchRevisions);
     assert_eq!(state.screen, Screen::Revisions);
     assert_eq!(state.revision_gist_id.as_deref(), Some("g1"));
@@ -3621,21 +3621,21 @@ fn revision_diff_omits_download_upload() {
 }
 
 #[test]
-fn revisions_f_cycles_target_file() {
+fn revisions_capital_f_cycles_target_file() {
     let mut state = state_with_gists();
     state.screen = Screen::Revisions;
     state.revision_gist_id = Some("g1".into());
     state.revision_target_file = "a.txt".into();
     state.revision_entries = Some(vec![]);
-    state.handle_key(KeyCode::Char('f'));
+    state.handle_key(KeyCode::Char('F'));
     assert_eq!(state.revision_target_file, "b.txt");
-    state.handle_key(KeyCode::Char('f'));
+    state.handle_key(KeyCode::Char('F'));
     assert_eq!(state.revision_target_file, "a.txt");
     assert_eq!(state.revision_target_file_label(), "a.txt (1/2)");
 }
 
 #[test]
-fn revisions_f_on_single_file_gist_shows_status() {
+fn revisions_capital_f_on_single_file_gist_shows_status() {
     let mut state = initial_state();
     state.gists = vec![GistFile {
         gist_id: "g1".into(),
@@ -3657,8 +3657,48 @@ fn revisions_f_on_single_file_gist_shows_status() {
     state.revision_gist_id = Some("g1".into());
     state.revision_target_file = "only.txt".into();
     state.revision_entries = Some(vec![]);
-    state.handle_key(KeyCode::Char('f'));
+    state.handle_key(KeyCode::Char('F'));
     assert_eq!(state.status.as_deref(), Some("only one file in this gist"));
+}
+
+#[test]
+fn vim_j_k_move_list_selection() {
+    let mut state = list_state_with_matches();
+    state.focus = FocusPane::Gist;
+    state.gist_index = 0;
+    state.handle_key(KeyCode::Char('j'));
+    assert_eq!(state.gist_index, 1);
+    state.handle_key(KeyCode::Char('k'));
+    assert_eq!(state.gist_index, 0);
+}
+
+#[test]
+fn vim_h_scrolls_focused_row_left() {
+    let mut state = list_state_with_matches();
+    state.focus = FocusPane::Gist;
+    state.gist_hscroll = 2;
+    state.handle_key(KeyCode::Char('h'));
+    assert_eq!(state.gist_hscroll, 1);
+}
+
+#[test]
+fn ctrl_f_pages_gist_detail_files() {
+    use crossterm::event::KeyModifiers;
+    let mut state = state_with_gists();
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("g1".into());
+    state.detail_file_cursor = 0;
+    state.handle_key_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
+    assert_eq!(state.detail_file_cursor, 1);
+}
+
+#[test]
+fn lowercase_h_does_not_open_revision_history() {
+    let mut state = list_state_with_matches();
+    state.focus = FocusPane::Gist;
+    state.gist_index = 0;
+    assert_eq!(state.handle_key(KeyCode::Char('h')), KeyOutcome::None);
+    assert_eq!(state.screen, Screen::List);
 }
 
 #[test]

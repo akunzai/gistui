@@ -28,7 +28,7 @@ pub enum Screen {
     Gists,
     /// Single-gist detail: basic info + file list + comments (entered from Gists with Enter).
     GistDetail,
-    /// Revision history for one gist (entered with `h` from Gist detail or Gist manager).
+    /// Revision history for one gist (entered with `H` from the list, Gist manager, or Gist detail).
     Revisions,
 }
 

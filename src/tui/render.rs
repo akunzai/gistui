@@ -52,8 +52,9 @@ fn help_topic_body(topic: HelpTopic) -> &'static str {
 Navigation
   Tab        switch pane (Local / Gists)
   1 / 2      jump to the Local / Gist pane
-  Up/Down    move the selection
-  Left/Right scroll a long row horizontally
+  Up/Down    move the selection (also j / k)
+  Left/Right scroll a long row horizontally (also h / l)
+  Ctrl+B/F   page up / down by 10 (also PageUp / PageDown)
 
 List screen
   r          toggle recursive file discovery (skips hidden + configured dirs)
@@ -77,7 +78,7 @@ Actions (on the selected local file + gist)
              (--- old / +++ new; local label = yellow, gist label = blue)
   Space      preview the gist file's content (R in preview to force-refresh;
              blocked for images/binary — use o or d instead)
-  h          open revision history for the selected gist file
+  H          open revision history for the selected gist file
   d          download the gist into the cwd
   u          upload the local file into the gist
   n          create a new gist from the local file (type a description, then s/p)
@@ -91,8 +92,8 @@ Actions (on the selected local file + gist)
         }
         HelpTopic::Pins => {
             "\
-  Up/Down    move between pins
-  Left/Right scroll a long local path horizontally (~ = home)
+  Up/Down    move between pins (also j / k)
+  Left/Right scroll a long local path horizontally (also h / l; ~ = home)
   /          filter pins by path or filename (↑↓ move · Enter apply · Esc clear)
              ←/→/Home/End move the text cursor · Del deletes ahead
   o          cycle sort: default / local path / gist filename
@@ -106,8 +107,8 @@ Actions (on the selected local file + gist)
         }
         HelpTopic::GistManager => {
             "\
-  Up/Down    move between gists
-  Left/Right scroll a long description horizontally
+  Up/Down    move between gists (also j / k)
+  Left/Right scroll a long description horizontally (also h / l)
   /          filter gists by description or id (↑↓ move · Enter apply · Esc clear)
   s          cycle sort: updated / created
   v          cycle visibility: all / public / secret / starred / forked
@@ -115,7 +116,7 @@ Actions (on the selected local file + gist)
   Enter      open the gist detail view (info, file list, comments)
   o          open the gist in your web browser
   y          copy the gist's URL to the system clipboard
-  h          open revision history (browse, diff, restore)
+  H          open revision history (browse, diff, restore)
   q / Esc    back to the list
              (edit description, compact, delete: gist detail only, owned gists)
   Rows show ☆ N (stargazers), ⑂ N (forks), 💬 N (comments) when non-zero;
@@ -124,12 +125,12 @@ Actions (on the selected local file + gist)
         HelpTopic::GistDetail => {
             "\
   Tab        switch tab: Files / Comments (one shows at a time; opens on Files)
-  Up/Down    move the file cursor (Files tab) or scroll comments (Comments tab)
-  PageUp/Dn  page comments / file cursor by 10
+  Up/Down    move the file cursor (Files tab) or scroll comments (also j / k)
+  PageUp/Dn  page comments / file cursor by 10 (also Ctrl+B / Ctrl+F)
   Enter      preview the cursor-selected file (file list focused; blocked for binary)
   1-9        preview the content of the Nth file (full-screen; R refresh, q back)
              non-text files are tagged (binary) in the list
-  h          open revision history for this gist (target = cursor file)
+  H          open revision history for this gist (target = cursor file)
   *          star / unstar this gist
   o          open the gist in your web browser
   y          copy the gist's URL to the system clipboard
@@ -145,19 +146,19 @@ Actions (on the selected local file + gist)
         }
         HelpTopic::Revisions => {
             "\
-  Up/Down    move between revisions (newest first; row 0 = current)
-  PageUp/Dn  page by 10
-  Left/Right scroll a long row horizontally
+  Up/Down    move between revisions (also j / k; newest first; row 0 = current)
+  PageUp/Dn  page by 10 (also Ctrl+B / Ctrl+F)
+  Left/Right scroll a long row horizontally (also h / l)
   Enter      diff this revision vs its parent (incremental; initial = all additions)
-  f          cycle the target file (multi-file gists; wraps)
+  F          cycle the target file (multi-file gists; wraps)
   D          diff the target file: selected revision vs current (read-only; no download/upload)
   r          restore the target file from the selected revision (y/n confirm)
   q / Esc    back"
         }
         HelpTopic::Diff => {
             "\
-  Up/Down/Left/Right  scroll the diff
-  PageUp/Dn  scroll the diff by 10 lines
+  Up/Down/Left/Right  scroll the diff (also j / k / h / l)
+  PageUp/Dn  scroll the diff by 10 lines (also Ctrl+B / Ctrl+F)
   c          toggle context: configured radius <-> full file (remembered)
   d / u      download / upload from the diff
   syntax     unchanged context lines are syntax-highlighted by file type
@@ -165,8 +166,8 @@ Actions (on the selected local file + gist)
         }
         HelpTopic::Preview => {
             "\
-  Up/Down/Left/Right  scroll (Left/Right only when wrap is off)
-  PageUp/Dn  scroll by 10 lines
+  Up/Down/Left/Right  scroll (also j / k / h / l; Left/Right only when wrap is off)
+  PageUp/Dn  scroll by 10 lines (also Ctrl+B / Ctrl+F)
   w          toggle soft line wrapping (remembered for the session)
   y          copy the gist URL · Y copy the file content to the clipboard
   syntax     known file types are syntax-highlighted
@@ -534,7 +535,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
     } else {
         (
             String::new(),
-            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · * star · h history · o browser · ? help · q back"
+            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · * star · H history · o browser · ? help · q back"
                 .to_string(),
             true,
         )
@@ -719,7 +720,7 @@ pub(super) fn render_revisions(frame: &mut Frame, state: &AppState) {
                     .as_ref()
                     .is_some_and(|id| state.gist_filenames(id).len() > 1)
                 {
-                    "f next file · "
+                    "F next file · "
                 } else {
                     ""
                 };
@@ -1063,10 +1064,10 @@ pub(super) fn detail_footer(
     };
     let hints = match focus {
         DetailFocus::Comments => format!(
-            "Tab files · ↑↓ scroll · 1-9 preview · h history · * star · o browser{manage} · ? help · q back"
+            "Tab files · ↑↓ scroll · 1-9 preview · H history · * star · o browser{manage} · ? help · q back"
         ),
         DetailFocus::Files => format!(
-            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · h history · * star · o browser{manage} · ? help · q back"
+            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · H history · * star · o browser{manage} · ? help · q back"
         ),
     };
     footer_with_status(status, &hints)
@@ -1243,12 +1244,12 @@ pub(super) fn gist_row_display(g: &RankedGistFile, view: GistView, state: &AppSt
 /// it to the terminal width.
 pub(super) fn commands_hint(focus: FocusPane) -> String {
     // Focus-relevant common keys only; the full reference lives in the `?` help overlay.
-    let mut items = vec!["Tab panes", "↑↓ move", "Enter diff", "a anchor"];
+    let mut items = vec!["Tab panes", "↑↓/jk move", "Enter diff", "a anchor"];
     match focus {
         FocusPane::Local => items.extend(["r recursive", "e edit", "n create", "P pins"]),
         FocusPane::Gist => items.extend([
             "Space preview",
-            "h history",
+            "H history",
             "d download",
             "u upload",
             "X remove file",
