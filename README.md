@@ -34,115 +34,17 @@ be installed and authenticated wherever you run `gistui`.
 
 ## Installation
 
-### Homebrew (macOS / Linux)
-
-```bash
-brew install akunzai/tap/gistui
-```
-
-This installs `gistui` (and its `gh` dependency) from the
-[`akunzai/homebrew-tap`](https://github.com/akunzai/homebrew-tap) tap. The fully-qualified
-name trusts only this formula — Homebrew 6.0.0+ requires non-official taps to be trusted
-before their code runs; see the tap README for the `brew tap` + short-name flow and the
-`Brewfile` `trusted:` option.
-
-### Windows (PowerShell)
-
-Install natively from PowerShell — this downloads the `x86_64-pc-windows-msvc` build,
-verifies its SHA-256 checksum, installs into `~\.local\bin`, and adds that directory to your
-user `PATH`:
-
-```powershell
-irm https://raw.githubusercontent.com/akunzai/gistui/main/install.ps1 | iex
-```
-
-To pin a release or change the install directory, invoke it as a script block:
-
-```powershell
-& ([scriptblock]::Create((irm https://raw.githubusercontent.com/akunzai/gistui/main/install.ps1))) -Version v0.9.0 -BinDir 'C:\tools\bin'
-```
-
-> Don't pipe `install.sh` into `bash` from PowerShell: if WSL is installed, `bash` resolves to
-> the WSL launcher and installs the **Linux** binary inside WSL. Use `install.ps1` for a native
-> Windows install, or run `install.sh` from [Git Bash](https://gitforwindows.org).
-
-### Scoop (Windows)
-
-With [Scoop](https://scoop.sh), install from the
-[`akunzai/scoop-bucket`](https://github.com/akunzai/scoop-bucket) bucket — it handles `PATH`,
-updates, and the `gh` dependency for you:
-
-```powershell
-scoop bucket add akunzai https://github.com/akunzai/scoop-bucket
-scoop install gistui
-```
-
-### Download a prebuilt binary (recommended)
-
-Each [release](https://github.com/akunzai/gistui/releases/latest) attaches prebuilt,
-checksummed binaries — no Rust toolchain required.
-
-The install script detects your platform, downloads the matching release asset, verifies
-its SHA-256 checksum, and installs it into `~/.local/bin`:
+**Recommended** — download a checksummed prebuilt binary (no Rust toolchain):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/akunzai/gistui/main/install.sh | bash
 ```
 
-It supports Linux (x86-64/ARM64), macOS (Intel/Apple Silicon), and Windows (x86-64) under
-[Git Bash](https://gitforwindows.org)/MSYS2 — on Windows, prefer the native [PowerShell
-installer](#windows-powershell) above. Pass `--version <tag>` to pin a release or
-`--bin-dir <dir>` to change the install location.
+On Windows, use the [PowerShell installer](reference/INSTALL.md#windows-powershell) instead of
+piping `install.sh` into `bash`.
 
-Prefer to install by hand? Grab the archive for your platform from the releases page:
-
-| Platform | Asset |
-|----------|-------|
-| macOS (Apple Silicon) | `gistui-<version>-aarch64-apple-darwin.tar.gz` |
-| macOS (Intel) | `gistui-<version>-x86_64-apple-darwin.tar.gz` |
-| Linux (x86-64) | `gistui-<version>-x86_64-unknown-linux-gnu.tar.gz` |
-| Linux (ARM64) | `gistui-<version>-aarch64-unknown-linux-gnu.tar.gz` |
-| Windows (x86-64) | `gistui-<version>-x86_64-pc-windows-msvc.zip` |
-
-Then extract it and put `gistui` somewhere on your `PATH`, e.g. on macOS/Linux:
-
-```bash
-tar -xzf gistui-<version>-<target>.tar.gz
-install -m 755 gistui-<version>-<target>/gistui ~/.local/bin/gistui
-```
-
-### crates.io
-
-With a Rust toolchain, install the published crate from
-[crates.io](https://crates.io/crates/gistui):
-
-```bash
-cargo install gistui
-```
-
-Or grab the same checksummed release binaries without compiling, via
-[`cargo binstall`](https://github.com/cargo-bins/cargo-binstall):
-
-```bash
-cargo binstall gistui
-```
-
-### Build from source
-
-With a Rust toolchain, install into `~/.cargo/bin` (make sure that directory is on your
-`PATH`):
-
-```bash
-cargo install --path .
-```
-
-Or build a release binary and place it yourself:
-
-```bash
-cargo build --release
-# binary is at target/release/gistui — copy or symlink it onto your PATH, e.g.
-ln -sf "$PWD/target/release/gistui" ~/.local/bin/gistui
-```
+Homebrew, Scoop, crates.io, manual download, build-from-source, and self-upgrade
+(`gistui --upgrade`) are documented in **[reference/INSTALL.md](reference/INSTALL.md)**.
 
 ## Usage
 
@@ -150,186 +52,41 @@ ln -sf "$PWD/target/release/gistui" ~/.local/bin/gistui
 gistui            # launch the TUI in the current directory (needs a TTY)
 gistui ~/dotfiles # launch against a specific working directory
 gistui --check    # print gh readiness, then exit (no TUI)
-gistui --upgrade  # upgrade a pre-built release binary in place (see below)
+gistui --upgrade  # upgrade a pre-built release binary (see reference/INSTALL.md)
 ```
 
-### Upgrading pre-built binaries
+Run from the directory whose files you want to pair with gists (or pass that path as an
+argument). The left pane lists local files; the right pane lists your gists. Ranking is
+**anchor-driven**: one pane drives the match order (`⚓` in its title) — press `a` to flip
+which pane anchors; this is independent of focus, so you can `Tab` to the ranked pane
+without resetting order. Pinned pairs show `📌`; same-filename candidates are **bold**.
 
-If you installed via `install.sh`, `install.ps1`, or a manual GitHub Release download,
-`gistui` can upgrade itself without re-running the installer:
+**Essential keys** (main list):
 
-```bash
-gistui --upgrade                         # upgrade to the latest release
-gistui --upgrade --check                 # print current vs latest; exit 0 if up to date
-gistui --upgrade --upgrade-version v0.12.0  # pin to a specific release (0.12.0 also works)
-```
+| Key | Action |
+|-----|--------|
+| `Tab` / `1`/`2` | switch or jump panes · `↑`/`↓` move · `←`/`→` scroll a long row |
+| `Enter` | diff local ↔ gist (then `d` download / `u` upload) |
+| `Space` | preview gist content (syntax-highlighted; binary blocked) |
+| `d` / `u` | download gist file / upload local file into gist |
+| `n` | create a new gist from the selected local file |
+| `p` / `P` | pin pair / open Pins view |
+| `g` | gist manager (per-gist view; `Enter` for detail, `v` visibility, `*` star) |
+| `a` | flip anchor pane · `/` filter focused pane · `?` help |
 
-The upgrader downloads the same checksummed release assets as the install scripts,
-verifies SHA-256, and replaces the **currently running** binary. On Windows the
-running `.exe` cannot be overwritten immediately — gistui stages the new binary and
-finishes the swap after you exit the process.
+Press **`?`** anytime for the **full, contextual keymap** — it opens the current screen's
+topic; `Tab` browses all topics (List, Pins, Gist manager, Gist detail, Diff, Preview, …).
+The footer also shows keys for the focused pane.
 
-Package-manager and toolchain installs are **not** self-upgraded; gistui detects them
-and prints the right command instead (`brew upgrade gistui`, `scoop update gistui`,
-`cargo install gistui --force`, or `cargo binstall gistui --force`).
+## Safety
 
-Run `gistui` from the directory whose files you want to pair with your gists, or pass that
-directory as an argument. The path defaults to the current directory; if you pass one that
-does not exist (or is not a directory) `gistui` prints an error and exits without launching.
-Inside the TUI press `?` for the full keymap (it also shows the running version and the
-project repository link); the footer shows the keys relevant to the focused pane.
+gistui is conservative about writes: downloads land only in `./<gist-filename>`; an existing
+file is never overwritten without a diff and `y/n` confirmation; destructive remote actions
+each get their own confirm. Others' gists (e.g. starred) are read-only for pin/upload/delete
+— fork with `F` in gist detail. No GitHub token is stored; gist content is never written to
+config.
 
-The left pane lists the files in your current working directory (its title shows the
-directory path with your home directory shortened to `~`); the right pane lists your
-gists. Ranking is **anchor-driven**: one pane is the *anchor* (it drives the ranking) and
-the other pane is ranked against the anchor's current selection. The anchor is shown with a
-`⚓` marker in its title and is **independent of focus** — press `a` to flip it. So you
-can keep the Local pane driving (gists ranked against the selected file), `Tab` over to the
-gist pane to pick a candidate, and the order won't reset; press `a` to drive from the gist
-side instead. Ranked rows are flagged with `📌` (an existing pinned pair) or **bold** (a
-same-filename candidate). Browse with `Tab` (switch pane) or `1`/`2` (jump to the Local /
-Gist pane), `Up`/`Down` (move), and `Left`/`Right` (scroll a long row).
-
-Press `?` in the app for the full keymap — it now opens the **current screen's** keys, and
-`Tab` browses all topics (List, Pins, Gist manager, Gist detail, Diff, Preview, …).
-
-<details>
-<summary>Full keymap (all actions & per-screen keys)</summary>
-
-### Actions
-
-- `Enter` (on a gist) — preview the unified diff between the selected local file and the
-  gist, with `+`/`-` colour and **word-level inline highlighting** of changed words (blocked
-  when either side looks binary — same rule as `Space`). The
-  diff direction follows the **focused pane**: focus the Gists pane for a *download* view
-  (`--- local` / `+++ gist`), or the Local pane for an *upload* view (`--- gist` /
-  `+++ local`). The `---`/`+++` header labels are tinted so each side stays identifiable
-  regardless of direction — **local in yellow, gist in blue**. From there `d` downloads or
-  `u` uploads, and `c` toggles between showing a few context lines around each change (the
-  `diff_context` config, default 3) and the full file. The choice is remembered (persisted
-  to config). Unchanged context lines are **syntax-highlighted** by file type; the `-`/`+`
-  lines keep their red/green and word-level highlighting so additions/removals stay obvious.
-  Scroll with the arrow keys, or `PageUp`/`PageDown` to jump 10 lines at a time.
-- `d` (on a gist) — download it into the cwd as `./<gist-filename>`. A brand-new file is
-  written directly; an existing one is shown as a diff and overwritten only after a `y`/`n`
-  confirmation.
-- `u` (on a gist) — upload the selected local file into the gist under the local file's
-  name (shows a confirmation screen with unified diff). From there:
-  - `y` / `n` / `Esc` — confirm and upload / cancel.
-  - `e` — edit / redact the upload content in `$EDITOR` before upload (does NOT mutate the local file).
-  - `p` / `s` — (JSON only) toggle pretty-print / recursive key sorting on the upload buffer.
-- `n` (on a local file) — create a new gist from it: type an optional description, then
-  choose `s` secret or `p` public. The description field is a full line editor —
-  `←`/`→`/`Home`/`End` move the cursor, `Backspace`/`Del` delete around it.
-- `X` (on a gist) — remove the selected file from its gist after a `y`/`n` confirmation.
-  Deleting a whole gist lives in the **gist manager** (`g`); a gist's only file can't be
-  removed (delete the gist instead).
-- `g` — open the **gist manager** (gist-level view): edit descriptions, delete gists, and
-  more (see below).
-- `p` (on a gist) — toggle a pin between the selected local file and gist (persisted to
-  config; pinned pairs sort to the top).
-- `P` — open the **Pins view** listing all pinned pairs with sync-status icons.
-  Each row shows one of: `✓` synced · `↑` local newer · `↓` remote newer · `?` unknown,
-  plus `(local <age> · gist <age>)` relative modification times.
-  Local paths are shown with the home directory shortened to `~`.
-  Keys inside the Pins view:
-  - `↑`/`↓` — move between pins; `←`/`→` — scroll a long local path horizontally.
-  - `/` — filter pins by local path or gist filename; while filtering, `↑`/`↓` move,
-    `Enter` applies, `Esc` clears, and `←`/`→`/`Home`/`End`/`Del` edit the query text.
-  - `Enter` — diff the selected pair (read-only; `d`/`u` from the diff to pull/push; `Esc`/`q` returns to the Pins view).
-  - `s` — smart-sync (newer side wins by modified time; skips if already identical).
-  - `u` — force push (upload local → gist).
-  - `d` — force pull (download gist → local, diff + `y`/`n` confirm).
-  - `x` — unpin the selected pair.
-- `S` (on a pinned pair) — smart-sync the selected local↔gist pair from the list screen
-  (push/pull by modified time; only available when the pair is pinned).
-- `e` (on a local file) — open it in `$VISUAL`/`$EDITOR`.
-- `y` (on a gist) — copy the gist's URL (`https://gist.github.com/<id>`) to the system
-  clipboard. Works on the list, the gist manager, the detail view, and the preview overlay.
-- `Space` (on a gist) — preview the gist's raw content in a scrollable overlay (`R` to
-  force-refresh, bypassing the session cache; `w` to toggle soft line wrapping for long lines,
-  remembered for the session). Known file types are **syntax-highlighted** by extension. Scroll
-  with the arrow keys, or `PageUp`/`PageDown` to jump 10 lines at a time. Inside the preview, `y`
-  copies the gist URL and `Y` copies the full file content to the clipboard. **Images and other
-  binary files** are not rendered in the terminal — preview and diff are blocked (the detail file
-  list tags them `(binary)`); use `o` to open in the browser or `d` to download.
-- `h` (on a gist file) — open **revision history** for that file (same screen as from the gist
-  manager/detail; `f` cycles files when the gist has more than one).
-- `r` — toggle **recursive** local file discovery; the pane title shows `[↓]` while active
-  and scans in the background so the UI stays responsive.
-- `a` — flip the **anchor** (which pane drives match ranking); independent of focus, so you
-  can focus the ranked pane to pick a file without the order resetting.
-- `/` filter the focused pane (Local pane matches path/filename; Gist pane matches description/id). While filtering: type to match, ↑/↓ move, Tab applies and switches pane, Enter applies, Esc clears, and ←/→/Home/End/Del edit the query text. · `v` cycle visibility (all/public/secret/starred/forked) · `*` star/unstar · `s` cycle the **focused
-  pane's** sort (match / name / recent — gists by name/updated, local files by
-  name/modified-time) · `t` toggle row view.
-- `T` — toggle between the built-in **dark** and **light** colour themes (saved to config).
-  Use `theme = "light"` in `config.toml` to start in light mode.
-- `Esc`/`q` — go back from an overlay; on the main list, press twice to quit (the first press
-  arms the quit, any other key cancels) so a stray key never exits the app.
-- `?` — show the help overlay.
-
-When no local file is selected (e.g. an empty directory), the right pane lists all gists
-unranked so you can still preview and download into the current directory.
-
-### Gist manager (`g`)
-
-Press `g` to open the **gist manager** — a gist-level view (one row per gist) that lands on
-the gist owning the currently selected file. From here you manage gists as a whole:
-
-- `Enter` — open the **gist detail view**: a header with basic info (description, visibility,
-  created/updated age, gist id, and `☆`/`⑂`/`💬` counts when non-zero) and a `Files │ Comments`
-  tab strip, with the active tab's content below. Opens on the **Files** tab.
-  - `Tab` switch tab between the file list and the comments (only one shows at a time).
-  - `↑`/`↓` move the file cursor (Files tab) or scroll comments (Comments tab) · `PageUp`/`PageDown`
-    page either by 10.
-  - `Enter` (Files tab) preview the cursor-selected file — this reaches **any** file,
-    including the 10th and beyond.
-  - `1`–`9` still preview the content of the Nth file directly, full-screen (`↑↓←→` scroll,
-    `R` refresh, `w` wrap, `q`/`Esc` back).
-  - `h` revision history (browse, incremental diff, diff vs current, restore the cursor file from an older revision) ·
-    `*` star / unstar (info line shows `★ starred` when active) · `o` browser · `y` copy gist URL ·
-    `q`/`Esc` back to the gist manager.
-  - **Owned gists only:** `e` edit description · `c` compact revisions · `X` delete the entire gist (`y`/`n` confirm).
-  - **Others' gists:** `F` fork into your account (mutate keys are hidden — pressing them is a silent no-op).
-- `o` — open the gist on gist.github.com in your browser.
-- `y` — copy the gist's URL to the system clipboard.
-- `h` — open **revision history** for the selected gist: browse revisions (newest first),
-  show the incremental diff for a revision (`Enter`, parent → selected; initial revision =
-  all additions), diff against the current version (`D`), and restore the target file from an
-  older revision (`r`, `y`/`n` confirm). From gist
-  detail, the target file is the one under the cursor; from the gist manager, it starts on
-  the gist's first file. Press `f` in revision history to cycle the target file when a gist
-  has more than one. Restore uploads old content as a **new** revision (history is kept).
-- `s` cycle sort (updated / created) · `v` cycle visibility (all/public/secret/starred/forked) · `*` star/unstar · `/` filter
-  by description or id (↑/↓ move · Enter apply · Esc clear · ←/→/Home/End/Del edit query) · `Left`/`Right` scroll a long description.
-  The title shows your starred-gist and owned-fork totals (`★ N` / `⑂ N`); rows show `☆ N` (stargazers), `⑂ N` (forks), and `💬 N` (comments) when non-zero.
-- `q`/`Esc` — back to the list.
-
-</details>
-
-## Safety rules
-
-- Gists you do not own (e.g. from the starred filter) are **read-only**: you can preview, diff, download, and open in the browser, but pin, upload, and remove-file are refused with a status message. Edit description, compact, delete, and revision restore are only offered in **gist detail** for gists you own; on others' gists those keys are hidden (silent no-op). Open gist detail and press `F` to fork one into your account.
-- Downloads only ever write to `./<gist-filename>` in the current working directory.
-- An existing file (local download target or remote gist file) is never overwritten without
-  first showing its diff and confirmation. Confirmations appear as a centered prompt over
-  the full-screen diff, so the change you are approving stays visible while you decide.
-- Uploads allow editing/redacting a temporary buffer in `$EDITOR` before sending, ensuring sensitive local content or credentials are not accidentally pushed to GitHub.
-- Identical files are detected: when the two sides match, upload/download are disabled.
-- Pulling a gist over an existing local file still goes through the diff + `y`/`n`
-  confirmation — one-key sync never overwrites a local file silently.
-- Destructive remote actions each require a `y`/`n` confirmation: removing a file from a
-  gist (`X` on the list), deleting a whole gist (`X` in the gist manager), and compacting a
-  gist's revisions (`c` in the gist manager or detail view — a history-rewriting force-push;
-  the confirmation prompt displays the gist's info so the target stays visible while you decide).
-- Restoring a file from an older revision (`r` in revision history) is also confirmed with a
-  full-screen diff, but it **adds** a new revision rather than rewriting history (the opposite
-  of `c` compact).
-- No GitHub token is stored by the app, and gist content is never written to the config
-  file — only path↔gist pin mappings are persisted.
-- Clipboard copy (`y` URL, `Y` content) hands the text to the system clipboard via the OS
-  tool, where other applications can read it. `Y` copies the full previewed file content, so
-  treat it like any other paste of potentially sensitive data.
+Full rules: **[reference/SAFETY.md](reference/SAFETY.md)**.
 
 ## Configuration
 
@@ -341,7 +98,7 @@ automatically the first time you pin a file. All fields are optional.
 |-------|------|-------------|
 | `scan_depth` | `integer` | Maximum directory depth for recursive discovery (`r` key). Default `2`. |
 | `skip_dirs` | `[string]` | Directory names skipped during recursive discovery (`r` key). Defaults to common build/dependency dirs (`node_modules`, `target`, …). Hidden dirs (`.`-prefix) are always skipped. |
-| `[[pinned]]` | table array | Local-file ↔ gist mappings managed by the `p`/`P` keys. Can also be edited by hand. |
+| `[[pinned]]` | `table array` | Local-file ↔ gist mappings managed by the `p`/`P` keys. Can also be edited by hand. |
 
 Copy [`config.example.toml`](config.example.toml) from the repo for an annotated
 starting point:
@@ -355,23 +112,4 @@ Syntax highlighting in the preview and diff views honours the conventional
 [`NO_COLOR`](https://no-color.org) environment variable: set `NO_COLOR=1` to render content
 plain (the semantic diff `-`/`+` colours and other UI colours are unaffected).
 
-## Building a release
-
-```bash
-cargo build --release
-```
-
-The optimized binary is `target/release/gistui`. It bundles no assets, but still requires
-the `gh` CLI on `PATH` at runtime (`gh` is not vendored). Optionally shrink it with
-`strip target/release/gistui`.
-
-## Development
-
-All four checks must pass before committing (clippy warnings are treated as errors):
-
-```bash
-cargo fmt --check
-cargo test
-cargo check
-cargo clippy --all-targets -- -D warnings
-```
+Contributing? See **[CONTRIBUTING.md](CONTRIBUTING.md)**.
