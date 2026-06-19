@@ -27,6 +27,7 @@ pub(super) fn render(frame: &mut Frame, state: &AppState) {
         Screen::Pins => render_pins(frame, state),
         Screen::Gists => render_gists(frame, state),
         Screen::GistDetail => render_gist_detail(frame, state),
+        Screen::Revisions => render_revisions(frame, state),
     }
     if let Some(ref msg) = state.bg_task_msg {
         render_loading_overlay(frame, msg, state.spinner_frame, &state.theme);
@@ -72,6 +73,7 @@ Actions (on the selected local file + gist)
              pane — Gist pane = download view, Local pane = upload view
              (--- old / +++ new; local label = yellow, gist label = blue)
   Space      preview the gist file's content (R in preview to force-refresh)
+  h          open revision history for the selected gist file
   d          download the gist into the cwd
   u          upload the local file into the gist
   n          create a new gist from the local file (type a description, then s/p)
@@ -110,6 +112,7 @@ Actions (on the selected local file + gist)
   Enter      open the gist detail view (info, file list, comments)
   o          open the gist in your web browser
   y          copy the gist's URL to the system clipboard
+  h          open revision history (browse, diff, restore)
   c          compact revisions: squash history to one commit (force-push, y/n confirm)
   X          delete the entire gist and all its files (y/n confirm)
   q / Esc    back to the list"
@@ -121,11 +124,23 @@ Actions (on the selected local file + gist)
   PageUp/Dn  page comments / file cursor by 10
   Enter      preview the cursor-selected file (file list focused)
   1-9        preview the content of the Nth file (full-screen; R refresh, q back)
+  h          open revision history for this gist (target = cursor file)
   c          compact revisions (y/n confirm; gist info shown as context)
   o          open the gist in your web browser
   y          copy the gist's URL to the system clipboard
   X          delete the entire gist and all its files (y/n confirm)
   q / Esc    back to the gist manager"
+        }
+        HelpTopic::Revisions => {
+            "\
+  Up/Down    move between revisions (newest first; row 0 = current)
+  PageUp/Dn  page by 10
+  Left/Right scroll a long row horizontally
+  Enter      diff this revision vs its parent (incremental; initial = all additions)
+  f          cycle the target file (multi-file gists; wraps)
+  D          diff the target file: selected revision vs current (read-only; no download/upload)
+  r          restore the target file from the selected revision (y/n confirm)
+  q / Esc    back"
         }
         HelpTopic::Diff => {
             "\
@@ -464,7 +479,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
     } else {
         (
             String::new(),
-            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · e desc · o browser · c compact · X delete · ? help · q back"
+            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · e desc · h history · o browser · c compact · X delete · ? help · q back"
                 .to_string(),
             true,
         )
@@ -575,6 +590,131 @@ pub(super) fn gist_info_line(group: &GistGroup, now: u64) -> String {
         "{vis} · created {created} · updated {updated} · {}",
         group.id
     )
+}
+
+pub(super) fn revision_row_label(
+    rev: &crate::domain::GistRevision,
+    index: usize,
+    now: u64,
+) -> String {
+    let age = crate::domain::parse_rfc3339_to_unix(&rev.committed_at)
+        .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
+        .unwrap_or_else(|| "?".into());
+    let delta = format!(
+        "+{}/-{}",
+        rev.change_status.additions, rev.change_status.deletions
+    );
+    let sha = crate::domain::short_sha(&rev.version);
+    let current = if index == 0 { " (current)" } else { "" };
+    format!(
+        "#{}  {} ago  {}  {}  {}{}",
+        index + 1,
+        age,
+        delta,
+        rev.user,
+        sha,
+        current
+    )
+}
+
+pub(super) fn render_revisions(frame: &mut Frame, state: &AppState) {
+    let area = frame.area();
+    let (ftitle, footer, colored) = if let Some(message) = &state.status {
+        (String::new(), message.clone(), false)
+    } else if state.revision_entries.is_none() {
+        (String::new(), "Loading revisions…".to_string(), false)
+    } else if let Some(err) = &state.revision_fetch_error {
+        (String::new(), err.clone(), false)
+    } else {
+        (
+            String::new(),
+            {
+                let file = state.revision_target_file_label();
+                let file_key = if state
+                    .revision_gist_id
+                    .as_ref()
+                    .is_some_and(|id| state.gist_filenames(id).len() > 1)
+                {
+                    "f next file · "
+                } else {
+                    ""
+                };
+                format!(
+                    "file={file} · {file_key}Enter incremental diff · D vs current · r restore · ? help · q back"
+                )
+            },
+            true,
+        )
+    };
+    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 1)])
+        .split(area);
+
+    let gist_id = state.revision_gist_id.as_deref().unwrap_or("");
+    let label = state
+        .group_by_id(gist_id)
+        .map(|g| {
+            if g.description.trim().is_empty() {
+                g.id.clone()
+            } else {
+                g.description.clone()
+            }
+        })
+        .unwrap_or_else(|| gist_id.to_string());
+    let count = state
+        .revision_entries
+        .as_ref()
+        .map(|e| e.len())
+        .unwrap_or(0);
+    let now = unix_now();
+
+    let items: Vec<ListItem> =
+        match &state.revision_entries {
+            None => vec![ListItem::new("  ⏳ Loading revisions…")
+                .style(Style::default().fg(state.theme.dim))],
+            Some(entries) if entries.is_empty() => {
+                vec![ListItem::new("  📭 No revisions found")
+                    .style(Style::default().fg(state.theme.dim))]
+            }
+            Some(entries) => entries
+                .iter()
+                .enumerate()
+                .map(|(i, rev)| {
+                    ListItem::new(hscroll_str(
+                        &revision_row_label(rev, i, now),
+                        state.revision_hscroll,
+                    ))
+                })
+                .collect(),
+        };
+
+    let selected = (count > 0).then_some(state.revision_index);
+    let title = format!("Revisions: {label} {}", count_label(count, count));
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(state.theme.accent))
+                .style(state.theme.base_style())
+                .padding(Padding::horizontal(1)),
+        )
+        .style(state.theme.base_style())
+        .highlight_style(
+            Style::default()
+                .bg(state.theme.accent)
+                .fg(state.theme.fg_on_accent)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
+
+    let mut list_state = ListState::default();
+    list_state.select(selected);
+    frame.render_stateful_widget(list, chunks[0], &mut list_state);
+    render_footer(frame, chunks[1], &ftitle, &footer, colored, &state.theme);
 }
 
 /// Current Unix time in seconds (saturating to 0 before the epoch); used for relative-age labels.
@@ -810,10 +950,10 @@ pub(super) fn footer_with_status(status: Option<&str>, hints: &str) -> (String, 
 pub(super) fn detail_footer(status: Option<&str>, focus: DetailFocus) -> (String, bool) {
     let hints = match focus {
         DetailFocus::Comments => {
-            "Tab files · ↑↓ scroll · 1-9 preview · c compact · o browser · X delete · ? help · q back"
+            "Tab files · ↑↓ scroll · 1-9 preview · h history · c compact · o browser · X delete · ? help · q back"
         }
         DetailFocus::Files => {
-            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · c compact · o browser · X delete · ? help · q back"
+            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · h history · c compact · o browser · X delete · ? help · q back"
         }
     };
     footer_with_status(status, hints)
@@ -960,6 +1100,7 @@ pub(super) fn commands_hint(focus: FocusPane) -> String {
         FocusPane::Local => items.extend(["r recursive", "e edit", "n create", "P pins"]),
         FocusPane::Gist => items.extend([
             "Space preview",
+            "h history",
             "d download",
             "u upload",
             "X remove file",
@@ -1697,6 +1838,15 @@ pub(super) fn confirm_prompt(state: &AppState) -> String {
                 "Compact {count} revisions of \"{label}\" into one? This force-pushes and cannot be undone. (y/n)"
             )
         }
+        Some(PendingAction::RestoreRevision {
+            filename,
+            version_label,
+            ..
+        }) => {
+            format!(
+                "Restore {filename} to revision {version_label}? This uploads old content as a new revision. (y/n)"
+            )
+        }
         _ => format!(
             "Overwrite {}? (y/n)",
             crate::config::display_path(&state.download_target)
@@ -1718,6 +1868,7 @@ pub(super) fn confirm_modal_style(state: &AppState) -> (&'static str, Color) {
         Some(PendingAction::Delete { .. }) => ("Delete", theme.del_color),
         Some(PendingAction::RemoveFile { .. }) => ("Remove file", theme.del_color),
         Some(PendingAction::CompactGist { .. }) => ("Compact revisions", theme.del_color),
+        Some(PendingAction::RestoreRevision { .. }) => ("Restore revision", theme.notice_color),
         _ => ("Overwrite", theme.del_color),
     }
 }
@@ -1780,19 +1931,30 @@ pub(super) fn render_diff_pane(frame: &mut Frame, area: Rect, state: &AppState) 
 /// #72 audit: this footer intentionally does not surface `state.status`. Diff actions (`d`/`u`)
 /// transition to `Screen::Confirm` or to the IO that lands back on `List`; their results surface
 /// on those destination screens (which read `state.status`), so no status is set while on Diff.
-pub(super) fn render_diff(frame: &mut Frame, state: &AppState) {
+/// Footer hints for `Screen::Diff` (pure for tests).
+pub(super) fn diff_footer(state: &AppState) -> String {
     let context = if state.diff_show_full {
         "c context [full]".to_string()
     } else {
         format!("c context [{}]", state.diff_context)
     };
-    let footer = if state.diff_identical {
-        format!(
-            "Files are identical — nothing to sync  ·  ↑↓←→ PgUp/Dn scroll  ·  {context}  ·  Esc/q back"
-        )
+    let scroll = "↑↓←→ PgUp/Dn scroll";
+    let back = "Esc/q back";
+    if !state.diff_allows_sync() {
+        if state.diff_identical {
+            format!("Files are identical  ·  {scroll}  ·  {context}  ·  {back}")
+        } else {
+            format!("{scroll}  ·  {context}  ·  {back}")
+        }
+    } else if state.diff_identical {
+        format!("Files are identical — nothing to sync  ·  {scroll}  ·  {context}  ·  {back}")
     } else {
-        format!("↑↓←→ PgUp/Dn scroll  ·  d download  ·  u upload  ·  {context}  ·  Esc/q back")
-    };
+        format!("{scroll}  ·  d download  ·  u upload  ·  {context}  ·  {back}")
+    }
+}
+
+pub(super) fn render_diff(frame: &mut Frame, state: &AppState) {
+    let footer = diff_footer(state);
 
     let area = frame.area();
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);

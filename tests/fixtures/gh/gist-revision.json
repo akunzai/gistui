@@ -1,0 +1,18 @@
+{
+  "url": "https://api.github.com/gists/abc123/xyz999aaa888",
+  "id": "abc123",
+  "files": {
+    "settings.json": {
+      "filename": "settings.json",
+      "type": "application/json",
+      "language": "JSON",
+      "raw_url": "https://gist.githubusercontent.com/abc123/raw/xyz999/settings.json",
+      "size": 24,
+      "truncated": false,
+      "content": "{\n  \"old\": true\n}\n"
+    }
+  },
+  "public": false,
+  "created_at": "2026-06-01T00:00:00Z",
+  "updated_at": "2026-06-01T08:00:00Z"
+}

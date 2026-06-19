@@ -86,6 +86,31 @@ pub struct GistGroup {
     pub file_count: usize,
 }
 
+/// One entry from `gh api /gists/{id}/commits` — a gist revision (newest-first in the API).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GistRevision {
+    pub version: String,
+    pub committed_at: String,
+    pub user: String,
+    pub change_status: GistRevisionChangeStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GistRevisionChangeStatus {
+    pub total: u32,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+/// Short git-style prefix of a gist revision `version` SHA for display.
+pub fn short_sha(version: &str) -> &str {
+    if version.len() <= 7 {
+        version
+    } else {
+        &version[..7]
+    }
+}
+
 /// A single gist comment, mirroring one object from `gh api /gists/{id}/comments`.
 /// The body is kept as raw plain text; the TUI wraps it to width (no markdown rendering).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

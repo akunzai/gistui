@@ -33,6 +33,7 @@ impl AppState {
             Screen::Pins => self.handle_key_pins(code),
             Screen::Gists => self.handle_key_gists(code),
             Screen::GistDetail => self.handle_key_detail(code),
+            Screen::Revisions => self.handle_key_revisions(code),
         }
     }
 
@@ -60,7 +61,7 @@ impl AppState {
                     self.help_index_open = false;
                     self.help_scroll = 0;
                 }
-                KeyCode::Char(c @ '1'..='8') => {
+                KeyCode::Char(c @ '1'..='9') if (c as u8 - b'1') < topics.len() as u8 => {
                     self.help_topic = topics[(c as u8 - b'1') as usize];
                     self.help_index_open = false;
                     self.help_scroll = 0;
@@ -83,7 +84,7 @@ impl AppState {
                         .unwrap_or(0);
                     self.help_index_open = true;
                 }
-                KeyCode::Char(c @ '1'..='8') => {
+                KeyCode::Char(c @ '1'..='9') if (c as u8 - b'1') < topics.len() as u8 => {
                     self.help_topic = topics[(c as u8 - b'1') as usize];
                     self.help_scroll = 0;
                 }
@@ -254,6 +255,11 @@ impl AppState {
             KeyCode::Char('y') if self.gists_index < groups.len() => {
                 return KeyOutcome::CopyGistUrl
             }
+            KeyCode::Char('h') if self.gists_index < groups.len() => {
+                if self.open_revisions(Screen::Gists) {
+                    return KeyOutcome::FetchRevisions;
+                }
+            }
             KeyCode::Char('c') if self.gists_index < groups.len() => {
                 // The revision count needs a network call, so analysis happens in run_loop;
                 // the confirm prompt is raised once the count is back.
@@ -299,6 +305,11 @@ impl AppState {
             KeyCode::PageUp => self.detail_nav(-10),
             KeyCode::Char('o') => return KeyOutcome::OpenBrowser,
             KeyCode::Char('y') => return KeyOutcome::CopyGistUrl,
+            KeyCode::Char('h') => {
+                if self.open_revisions(Screen::GistDetail) {
+                    return KeyOutcome::FetchRevisions;
+                }
+            }
             KeyCode::Char('c') => {
                 self.compact_return_screen = Screen::GistDetail;
                 return KeyOutcome::CompactGist;
@@ -355,6 +366,55 @@ impl AppState {
                         return KeyOutcome::PreviewContent;
                     }
                 }
+            }
+            KeyCode::Char('?') => self.open_help(),
+            _ => {}
+        }
+        KeyOutcome::None
+    }
+
+    fn handle_key_revisions(&mut self, code: KeyCode) -> KeyOutcome {
+        self.status = None;
+        let entries_len = self.revision_entries.as_ref().map(|e| e.len()).unwrap_or(0);
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.screen = self.revision_return_screen;
+            }
+            KeyCode::Down if entries_len > 0 => {
+                self.revision_index = (self.revision_index + 1).min(entries_len - 1);
+            }
+            KeyCode::Up if entries_len > 0 => {
+                self.revision_index = self.revision_index.saturating_sub(1);
+            }
+            KeyCode::PageDown if entries_len > 0 => {
+                self.revision_index =
+                    (self.revision_index + PAGE_SCROLL as usize).min(entries_len - 1);
+            }
+            KeyCode::PageUp if entries_len > 0 => {
+                self.revision_index = self.revision_index.saturating_sub(PAGE_SCROLL as usize);
+            }
+            KeyCode::Left => {
+                self.revision_hscroll = self.revision_hscroll.saturating_sub(1);
+            }
+            KeyCode::Right => self.revision_hscroll = self.revision_hscroll.saturating_add(1),
+            KeyCode::Enter if entries_len > 0 => return KeyOutcome::RevisionDiffIncremental,
+            KeyCode::Char('D') if entries_len > 0 && self.revision_index > 0 => {
+                return KeyOutcome::RevisionDiff;
+            }
+            KeyCode::Char('D') if entries_len > 0 => {
+                self.set_status("already at current revision");
+            }
+            KeyCode::Char('r') if entries_len > 1 && self.revision_index > 0 => {
+                return KeyOutcome::RestoreRevisionPreview;
+            }
+            KeyCode::Char('r') if entries_len <= 1 => {
+                self.set_status("only one revision — nothing to restore");
+            }
+            KeyCode::Char('r') if self.revision_index == 0 => {
+                self.set_status("already at current revision");
+            }
+            KeyCode::Char('f') if !self.cycle_revision_target_file() => {
+                self.set_status("only one file in this gist");
             }
             KeyCode::Char('?') => self.open_help(),
             _ => {}
@@ -584,6 +644,12 @@ impl AppState {
             }
             KeyCode::Char('S') => return KeyOutcome::SyncSelectedPair,
             KeyCode::Char('g') => self.open_gist_manager(),
+            KeyCode::Char('h') if self.gist_index < self.ranked_gists().len() => {
+                if self.open_revisions(Screen::List) {
+                    return KeyOutcome::FetchRevisions;
+                }
+                self.status = Some("select a gist file to view revision history".into());
+            }
             KeyCode::Char('e') => {
                 if self.selected_local().is_some() {
                     return KeyOutcome::EditLocal;
@@ -803,7 +869,8 @@ impl AppState {
             KeyCode::Right => self.scroll_diff_right(),
             KeyCode::Left => self.scroll_diff_left(),
             // Identical files have nothing to sync, so download/upload are not offered.
-            KeyCode::Char('d') if !self.diff_identical => {
+            // Revision-history diffs are read-only (no local file pairing).
+            KeyCode::Char('d') if self.diff_allows_sync() && !self.diff_identical => {
                 if self.download_target.exists() {
                     self.pending_action = Some(PendingAction::Download);
                     self.screen = Screen::Confirm;
@@ -811,7 +878,9 @@ impl AppState {
                     return KeyOutcome::Download;
                 }
             }
-            KeyCode::Char('u') if !self.diff_identical => return self.upload_intent(),
+            KeyCode::Char('u') if self.diff_allows_sync() && !self.diff_identical => {
+                return self.upload_intent();
+            }
             // Toggle between the configured context radius and the full file; the line
             // count changes, so reset the vertical scroll. The choice is persisted.
             KeyCode::Char('c') => {
@@ -925,6 +994,14 @@ impl AppState {
                     // Return to whichever screen launched the compaction (Gists or GistDetail).
                     self.pending_action = None;
                     self.screen = self.compact_return_screen;
+                }
+                _ => {}
+            },
+            Some(PendingAction::RestoreRevision { .. }) => match code {
+                KeyCode::Char('y') => return KeyOutcome::ExecuteRestoreRevision,
+                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
+                    self.pending_action = None;
+                    self.screen = Screen::Revisions;
                 }
                 _ => {}
             },

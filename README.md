@@ -250,6 +250,8 @@ Press `?` in the app for the full keymap — it now opens the **current screen's
   remembered for the session). Known file types are **syntax-highlighted** by extension. Scroll
   with the arrow keys, or `PageUp`/`PageDown` to jump 10 lines at a time. Inside the preview, `y`
   copies the gist URL and `Y` copies the full file content to the clipboard.
+- `h` (on a gist file) — open **revision history** for that file (same screen as from the gist
+  manager/detail; `f` cycles files when the gist has more than one).
 - `r` — toggle **recursive** local file discovery; the pane title shows `[↓]` while active
   and scans in the background so the UI stays responsive.
 - `a` — flip the **anchor** (which pane drives match ranking); independent of focus, so you
@@ -283,11 +285,19 @@ the gist owning the currently selected file. From here you manage gists as a who
     including the 10th and beyond.
   - `1`–`9` still preview the content of the Nth file directly, full-screen (`↑↓←→` scroll,
     `R` refresh, `w` wrap, `q`/`Esc` back).
-  - `c` compact · `o` browser · `y` copy gist URL · `X` delete the entire gist (`y`/`n` confirm) ·
+  - `h` revision history (browse, incremental diff, diff vs current, restore the cursor file from an older revision) ·
+    `c` compact · `o` browser · `y` copy gist URL · `X` delete the entire gist (`y`/`n` confirm) ·
     `q`/`Esc` back to the gist manager.
 - `X` — delete the entire gist and all its files, after a `y`/`n` confirmation.
 - `o` — open the gist on gist.github.com in your browser.
 - `y` — copy the gist's URL to the system clipboard.
+- `h` — open **revision history** for the selected gist: browse revisions (newest first),
+  show the incremental diff for a revision (`Enter`, parent → selected; initial revision =
+  all additions), diff against the current version (`D`), and restore the target file from an
+  older revision (`r`, `y`/`n` confirm). From gist
+  detail, the target file is the one under the cursor; from the gist manager, it starts on
+  the gist's first file. Press `f` in revision history to cycle the target file when a gist
+  has more than one. Restore uploads old content as a **new** revision (history is kept).
 - `c` — compact revisions: after showing the revision count and a `y`/`n` confirmation, the
   gist is cloned to a temp dir over HTTPS (authenticating through your `gh` token, never SSH
   keys), its history squashed to a single commit, and force-pushed — collapsing all older
@@ -314,6 +324,9 @@ the gist owning the currently selected file. From here you manage gists as a who
   gist (`X` on the list), deleting a whole gist (`X` in the gist manager), and compacting a
   gist's revisions (`c` in the gist manager or detail view — a history-rewriting force-push;
   the confirmation prompt displays the gist's info so the target stays visible while you decide).
+- Restoring a file from an older revision (`r` in revision history) is also confirmed with a
+  full-screen diff, but it **adds** a new revision rather than rewriting history (the opposite
+  of `c` compact).
 - No GitHub token is stored by the app, and gist content is never written to the config
   file — only path↔gist pin mappings are persisted.
 - Clipboard copy (`y` URL, `Y` content) hands the text to the system clipboard via the OS

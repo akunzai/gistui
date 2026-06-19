@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Gist revision history: press `h` on a gist file in the main list, gist manager, or gist detail view to browse revisions (newest first), show the incremental diff for a revision (`Enter`, parent → selected), diff against the current version (`D`), and restore a single file from an older revision (`r`, `y`/`n` confirm — creates a new revision, unlike `c` compact which deletes history). In revision history, `f` cycles the target file on multi-file gists. Revision diffs are read-only (no `d`/`u` download/upload).
+
 ## [0.11.0] — 2026-06-17
 
 - Built-in light/dark colour theme: set `theme = "light"` in `config.toml` for terminals with a light background, or press `T` at any time to toggle and save instantly.
