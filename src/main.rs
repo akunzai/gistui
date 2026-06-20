@@ -27,6 +27,11 @@ struct Cli {
         help = "Working directory to pair files against (defaults to the current directory)"
     )]
     path: Option<PathBuf>,
+    #[arg(
+        long = "no-mouse",
+        help = "Disable mouse capture (scroll/click) for this session"
+    )]
+    no_mouse: bool,
 }
 
 fn main() -> Result<()> {
@@ -51,5 +56,5 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    gistui::tui::run()
+    gistui::tui::run(cli.no_mouse)
 }

@@ -4,10 +4,11 @@ use crate::domain::{
 use crate::ranking::{rank_gist_files, rank_local_files, MatchReason, RankedGistFile, RankedLocal};
 use anyhow::Result;
 use crossterm::{
+    event::{DisableMouseCapture, EnableMouseCapture},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{backend::CrosstermBackend, widgets::Clear, Terminal};
+use ratatui::{backend::CrosstermBackend, layout::Rect, widgets::Clear, Terminal};
 use std::io;
 use std::path::PathBuf;
 
@@ -360,6 +361,72 @@ pub enum KeyOutcome {
     ForkGist,
 }
 
+/// A clickable list pane recorded by `render` for the current frame.
+/// `offset` is ratatui's first-visible-item index, captured after the list renders.
+#[derive(Debug, Clone, Copy)]
+pub struct PaneHit {
+    pub rect: Rect,
+    pub offset: usize,
+}
+
+impl PaneHit {
+    /// Map an absolute terminal `row` to a list index, or `None` for border rows,
+    /// rows past the last item, or an empty list. `visible_len` is the count of
+    /// currently visible rows (e.g. `visible_locals().len()` / `ranked_gists().len()`).
+    pub fn index_at(&self, row: u16, visible_len: usize) -> Option<usize> {
+        let top = self.rect.y + 1; // skip the top border
+        let bottom = self.rect.bottom().saturating_sub(1); // exclusive of bottom border
+        if row < top || row >= bottom {
+            return None;
+        }
+        let idx = self.offset + (row - top) as usize;
+        (idx < visible_len).then_some(idx)
+    }
+}
+
+/// Per-frame mouse hit regions, owned by `run_loop`, filled by `render`.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct MouseLayout {
+    pub local: Option<PaneHit>,
+    pub gist: Option<PaneHit>,
+    /// Single-list screens (Gists / Pins / Revisions).
+    pub list: Option<PaneHit>,
+    /// GistDetail file list (Files tab).
+    pub detail_files: Option<PaneHit>,
+    /// GistDetail "Files" / "Comments" tab headers (clickable to switch focus).
+    pub detail_tab_files: Option<Rect>,
+    pub detail_tab_comments: Option<Rect>,
+    pub close_button: Option<Rect>,
+}
+
+/// A classified mouse intent handed to the pure `handle_mouse`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseInput {
+    ScrollUp,
+    ScrollDown,
+    Click { col: u16, row: u16 },
+    DoubleClick { col: u16, row: u16 },
+}
+
+/// Max gap between two left-clicks on the same cell to count as a double-click.
+pub const DOUBLE_CLICK_MS: u128 = 400;
+
+/// Classify a left-button press as a single or double click. `prev` is the (col,row) of
+/// the previous left press; `elapsed_ms` is the time since it. Pure: the caller (run_loop)
+/// owns the clock and supplies the elapsed milliseconds.
+pub fn classify_click(
+    prev: Option<(u16, u16)>,
+    elapsed_ms: u128,
+    col: u16,
+    row: u16,
+) -> MouseInput {
+    if prev == Some((col, row)) && elapsed_ms <= DOUBLE_CLICK_MS {
+        MouseInput::DoubleClick { col, row }
+    } else {
+        MouseInput::Click { col, row }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub locals: Vec<LocalCandidate>,
@@ -413,6 +480,9 @@ pub struct AppState {
     /// Syntax-highlight file content in the preview and diff-context lines (issue #69).
     /// Defaults on; `load_startup_state` turns it off when `NO_COLOR` is set in the environment.
     pub syntax_highlight: bool,
+    /// Whether mouse capture is active this session (config `mouse` AND-NOT `--no-mouse`).
+    /// Gates the `Event::Mouse` branch and the close-button rendering.
+    pub mouse_enabled: bool,
     pub preview_gist_key: Option<(String, String)>,
     /// Screen to return to when leaving the full-screen preview (default: List; set to
     /// GistDetail when a detail-view file preview is launched).
@@ -1317,6 +1387,7 @@ pub fn initial_state() -> AppState {
         preview_title: String::new(),
         preview_wrap: false,
         syntax_highlight: true,
+        mouse_enabled: true,
         preview_gist_key: None,
         preview_return: Screen::List,
         preview_request: None,
@@ -1381,7 +1452,7 @@ pub fn initial_state() -> AppState {
     }
 }
 
-pub fn load_startup_state() -> Result<AppState> {
+pub fn load_startup_state(no_mouse: bool) -> Result<AppState> {
     let mut state = initial_state();
     let config_path = crate::config::config_path()?;
     let config = crate::config::load_config(&config_path)?;
@@ -1396,6 +1467,7 @@ pub fn load_startup_state() -> Result<AppState> {
     state.theme = Theme::for_choice(config.theme);
     // Honour NO_COLOR for the syntax-highlight feature only (existing semantic colours stay).
     state.syntax_highlight = std::env::var_os("NO_COLOR").is_none();
+    state.mouse_enabled = crate::config::resolve_mouse_enabled(config.mouse, no_mouse);
     state.locals = crate::local::discover_local_candidates(
         &cwd,
         &state.pinned,
@@ -1425,17 +1497,22 @@ pub fn load_startup_state() -> Result<AppState> {
     Ok(state)
 }
 
-pub fn run() -> Result<()> {
+pub fn run(no_mouse: bool) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_loop(&mut terminal);
+    let result = run_loop(&mut terminal, no_mouse);
 
     let _ = disable_raw_mode();
     let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);
+    // Always emitted (harmless if capture was never enabled), so it runs even on error.
+    let _ = execute!(
+        terminal.backend_mut(),
+        crossterm::event::DisableMouseCapture
+    );
 
     result
 }
