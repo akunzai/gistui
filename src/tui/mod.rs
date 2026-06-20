@@ -483,6 +483,14 @@ pub struct AppState {
     /// Whether mouse capture is active this session (config `mouse` AND-NOT `--no-mouse`).
     /// Gates the `Event::Mouse` branch and the close-button rendering.
     pub mouse_enabled: bool,
+    /// Whether the startup update check runs this session (config `check_updates` AND-NOT
+    /// `--no-update-check`).
+    pub update_check_enabled: bool,
+    /// Newer release version found by the background check, if any (footer hint on the List).
+    pub update_available: Option<String>,
+    /// How this binary was installed — resolved once at startup so the update hint can show
+    /// the right upgrade command without per-frame IO.
+    pub install_method: crate::upgrade::InstallMethod,
     pub preview_gist_key: Option<(String, String)>,
     /// Screen to return to when leaving the full-screen preview (default: List; set to
     /// GistDetail when a detail-view file preview is launched).
@@ -1388,6 +1396,9 @@ pub fn initial_state() -> AppState {
         preview_wrap: false,
         syntax_highlight: true,
         mouse_enabled: true,
+        update_check_enabled: true,
+        update_available: None,
+        install_method: crate::upgrade::InstallMethod::Standalone,
         preview_gist_key: None,
         preview_return: Screen::List,
         preview_request: None,
@@ -1452,7 +1463,7 @@ pub fn initial_state() -> AppState {
     }
 }
 
-pub fn load_startup_state(no_mouse: bool) -> Result<AppState> {
+pub fn load_startup_state(no_mouse: bool, no_update_check: bool) -> Result<AppState> {
     let mut state = initial_state();
     let config_path = crate::config::config_path()?;
     let config = crate::config::load_config(&config_path)?;
@@ -1468,6 +1479,20 @@ pub fn load_startup_state(no_mouse: bool) -> Result<AppState> {
     // Honour NO_COLOR for the syntax-highlight feature only (existing semantic colours stay).
     state.syntax_highlight = std::env::var_os("NO_COLOR").is_none();
     state.mouse_enabled = crate::config::resolve_mouse_enabled(config.mouse, no_mouse);
+    state.update_check_enabled =
+        crate::config::resolve_update_check(config.check_updates, no_update_check);
+    // Surface a previously-seen newer release immediately (even when the daily check is
+    // throttled), so the hint persists across launches without re-hitting the network.
+    if state.update_check_enabled {
+        if let Ok(exe) = std::env::current_exe() {
+            state.install_method = crate::upgrade::detect_install_method(&exe);
+        }
+        if let Ok(path) = crate::update_check::state_path() {
+            let seen = crate::update_check::load_state(&path).latest_seen;
+            state.update_available =
+                crate::update_check::is_newer(&seen, env!("CARGO_PKG_VERSION"));
+        }
+    }
     state.locals = crate::local::discover_local_candidates(
         &cwd,
         &state.pinned,
@@ -1497,14 +1522,14 @@ pub fn load_startup_state(no_mouse: bool) -> Result<AppState> {
     Ok(state)
 }
 
-pub fn run(no_mouse: bool) -> Result<()> {
+pub fn run(no_mouse: bool, no_update_check: bool) -> Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_loop(&mut terminal, no_mouse);
+    let result = run_loop(&mut terminal, no_mouse, no_update_check);
 
     let _ = disable_raw_mode();
     let _ = execute!(terminal.backend_mut(), LeaveAlternateScreen);

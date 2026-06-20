@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Mouse support: wheel scroll, click to focus/select, double-click to open, and a clickable close button on pop-up screens (on by default; disable with `mouse = false` or `--no-mouse`).
+- Startup update check: on launch gistui checks GitHub (once a day, silently) for a newer release and shows a footer hint with the right upgrade command if one exists (disable with `check_updates = false` or `--no-update-check`).
 
 ## [0.12.0] — 2026-06-19
 

@@ -6,13 +6,31 @@ use std::io;
 pub(super) fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     no_mouse: bool,
+    no_update_check: bool,
 ) -> Result<()> {
-    let mut state = load_startup_state(no_mouse)?;
+    let mut state = load_startup_state(no_mouse, no_update_check)?;
     if state.mouse_enabled {
         execute!(terminal.backend_mut(), EnableMouseCapture)?;
     }
     let mut mouse_layout = MouseLayout::default();
     let mut last_click: Option<(u16, u16, std::time::Instant)> = None;
+
+    // Background "is a newer release available?" check — off-thread, throttled to once a day,
+    // silent on failure. The result (if any) is absorbed in the loop below.
+    let update_check_path = crate::update_check::state_path().ok();
+    let mut update_rx: Option<std::sync::mpsc::Receiver<crate::update_check::UpdateCheckOutcome>> =
+        None;
+    if state.update_check_enabled {
+        let due = update_check_path.as_ref().is_none_or(|path| {
+            crate::update_check::should_check(
+                crate::update_check::load_state(path).last_check,
+                crate::update_check::now_secs(),
+            )
+        });
+        if due {
+            update_rx = Some(spawn_update_check());
+        }
+    }
     let mut gist_rx = Some(spawn_gist_fetch());
     let mut fork_rx: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>> =
         None;
@@ -127,6 +145,42 @@ pub(super) fn run_loop(
                     state.local_scanning = false;
                     state.status = None;
                     local_rx = None;
+                }
+            }
+        }
+
+        // Absorb the background update-check result: show the hint and persist the throttle.
+        // Failed checks are silent and not recorded, so they retry on the next launch.
+        if let Some(ref rx) = update_rx {
+            if let Ok(outcome) = rx.try_recv() {
+                update_rx = None;
+                let now = crate::update_check::now_secs();
+                match outcome {
+                    crate::update_check::UpdateCheckOutcome::Newer(version) => {
+                        if let Some(ref path) = update_check_path {
+                            crate::update_check::save_state(
+                                path,
+                                &crate::update_check::UpdateCheckState {
+                                    last_check: now,
+                                    latest_seen: version.clone(),
+                                },
+                            );
+                        }
+                        state.update_available = Some(version);
+                    }
+                    crate::update_check::UpdateCheckOutcome::UpToDate => {
+                        if let Some(ref path) = update_check_path {
+                            crate::update_check::save_state(
+                                path,
+                                &crate::update_check::UpdateCheckState {
+                                    last_check: now,
+                                    latest_seen: String::new(),
+                                },
+                            );
+                        }
+                        state.update_available = None;
+                    }
+                    crate::update_check::UpdateCheckOutcome::Failed => {}
                 }
             }
         }
@@ -1535,6 +1589,18 @@ type GistFetchResult = (
     Option<String>,
     Option<String>,
 );
+
+/// Off-thread: ask GitHub for the latest release tag and classify it against the running
+/// version. Network failures map to `Failed` (silent; the loop won't record the throttle).
+fn spawn_update_check() -> std::sync::mpsc::Receiver<crate::update_check::UpdateCheckOutcome> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let outcome =
+            crate::update_check::check(&crate::upgrade::UreqClient, env!("CARGO_PKG_VERSION"));
+        let _ = tx.send(outcome);
+    });
+    rx
+}
 
 fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<GistFetchResult> {
     let (tx, rx) = std::sync::mpsc::channel();

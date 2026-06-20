@@ -1547,6 +1547,11 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
     };
     // Only the command-hint variant gets key colouring; filter input and status stay plain.
     let footer_is_command = !state.filtering && state.status.is_none();
+    // A newer-release hint rides the footer's top-border title slot (non-intrusive, persistent).
+    let footer_title = match &state.update_available {
+        Some(v) => crate::update_check::update_hint(v, &state.install_method),
+        None => String::new(),
+    };
     // Width inside the footer block: minus the 2 horizontal padding columns (no side borders).
     let footer_lines = wrap_line_count(&footer_body, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
@@ -1689,7 +1694,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
         render_footer(
             frame,
             chunks[1],
-            "",
+            &footer_title,
             &footer_body,
             footer_is_command,
             &state.theme,
