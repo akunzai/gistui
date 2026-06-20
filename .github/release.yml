@@ -7,18 +7,18 @@ changelog:
     labels:
       - skip-changelog
   categories:
-    - title: Features
+    - title: 🚀 Features
       labels:
         - enhancement
-    - title: Bug Fixes
+    - title: 🐛 Bug Fixes
       labels:
         - bug
-    - title: Documentation
+    - title: 📚 Documentation
       labels:
         - documentation
-    - title: Dependencies
+    - title: ⬆️ Dependencies
       labels:
         - dependencies
-    - title: Other Changes
+    - title: 🧰 Maintenance
       labels:
         - "*"
