@@ -78,13 +78,24 @@ Press **`?`** anytime for the **full, contextual keymap** — it opens the curre
 topic; `Tab` browses all topics (List, Pins, Gist manager, Gist detail, Diff, Preview, …).
 The footer also shows keys for the focused pane.
 
+**Mouse** (on by default; disable with `mouse = false` in config or `--no-mouse`):
+
+| Action | Effect |
+|--------|--------|
+| Wheel up/down | scroll the focused list or content pane |
+| Click a row | select it (List panes also switch focus) |
+| Double-click a row | open it — List diff, gist detail, pin diff, revision diff, or file preview (same as `Enter`) |
+| Click a tab (Gist details) | switch between Files / Comments |
+| Click `[✕]` button (pop-up screens) | close / go back |
+
 ## Safety
 
 gistui is conservative about writes: downloads land only in `./<gist-filename>`; an existing
 file is never overwritten without a diff and `y/n` confirmation; destructive remote actions
 each get their own confirm. Others' gists (e.g. starred) are read-only for pin/upload/delete
 — fork with `F` in gist detail. No GitHub token is stored; gist content is never written to
-config.
+config. Mouse is on by default and can be disabled with `mouse = false` in the config file or
+the `--no-mouse` flag.
 
 Full rules: **[reference/SAFETY.md](reference/SAFETY.md)**.
 

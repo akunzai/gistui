@@ -18,6 +18,11 @@ diff_show_full = false
 # Use "light" for terminals with a light background colour.
 # theme = "dark"
 
+# Enable mouse support: wheel scroll, click to focus/select, double-click to open,
+# and a clickable [Esc]/[n] close button on pop-up screens. Default: true.
+# (The `--no-mouse` CLI flag also forces it off for a single session.)
+mouse = true
+
 # Directories skipped when recursive local file discovery is active (r key).
 # Hidden directories (names starting with ".") are always skipped regardless
 # of this list. Add project-specific build output dirs here as needed.

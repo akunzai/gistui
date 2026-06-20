@@ -550,17 +550,7 @@ impl AppState {
             KeyCode::Char('F') => return self.fork_intent(),
             // 1–9 preview the content of the Nth file in the gist (full-screen preview).
             KeyCode::Char(c @ '1'..='9') => {
-                if let Some(gist_id) = self.detail_gist_id.clone() {
-                    let index = (c as u8 - b'1') as usize;
-                    if let Some(filename) = self.gist_filenames(&gist_id).into_iter().nth(index) {
-                        if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
-                            return KeyOutcome::None;
-                        }
-                        self.preview_request = Some((gist_id, filename));
-                        self.preview_return = Screen::GistDetail;
-                        return KeyOutcome::PreviewContent;
-                    }
-                }
+                return self.preview_detail_file((c as u8 - b'1') as usize);
             }
             KeyCode::Tab => {
                 self.detail_focus = match self.detail_focus {
@@ -722,6 +712,215 @@ impl AppState {
             Err(error) => {
                 self.detail_comments = Some(Vec::new());
                 self.detail_comments_error = Some(error);
+            }
+        }
+    }
+
+    /// Number of navigation steps per mouse wheel tick. List/index screens move one row;
+    /// content panes (Diff, Preview, Confirm, GistDetail) scroll three lines for faster
+    /// panning. Help body also scrolls three; the Help topic index is a list (one row).
+    fn wheel_step(&self) -> usize {
+        match self.screen {
+            Screen::Diff | Screen::Preview | Screen::Confirm => 3,
+            // GistDetail: the comments body scrolls like content (3 lines); the file list
+            // steps one file at a time.
+            Screen::GistDetail if self.detail_focus == DetailFocus::Comments => 3,
+            Screen::Help if !self.help_index_open => 3, // help body scrolls; topic index is a list
+            _ => 1, // List/Pins/Gists/Revisions/Help index/GistDetail Files
+        }
+    }
+
+    /// Select the clicked list row on the current screen, focusing its pane/list. Returns
+    /// `true` when a row was hit (so a double-click should "open" it). A click in a pane's
+    /// blank area or border focuses it but selects nothing (returns `false`); a click off
+    /// every list returns `false`.
+    fn click_select(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
+        match self.screen {
+            Screen::List => {
+                if let Some(hit) = layout.local {
+                    if point_in(hit.rect, col, row) {
+                        // A click anywhere in the pane (incl. blank/border) focuses it; a
+                        // click on a row also selects it.
+                        self.focus = FocusPane::Local;
+                        if let Some(idx) = hit.index_at(row, self.visible_locals().len()) {
+                            self.local_index = idx;
+                            self.local_hscroll = 0;
+                            if self.anchor == FocusPane::Local {
+                                self.reset_ranked_pane();
+                            }
+                            return true;
+                        }
+                        return false;
+                    }
+                }
+                if let Some(hit) = layout.gist {
+                    if point_in(hit.rect, col, row) {
+                        self.focus = FocusPane::Gist;
+                        if let Some(idx) = hit.index_at(row, self.ranked_gists().len()) {
+                            self.gist_index = idx;
+                            self.gist_hscroll = 0;
+                            if self.anchor == FocusPane::Gist {
+                                self.reset_ranked_pane();
+                            }
+                            return true;
+                        }
+                        return false;
+                    }
+                }
+                false
+            }
+            Screen::Gists => {
+                if let Some(hit) = layout.list {
+                    if point_in(hit.rect, col, row) {
+                        if let Some(idx) = hit.index_at(row, self.visible_gist_groups().len()) {
+                            self.gists_index = idx;
+                            self.gists_hscroll = 0;
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            Screen::Pins => {
+                if let Some(hit) = layout.list {
+                    if point_in(hit.rect, col, row) {
+                        if let Some(idx) = hit.index_at(row, self.visible_pin_indices().len()) {
+                            self.pins_index = idx;
+                            self.pins_hscroll = 0;
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            Screen::Revisions => {
+                if let Some(hit) = layout.list {
+                    if point_in(hit.rect, col, row) {
+                        let count = self.revision_entries.as_ref().map_or(0, |e| e.len());
+                        if let Some(idx) = hit.index_at(row, count) {
+                            self.revision_index = idx;
+                            self.revision_hscroll = 0;
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            Screen::GistDetail => {
+                if let Some(hit) = layout.detail_files {
+                    if point_in(hit.rect, col, row) {
+                        // Clicking the file list focuses the Files tab; a row also moves the cursor.
+                        self.detail_focus = DetailFocus::Files;
+                        let count = self
+                            .detail_gist_id
+                            .as_deref()
+                            .map_or(0, |id| self.gist_filenames(id).len());
+                        if let Some(idx) = hit.index_at(row, count) {
+                            self.detail_file_cursor = idx;
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Open/activate the currently selected row on the current screen (the double-click
+    /// action), reusing each screen's `Enter` behaviour where one exists.
+    fn activate_selected(&mut self) -> KeyOutcome {
+        match self.screen {
+            // GistDetail files have no `Enter`; they preview via number keys, so a
+            // double-click previews the file under the cursor.
+            Screen::GistDetail => self.preview_detail_file(self.detail_file_cursor),
+            _ => self.handle_key_with(KeyCode::Enter, KeyModifiers::NONE),
+        }
+    }
+
+    /// Preview the `index`-th file of the gist shown on `Screen::GistDetail` (full-screen),
+    /// the action behind the `1`–`9` keys and a file double-click.
+    fn preview_detail_file(&mut self, index: usize) -> KeyOutcome {
+        if let Some(gist_id) = self.detail_gist_id.clone() {
+            if let Some(filename) = self.gist_filenames(&gist_id).into_iter().nth(index) {
+                if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
+                    return KeyOutcome::None;
+                }
+                self.preview_request = Some((gist_id, filename));
+                self.preview_return = Screen::GistDetail;
+                return KeyOutcome::PreviewContent;
+            }
+        }
+        KeyOutcome::None
+    }
+
+    /// Switch the GistDetail tab if `col`/`row` lands on a tab header. Returns the outcome
+    /// (possibly `FetchComments`) when a tab was clicked, else `None` to fall through.
+    fn click_detail_tab(&mut self, col: u16, row: u16, layout: &MouseLayout) -> Option<KeyOutcome> {
+        if self.screen != Screen::GistDetail {
+            return None;
+        }
+        if let Some(rect) = layout.detail_tab_files {
+            if point_in(rect, col, row) {
+                self.detail_focus = DetailFocus::Files;
+                return Some(KeyOutcome::None);
+            }
+        }
+        if let Some(rect) = layout.detail_tab_comments {
+            if point_in(rect, col, row) {
+                self.detail_focus = DetailFocus::Comments;
+                if self.detail_comments.is_none() && !self.detail_comments_loading {
+                    return Some(KeyOutcome::FetchComments);
+                }
+                return Some(KeyOutcome::None);
+            }
+        }
+        None
+    }
+
+    /// Translate a classified mouse intent into a state change, reusing existing keyboard
+    /// logic. Pure (no IO, no clock); returns a `KeyOutcome` so `run_loop` can perform any
+    /// follow-up IO (e.g. `PreviewDiff` on double-click).
+    pub fn handle_mouse(&mut self, input: MouseInput, layout: &MouseLayout) -> KeyOutcome {
+        match input {
+            MouseInput::ScrollUp | MouseInput::ScrollDown => {
+                let action = if matches!(input, MouseInput::ScrollUp) {
+                    NavAction::Up
+                } else {
+                    NavAction::Down
+                };
+                for _ in 0..self.wheel_step() {
+                    self.apply_navigation(action);
+                }
+                KeyOutcome::None
+            }
+            MouseInput::Click { col, row } => {
+                // Close button takes priority on non-List screens.
+                if let Some(rect) = layout.close_button {
+                    if point_in(rect, col, row) {
+                        // Esc is the universal cancel across all screens and all
+                        // pending-action variants (including the create-description
+                        // editing sub-state where 'n' would type into the field).
+                        return self.handle_key_with(KeyCode::Esc, KeyModifiers::NONE);
+                    }
+                }
+                // A GistDetail tab header click switches focus (single-click action).
+                if let Some(outcome) = self.click_detail_tab(col, row, layout) {
+                    return outcome;
+                }
+                self.click_select(col, row, layout);
+                KeyOutcome::None
+            }
+            MouseInput::DoubleClick { col, row } => {
+                // A tab double-click is just a tab switch (no "open").
+                if let Some(outcome) = self.click_detail_tab(col, row, layout) {
+                    return outcome;
+                }
+                if self.click_select(col, row, layout) {
+                    // Selection landed on a row — open/activate it.
+                    return self.activate_selected();
+                }
+                KeyOutcome::None
             }
         }
     }
@@ -1304,4 +1503,9 @@ impl AppState {
         }
         KeyOutcome::None
     }
+}
+
+/// Whether a column/row position lands inside a `Rect`.
+fn point_in(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
+    col >= rect.x && col < rect.right() && row >= rect.y && row < rect.bottom()
 }

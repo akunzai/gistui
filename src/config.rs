@@ -22,6 +22,10 @@ fn default_diff_context() -> u32 {
     3
 }
 
+fn default_mouse() -> bool {
+    true
+}
+
 fn default_skip_dirs() -> Vec<String> {
     [
         "node_modules",
@@ -64,6 +68,10 @@ pub struct AppConfig {
     /// Built-in colour theme: `"dark"` (default) or `"light"`.
     #[serde(default)]
     pub theme: ThemeChoice,
+    /// Enable mouse support (wheel scroll, click-to-focus/select). Default `true`;
+    /// set `false` to opt out (the `--no-mouse` CLI flag also forces it off).
+    #[serde(default = "default_mouse")]
+    pub mouse: bool,
 }
 
 impl Default for AppConfig {
@@ -75,6 +83,7 @@ impl Default for AppConfig {
             diff_context: default_diff_context(),
             diff_show_full: false,
             theme: ThemeChoice::Dark,
+            mouse: true,
         }
     }
 }
@@ -168,6 +177,12 @@ pub fn save_config(path: &Path, config: &AppConfig) -> Result<()> {
     fs::write(path, raw).with_context(|| format!("write {}", path.display()))
 }
 
+/// Effective mouse-enabled state: the config value, with the `--no-mouse` CLI flag able
+/// to force it off. There is intentionally no `--mouse` flag — edit the config to force on.
+pub fn resolve_mouse_enabled(config_mouse: bool, no_mouse: bool) -> bool {
+    config_mouse && !no_mouse
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,6 +240,7 @@ mod tests {
             diff_context: default_diff_context(),
             diff_show_full: false,
             theme: ThemeChoice::Dark,
+            mouse: true,
         };
 
         save_config(&path, &config).unwrap();
@@ -393,5 +409,32 @@ mod tests {
             assert_eq!(display_path(&p), display_path_with_home(&p, Some(&home)));
             assert_eq!(display_path(&p), "~/code/gistui");
         }
+    }
+
+    #[test]
+    fn mouse_defaults_to_true_when_absent() {
+        // A config file with no `mouse` key must load as enabled.
+        let toml = "scan_depth = 4\n";
+        let config: AppConfig = toml::from_str(toml).unwrap();
+        assert!(config.mouse);
+    }
+
+    #[test]
+    fn mouse_round_trips() {
+        let config = AppConfig {
+            mouse: false,
+            ..Default::default()
+        };
+        let text = toml::to_string(&config).unwrap();
+        let parsed: AppConfig = toml::from_str(&text).unwrap();
+        assert!(!parsed.mouse);
+    }
+
+    #[test]
+    fn resolve_mouse_enabled_truth_table() {
+        assert!(resolve_mouse_enabled(true, false)); // default on, no flag
+        assert!(!resolve_mouse_enabled(true, true)); // flag forces off
+        assert!(!resolve_mouse_enabled(false, false)); // config off
+        assert!(!resolve_mouse_enabled(false, true)); // both off
     }
 }

@@ -11,7 +11,8 @@ use ratatui::{
 };
 use similar::{ChangeTag, TextDiff};
 
-pub(super) fn render(frame: &mut Frame, state: &AppState) {
+pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+    *layout = MouseLayout::default();
     // Paint the full canvas so every unfilled cell uses the theme background (no-op for dark
     // theme where bg=Reset, effective for light theme which sets a grey canvas).
     frame.render_widget(
@@ -19,19 +20,34 @@ pub(super) fn render(frame: &mut Frame, state: &AppState) {
         frame.area(),
     );
     match state.screen {
-        Screen::List => render_list(frame, state),
-        Screen::Diff => render_diff(frame, state),
-        Screen::Confirm => render_confirm(frame, state),
-        Screen::Preview => render_preview(frame, state),
-        Screen::Help => render_help(frame, state),
-        Screen::Pins => render_pins(frame, state),
-        Screen::Gists => render_gists(frame, state),
-        Screen::GistDetail => render_gist_detail(frame, state),
-        Screen::Revisions => render_revisions(frame, state),
+        Screen::List => render_list(frame, state, layout),
+        Screen::Diff => render_diff(frame, state, layout),
+        Screen::Confirm => render_confirm(frame, state, layout),
+        Screen::Preview => render_preview(frame, state, layout),
+        Screen::Help => render_help(frame, state, layout),
+        Screen::Pins => render_pins(frame, state, layout),
+        Screen::Gists => render_gists(frame, state, layout),
+        Screen::GistDetail => render_gist_detail(frame, state, layout),
+        Screen::Revisions => render_revisions(frame, state, layout),
     }
     if let Some(ref msg) = state.bg_task_msg {
         render_loading_overlay(frame, msg, state.spinner_frame, &state.theme);
     }
+}
+
+fn render_close_button(frame: &mut Frame, outer: Rect, theme: &Theme) -> Rect {
+    let text = "[✕]";
+    let width = text.chars().count() as u16;
+    if outer.width < width + 2 || outer.height == 0 {
+        return Rect::new(outer.x, outer.y, 0, 0);
+    }
+    let x = outer.right().saturating_sub(width + 1);
+    let rect = Rect::new(x, outer.y, width, 1);
+    frame.render_widget(
+        Paragraph::new(Span::styled(text, Style::default().fg(theme.accent))),
+        rect,
+    );
+    rect
 }
 
 /// A count suffix for a list title: `(N)` normally, or `(shown/total)` when a filter has
@@ -88,7 +104,14 @@ Actions (on the selected local file + gist)
   X          remove the selected file from its gist (y/n confirm)
   g          open the gist manager (edit description, delete gist)
   e          edit the local file in $EDITOR
-  y          copy the selected gist's URL to the system clipboard"
+  y          copy the selected gist's URL to the system clipboard
+
+Mouse (on by default; disable with mouse = false in config or --no-mouse)
+  Wheel      scroll the focused list or content pane
+  Click      select the clicked row (List panes also switch focus)
+  Dbl-click  open the clicked row (diff / detail / pin diff / preview)
+  Tab click  switch Files / Comments on the Gist details screen
+  [✕] btn    close / go back on any pop-up screen"
         }
         HelpTopic::Pins => {
             "\
@@ -195,7 +218,7 @@ Actions (on the selected local file + gist)
     }
 }
 
-pub(super) fn render_help(frame: &mut Frame, state: &AppState) {
+pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     if state.help_index_open {
         let items: Vec<ListItem> = HelpTopic::all()
             .iter()
@@ -242,6 +265,9 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState) {
             frame.area(),
         );
     }
+    if state.mouse_enabled {
+        layout.close_button = Some(render_close_button(frame, frame.area(), &state.theme));
+    }
 }
 
 /// Lowercase file extension of a filename or path string, if any.
@@ -280,7 +306,7 @@ fn preview_line_spans(state: &AppState) -> Vec<Vec<Span<'static>>> {
     }
 }
 
-pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
+pub(super) fn render_preview(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
     // A `R`-refresh fetch error (set via state.status) must surface here, not be swallowed.
     let hints = if state.preview_wrap {
@@ -332,9 +358,12 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState) {
         render_text_scrollbar(frame, chunks[0], total_lines, state.diff_scroll as usize);
     }
     render_footer(frame, chunks[1], "", &footer, colored, &state.theme);
+    if state.mouse_enabled {
+        layout.close_button = Some(render_close_button(frame, area, &state.theme));
+    }
 }
 
-pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
+pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
     // Sync feedback (e.g. "already in sync", "can't tell which side is newer") is set via
     // state.status while staying on this screen, so the footer must surface it (see #72).
@@ -430,6 +459,12 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
     let mut list_state = ListState::default();
     list_state.select(selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
+    if state.mouse_enabled {
+        layout.list = Some(PaneHit {
+            rect: chunks[0],
+            offset: list_state.offset(),
+        });
+    }
 
     if state.pins_filtering {
         render_footer_line(
@@ -441,6 +476,9 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState) {
         );
     } else {
         render_footer(frame, chunks[1], &ftitle, &footer, colored, &state.theme);
+    }
+    if state.mouse_enabled {
+        layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }
 }
 
@@ -522,7 +560,7 @@ pub(super) fn gist_group_row_label(
     )
 }
 
-pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
+pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
     // Footer: filter input while filtering, else a one-shot status message (e.g. the compaction
     // result) when present, else the command hints. Only the hints get key colouring.
@@ -615,6 +653,12 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
     let mut list_state = ListState::default();
     list_state.select(selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
+    if state.mouse_enabled {
+        layout.list = Some(PaneHit {
+            rect: chunks[0],
+            offset: list_state.offset(),
+        });
+    }
 
     if state.gists_filtering {
         render_footer_line(
@@ -626,6 +670,9 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState) {
         );
     } else {
         render_footer(frame, chunks[1], &ftitle, &footer, colored, &state.theme);
+    }
+    if state.mouse_enabled {
+        layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }
 }
 
@@ -704,7 +751,7 @@ pub(super) fn revision_row_label(
     )
 }
 
-pub(super) fn render_revisions(frame: &mut Frame, state: &AppState) {
+pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
     let (ftitle, footer, colored) = if let Some(message) = &state.status {
         (String::new(), message.clone(), false)
@@ -801,7 +848,16 @@ pub(super) fn render_revisions(frame: &mut Frame, state: &AppState) {
     let mut list_state = ListState::default();
     list_state.select(selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
+    if state.mouse_enabled {
+        layout.list = Some(PaneHit {
+            rect: chunks[0],
+            offset: list_state.offset(),
+        });
+    }
     render_footer(frame, chunks[1], &ftitle, &footer, colored, &state.theme);
+    if state.mouse_enabled {
+        layout.close_button = Some(render_close_button(frame, area, &state.theme));
+    }
 }
 
 /// Current Unix time in seconds (saturating to 0 before the epoch); used for relative-age labels.
@@ -925,7 +981,13 @@ pub(super) fn render_gist_info_and_files(
 
 /// The gist detail header: a block holding the basic-info line and the `Files │ Comments`
 /// focus tabs. The active tab's content is rendered below it.
-fn render_detail_header(frame: &mut Frame, area: Rect, state: &AppState, gist_id: &str) {
+fn render_detail_header(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    gist_id: &str,
+    layout: &mut MouseLayout,
+) {
     let Some(group) = state.group_by_id(gist_id) else {
         return;
     };
@@ -951,15 +1013,33 @@ fn render_detail_header(frame: &mut Frame, area: Rect, state: &AppState, gist_id
         ),
         area,
     );
+    if state.mouse_enabled {
+        // Tab line is the 2nd content row (border + gist-info line above it); content starts
+        // after the left border (1) + horizontal padding (1). Labels: " Files " (7), " │ " (3),
+        // " Comments " (10) — see detail_focus_tabs_line.
+        let content_x = area.x + 2;
+        let tabs_y = area.y + 2;
+        layout.detail_tab_files = Some(Rect::new(content_x, tabs_y, 7, 1));
+        layout.detail_tab_comments = Some(Rect::new(content_x + 10, tabs_y, 10, 1));
+    }
 }
 
 /// The gist detail's Files tab: the numbered, cursor-highlighted, scrollable file list,
 /// titled with the file count.
-fn render_gist_file_list(frame: &mut Frame, area: Rect, state: &AppState, gist_id: &str) {
+fn render_gist_file_list(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    gist_id: &str,
+    layout: &mut MouseLayout,
+) {
     let files = state.gist_file_display_names(gist_id);
     let cursor = state.detail_file_cursor.min(files.len().saturating_sub(1));
     let visible_rows = (area.height as usize).saturating_sub(2);
     let offset = file_list_scroll(cursor, visible_rows, files.len());
+    if state.mouse_enabled {
+        layout.detail_files = Some(PaneHit { rect: area, offset });
+    }
     let lines = file_rows(&files, cursor, offset, visible_rows, true, &state.theme);
     frame.render_widget(
         Paragraph::new(lines).style(state.theme.base_style()).block(
@@ -1110,7 +1190,7 @@ pub(super) fn detail_focus_tabs_line(focus: DetailFocus, theme: &Theme) -> Line<
     Line::from(spans)
 }
 
-pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState) {
+pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
     let owned = state
         .detail_gist_id
@@ -1129,16 +1209,21 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState) {
         ])
         .split(area);
     if let Some(id) = state.detail_gist_id.as_deref() {
-        render_detail_header(frame, chunks[0], state, id);
+        render_detail_header(frame, chunks[0], state, id, layout);
         match state.detail_focus {
-            DetailFocus::Files => render_gist_file_list(frame, chunks[1], state, id),
+            DetailFocus::Files => render_gist_file_list(frame, chunks[1], state, id, layout),
             DetailFocus::Comments => render_gist_comments(frame, chunks[1], state),
         }
     }
     render_footer(frame, chunks[2], "", &footer, colored, &state.theme);
 
-    if state.editing_description {
-        render_centered_modal_input(
+    let edit_modal = if state.editing_description {
+        // The modal covers the file list and tabs; drop their hit regions so a click
+        // behind the modal doesn't move the cursor or switch tabs.
+        layout.detail_files = None;
+        layout.detail_tab_files = None;
+        layout.detail_tab_comments = None;
+        Some(render_centered_modal_input(
             frame,
             "Edit description (Enter apply · Esc cancel)",
             "",
@@ -1146,7 +1231,18 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState) {
             "",
             state.theme.accent,
             &state.theme,
-        );
+        ))
+    } else {
+        None
+    };
+    if state.mouse_enabled {
+        // When the edit-description modal is open, the close button belongs on it;
+        // otherwise it sits on the full-screen detail view's top-right corner.
+        layout.close_button = Some(render_close_button(
+            frame,
+            edit_modal.unwrap_or(area),
+            &state.theme,
+        ));
     }
 }
 
@@ -1435,7 +1531,7 @@ pub(super) fn input_line(prefix: &str, input: &TextInput, suffix: &str) -> Line<
     Line::from(spans)
 }
 
-pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
+pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
     let footer_body = if state.filtering {
         let (pane, query) = match state.focus {
@@ -1506,7 +1602,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
     } else {
         local_title
     };
-    render_pane(
+    let local_offset = render_pane(
         frame,
         columns[0],
         &local_title,
@@ -1515,6 +1611,12 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
         local_selected,
         &state.theme,
     );
+    if state.mouse_enabled {
+        layout.local = Some(PaneHit {
+            rect: columns[0],
+            offset: local_offset,
+        });
+    }
 
     let ranked = state.ranked_gists();
     let gist_items: Vec<ListItem> = if state.loading && ranked.is_empty() {
@@ -1556,7 +1658,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
     } else {
         gist_title
     };
-    render_pane(
+    let gist_offset = render_pane(
         frame,
         columns[1],
         &gist_title,
@@ -1565,6 +1667,12 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState) {
         gist_selected,
         &state.theme,
     );
+    if state.mouse_enabled {
+        layout.gist = Some(PaneHit {
+            rect: columns[1],
+            offset: gist_offset,
+        });
+    }
 
     if state.filtering {
         let (pane, query) = match state.focus {
@@ -1597,7 +1705,7 @@ pub(super) fn render_pane(
     focused: bool,
     selected: Option<usize>,
     theme: &Theme,
-) {
+) -> usize {
     let item_count = items.len();
     let border_style = if focused {
         Style::default().fg(theme.accent)
@@ -1634,6 +1742,7 @@ pub(super) fn render_pane(
     let mut list_state = ListState::default();
     list_state.select(selected);
     frame.render_stateful_widget(list, area, &mut list_state);
+    let offset = list_state.offset();
 
     // Show a scrollbar when the list overflows its viewport.
     let viewport = area.height.saturating_sub(2) as usize;
@@ -1650,6 +1759,7 @@ pub(super) fn render_pane(
             &mut scrollbar_state,
         );
     }
+    offset
 }
 
 /// Builds the visible, coloured slice of a unified diff (additions green, deletions red,
@@ -2105,7 +2215,7 @@ pub(super) fn diff_footer(state: &AppState) -> String {
     }
 }
 
-pub(super) fn render_diff(frame: &mut Frame, state: &AppState) {
+pub(super) fn render_diff(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let footer = diff_footer(state);
 
     let area = frame.area();
@@ -2118,6 +2228,9 @@ pub(super) fn render_diff(frame: &mut Frame, state: &AppState) {
     render_diff_pane(frame, chunks[0], state);
 
     render_footer(frame, chunks[1], "", &footer, true, &state.theme);
+    if state.mouse_enabled {
+        layout.close_button = Some(render_close_button(frame, area, &state.theme));
+    }
 }
 
 /// `Screen::Confirm`: the diff fills the screen as context behind a centered prompt modal,
@@ -2125,7 +2238,7 @@ pub(super) fn render_diff(frame: &mut Frame, state: &AppState) {
 /// #72 audit: this modal intentionally does not surface `state.status`. It is a transient y/n
 /// gate — confirming executes the action and transitions to `List`/`Gists`, where the result
 /// status is shown; cancelling returns to the launching screen without setting a status here.
-pub(super) fn render_confirm(frame: &mut Frame, state: &AppState) {
+pub(super) fn render_confirm(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     match &state.pending_action {
         Some(PendingAction::CompactGist { gist_id, .. }) => {
             render_gist_info_and_files(frame, frame.area(), state, gist_id);
@@ -2135,7 +2248,7 @@ pub(super) fn render_confirm(frame: &mut Frame, state: &AppState) {
     let (title, border) = confirm_modal_style(state);
     // The create flow's description step is an active text input, so it needs the
     // reverse-video cursor; every other confirm prompt is static text.
-    if matches!(state.pending_action, Some(PendingAction::Create { .. }))
+    let modal = if matches!(state.pending_action, Some(PendingAction::Create { .. }))
         && state.editing_description
     {
         render_centered_modal_input(
@@ -2146,9 +2259,13 @@ pub(super) fn render_confirm(frame: &mut Frame, state: &AppState) {
             CREATE_DESC_SUFFIX,
             border,
             &state.theme,
-        );
+        )
     } else {
-        render_centered_modal(frame, title, &confirm_prompt(state), border, &state.theme);
+        render_centered_modal(frame, title, &confirm_prompt(state), border, &state.theme)
+    };
+    if state.mouse_enabled {
+        // Put the close button on the modal box itself, not the full-screen corner.
+        layout.close_button = Some(render_close_button(frame, modal, &state.theme));
     }
 }
 
@@ -2192,7 +2309,7 @@ pub(super) fn render_centered_modal(
     body: &str,
     border: Color,
     theme: &Theme,
-) {
+) -> Rect {
     let rect = centered_modal_rect(frame.area(), body);
     frame.render_widget(Clear, rect);
     frame.render_widget(
@@ -2202,6 +2319,7 @@ pub(super) fn render_centered_modal(
             .block(modal_block(title, border, theme)),
         rect,
     );
+    rect
 }
 
 /// Centered modal whose body is an active text input (`prefix` + text-with-cursor +
@@ -2214,7 +2332,7 @@ pub(super) fn render_centered_modal_input(
     suffix: &str,
     border: Color,
     theme: &Theme,
-) {
+) -> Rect {
     // Size from the plain text plus one column for the (possibly trailing) cursor cell.
     let plain = format!("{prefix}{input} {suffix}");
     let rect = centered_modal_rect(frame.area(), &plain);
@@ -2226,6 +2344,7 @@ pub(super) fn render_centered_modal_input(
             .block(modal_block(title, border, theme)),
         rect,
     );
+    rect
 }
 
 /// Frames for the in-progress spinner, advanced by `AppState::spinner_frame` (one step per

@@ -1,5 +1,6 @@
 use super::*;
 use crossterm::event::KeyCode;
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 use std::path::PathBuf;
 
@@ -4117,4 +4118,508 @@ fn fork_key_ignored_on_list_and_gist_manager() {
     state.gists_type_filter = GistTypeFilter::Starred;
     state.gists_index = 0;
     assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::None);
+}
+
+#[test]
+fn initial_state_enables_mouse_by_default() {
+    assert!(super::initial_state().mouse_enabled);
+}
+
+#[test]
+fn pane_hit_maps_rows_to_indices() {
+    // A pane at y=2, height 6: top border row 2, content rows 3..=6, bottom border row 7.
+    let hit = PaneHit {
+        rect: Rect::new(0, 2, 40, 6),
+        offset: 0,
+    };
+    assert_eq!(hit.index_at(3, 4), Some(0)); // first content row
+    assert_eq!(hit.index_at(6, 4), Some(3)); // fourth content row
+    assert_eq!(hit.index_at(2, 4), None); // top border
+    assert_eq!(hit.index_at(7, 4), None); // bottom border
+    assert_eq!(hit.index_at(6, 2), None); // row maps to idx 3 >= visible_len 2
+}
+
+#[test]
+fn pane_hit_respects_scroll_offset() {
+    let hit = PaneHit {
+        rect: Rect::new(0, 0, 40, 10),
+        offset: 5,
+    };
+    // content starts at row 1; row 1 -> offset 5
+    assert_eq!(hit.index_at(1, 20), Some(5));
+    assert_eq!(hit.index_at(3, 20), Some(7));
+}
+
+#[test]
+fn pane_hit_empty_list_selects_nothing() {
+    let hit = PaneHit {
+        rect: Rect::new(0, 0, 40, 10),
+        offset: 0,
+    };
+    assert_eq!(hit.index_at(1, 0), None);
+}
+
+#[test]
+fn classify_click_detects_double_click() {
+    // Same cell within the threshold -> DoubleClick.
+    let r = super::classify_click(Some((5, 5)), 100, 5, 5);
+    assert_eq!(r, MouseInput::DoubleClick { col: 5, row: 5 });
+}
+
+#[test]
+fn classify_click_single_when_too_slow() {
+    let r = super::classify_click(Some((5, 5)), super::DOUBLE_CLICK_MS + 1, 5, 5);
+    assert_eq!(r, MouseInput::Click { col: 5, row: 5 });
+}
+
+#[test]
+fn classify_click_single_on_different_cell() {
+    let r = super::classify_click(Some((5, 5)), 100, 6, 5);
+    assert_eq!(r, MouseInput::Click { col: 6, row: 5 });
+}
+
+#[test]
+fn classify_click_single_when_no_prior() {
+    let r = super::classify_click(None, 0, 5, 5);
+    assert_eq!(r, MouseInput::Click { col: 5, row: 5 });
+}
+
+#[test]
+fn classify_click_at_exact_threshold() {
+    // Exactly at the boundary: still counts as a double-click (inclusive `<=`).
+    let r = super::classify_click(Some((5, 5)), super::DOUBLE_CLICK_MS, 5, 5);
+    assert_eq!(r, MouseInput::DoubleClick { col: 5, row: 5 });
+}
+
+// ── handle_mouse tests ────────────────────────────────────────────────────────
+
+#[test]
+fn scroll_down_moves_focused_list_by_one() {
+    let mut state = state_with_local_paths(&["a.rs", "b.rs", "c.rs"]);
+    state.screen = Screen::List;
+    state.focus = FocusPane::Local;
+    state.local_index = 0;
+    let out = state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.local_index, 1);
+}
+
+#[test]
+fn scroll_up_moves_focused_list_by_one() {
+    let mut state = state_with_local_paths(&["a.rs", "b.rs", "c.rs"]);
+    state.screen = Screen::List;
+    state.focus = FocusPane::Local;
+    state.local_index = 2;
+    let out = state.handle_mouse(MouseInput::ScrollUp, &MouseLayout::default());
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.local_index, 1);
+}
+
+#[test]
+fn scroll_down_moves_content_three_lines() {
+    // Set up a Diff screen with enough lines that diff_scroll can reach 3.
+    let mut state = state_with_selection();
+    state.enter_diff(
+        "line1\nline2\nline3\nline4\nline5".into(),
+        "remote".into(),
+        std::path::PathBuf::from("/tmp/x"),
+        std::path::PathBuf::from("/tmp/cwd/x"),
+    );
+    assert_eq!(state.screen, Screen::Diff);
+    assert_eq!(state.diff_scroll, 0);
+    state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+    assert_eq!(state.diff_scroll, 3);
+}
+
+#[test]
+fn scroll_up_moves_content_three_lines() {
+    let mut state = state_with_selection();
+    state.enter_diff(
+        "line1\nline2\nline3\nline4\nline5".into(),
+        "remote".into(),
+        std::path::PathBuf::from("/tmp/x"),
+        std::path::PathBuf::from("/tmp/cwd/x"),
+    );
+    state.diff_scroll = 3;
+    state.handle_mouse(MouseInput::ScrollUp, &MouseLayout::default());
+    assert_eq!(state.diff_scroll, 0);
+}
+
+#[test]
+fn close_button_click_returns_from_help() {
+    let mut state = state_with_gists();
+    // Simulate entering Help (mirrors what open_help() does).
+    state.help_return = Screen::List;
+    state.screen = Screen::Help;
+    let layout = MouseLayout {
+        close_button: Some(Rect::new(36, 0, 5, 1)),
+        ..Default::default()
+    };
+    let out = state.handle_mouse(MouseInput::Click { col: 38, row: 0 }, &layout);
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.screen, Screen::List);
+}
+
+#[test]
+fn close_button_click_outside_is_noop() {
+    let mut state = state_with_gists();
+    state.help_return = Screen::List;
+    state.screen = Screen::Help;
+    let layout = MouseLayout {
+        close_button: Some(Rect::new(36, 0, 5, 1)),
+        ..Default::default()
+    };
+    // col 35 is just outside the left edge of the close button
+    let out = state.handle_mouse(MouseInput::Click { col: 35, row: 0 }, &layout);
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.screen, Screen::Help);
+}
+
+#[test]
+fn list_click_selects_and_focuses_gist_pane() {
+    let mut state = state_with_gists();
+    state.screen = Screen::List;
+    state.focus = FocusPane::Local;
+    state.gist_hscroll = 5;
+    let hit = PaneHit {
+        rect: Rect::new(20, 0, 20, 10),
+        offset: 0,
+    };
+    let layout = MouseLayout {
+        gist: Some(hit),
+        ..Default::default()
+    };
+    // row 2 -> content idx 1 (top border is row 0, row 1 = idx 0, row 2 = idx 1)
+    let out = state.handle_mouse(MouseInput::Click { col: 25, row: 2 }, &layout);
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.focus, FocusPane::Gist);
+    assert_eq!(state.gist_index, 1);
+    assert_eq!(state.gist_hscroll, 0);
+}
+
+#[test]
+fn list_click_selects_and_focuses_local_pane() {
+    let mut state = state_with_local_paths(&["a.rs", "b.rs", "c.rs"]);
+    state.gists = vec![];
+    state.screen = Screen::List;
+    state.focus = FocusPane::Gist;
+    state.local_hscroll = 5;
+    let hit = PaneHit {
+        rect: Rect::new(0, 0, 20, 10),
+        offset: 0,
+    };
+    let layout = MouseLayout {
+        local: Some(hit),
+        ..Default::default()
+    };
+    // row 1 -> idx 0 (first content row after top border)
+    let out = state.handle_mouse(MouseInput::Click { col: 5, row: 1 }, &layout);
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.focus, FocusPane::Local);
+    assert_eq!(state.local_index, 0);
+    assert_eq!(state.local_hscroll, 0);
+}
+
+#[test]
+fn list_double_click_opens_diff() {
+    let mut state = state_with_gists();
+    state.screen = Screen::List;
+    let hit = PaneHit {
+        rect: Rect::new(20, 0, 20, 10),
+        offset: 0,
+    };
+    let layout = MouseLayout {
+        gist: Some(hit),
+        ..Default::default()
+    };
+    // row 1 -> idx 0 (first gist)
+    let out = state.handle_mouse(MouseInput::DoubleClick { col: 25, row: 1 }, &layout);
+    assert_eq!(state.focus, FocusPane::Gist);
+    assert_eq!(state.gist_index, 0);
+    assert_eq!(out, KeyOutcome::PreviewDiff);
+}
+
+#[test]
+fn click_in_pane_blank_focuses_without_selecting() {
+    let mut state = state_with_gists();
+    state.screen = Screen::List;
+    state.focus = FocusPane::Local;
+    state.gist_index = 0;
+    let hit = PaneHit {
+        rect: Rect::new(20, 0, 20, 4),
+        offset: 0,
+    };
+    let layout = MouseLayout {
+        gist: Some(hit),
+        ..Default::default()
+    };
+    // row 0 is the top border (no row there): clicking the gist pane's blank/border area
+    // switches focus to it but selects nothing.
+    let out = state.handle_mouse(MouseInput::Click { col: 25, row: 0 }, &layout);
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.focus, FocusPane::Gist);
+    assert_eq!(state.gist_index, 0);
+}
+
+#[test]
+fn click_off_list_screen_is_noop() {
+    let mut state = state_with_gists();
+    state.help_return = Screen::List;
+    state.screen = Screen::Help;
+    let hit = PaneHit {
+        rect: Rect::new(20, 0, 20, 10),
+        offset: 0,
+    };
+    let layout = MouseLayout {
+        gist: Some(hit),
+        ..Default::default()
+    };
+    let before_screen = state.screen;
+    let out = state.handle_mouse(MouseInput::Click { col: 25, row: 1 }, &layout);
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.screen, before_screen);
+}
+
+#[test]
+fn scroll_down_clamps_at_list_end() {
+    // Only 1 item in local; scrolling down should clamp (no panic, no index change).
+    let mut state = state_with_local_paths(&["a.rs"]);
+    state.screen = Screen::List;
+    state.focus = FocusPane::Local;
+    state.local_index = 0;
+    state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+    assert_eq!(state.local_index, 0);
+}
+
+#[test]
+fn close_button_click_confirm_cancel_clears_pending() {
+    // Close button on Screen::Confirm dispatches Esc, which cancels the pending action.
+    // Using PendingAction::Download: Esc sets pending_action = None and screen = Screen::Diff.
+    let mut state = state_with_gists();
+    state.diff_text = "line1\nline2\nline3".into();
+    state.screen = Screen::Confirm;
+    state.pending_action = Some(PendingAction::Download);
+    let layout = MouseLayout {
+        close_button: Some(Rect::new(36, 0, 5, 1)),
+        ..Default::default()
+    };
+    let out = state.handle_mouse(MouseInput::Click { col: 38, row: 0 }, &layout);
+    assert_eq!(out, KeyOutcome::None);
+    assert!(state.pending_action.is_none());
+    assert_eq!(state.screen, Screen::Diff);
+}
+
+#[test]
+fn close_button_click_create_description_cancels_not_types() {
+    // Regression: close button while editing the create-description sub-state must cancel
+    // (Esc), NOT append 'n' to the description field.  This test fails against the old
+    // `KeyCode::Char('n')` dispatch and passes with `KeyCode::Esc`.
+    let mut state = initial_state();
+    state.screen = Screen::Confirm;
+    state.pending_action = Some(PendingAction::Create {
+        local_path: std::path::PathBuf::from("notes.txt"),
+    });
+    state.editing_description = true;
+    // Pre-fill description so we can assert it was cleared (not grown by a typed 'n').
+    state.description_input = "my desc".into();
+    let layout = MouseLayout {
+        close_button: Some(Rect::new(36, 0, 5, 1)),
+        ..Default::default()
+    };
+    state.handle_mouse(MouseInput::Click { col: 38, row: 0 }, &layout);
+    // Esc on create-description clears description, exits editing, and calls back_to_list.
+    assert!(
+        !state.editing_description,
+        "editing_description must be false after close"
+    );
+    assert!(
+        state.description_input.is_empty(),
+        "description must be cleared, not have 'n' appended"
+    );
+    assert_eq!(state.screen, Screen::List);
+    assert!(state.pending_action.is_none());
+}
+
+#[test]
+fn wheel_step_gist_detail_moves_three() {
+    // GistDetail content pane: one scroll-down tick must advance detail_scroll by 3.
+    let mut state = state_with_gists();
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("g1".into());
+    // Use Comments focus so detail_nav moves detail_scroll (not the file cursor).
+    state.detail_focus = DetailFocus::Comments;
+    state.detail_comments = Some(Vec::new());
+    assert_eq!(state.detail_scroll, 0);
+    state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+    assert_eq!(state.detail_scroll, 3);
+}
+
+#[test]
+fn wheel_step_help_body_moves_three() {
+    // Help body (help_index_open = false): one scroll-down tick must advance help_scroll by 3.
+    let mut state = initial_state();
+    state.screen = Screen::Help;
+    state.help_index_open = false;
+    state.help_scroll = 0;
+    state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+    assert_eq!(state.help_scroll, 3);
+}
+
+#[test]
+fn wheel_step_help_index_moves_one() {
+    // Help topic index (help_index_open = true): one scroll-down tick must move index by 1.
+    let mut state = initial_state();
+    state.screen = Screen::Help;
+    state.help_index_open = true;
+    state.help_index_sel = 0;
+    state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+    assert_eq!(state.help_index_sel, 1);
+}
+
+#[test]
+fn gists_click_selects_and_double_click_matches_enter() {
+    let mut state = gists_screen_state(); // 2 groups, Screen::Gists
+    state.gists_index = 0;
+    let hit = PaneHit {
+        rect: Rect::new(0, 0, 40, 10),
+        offset: 0,
+    };
+    let layout = MouseLayout {
+        list: Some(hit),
+        ..Default::default()
+    };
+    // Row 2 is the 2nd content row (border at row 0) -> idx 1.
+    let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.gists_index, 1);
+    // Double-click activates the same row, exactly as Enter would.
+    let mut by_key = state.clone();
+    let key_out = by_key.handle_key(KeyCode::Enter);
+    let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
+    assert_eq!(by_mouse, key_out);
+    assert_eq!(by_mouse, KeyOutcome::OpenGistDetail);
+}
+
+#[test]
+fn pins_click_selects_and_double_click_matches_enter() {
+    let mut state = state_with_pins(&[("a.txt", "g1", "a.txt"), ("b.txt", "g2", "b.txt")]);
+    let hit = PaneHit {
+        rect: Rect::new(0, 0, 40, 10),
+        offset: 0,
+    };
+    let layout = MouseLayout {
+        list: Some(hit),
+        ..Default::default()
+    };
+    let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.pins_index, 1);
+    let mut by_key = state.clone();
+    let key_out = by_key.handle_key(KeyCode::Enter);
+    let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
+    assert_eq!(by_mouse, key_out);
+}
+
+#[test]
+fn revisions_click_selects_and_double_click_matches_enter() {
+    let mut state = state_with_gists();
+    state.screen = Screen::Revisions;
+    state.revision_index = 0;
+    state.revision_entries = Some(vec![
+        crate::domain::GistRevision {
+            version: "v2".into(),
+            committed_at: "2026-06-10T00:00:00Z".into(),
+            user: "u".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 1,
+                additions: 1,
+                deletions: 0,
+            },
+        },
+        crate::domain::GistRevision {
+            version: "v1".into(),
+            committed_at: "2026-06-01T00:00:00Z".into(),
+            user: "u".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 2,
+                additions: 2,
+                deletions: 0,
+            },
+        },
+    ]);
+    let hit = PaneHit {
+        rect: Rect::new(0, 0, 40, 10),
+        offset: 0,
+    };
+    let layout = MouseLayout {
+        list: Some(hit),
+        ..Default::default()
+    };
+    let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.revision_index, 1);
+    let mut by_key = state.clone();
+    let key_out = by_key.handle_key(KeyCode::Enter);
+    let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
+    assert_eq!(by_mouse, key_out);
+    assert_eq!(by_mouse, KeyOutcome::RevisionDiffIncremental);
+}
+
+#[test]
+fn gist_detail_file_click_selects_and_double_previews() {
+    let mut state = state_with_gists(); // g1: a.txt (0), b.txt (1)
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("g1".into());
+    state.detail_focus = DetailFocus::Comments; // start elsewhere to prove the focus switch
+    let hit = PaneHit {
+        rect: Rect::new(0, 0, 40, 10),
+        offset: 0,
+    };
+    let layout = MouseLayout {
+        detail_files: Some(hit),
+        ..Default::default()
+    };
+    // Click the 2nd file row -> Files focus + cursor 1, but no open yet.
+    let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.detail_focus, DetailFocus::Files);
+    assert_eq!(state.detail_file_cursor, 1);
+    // Double-click previews that file (there is no Enter for files).
+    let out = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
+    assert_eq!(out, KeyOutcome::PreviewContent);
+    assert_eq!(state.preview_request, Some(("g1".into(), "b.txt".into())));
+}
+
+#[test]
+fn gist_detail_tab_click_switches_focus() {
+    let mut state = state_with_gists();
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("g1".into());
+    state.detail_focus = DetailFocus::Files;
+    // Header at chunks[0] y=0: content_x = 2, tabs_y = 2; " Files " (7), " Comments " (10 @ +10).
+    let layout = MouseLayout {
+        detail_tab_files: Some(Rect::new(2, 2, 7, 1)),
+        detail_tab_comments: Some(Rect::new(12, 2, 10, 1)),
+        ..Default::default()
+    };
+    // Click the Comments tab: switches focus and (comments unloaded) requests a fetch.
+    let out = state.handle_mouse(MouseInput::Click { col: 14, row: 2 }, &layout);
+    assert_eq!(state.detail_focus, DetailFocus::Comments);
+    assert_eq!(out, KeyOutcome::FetchComments);
+    // Click the Files tab back.
+    let out = state.handle_mouse(MouseInput::Click { col: 4, row: 2 }, &layout);
+    assert_eq!(state.detail_focus, DetailFocus::Files);
+    assert_eq!(out, KeyOutcome::None);
+}
+
+#[test]
+fn wheel_step_gist_detail_files_moves_one() {
+    // The file list (Files tab) steps one file per wheel tick, not 3.
+    let mut state = state_with_gists();
+    state.screen = Screen::GistDetail;
+    state.detail_gist_id = Some("g1".into());
+    state.detail_focus = DetailFocus::Files;
+    state.detail_file_cursor = 0;
+    state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+    assert_eq!(state.detail_file_cursor, 1);
 }

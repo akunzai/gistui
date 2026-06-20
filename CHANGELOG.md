@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Mouse support: wheel scroll, click to focus/select, double-click to open, and a clickable close button on pop-up screens (on by default; disable with `mouse = false` or `--no-mouse`).
+
 ## [0.12.0] — 2026-06-19
 
 - Vim-style navigation: `h`/`j`/`k`/`l` move and scroll alongside arrow keys; `Ctrl+b` / `Ctrl+f` page up/down by 10 (same as PageUp/PageDown) on every scrollable screen, including the main list (Files/Gists panes), Pins, and Gist manager. Revision history is now `H` (was `h`); cycling the revision target file is `F` (was `f`).
