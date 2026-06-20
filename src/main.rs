@@ -32,6 +32,11 @@ struct Cli {
         help = "Disable mouse capture (scroll/click) for this session"
     )]
     no_mouse: bool,
+    #[arg(
+        long = "no-update-check",
+        help = "Skip the startup check for a newer release for this session"
+    )]
+    no_update_check: bool,
 }
 
 fn main() -> Result<()> {
@@ -56,5 +61,5 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    gistui::tui::run(cli.no_mouse)
+    gistui::tui::run(cli.no_mouse, cli.no_update_check)
 }

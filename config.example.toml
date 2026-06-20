@@ -19,9 +19,14 @@ diff_show_full = false
 # theme = "dark"
 
 # Enable mouse support: wheel scroll, click to focus/select, double-click to open,
-# and a clickable [Esc]/[n] close button on pop-up screens. Default: true.
+# and a clickable [✕] close button on pop-up screens. Default: true.
 # (The `--no-mouse` CLI flag also forces it off for a single session.)
 mouse = true
+
+# Check GitHub on startup for a newer release and show a hint if one exists. Default: true.
+# Throttled to once per day; fails silently when offline.
+# (The `--no-update-check` CLI flag also forces it off for a single session.)
+check_updates = true
 
 # Directories skipped when recursive local file discovery is active (r key).
 # Hidden directories (names starting with ".") are always skipped regardless

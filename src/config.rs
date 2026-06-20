@@ -26,6 +26,10 @@ fn default_mouse() -> bool {
     true
 }
 
+fn default_check_updates() -> bool {
+    true
+}
+
 fn default_skip_dirs() -> Vec<String> {
     [
         "node_modules",
@@ -72,6 +76,10 @@ pub struct AppConfig {
     /// set `false` to opt out (the `--no-mouse` CLI flag also forces it off).
     #[serde(default = "default_mouse")]
     pub mouse: bool,
+    /// Check GitHub on startup for a newer release and show a hint if one exists. Default
+    /// `true`; set `false` to opt out (the `--no-update-check` CLI flag also forces it off).
+    #[serde(default = "default_check_updates")]
+    pub check_updates: bool,
 }
 
 impl Default for AppConfig {
@@ -84,6 +92,7 @@ impl Default for AppConfig {
             diff_show_full: false,
             theme: ThemeChoice::Dark,
             mouse: true,
+            check_updates: true,
         }
     }
 }
@@ -183,6 +192,12 @@ pub fn resolve_mouse_enabled(config_mouse: bool, no_mouse: bool) -> bool {
     config_mouse && !no_mouse
 }
 
+/// Effective update-check state: the config value, with the `--no-update-check` CLI flag
+/// able to force it off (no `--update-check` flag — edit the config to force on).
+pub fn resolve_update_check(config_check: bool, no_update_check: bool) -> bool {
+    config_check && !no_update_check
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,6 +256,7 @@ mod tests {
             diff_show_full: false,
             theme: ThemeChoice::Dark,
             mouse: true,
+            check_updates: true,
         };
 
         save_config(&path, &config).unwrap();
@@ -436,5 +452,21 @@ mod tests {
         assert!(!resolve_mouse_enabled(true, true)); // flag forces off
         assert!(!resolve_mouse_enabled(false, false)); // config off
         assert!(!resolve_mouse_enabled(false, true)); // both off
+    }
+
+    #[test]
+    fn check_updates_defaults_to_true_when_absent() {
+        // A config file with no `check_updates` key must load as enabled.
+        let toml = "scan_depth = 4\n";
+        let config: AppConfig = toml::from_str(toml).unwrap();
+        assert!(config.check_updates);
+    }
+
+    #[test]
+    fn resolve_update_check_truth_table() {
+        assert!(resolve_update_check(true, false)); // default on, no flag
+        assert!(!resolve_update_check(true, true)); // flag forces off
+        assert!(!resolve_update_check(false, false)); // config off
+        assert!(!resolve_update_check(false, true)); // both off
     }
 }

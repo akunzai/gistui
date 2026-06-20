@@ -95,7 +95,9 @@ file is never overwritten without a diff and `y/n` confirmation; destructive rem
 each get their own confirm. Others' gists (e.g. starred) are read-only for pin/upload/delete
 — fork with `F` in gist detail. No GitHub token is stored; gist content is never written to
 config. Mouse is on by default and can be disabled with `mouse = false` in the config file or
-the `--no-mouse` flag.
+the `--no-mouse` flag. On startup gistui checks GitHub once a day for a newer release and shows
+a footer hint if one exists (no telemetry; fails silently offline) — disable with
+`check_updates = false` or `--no-update-check`.
 
 Full rules: **[reference/SAFETY.md](reference/SAFETY.md)**.
 

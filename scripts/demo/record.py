@@ -69,7 +69,8 @@ def main():
     pid, master = pty.fork()
     if pid == 0:
         os.chdir(WORK)
-        os.execvpe(BIN, [BIN, WORK], env)
+        # --no-update-check keeps the recording deterministic and offline (no GitHub call).
+        os.execvpe(BIN, [BIN, "--no-update-check", WORK], env)
         os._exit(127)
 
     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
