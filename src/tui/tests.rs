@@ -404,6 +404,32 @@ fn preview_w_toggles_line_wrapping() {
 }
 
 #[test]
+fn diff_w_toggles_wrap_and_resets_hscroll() {
+    let mut state = initial_state();
+    state.screen = Screen::Diff;
+    state.diff_hscroll = 5;
+    assert!(!state.diff_wrap);
+    state.handle_key(KeyCode::Char('w'));
+    assert!(state.diff_wrap);
+    // Horizontal offset is meaningless once wrapping, so it resets.
+    assert_eq!(state.diff_hscroll, 0);
+    state.handle_key(KeyCode::Char('w'));
+    assert!(!state.diff_wrap);
+}
+
+#[test]
+fn diff_footer_reflects_wrap_toggle() {
+    let mut state = initial_state();
+    state.screen = Screen::Diff;
+    assert!(diff_footer(&state).contains("w wrap [off]"));
+    state.diff_wrap = true;
+    let footer = diff_footer(&state);
+    assert!(footer.contains("w wrap [on]"));
+    // The horizontal-scroll arrows are dropped from the hint when wrapping.
+    assert!(!footer.contains("←→"));
+}
+
+#[test]
 fn detail_x_requests_gist_delete_confirm() {
     let mut state = state_with_gists();
     state.screen = Screen::GistDetail;
