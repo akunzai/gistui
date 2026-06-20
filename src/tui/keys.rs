@@ -1406,6 +1406,12 @@ impl AppState {
                 self.diff_scroll = 0;
                 return KeyOutcome::PersistDiffContext;
             }
+            // Soft-wrap long lines instead of horizontal scrolling; reset the now-meaningless
+            // horizontal offset so wrapped lines start at column 0.
+            KeyCode::Char('w') => {
+                self.diff_wrap = !self.diff_wrap;
+                self.diff_hscroll = 0;
+            }
             _ => {}
         }
         KeyOutcome::None

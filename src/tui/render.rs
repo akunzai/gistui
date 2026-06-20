@@ -182,8 +182,9 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
         }
         HelpTopic::Diff => {
             "\
-  Up/Down/Left/Right  scroll the diff (also j / k / h / l)
+  Up/Down/Left/Right  scroll the diff (also j / k / h / l; Left/Right only when wrap is off)
   PageUp/Dn  scroll the diff by 10 lines (also Ctrl+b / Ctrl+f)
+  w          toggle soft line wrapping (remembered for the session)
   c          toggle context: configured radius <-> full file (remembered)
   d / u      download / upload from the diff
   syntax     unchanged context lines are syntax-highlighted by file type
@@ -2169,7 +2170,28 @@ pub(super) fn render_diff_pane(frame: &mut Frame, area: Rect, state: &AppState) 
         None => state.diff_text.clone(),
     };
     let ext = diff_ext(state);
-    frame.render_widget(
+    let block = Block::default()
+        .title(diff_title(state))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .style(state.theme.base_style())
+        .padding(Padding::horizontal(1));
+    let paragraph = if state.diff_wrap {
+        // Wrapping needs the full, un-h-scrolled line set; vertical scroll goes through
+        // Paragraph. Mirrors render_preview's wrap branch.
+        Paragraph::new(diff_view_highlighted(
+            &diff_body,
+            0,
+            0,
+            ext.as_deref(),
+            state.syntax_highlight,
+            &state.theme,
+        ))
+        .style(state.theme.base_style())
+        .scroll((state.diff_scroll, 0))
+        .wrap(Wrap { trim: false })
+        .block(block)
+    } else {
         Paragraph::new(diff_view_highlighted(
             &diff_body,
             state.diff_scroll,
@@ -2179,18 +2201,14 @@ pub(super) fn render_diff_pane(frame: &mut Frame, area: Rect, state: &AppState) 
             &state.theme,
         ))
         .style(state.theme.base_style())
-        .block(
-            Block::default()
-                .title(diff_title(state))
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .style(state.theme.base_style())
-                .padding(Padding::horizontal(1)),
-        ),
-        area,
-    );
-    let total_lines = diff_body.lines().count();
-    render_text_scrollbar(frame, area, total_lines, state.diff_scroll as usize);
+        .block(block)
+    };
+    frame.render_widget(paragraph, area);
+    // The scrollbar's 1:1 line↔row mapping only holds without soft wrapping (see render_preview).
+    if !state.diff_wrap {
+        let total_lines = diff_body.lines().count();
+        render_text_scrollbar(frame, area, total_lines, state.diff_scroll as usize);
+    }
 }
 
 /// The `Screen::Diff` preview: the diff pane plus a scroll/commands footer.
@@ -2205,18 +2223,28 @@ pub(super) fn diff_footer(state: &AppState) -> String {
     } else {
         format!("c context [{}]", state.diff_context)
     };
-    let scroll = "↑↓←→ PgUp/Dn scroll";
+    // When wrapping, horizontal scroll (←→) is meaningless — drop it from the hint.
+    let scroll = if state.diff_wrap {
+        "↑↓ PgUp/Dn scroll"
+    } else {
+        "↑↓←→ PgUp/Dn scroll"
+    };
+    let wrap = if state.diff_wrap {
+        "w wrap [on]"
+    } else {
+        "w wrap [off]"
+    };
     let back = "Esc/q back";
     if !state.diff_allows_sync() {
         if state.diff_identical {
-            format!("Files are identical  ·  {scroll}  ·  {context}  ·  {back}")
+            format!("Files are identical  ·  {scroll}  ·  {wrap}  ·  {context}  ·  {back}")
         } else {
-            format!("{scroll}  ·  {context}  ·  {back}")
+            format!("{scroll}  ·  {wrap}  ·  {context}  ·  {back}")
         }
     } else if state.diff_identical {
-        format!("Files are identical — nothing to sync  ·  {scroll}  ·  {context}  ·  {back}")
+        format!("Files are identical — nothing to sync  ·  {scroll}  ·  {wrap}  ·  {context}  ·  {back}")
     } else {
-        format!("{scroll}  ·  d download  ·  u upload  ·  {context}  ·  {back}")
+        format!("{scroll}  ·  d download  ·  u upload  ·  {wrap}  ·  {context}  ·  {back}")
     }
 }
 

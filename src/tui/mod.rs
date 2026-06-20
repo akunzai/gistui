@@ -461,6 +461,9 @@ pub struct AppState {
     pub diff_text: String,
     pub diff_scroll: u16,
     pub diff_hscroll: u16,
+    /// Soft-wrap long lines in the diff view instead of horizontal scrolling (`w` toggles;
+    /// session-scoped, mirrors `preview_wrap`).
+    pub diff_wrap: bool,
     pub diff_identical: bool,
     /// Unchanged context lines kept around each change in the diff view (from config).
     pub diff_context: u32,
@@ -1383,6 +1386,7 @@ pub fn initial_state() -> AppState {
         diff_text: String::new(),
         diff_scroll: 0,
         diff_hscroll: 0,
+        diff_wrap: false,
         diff_identical: false,
         diff_context: 3,
         diff_show_full: false,
