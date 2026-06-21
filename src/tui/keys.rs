@@ -85,10 +85,10 @@ impl AppState {
 
     /// Open the Help screen on the topic for the current screen, remembering where to return.
     fn open_help(&mut self) {
-        self.help_return = self.screen;
-        self.help_topic = HelpTopic::for_screen(self.screen);
-        self.help_index_open = false;
-        self.help_scroll = 0;
+        self.help.return_screen = self.screen;
+        self.help.topic = HelpTopic::for_screen(self.screen);
+        self.help.index_open = false;
+        self.help.scroll = 0;
         self.screen = Screen::Help;
     }
 
@@ -109,14 +109,14 @@ impl AppState {
         match self.screen {
             Screen::Help => {
                 let topics = HelpTopic::all();
-                if self.help_index_open {
+                if self.help.index_open {
                     match action {
                         NavAction::Up => {
-                            self.help_index_sel = self.help_index_sel.saturating_sub(1)
+                            self.help.index_sel = self.help.index_sel.saturating_sub(1)
                         }
                         NavAction::Down => {
-                            if self.help_index_sel + 1 < topics.len() {
-                                self.help_index_sel += 1;
+                            if self.help.index_sel + 1 < topics.len() {
+                                self.help.index_sel += 1;
                             }
                         }
                         _ => return false,
@@ -124,16 +124,16 @@ impl AppState {
                 } else {
                     match action {
                         NavAction::Up => {
-                            self.help_scroll = self.help_scroll.saturating_sub(1);
+                            self.help.scroll = self.help.scroll.saturating_sub(1);
                         }
                         NavAction::Down => {
-                            self.help_scroll = self.help_scroll.saturating_add(1);
+                            self.help.scroll = self.help.scroll.saturating_add(1);
                         }
                         NavAction::PageUp => {
-                            self.help_scroll = self.help_scroll.saturating_sub(PAGE_SCROLL);
+                            self.help.scroll = self.help.scroll.saturating_sub(PAGE_SCROLL);
                         }
                         NavAction::PageDown => {
-                            self.help_scroll = self.help_scroll.saturating_add(PAGE_SCROLL);
+                            self.help.scroll = self.help.scroll.saturating_add(PAGE_SCROLL);
                         }
                         _ => return false,
                     }
@@ -295,41 +295,41 @@ impl AppState {
 
     fn handle_key_help(&mut self, code: KeyCode) -> KeyOutcome {
         let topics = HelpTopic::all();
-        if self.help_index_open {
+        if self.help.index_open {
             match code {
                 KeyCode::Enter => {
-                    self.help_topic = topics[self.help_index_sel];
-                    self.help_index_open = false;
-                    self.help_scroll = 0;
+                    self.help.topic = topics[self.help.index_sel];
+                    self.help.index_open = false;
+                    self.help.scroll = 0;
                 }
                 KeyCode::Char(c @ '1'..='9') if (c as u8 - b'1') < topics.len() as u8 => {
-                    self.help_topic = topics[(c as u8 - b'1') as usize];
-                    self.help_index_open = false;
-                    self.help_scroll = 0;
+                    self.help.topic = topics[(c as u8 - b'1') as usize];
+                    self.help.index_open = false;
+                    self.help.scroll = 0;
                 }
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
-                    self.screen = self.help_return;
-                    self.help_index_open = false;
-                    self.help_scroll = 0;
+                    self.screen = self.help.return_screen;
+                    self.help.index_open = false;
+                    self.help.scroll = 0;
                 }
                 _ => {}
             }
         } else {
             match code {
                 KeyCode::Tab => {
-                    self.help_index_sel = topics
+                    self.help.index_sel = topics
                         .iter()
-                        .position(|&t| t == self.help_topic)
+                        .position(|&t| t == self.help.topic)
                         .unwrap_or(0);
-                    self.help_index_open = true;
+                    self.help.index_open = true;
                 }
                 KeyCode::Char(c @ '1'..='9') if (c as u8 - b'1') < topics.len() as u8 => {
-                    self.help_topic = topics[(c as u8 - b'1') as usize];
-                    self.help_scroll = 0;
+                    self.help.topic = topics[(c as u8 - b'1') as usize];
+                    self.help.scroll = 0;
                 }
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
-                    self.screen = self.help_return;
-                    self.help_scroll = 0;
+                    self.screen = self.help.return_screen;
+                    self.help.scroll = 0;
                 }
                 _ => {}
             }
@@ -685,7 +685,7 @@ impl AppState {
             // GistDetail: the comments body scrolls like content (3 lines); the file list
             // steps one file at a time.
             Screen::GistDetail if self.detail_focus == DetailFocus::Comments => 3,
-            Screen::Help if !self.help_index_open => 3, // help body scrolls; topic index is a list
+            Screen::Help if !self.help.index_open => 3, // help body scrolls; topic index is a list
             _ => 1, // List/Pins/Gists/Revisions/Help index/GistDetail Files
         }
     }
