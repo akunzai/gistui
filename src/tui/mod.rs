@@ -1314,15 +1314,19 @@ impl AppState {
     }
 
     pub fn scroll_diff_down(&mut self) {
-        let max = self
-            .diff_text
-            .lines()
-            .count()
-            .saturating_sub(1)
-            .min(u16::MAX as usize) as u16;
+        let max = self.diff_vscroll_max();
         if self.diff_scroll < max {
             self.diff_scroll += 1;
         }
+    }
+
+    /// Bottom clamp for the diff/preview vertical scroll: the last addressable line index.
+    fn diff_vscroll_max(&self) -> u16 {
+        self.diff_text
+            .lines()
+            .count()
+            .saturating_sub(1)
+            .min(u16::MAX as usize) as u16
     }
 
     pub fn scroll_diff_up(&mut self) {
@@ -1331,12 +1335,7 @@ impl AppState {
 
     /// Page the diff/preview down by `lines`, clamped to the same bottom as `scroll_diff_down`.
     pub fn scroll_diff_page_down(&mut self, lines: u16) {
-        let max = self
-            .diff_text
-            .lines()
-            .count()
-            .saturating_sub(1)
-            .min(u16::MAX as usize) as u16;
+        let max = self.diff_vscroll_max();
         self.diff_scroll = self.diff_scroll.saturating_add(lines).min(max);
     }
 
