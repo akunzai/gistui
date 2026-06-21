@@ -4649,7 +4649,8 @@ fn wheel_step_gist_detail_files_moves_one() {
 #[test]
 fn comment_lines_count_matches_built_lines() {
     use crate::domain::GistComment;
-    use crate::tui::render::{comment_lines, comment_lines_count};
+    use crate::tui::render::comment_lines;
+    use crate::tui::text::comment_lines_count;
     let theme = crate::tui::theme::Theme::for_choice(crate::config::ThemeChoice::Dark);
     let comments = vec![
         GistComment {

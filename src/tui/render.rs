@@ -1085,16 +1085,6 @@ pub(super) fn comment_lines<'a>(
     lines
 }
 
-/// Logical line count of `comment_lines(comments, …)` — the amount to add to
-/// `detail_scroll` when older comments are prepended, so the viewport does not jump.
-pub(super) fn comment_lines_count(comments: &[GistComment]) -> u16 {
-    comments
-        .iter()
-        .map(|c| 2 + c.body.lines().count())
-        .sum::<usize>()
-        .min(u16::MAX as usize) as u16
-}
-
 /// Dim helper line (matches the existing dim placeholder styling).
 fn dim_line<'a>(text: &'a str, state: &AppState) -> Line<'a> {
     Line::from(Span::styled(text, Style::default().fg(state.theme.dim)))
@@ -1317,10 +1307,6 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &m
             &state.theme,
         ));
     }
-}
-
-pub(super) fn local_row_label(path: &std::path::Path, cwd: &std::path::Path) -> String {
-    path.strip_prefix(cwd).unwrap_or(path).display().to_string()
 }
 
 pub(super) fn hscroll_str(text: &str, offset: u16) -> String {
@@ -1654,7 +1640,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
         visible_locals
             .iter()
             .map(|r| {
-                let base = local_row_label(&r.candidate.path, &state.cwd);
+                let base = super::text::local_row_label(&r.candidate.path, &state.cwd);
                 marked_item(base, row_mark(&r.reasons), state.local_hscroll)
             })
             .collect()

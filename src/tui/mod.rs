@@ -890,7 +890,7 @@ impl AppState {
         let query = self.local_filter_query.to_lowercase();
         if !query.is_empty() {
             ranked.retain(|r| {
-                render::local_row_label(&r.candidate.path, &self.cwd)
+                local_row_label(&r.candidate.path, &self.cwd)
                     .to_lowercase()
                     .contains(&query)
             });
@@ -1699,7 +1699,7 @@ impl AppState {
         self.detail.comments_loading_more = false;
         match result {
             Ok(mut older) => {
-                let added = crate::tui::render::comment_lines_count(&older);
+                let added = comment_lines_count(&older);
                 if let Some(existing) = self.detail.comments.as_mut() {
                     older.append(existing);
                     *existing = older;
@@ -1736,6 +1736,8 @@ impl AppState {
 mod highlight;
 mod render;
 use render::*;
+mod text;
+use text::{comment_lines_count, local_row_label};
 mod keys;
 mod run_loop;
 use run_loop::run_loop;
