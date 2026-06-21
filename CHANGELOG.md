@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Gist comments now load newest-first in pages of 30 (popular gists no longer dump every comment or silently stop at 100); `m` or clicking the top line loads 30 older comments. The Comments pane is restyled with a per-comment header, relative time, and a loaded-range title.
 - Diff view: a difference that is *only* a file-final newline no longer shows as a phantom change and no longer forces an overwrite confirm (GitHub stores gists with a trailing newline that local files often lack); disable with `ignore_trailing_newline = false` for byte-exact diffs.
 
 ## [0.13.0] — 2026-06-20

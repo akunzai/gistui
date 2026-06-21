@@ -152,6 +152,7 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   Tab        switch tab: Files / Comments (one shows at a time; opens on Files)
   Up/Down    move the file cursor (Files tab) or scroll comments (also j / k)
   PageUp/Dn  page comments / file cursor by 10 (also Ctrl+b / Ctrl+f)
+  m          load 30 older comments (Comments tab; also click the top line)
   Enter      preview the cursor-selected file (file list focused; blocked for binary)
   1-9        preview the content of the Nth file (full-screen; R refresh, q back)
              non-text files are tagged (binary) in the list
