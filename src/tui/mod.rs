@@ -433,6 +433,19 @@ pub fn classify_click(
     }
 }
 
+/// Per-screen upload-diff state (the `u` flow). Data only — the upload methods
+/// (`init_upload_state`, `content_to_upload`, `update_upload_diff`) stay on `AppState`.
+#[derive(Debug, Clone, Default)]
+pub struct UploadState {
+    pub original_content: String,
+    pub edited_content: Option<String>,
+    pub json_pretty: bool,
+    pub json_sort: bool,
+    pub remote_content: Option<String>,
+    pub local_label: Option<String>,
+    pub gist_label: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub locals: Vec<LocalCandidate>,
@@ -542,13 +555,7 @@ pub struct AppState {
     pub help_index_open: bool,
     /// Highlighted row in the Help topic index.
     pub help_index_sel: usize,
-    pub upload_original_content: String,
-    pub upload_edited_content: Option<String>,
-    pub upload_json_pretty: bool,
-    pub upload_json_sort: bool,
-    pub upload_remote_content: Option<String>,
-    pub upload_local_label: Option<String>,
-    pub upload_gist_label: Option<String>,
+    pub upload: UploadState,
     /// gist_id of the active download (set when entering the diff Confirm for a pull).
     pub download_gist_id: Option<String>,
     /// filename of the active download (set when entering the diff Confirm for a pull).
@@ -642,15 +649,16 @@ impl AppState {
 
     pub fn content_to_upload(&self) -> String {
         let base = self
-            .upload_edited_content
+            .upload
+            .edited_content
             .as_ref()
-            .unwrap_or(&self.upload_original_content);
+            .unwrap_or(&self.upload.original_content);
         if let Some(local_path) = self.upload_local_path() {
             if is_json_file(&local_path) {
                 if let Ok(transformed) = crate::domain::transform_json(
                     base,
-                    self.upload_json_pretty,
-                    self.upload_json_sort,
+                    self.upload.json_pretty,
+                    self.upload.json_sort,
                 ) {
                     return transformed;
                 }
@@ -662,12 +670,13 @@ impl AppState {
     pub fn update_upload_diff(&mut self) {
         let local_content = self.content_to_upload();
         let remote = self
-            .upload_remote_content
+            .upload
+            .remote_content
             .as_ref()
             .cloned()
             .unwrap_or_default();
-        let local_label = self.upload_local_label.clone().unwrap_or_default();
-        let gist_label = self.upload_gist_label.clone().unwrap_or_default();
+        let local_label = self.upload.local_label.clone().unwrap_or_default();
+        let gist_label = self.upload.gist_label.clone().unwrap_or_default();
 
         let diff = crate::diff::unified_diff(
             &gist_label,
@@ -690,13 +699,13 @@ impl AppState {
         local_label: String,
         gist_label: String,
     ) -> std::io::Result<()> {
-        self.upload_original_content = std::fs::read_to_string(local_path)?;
-        self.upload_edited_content = None;
-        self.upload_json_pretty = false;
-        self.upload_json_sort = false;
-        self.upload_remote_content = remote_content;
-        self.upload_local_label = Some(local_label);
-        self.upload_gist_label = Some(gist_label);
+        self.upload.original_content = std::fs::read_to_string(local_path)?;
+        self.upload.edited_content = None;
+        self.upload.json_pretty = false;
+        self.upload.json_sort = false;
+        self.upload.remote_content = remote_content;
+        self.upload.local_label = Some(local_label);
+        self.upload.gist_label = Some(gist_label);
         self.update_upload_diff();
         Ok(())
     }
@@ -1453,13 +1462,7 @@ pub fn initial_state() -> AppState {
         help_topic: HelpTopic::List,
         help_index_open: false,
         help_index_sel: 0,
-        upload_original_content: String::new(),
-        upload_edited_content: None,
-        upload_json_pretty: false,
-        upload_json_sort: false,
-        upload_remote_content: None,
-        upload_local_label: None,
-        upload_gist_label: None,
+        upload: UploadState::default(),
         download_gist_id: None,
         download_gist_filename: None,
         diff_return: Screen::List,

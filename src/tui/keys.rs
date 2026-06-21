@@ -1417,11 +1417,11 @@ impl AppState {
                 }
                 KeyCode::Char('e') => return KeyOutcome::EditUpload,
                 KeyCode::Char('p') if is_json_file(local_path) => {
-                    self.upload_json_pretty = !self.upload_json_pretty;
+                    self.upload.json_pretty = !self.upload.json_pretty;
                     self.update_upload_diff();
                 }
                 KeyCode::Char('s') if is_json_file(local_path) => {
-                    self.upload_json_sort = !self.upload_json_sort;
+                    self.upload.json_sort = !self.upload.json_sort;
                     self.update_upload_diff();
                 }
                 _ => {}

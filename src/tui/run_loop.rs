@@ -2103,7 +2103,7 @@ fn edit_upload_buffer(
     match result {
         Ok(_) => match std::fs::read_to_string(&temp_file_path) {
             Ok(edited_content) => {
-                state.upload_edited_content = Some(edited_content);
+                state.upload.edited_content = Some(edited_content);
                 state.update_upload_diff();
                 state.set_status("Edited redact buffer");
             }

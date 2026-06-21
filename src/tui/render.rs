@@ -2141,19 +2141,19 @@ pub(super) fn confirm_prompt(state: &AppState) -> String {
             filename,
             local_path,
         }) => {
-            let edited_status = if state.upload_edited_content.is_some() {
+            let edited_status = if state.upload.edited_content.is_some() {
                 " [edited]"
             } else {
                 ""
             };
             let mut opts = format!("y yes  n/Esc cancel  e edit{edited_status}");
             if is_json_file(local_path) {
-                let pretty_status = if state.upload_json_pretty {
+                let pretty_status = if state.upload.json_pretty {
                     " [on]"
                 } else {
                     " [off]"
                 };
-                let sort_status = if state.upload_json_sort {
+                let sort_status = if state.upload.json_sort {
                     " [on]"
                 } else {
                     " [off]"
