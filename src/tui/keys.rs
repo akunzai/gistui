@@ -52,7 +52,7 @@ impl AppState {
         if code == KeyCode::Char('T')
             && theme_toggle_modifiers_ok(modifiers)
             && !self.filtering
-            && !self.pins_filtering
+            && !self.pins.filtering
             && !self.gists_filtering
             && !self.editing_description
         {
@@ -101,7 +101,7 @@ impl AppState {
         }
         // While filtering, arrows/hjkl are typed or handled in the filter branches; page keys
         // still jump the live selection by PAGE_SCROLL.
-        if (self.filtering || self.pins_filtering || self.gists_filtering)
+        if (self.filtering || self.pins.filtering || self.gists_filtering)
             && !matches!(action, NavAction::PageUp | NavAction::PageDown)
         {
             return false;
@@ -144,33 +144,33 @@ impl AppState {
                 let len = self.visible_pin_indices().len();
                 match action {
                     NavAction::Down => {
-                        if self.pins_index + 1 < len {
-                            self.pins_index += 1;
-                            self.pins_hscroll = 0;
+                        if self.pins.index + 1 < len {
+                            self.pins.index += 1;
+                            self.pins.hscroll = 0;
                         }
                     }
                     NavAction::Up => {
-                        if self.pins_index > 0 {
-                            self.pins_index -= 1;
-                            self.pins_hscroll = 0;
+                        if self.pins.index > 0 {
+                            self.pins.index -= 1;
+                            self.pins.hscroll = 0;
                         }
                     }
                     NavAction::Right => {
-                        self.pins_hscroll = (self.pins_hscroll + 1).min(self.pins_hscroll_max());
+                        self.pins.hscroll = (self.pins.hscroll + 1).min(self.pins_hscroll_max());
                     }
                     NavAction::Left => {
-                        self.pins_hscroll = self.pins_hscroll.saturating_sub(1);
+                        self.pins.hscroll = self.pins.hscroll.saturating_sub(1);
                     }
                     NavAction::PageDown => {
                         if len > 0 {
                             let max = len - 1;
-                            self.pins_index = (self.pins_index + PAGE_SCROLL as usize).min(max);
-                            self.pins_hscroll = 0;
+                            self.pins.index = (self.pins.index + PAGE_SCROLL as usize).min(max);
+                            self.pins.hscroll = 0;
                         }
                     }
                     NavAction::PageUp => {
-                        self.pins_index = self.pins_index.saturating_sub(PAGE_SCROLL as usize);
-                        self.pins_hscroll = 0;
+                        self.pins.index = self.pins.index.saturating_sub(PAGE_SCROLL as usize);
+                        self.pins.hscroll = 0;
                     }
                 }
                 true
@@ -342,30 +342,30 @@ impl AppState {
         // key may set a fresh one afterwards (e.g. "already in sync").
         self.status = None;
         // Inline text filter: live-navigate with arrows; Tab is a no-op (single pane).
-        if self.pins_filtering {
+        if self.pins.filtering {
             match code {
-                KeyCode::Up if self.pins_index > 0 => {
-                    self.pins_index -= 1;
-                    self.pins_hscroll = 0;
+                KeyCode::Up if self.pins.index > 0 => {
+                    self.pins.index -= 1;
+                    self.pins.hscroll = 0;
                 }
                 KeyCode::Up => {}
                 KeyCode::Down => {
-                    if self.pins_index + 1 < self.visible_pin_indices().len() {
-                        self.pins_index += 1;
-                        self.pins_hscroll = 0;
+                    if self.pins.index + 1 < self.visible_pin_indices().len() {
+                        self.pins.index += 1;
+                        self.pins.hscroll = 0;
                     }
                 }
-                _ => match apply_filter_edit(code, &mut self.pins_filter_query) {
+                _ => match apply_filter_edit(code, &mut self.pins.filter_query) {
                     FilterKey::Edited => {
-                        self.pins_index = 0;
-                        self.pins_hscroll = 0;
+                        self.pins.index = 0;
+                        self.pins.hscroll = 0;
                     }
                     FilterKey::Cleared => {
-                        self.pins_filtering = false;
-                        self.pins_index = 0;
-                        self.pins_hscroll = 0;
+                        self.pins.filtering = false;
+                        self.pins.index = 0;
+                        self.pins.hscroll = 0;
                     }
-                    FilterKey::Exited => self.pins_filtering = false,
+                    FilterKey::Exited => self.pins.filtering = false,
                     FilterKey::Moved | FilterKey::Pass => {}
                 },
             }
@@ -373,7 +373,7 @@ impl AppState {
         }
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
-            KeyCode::Char('/') => self.pins_filtering = true,
+            KeyCode::Char('/') => self.pins.filtering = true,
             KeyCode::Enter if !self.pinned.is_empty() => {
                 if let Some(idx) = self.selected_pin_index() {
                     let (gist_id, gist_filename, local_path) = {
@@ -399,9 +399,9 @@ impl AppState {
             KeyCode::Char('u') if !self.pinned.is_empty() => return KeyOutcome::SyncPinPush,
             KeyCode::Char('d') if !self.pinned.is_empty() => return KeyOutcome::SyncPinPull,
             KeyCode::Char('o') => {
-                self.pins_sort = self.pins_sort.next();
-                self.pins_index = 0;
-                self.pins_hscroll = 0;
+                self.pins.sort = self.pins.sort.next();
+                self.pins.index = 0;
+                self.pins.hscroll = 0;
             }
             KeyCode::Char('?') => self.open_help(),
             _ => {}
@@ -745,8 +745,8 @@ impl AppState {
                 if let Some(hit) = layout.list {
                     if point_in(hit.rect, col, row) {
                         if let Some(idx) = hit.index_at(row, self.visible_pin_indices().len()) {
-                            self.pins_index = idx;
-                            self.pins_hscroll = 0;
+                            self.pins.index = idx;
+                            self.pins.hscroll = 0;
                             return true;
                         }
                     }
@@ -1061,8 +1061,8 @@ impl AppState {
             KeyCode::Char('y') => return KeyOutcome::CopyGistUrl,
             KeyCode::Char('?') => self.open_help(),
             KeyCode::Char('P') => {
-                self.pins_index = 0;
-                self.pins_hscroll = 0;
+                self.pins.index = 0;
+                self.pins.hscroll = 0;
                 self.screen = Screen::Pins;
             }
             KeyCode::Char('S') => return KeyOutcome::SyncSelectedPair,

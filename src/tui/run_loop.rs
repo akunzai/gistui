@@ -2270,8 +2270,9 @@ fn unpin_at_pin_index(state: &mut AppState) {
             state.pinned = config.pinned;
             state.skip_dirs = config.skip_dirs;
             state.scan_depth = config.scan_depth;
-            state.pins_index = state
-                .pins_index
+            state.pins.index = state
+                .pins
+                .index
                 .min(state.visible_pin_indices().len().saturating_sub(1));
             refresh_locals(state);
             state.set_status(format!("Unpinned {label}"));
