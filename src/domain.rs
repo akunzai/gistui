@@ -235,6 +235,26 @@ pub struct GistGroup {
 }
 
 impl GistFile {
+    /// A bare row carrying only the identity a sync/diff/upload operation needs —
+    /// `gist_id`, `filename`, and `raw_url`. All display/metadata fields default to empty,
+    /// so adding a new field to `GistFile` no longer means editing every call site that
+    /// builds one of these throwaway targets.
+    pub fn for_sync(gist_id: String, filename: String, raw_url: Option<String>) -> Self {
+        GistFile {
+            gist_id,
+            description: String::new(),
+            filename,
+            public: false,
+            updated_at: String::new(),
+            created_at: String::new(),
+            owner_login: String::new(),
+            fork_of_id: None,
+            raw_url,
+            content_type: None,
+            node_id: None,
+        }
+    }
+
     pub fn is_owned_by(&self, login: &str) -> bool {
         !login.is_empty() && self.owner_login == login
     }
