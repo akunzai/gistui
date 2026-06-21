@@ -1108,8 +1108,14 @@ impl AppState {
     /// Open `Screen::Revisions` for the gist on `return_screen`. Returns false when no gist
     /// is selected or the gist has no files.
     pub fn open_revisions(&mut self, return_screen: Screen) -> bool {
+        // Snapshot the selected gist once for the List path; it feeds both `gist_id` and
+        // `target_file` below, avoiding a second `ranked_gists` recompute (perf-1, #154).
+        let selected_list_gist = match return_screen {
+            Screen::List => self.selected_gist(),
+            _ => None,
+        };
         let gist_id = match return_screen {
-            Screen::List => self.selected_gist().map(|g| g.file.gist_id.clone()),
+            Screen::List => selected_list_gist.as_ref().map(|g| g.file.gist_id.clone()),
             Screen::GistDetail => self.detail.gist_id.clone(),
             Screen::Gists => self.selected_group().map(|g| g.id.clone()),
             _ => None,
@@ -1119,8 +1125,8 @@ impl AppState {
         };
         let filenames = self.gist_filenames(&gist_id);
         let target_file = match return_screen {
-            Screen::List => self
-                .selected_gist()
+            Screen::List => selected_list_gist
+                .as_ref()
                 .map(|g| g.file.filename.clone())
                 .filter(|f| filenames.iter().any(|name| name == f)),
             Screen::GistDetail => filenames

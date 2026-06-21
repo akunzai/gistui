@@ -1099,12 +1099,18 @@ impl AppState {
                 return KeyOutcome::DownloadGist;
             }
             // Enter works from either pane: it diffs the selected local file against the
-            // selected gist (the top match when focus is on the local pane).
-            KeyCode::Enter if self.gist_index < self.ranked_gists().len() => {
-                let Some(gist) = self.selected_gist() else {
+            // selected gist (the top match when focus is on the local pane). Snapshot both
+            // ranked lists once here instead of recomputing them through the bounds guard plus
+            // `selected_gist`/`selected_local` (perf-1, #154).
+            KeyCode::Enter => {
+                let ranked = self.ranked_gists();
+                let Some(gist) = ranked.get(self.gist_index) else {
                     return KeyOutcome::None;
                 };
-                let local_path = self.selected_local().map(|l| l.path.clone());
+                let local_path = self
+                    .visible_locals()
+                    .get(self.local_index)
+                    .map(|r| r.candidate.path.clone());
                 if self.block_if_non_previewable_diff(
                     &gist.file.gist_id,
                     &gist.file.filename,
