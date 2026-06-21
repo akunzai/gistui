@@ -882,18 +882,8 @@ pub(super) fn run_loop(
                         .iter()
                         .find(|g| g.gist_id == gist_id && g.filename == filename)
                         .cloned()
-                        .unwrap_or_else(|| GistFile {
-                            gist_id: gist_id.clone(),
-                            description: String::new(),
-                            filename: filename.clone(),
-                            public: false,
-                            updated_at: String::new(),
-                            created_at: String::new(),
-                            owner_login: String::new(),
-                            fork_of_id: None,
-                            raw_url: None,
-                            content_type: None,
-                            node_id: None,
+                        .unwrap_or_else(|| {
+                            GistFile::for_sync(gist_id.clone(), filename.clone(), None)
                         });
                     (local_path, gist_id, gist_file)
                 } else {
@@ -963,19 +953,7 @@ pub(super) fn run_loop(
                     .any(|g| g.gist_id == gist_id && g.filename == filename);
 
                 let plan = if has_same_name {
-                    let target = GistFile {
-                        gist_id: gist_id.clone(),
-                        description: String::new(),
-                        filename: filename.clone(),
-                        public: false,
-                        updated_at: String::new(),
-                        created_at: String::new(),
-                        owner_login: String::new(),
-                        fork_of_id: None,
-                        raw_url: None,
-                        content_type: None,
-                        node_id: None,
-                    };
+                    let target = GistFile::for_sync(gist_id.clone(), filename.clone(), None);
                     crate::actions::upload_command(&temp_file_path, &target)
                 } else {
                     crate::actions::upload_add_command(&temp_file_path, &gist_id)
@@ -1853,19 +1831,7 @@ fn spawn_pin_push(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         local_path: local_path.clone(),
     });
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
-    let gist_file = GistFile {
-        gist_id: gist_id.clone(),
-        description: String::new(),
-        filename: filename.clone(),
-        public: false,
-        updated_at: String::new(),
-        created_at: String::new(),
-        owner_login: String::new(),
-        fork_of_id: None,
-        raw_url: raw_url.clone(),
-        content_type: None,
-        node_id: None,
-    };
+    let gist_file = GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone());
     let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
     spawn_bg(state, bg_rx, "Loading diff…", move || {
         let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
@@ -1888,19 +1854,7 @@ fn spawn_pin_pull(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
-    let gist_file = GistFile {
-        gist_id: gist_id.clone(),
-        description: String::new(),
-        filename: filename.clone(),
-        public: false,
-        updated_at: String::new(),
-        created_at: String::new(),
-        owner_login: String::new(),
-        fork_of_id: None,
-        raw_url: raw_url.clone(),
-        content_type: None,
-        node_id: None,
-    };
+    let gist_file = GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone());
     let (local_label, gist_label) = diff_labels(Some(&target), &gist_file);
     spawn_bg(state, bg_rx, "Downloading…", move || {
         let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
@@ -1935,17 +1889,8 @@ fn spawn_pin_diff(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::Pin
         .unwrap_or_default();
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
     let gist_file = GistFile {
-        gist_id: gist_id.clone(),
-        description: String::new(),
-        filename: filename.clone(),
-        public: false,
         updated_at,
-        created_at: String::new(),
-        owner_login: String::new(),
-        fork_of_id: None,
-        raw_url: raw_url.clone(),
-        content_type: None,
-        node_id: None,
+        ..GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone())
     };
     let (local_label, gist_label) = diff_labels(Some(&local_abs), &gist_file);
     let target = local_abs.clone();
