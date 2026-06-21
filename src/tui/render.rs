@@ -568,10 +568,10 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut Mou
     let area = frame.area();
     // Footer: filter input while filtering, else a one-shot status message (e.g. the compaction
     // result) when present, else the command hints. Only the hints get key colouring.
-    let (ftitle, footer, colored) = if state.gists_filtering {
+    let (ftitle, footer, colored) = if state.gist_manager.filtering {
         (
             "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
-            format!("/{}_", state.gists_filter_query),
+            format!("/{}_", state.gist_manager.filter_query),
             false,
         )
     } else if let Some(message) = &state.status {
@@ -608,7 +608,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut Mou
                     &gist_group_row_label(
                         g,
                         now,
-                        state.gists_sort,
+                        state.gist_manager.sort,
                         (
                             state.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
                             state.gist_star_counts.get(&g.id).copied().unwrap_or(0),
@@ -617,23 +617,23 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut Mou
                         state.gist_is_starred(&g.id),
                         state.current_user_login.as_deref(),
                     ),
-                    state.gists_hscroll,
+                    state.gist_manager.hscroll,
                 ))
             })
             .collect()
     };
 
-    let selected = (!groups.is_empty()).then_some(state.gists_index);
+    let selected = (!groups.is_empty()).then_some(state.gist_manager.index);
     let mut title = format!(
         "Gists {}  ·  sort:{}  ·  type:{}  ·  ★ {}  ·  ⑂ {}",
         count_label(groups.len(), state.gist_groups().len()),
-        state.gists_sort.label(),
-        state.gists_type_filter.label(),
+        state.gist_manager.sort.label(),
+        state.gist_manager.type_filter.label(),
         state.starred_gist_count(),
         state.owned_fork_gist_count()
     );
-    if !state.gists_filter_query.is_empty() {
-        title.push_str(&format!("  ·  /{}", state.gists_filter_query));
+    if !state.gist_manager.filter_query.is_empty() {
+        title.push_str(&format!("  ·  /{}", state.gist_manager.filter_query));
     }
     let list = List::new(items)
         .block(
@@ -664,12 +664,12 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut Mou
         });
     }
 
-    if state.gists_filtering {
+    if state.gist_manager.filtering {
         render_footer_line(
             frame,
             chunks[1],
             &ftitle,
-            input_line("/", &state.gists_filter_query, ""),
+            input_line("/", &state.gist_manager.filter_query, ""),
             &state.theme,
         );
     } else {
