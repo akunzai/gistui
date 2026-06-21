@@ -261,29 +261,8 @@ impl AppState {
                 }
                 true
             }
-            Screen::Diff => {
-                match action {
-                    NavAction::Down => self.scroll_diff_down(),
-                    NavAction::Up => self.scroll_diff_up(),
-                    NavAction::PageDown => self.scroll_diff_page_down(PAGE_SCROLL),
-                    NavAction::PageUp => self.scroll_diff_page_up(PAGE_SCROLL),
-                    NavAction::Right => self.scroll_diff_right(),
-                    NavAction::Left => self.scroll_diff_left(),
-                }
-                true
-            }
-            Screen::Preview => {
-                match action {
-                    NavAction::Down => self.scroll_diff_down(),
-                    NavAction::Up => self.scroll_diff_up(),
-                    NavAction::PageDown => self.scroll_diff_page_down(PAGE_SCROLL),
-                    NavAction::PageUp => self.scroll_diff_page_up(PAGE_SCROLL),
-                    NavAction::Right => self.scroll_diff_right(),
-                    NavAction::Left => self.scroll_diff_left(),
-                }
-                true
-            }
-            Screen::Confirm => {
+            // Diff, Preview and Confirm all scroll the same diff/preview buffer identically.
+            Screen::Diff | Screen::Preview | Screen::Confirm => {
                 match action {
                     NavAction::Down => self.scroll_diff_down(),
                     NavAction::Up => self.scroll_diff_up(),
