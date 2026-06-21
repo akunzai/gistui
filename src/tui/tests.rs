@@ -3999,6 +3999,44 @@ fn star_key_returns_toggle_intent() {
 }
 
 #[test]
+fn starred_filter_lists_only_starred_gists() {
+    // With the Starred type filter active, ranked_gists must draw from starred_gists, not the
+    // owned list — exercises the owned/starred source switch with data on both sides.
+    let mut state = initial_state();
+    state.gists = vec![GistFile {
+        gist_id: "owned".into(),
+        description: "mine".into(),
+        filename: "a.txt".into(),
+        public: true,
+        updated_at: "x".into(),
+        created_at: "x".into(),
+        owner_login: "me".into(),
+        fork_of_id: None,
+        raw_url: None,
+        content_type: None,
+        node_id: None,
+    }];
+    state.starred_gists = vec![GistFile {
+        gist_id: "starred".into(),
+        description: "theirs".into(),
+        filename: "b.txt".into(),
+        public: true,
+        updated_at: "x".into(),
+        created_at: "x".into(),
+        owner_login: "other".into(),
+        fork_of_id: None,
+        raw_url: None,
+        content_type: None,
+        node_id: None,
+    }];
+    state.gist_type_filter = GistTypeFilter::Starred;
+
+    let ranked = state.ranked_gists();
+    assert_eq!(ranked.len(), 1);
+    assert_eq!(ranked[0].file.gist_id, "starred");
+}
+
+#[test]
 fn fork_key_returns_fork_intent_for_foreign_gist_in_detail() {
     let mut state = initial_state();
     state.current_user_login = Some("me".into());

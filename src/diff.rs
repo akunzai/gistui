@@ -170,4 +170,27 @@ mod tests {
         assert!(collapsed.contains(" a"));
         assert!(collapsed.contains(" c"));
     }
+
+    #[test]
+    fn collapse_context_separates_disjoint_hunks() {
+        // Two changes far apart: each keeps its own context window, the long equal runs
+        // before/between/after them collapse to markers, and the two windows do not merge.
+        let old = "a\nb\nc\nd\ne\nf\ng\nX\nh\ni\nj\nk\nl\nm\nn\no\np\nY\nq\nr\ns\nt\n";
+        let new = "a\nb\nc\nd\ne\nf\ng\nX2\nh\ni\nj\nk\nl\nm\nn\no\np\nY2\nq\nr\ns\nt\n";
+        let collapsed = collapse_context(&unified_diff("g", old, "l", new, false), 2);
+        let lines: Vec<&str> = collapsed.lines().collect();
+
+        // Both hunks preserved.
+        assert!(lines.contains(&"-X"));
+        assert!(lines.contains(&"+X2"));
+        assert!(lines.contains(&"-Y"));
+        assert!(lines.contains(&"+Y2"));
+        // Two context lines kept on each side of each change (the X hunk, then the Y hunk).
+        assert!(lines.contains(&" g") && lines.contains(&" h"));
+        assert!(lines.contains(&" p") && lines.contains(&" q"));
+        // The equal run BETWEEN the two hunks is hidden — the windows did not merge.
+        assert!(!lines.contains(&" k"));
+        // Three collapsed runs: before X, between the hunks, and after Y.
+        assert_eq!(collapsed.matches("unchanged line").count(), 3);
+    }
 }
