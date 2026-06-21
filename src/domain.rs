@@ -89,11 +89,17 @@ pub struct GistFile {
     pub node_id: Option<String>,
 }
 
-/// File extensions that are treated as non-text for preview/diff (images, archives, media, …).
+/// Image file extensions — the single source of truth for the "image file" classification,
+/// referenced by both [`extension_looks_binary`] and [`gist_file_non_previewable_reason`].
+const IMAGE_EXTENSIONS: &[&str] = &[
+    "avif", "bmp", "gif", "heic", "heif", "ico", "jpeg", "jpg", "png", "tif", "tiff", "webp",
+];
+
+/// Non-image binary extensions (archives, media, executables, fonts, …). Images live in
+/// [`IMAGE_EXTENSIONS`]; the binary check below treats both lists as non-text.
 const BINARY_EXTENSIONS: &[&str] = &[
-    "avif", "bmp", "bz2", "deb", "dll", "dmg", "dylib", "eot", "exe", "flac", "gif", "gz", "heic",
-    "heif", "ico", "iso", "jpeg", "jpg", "mkv", "mov", "mp3", "mp4", "ogg", "otf", "pdf", "png",
-    "rar", "rpm", "so", "tar", "tif", "tiff", "ttf", "wav", "wasm", "webm", "webp", "woff",
+    "bz2", "deb", "dll", "dmg", "dylib", "eot", "exe", "flac", "gz", "iso", "mkv", "mov", "mp3",
+    "mp4", "ogg", "otf", "pdf", "rar", "rpm", "so", "tar", "ttf", "wav", "wasm", "webm", "woff",
     "woff2", "xz", "zip", "7z",
 ];
 
@@ -150,6 +156,7 @@ pub fn extension_looks_binary(filename: &str) -> bool {
         .is_some_and(|e| {
             BINARY_EXTENSIONS
                 .iter()
+                .chain(IMAGE_EXTENSIONS)
                 .any(|&deny| e.eq_ignore_ascii_case(deny))
         })
 }
@@ -184,23 +191,10 @@ pub fn gist_file_non_previewable_reason(
             .extension()
             .and_then(|e| e.to_str())
             .map(str::to_ascii_lowercase);
-        if matches!(
-            ext.as_deref(),
-            Some(
-                "png"
-                    | "jpg"
-                    | "jpeg"
-                    | "gif"
-                    | "webp"
-                    | "ico"
-                    | "bmp"
-                    | "tif"
-                    | "tiff"
-                    | "heic"
-                    | "heif"
-                    | "avif"
-            )
-        ) {
+        if ext
+            .as_deref()
+            .is_some_and(|e| IMAGE_EXTENSIONS.contains(&e))
+        {
             return "image file";
         }
         return "binary file";
