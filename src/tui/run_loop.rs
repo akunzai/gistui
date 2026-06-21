@@ -308,16 +308,26 @@ pub(super) fn run_loop(
                                 filename,
                                 local_path: local_path.clone(),
                             });
-                            state.init_upload_state(
+                            match state.init_upload_state(
                                 &local_path,
                                 Some(remote),
                                 local_label,
                                 gist_label,
-                            );
-                            state.diff_scroll = 0;
-                            state.diff_hscroll = 0;
-                            state.status = None;
-                            state.screen = Screen::Confirm;
+                            ) {
+                                Ok(()) => {
+                                    state.diff_scroll = 0;
+                                    state.diff_hscroll = 0;
+                                    state.status = None;
+                                    state.screen = Screen::Confirm;
+                                }
+                                Err(error) => {
+                                    state.pending_action = None;
+                                    state.set_status(format!(
+                                        "cannot read {}: {error}",
+                                        crate::config::display_path(&local_path)
+                                    ));
+                                }
+                            }
                         }
                         Err(error) => state.set_status(format!("fetch failed: {error}")),
                     },
@@ -844,8 +854,21 @@ pub(super) fn run_loop(
 
                 let local_label = format!("local: {}", crate::config::display_path(&local_path));
                 let gist_label = "(new file)".to_string();
-                state.init_upload_state(&local_path, Some(String::new()), local_label, gist_label);
-                state.screen = Screen::Confirm;
+                match state.init_upload_state(
+                    &local_path,
+                    Some(String::new()),
+                    local_label,
+                    gist_label,
+                ) {
+                    Ok(()) => state.screen = Screen::Confirm,
+                    Err(error) => {
+                        state.pending_action = None;
+                        state.set_status(format!(
+                            "cannot read {}: {error}",
+                            crate::config::display_path(&local_path)
+                        ));
+                    }
+                }
             }
             KeyOutcome::UploadPreview => {
                 let (local_path, gist_id, gist_file) = if state.is_pin_diff_context() {
@@ -920,7 +943,7 @@ pub(super) fn run_loop(
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_nanos())
                     .unwrap_or(0);
-                let temp_dir = state.cwd.join(format!(".gistui_upload_{timestamp}"));
+                let temp_dir = std::env::temp_dir().join(format!(".gistui_upload_{timestamp}"));
 
                 if let Err(e) = std::fs::create_dir_all(&temp_dir) {
                     state.set_status(format!("failed to create temp dir: {e}"));
@@ -1350,7 +1373,7 @@ pub(super) fn run_loop(
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_nanos())
                     .unwrap_or(0);
-                let temp_dir = state.cwd.join(format!(".gistui_restore_{timestamp}"));
+                let temp_dir = std::env::temp_dir().join(format!(".gistui_restore_{timestamp}"));
                 if let Err(e) = std::fs::create_dir_all(&temp_dir) {
                     state.set_status(format!("failed to create temp dir: {e}"));
                     continue;
@@ -1986,10 +2009,14 @@ fn open_browser(state: &mut AppState) {
         return;
     };
     let plan = crate::actions::open_browser_command(&gist_id);
-    match crate::actions::execute_command(&plan) {
-        Ok(_) => state.set_status(format!("Opened gist {gist_id} in the browser")),
-        Err(error) => state.set_status(format!("open failed: {error}")),
-    }
+    // Fire-and-forget on a detached thread: `gh gist view --web` resolves the URL and shells
+    // out to the OS opener, which can stall the event loop for a perceptible window if run
+    // inline. A launch failure is rare and self-evident (no browser appears), so we report
+    // optimistically rather than thread the result back through a background outcome.
+    std::thread::spawn(move || {
+        let _ = crate::actions::execute_command(&plan);
+    });
+    state.set_status(format!("Opening gist {gist_id} in the browser…"));
 }
 
 /// Copies the context gist's web URL to the system clipboard. On the Preview screen the

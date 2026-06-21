@@ -679,14 +679,18 @@ impl AppState {
         self.diff_text = diff;
     }
 
+    /// Prime the upload-diff state from the local file. Returns the read error instead of
+    /// silently defaulting to empty content — an unreadable/deleted/non-UTF-8 file would
+    /// otherwise render the whole gist as additions, so the caller must surface it and abort
+    /// the upload rather than show a bogus diff.
     pub fn init_upload_state(
         &mut self,
         local_path: &std::path::Path,
         remote_content: Option<String>,
         local_label: String,
         gist_label: String,
-    ) {
-        self.upload_original_content = std::fs::read_to_string(local_path).unwrap_or_default();
+    ) -> std::io::Result<()> {
+        self.upload_original_content = std::fs::read_to_string(local_path)?;
         self.upload_edited_content = None;
         self.upload_json_pretty = false;
         self.upload_json_sort = false;
@@ -694,6 +698,7 @@ impl AppState {
         self.upload_local_label = Some(local_label);
         self.upload_gist_label = Some(gist_label);
         self.update_upload_diff();
+        Ok(())
     }
 
     fn list_gist_source(&self) -> &[GistFile] {
