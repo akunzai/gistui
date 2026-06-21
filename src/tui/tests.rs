@@ -3031,48 +3031,6 @@ fn list_screen_capital_s_syncs_selected_pair() {
 }
 
 #[test]
-fn fetched_comments_apply_when_viewing_same_gist() {
-    let mut state = initial_state();
-    state.detail_gist_id = Some("g1".into());
-    state.apply_fetched_comments(
-        "g1",
-        Ok(vec![GistComment {
-            author: "alice".into(),
-            created_at: "2026-06-10T00:00:00Z".into(),
-            body: "hi".into(),
-        }]),
-    );
-    assert_eq!(state.detail_comments.as_ref().unwrap().len(), 1);
-    assert!(state.detail_comments_error.is_none());
-}
-
-#[test]
-fn fetched_comments_ignored_when_gist_changed() {
-    let mut state = initial_state();
-    state.detail_gist_id = Some("g2".into());
-    state.detail_comments = None;
-    state.apply_fetched_comments(
-        "g1",
-        Ok(vec![GistComment {
-            author: "alice".into(),
-            created_at: "2026-06-10T00:00:00Z".into(),
-            body: "stale".into(),
-        }]),
-    );
-    // Result was for g1 but user is on g2 → ignored.
-    assert!(state.detail_comments.is_none());
-}
-
-#[test]
-fn fetched_comments_error_sets_empty_list_and_message() {
-    let mut state = initial_state();
-    state.detail_gist_id = Some("g1".into());
-    state.apply_fetched_comments("g1", Err("boom".into()));
-    assert_eq!(state.detail_comments.as_ref().unwrap().len(), 0);
-    assert_eq!(state.detail_comments_error.as_deref(), Some("boom"));
-}
-
-#[test]
 fn gist_group_row_age_tracks_active_sort() {
     let group = GistGroup {
         id: "g1".into(),

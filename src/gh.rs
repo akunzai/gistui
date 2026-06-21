@@ -213,30 +213,6 @@ pub fn gist_comments_page_plan(gist_id: &str, page: u32, per_page: u32) -> Comma
     }
 }
 
-/// Plan for fetching all gist comments via the REST API (paginated).
-/// Kept for backward compatibility; will be removed when run_loop is rewired in a later task.
-#[allow(dead_code)]
-pub fn gist_comments_plan(gist_id: &str) -> CommandPlan {
-    CommandPlan {
-        program: "gh".into(),
-        args: vec![
-            "api".into(),
-            "--paginate".into(),
-            format!("/gists/{gist_id}/comments?per_page=100"),
-        ],
-    }
-}
-
-#[allow(dead_code)]
-pub fn fetch_gist_comments_json(gist_id: &str) -> Result<String> {
-    fetch_gist_comments_json_with(&SystemRunner, gist_id)
-}
-
-#[allow(dead_code)]
-pub fn fetch_gist_comments_json_with(runner: &dyn CommandRunner, gist_id: &str) -> Result<String> {
-    run_command(runner, &gist_comments_plan(gist_id))
-}
-
 pub fn fetch_gist_comments_probe(gist_id: &str) -> Result<String> {
     fetch_gist_comments_probe_with(&SystemRunner, gist_id)
 }

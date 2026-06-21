@@ -697,30 +697,6 @@ impl AppState {
         }
     }
 
-    /// Apply a finished comment fetch, ignoring it if the user has since navigated to a
-    /// different gist (stale response). On error, comments become an empty list and the
-    /// error message is retained so the detail view can surface it.
-    pub fn apply_fetched_comments(
-        &mut self,
-        gist_id: &str,
-        result: Result<Vec<GistComment>, String>,
-    ) {
-        if self.detail_gist_id.as_deref() != Some(gist_id) {
-            return;
-        }
-        self.detail_comments_loading = false;
-        match result {
-            Ok(comments) => {
-                self.detail_comments = Some(comments);
-                self.detail_comments_error = None;
-            }
-            Err(error) => {
-                self.detail_comments = Some(Vec::new());
-                self.detail_comments_error = Some(error);
-            }
-        }
-    }
-
     /// Number of navigation steps per mouse wheel tick. List/index screens move one row;
     /// content panes (Diff, Preview, Confirm, GistDetail) scroll three lines for faster
     /// panning. Help body also scrolls three; the Help topic index is a list (one row).

@@ -44,6 +44,12 @@ pub(super) fn run_loop(
 
     loop {
         terminal.draw(|frame| render(frame, &state, &mut mouse_layout))?;
+        if state.comments_scroll_to_bottom {
+            if let Some(max) = mouse_layout.comments_max_scroll {
+                state.detail_scroll = max;
+            }
+            state.comments_scroll_to_bottom = false;
+        }
         // Advance the spinner once per iteration; the poll below caps the loop at ~150ms, so
         // in-progress states (scanning/loading/working) animate even with no input.
         state.spinner_frame = state.spinner_frame.wrapping_add(1);
@@ -459,8 +465,11 @@ pub(super) fn run_loop(
                         }
                         Err(error) => state.set_status(format!("compact failed: {error}")),
                     },
-                    BgTaskOutcome::CommentsFetched { gist_id, result } => {
-                        state.apply_fetched_comments(&gist_id, result);
+                    BgTaskOutcome::CommentsInitialLoaded { gist_id, result } => {
+                        state.apply_initial_comments(&gist_id, result);
+                    }
+                    BgTaskOutcome::CommentsOlderLoaded { gist_id, result } => {
+                        state.apply_older_comments(&gist_id, result);
                     }
                     BgTaskOutcome::RevisionsFetched { gist_id, result } => {
                         if state.revision_gist_id.as_deref() != Some(gist_id.as_str()) {
@@ -722,9 +731,7 @@ pub(super) fn run_loop(
                 let gist_id = group.id.clone();
                 state.screen = Screen::GistDetail;
                 state.detail_gist_id = Some(gist_id);
-                state.detail_comments = None;
-                state.detail_comments_loading = false;
-                state.detail_comments_error = None;
+                state.reset_comment_pagination();
                 state.detail_scroll = 0;
                 state.detail_focus = DetailFocus::Files;
                 state.detail_file_cursor = 0;
@@ -739,16 +746,46 @@ pub(super) fn run_loop(
                 state.detail_comments_loading = true;
                 let fetch_id = gist_id.clone();
                 spawn_bg(&mut state, &mut bg_rx, "Loading comments…", move || {
-                    let result = crate::gh::fetch_gist_comments_json(&fetch_id)
-                        .map_err(|e| e.to_string())
-                        .and_then(|raw| {
-                            crate::gh::parse_gist_comments_json(&raw).map_err(|e| e.to_string())
-                        });
-                    BgTaskOutcome::CommentsFetched {
+                    let result = load_initial_comments(&fetch_id);
+                    BgTaskOutcome::CommentsInitialLoaded {
                         gist_id: fetch_id,
                         result,
                     }
                 });
+            }
+            KeyOutcome::LoadOlderComments => {
+                let Some(gist_id) = state.detail_gist_id.clone() else {
+                    continue;
+                };
+                if !state.can_load_older_comments() {
+                    continue;
+                }
+                let page = state.comments_loaded_oldest_page.saturating_sub(1);
+                if page == 0 {
+                    continue;
+                }
+                state.comments_loading_more = true;
+                let fetch_id = gist_id.clone();
+                spawn_bg(
+                    &mut state,
+                    &mut bg_rx,
+                    "Loading older comments…",
+                    move || {
+                        let result = crate::gh::fetch_gist_comments_page(
+                            &fetch_id,
+                            page,
+                            crate::gh::COMMENTS_PAGE_SIZE,
+                        )
+                        .map_err(|e| e.to_string())
+                        .and_then(|raw| {
+                            crate::gh::parse_gist_comments_json(&raw).map_err(|e| e.to_string())
+                        });
+                        BgTaskOutcome::CommentsOlderLoaded {
+                            gist_id: fetch_id,
+                            result,
+                        }
+                    },
+                );
             }
             KeyOutcome::CompactGist => {
                 let Some(gist_id) = state.context_gist_id() else {
@@ -1380,7 +1417,6 @@ pub(super) fn run_loop(
                     BgTaskOutcome::ForkGist { result, gist_id }
                 });
             }
-            KeyOutcome::LoadOlderComments => {}
             KeyOutcome::None => {}
         }
     }
@@ -1453,7 +1489,11 @@ enum BgTaskOutcome {
         label: String,
         count: usize,
     },
-    CommentsFetched {
+    CommentsInitialLoaded {
+        gist_id: String,
+        result: Result<crate::tui::InitialComments, String>,
+    },
+    CommentsOlderLoaded {
         gist_id: String,
         result: Result<Vec<GistComment>, String>,
     },
@@ -1734,6 +1774,30 @@ where
     std::thread::spawn(move || {
         let _ = tx.send(work());
     });
+}
+
+/// Initial newest-first comment load: probe the total, then fetch the newest page.
+/// Thin IO boundary (network) — not unit-tested.
+fn load_initial_comments(gist_id: &str) -> Result<crate::tui::InitialComments, String> {
+    let probe = crate::gh::fetch_gist_comments_probe(gist_id).map_err(|e| e.to_string())?;
+    let total = crate::gh::comments_total_from_probe(&probe);
+    if total == 0 {
+        return Ok(crate::tui::InitialComments {
+            comments: Vec::new(),
+            total: 0,
+            oldest_page: 1,
+        });
+    }
+    let oldest_page = crate::gh::last_page(total, crate::gh::COMMENTS_PAGE_SIZE);
+    let raw =
+        crate::gh::fetch_gist_comments_page(gist_id, oldest_page, crate::gh::COMMENTS_PAGE_SIZE)
+            .map_err(|e| e.to_string())?;
+    let comments = crate::gh::parse_gist_comments_json(&raw).map_err(|e| e.to_string())?;
+    Ok(crate::tui::InitialComments {
+        comments,
+        total,
+        oldest_page,
+    })
 }
 
 /// The pin currently selected in the Pins screen, if any.
