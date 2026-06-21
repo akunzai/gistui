@@ -713,10 +713,14 @@ impl AppState {
     }
 
     /// `owner.login` for a gist id from the in-memory owned or starred lists.
+    /// Iterator over every in-memory gist file — owned first, then starred. The shared base
+    /// for the many lookups that must search both lists.
+    fn all_gist_files(&self) -> impl Iterator<Item = &GistFile> {
+        self.gists.iter().chain(self.starred_gists.iter())
+    }
+
     pub fn gist_owner_login(&self, gist_id: &str) -> String {
-        self.gists
-            .iter()
-            .chain(self.starred_gists.iter())
+        self.all_gist_files()
             .find(|g| g.gist_id == gist_id)
             .map(|g| g.owner_login.clone())
             .unwrap_or_default()
@@ -724,18 +728,14 @@ impl AppState {
 
     /// `raw_url` from the in-memory gist lists for a `(gist_id, filename)` pair.
     pub fn gist_file_raw_url(&self, gist_id: &str, filename: &str) -> Option<String> {
-        self.gists
-            .iter()
-            .chain(self.starred_gists.iter())
+        self.all_gist_files()
             .find(|g| g.gist_id == gist_id && g.filename == filename)
             .and_then(|g| g.raw_url.clone())
     }
 
     pub fn gist_is_owned(&self, gist_id: &str) -> bool {
         if let Some(me) = self.current_user_login.as_deref() {
-            self.gists
-                .iter()
-                .chain(self.starred_gists.iter())
+            self.all_gist_files()
                 .find(|g| g.gist_id == gist_id)
                 .is_some_and(|g| g.is_owned_by(me))
         } else {
@@ -973,27 +973,21 @@ impl AppState {
     /// Number of files the given gist holds in the current in-memory list. Used to guard
     /// against removing a gist's only file (GitHub forbids a fileless gist).
     fn gist_file_count(&self, gist_id: &str) -> usize {
-        self.gists
-            .iter()
-            .chain(self.starred_gists.iter())
+        self.all_gist_files()
             .filter(|g| g.gist_id == gist_id)
             .count()
     }
 
     /// Filenames the given gist holds in the current in-memory list (gh order).
     pub fn gist_filenames(&self, gist_id: &str) -> Vec<String> {
-        self.gists
-            .iter()
-            .chain(self.starred_gists.iter())
+        self.all_gist_files()
             .filter(|g| g.gist_id == gist_id)
             .map(|g| g.filename.clone())
             .collect()
     }
 
     pub fn gist_file_content_type(&self, gist_id: &str, filename: &str) -> Option<String> {
-        self.gists
-            .iter()
-            .chain(self.starred_gists.iter())
+        self.all_gist_files()
             .find(|g| g.gist_id == gist_id && g.filename == filename)
             .and_then(|g| g.content_type.clone())
     }
@@ -1141,9 +1135,7 @@ impl AppState {
 
     pub fn group_by_id(&self, gist_id: &str) -> Option<GistGroup> {
         let files: Vec<GistFile> = self
-            .gists
-            .iter()
-            .chain(self.starred_gists.iter())
+            .all_gist_files()
             .filter(|g| g.gist_id == gist_id)
             .cloned()
             .collect();
