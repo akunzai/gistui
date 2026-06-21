@@ -35,14 +35,15 @@ pub(super) fn run_loop(
             update_rx = Some(spawn_update_check());
         }
     }
-    let mut gist_rx = Some(spawn_gist_fetch());
-    let mut fork_rx: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>> =
-        None;
-    let mut star_rx: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>> =
-        None;
-    let mut fork_meta_rx: Option<std::sync::mpsc::Receiver<ForkMetaResult>> = None;
-    let mut local_rx: Option<std::sync::mpsc::Receiver<Vec<LocalCandidate>>> = None;
-    let mut bg_rx: Option<std::sync::mpsc::Receiver<BgTaskOutcome>> = None;
+    let mut channels = BgChannels {
+        update: update_rx,
+        gist: Some(spawn_gist_fetch()),
+        fork: None,
+        star: None,
+        fork_meta: None,
+        local: None,
+        bg: None,
+    };
 
     loop {
         terminal.draw(|frame| render(frame, &state, &mut mouse_layout))?;
@@ -58,7 +59,7 @@ pub(super) fn run_loop(
 
         // Absorb the background gist list once it arrives.
         if state.loading {
-            if let Some(ref rx) = gist_rx {
+            if let Some(ref rx) = channels.gist {
                 if let Ok((
                     gists,
                     starred,
@@ -91,45 +92,45 @@ pub(super) fn run_loop(
                     if count > 0 && state.gist_manager.index >= count {
                         state.gist_manager.index = count - 1;
                     }
-                    gist_rx = None;
+                    channels.gist = None;
                     let gist_ids: std::collections::HashSet<String> = state
                         .gists
                         .iter()
                         .chain(state.starred_gists.iter())
                         .map(|g| g.gist_id.clone())
                         .collect();
-                    fork_rx = Some(spawn_fork_count_fetch(
+                    channels.fork = Some(spawn_fork_count_fetch(
                         owned_raw,
                         starred_raw,
                         gist_ids.clone(),
                     ));
-                    fork_meta_rx = Some(spawn_fork_metadata_fetch(
+                    channels.fork_meta = Some(spawn_fork_metadata_fetch(
                         state.gists.iter().map(|g| g.gist_id.clone()).collect(),
                     ));
                     let node_ids =
                         crate::gh::merge_gist_node_id_maps(&state.gists, &state.starred_gists);
-                    star_rx = Some(spawn_star_count_fetch(node_ids));
+                    channels.star = Some(spawn_star_count_fetch(node_ids));
                 }
             }
         }
 
-        if let Some(ref rx) = fork_rx {
+        if let Some(ref rx) = channels.fork {
             if let Ok(fork_counts) = rx.try_recv() {
                 state.gist_fork_counts = fork_counts;
                 persist_gist_cache_from_state(&state);
-                fork_rx = None;
+                channels.fork = None;
             }
         }
 
-        if let Some(ref rx) = star_rx {
+        if let Some(ref rx) = channels.star {
             if let Ok(star_counts) = rx.try_recv() {
                 state.gist_star_counts = star_counts;
                 persist_gist_cache_from_state(&state);
-                star_rx = None;
+                channels.star = None;
             }
         }
 
-        if let Some(ref rx) = fork_meta_rx {
+        if let Some(ref rx) = channels.fork_meta {
             if let Ok(result) = rx.try_recv() {
                 match result {
                     Ok(fork_of) => {
@@ -138,13 +139,13 @@ pub(super) fn run_loop(
                     }
                     Err(error) => state.set_status(format!("fork detection unavailable: {error}")),
                 }
-                fork_meta_rx = None;
+                channels.fork_meta = None;
             }
         }
 
         // Absorb a completed background local scan.
         if state.local_scanning {
-            if let Some(ref rx) = local_rx {
+            if let Some(ref rx) = channels.local {
                 if let Ok(locals) = rx.try_recv() {
                     let selected = state.selected_local().map(|c| c.path.clone());
                     state.locals = locals;
@@ -157,16 +158,16 @@ pub(super) fn run_loop(
                     }
                     state.local_scanning = false;
                     state.status = None;
-                    local_rx = None;
+                    channels.local = None;
                 }
             }
         }
 
         // Absorb the background update-check result: show the hint and persist the throttle.
         // Failed checks are silent and not recorded, so they retry on the next launch.
-        if let Some(ref rx) = update_rx {
+        if let Some(ref rx) = channels.update {
             if let Ok(outcome) = rx.try_recv() {
-                update_rx = None;
+                channels.update = None;
                 let now = crate::update_check::now_secs();
                 match outcome {
                     crate::update_check::UpdateCheckOutcome::Newer(version) => {
@@ -199,10 +200,10 @@ pub(super) fn run_loop(
         }
 
         // Absorb a completed background per-action task.
-        if let Some(ref rx) = bg_rx {
+        if let Some(ref rx) = channels.bg {
             if let Ok(outcome) = rx.try_recv() {
                 state.bg_task_msg = None;
-                bg_rx = None;
+                channels.bg = None;
                 match outcome {
                     BgTaskOutcome::PreviewDiff {
                         result,
@@ -361,7 +362,7 @@ pub(super) fn run_loop(
                             }
                             state.back_to_list();
                             state.loading = true;
-                            gist_rx = Some(spawn_gist_fetch());
+                            channels.gist = Some(spawn_gist_fetch());
                         }
                         Err(error) => {
                             state.set_status(format!("upload failed: {error}"));
@@ -383,7 +384,7 @@ pub(super) fn run_loop(
                             state.description_input.clear();
                             state.back_to_list();
                             state.loading = true;
-                            gist_rx = Some(spawn_gist_fetch());
+                            channels.gist = Some(spawn_gist_fetch());
                         }
                         Err(error) => {
                             state.set_status(format!("create failed: {error}"));
@@ -415,7 +416,7 @@ pub(super) fn run_loop(
                         Ok(_) => {
                             state.set_status(format!("Deleted gist {gist_id}"));
                             state.loading = true;
-                            gist_rx = Some(spawn_gist_fetch());
+                            channels.gist = Some(spawn_gist_fetch());
                         }
                         Err(error) => state.set_status(format!("delete failed: {error}")),
                     },
@@ -430,7 +431,7 @@ pub(super) fn run_loop(
                                 .remove(&(gist_id.clone(), filename.clone()));
                             state.set_status(format!("Removed {filename} from gist {gist_id}"));
                             state.loading = true;
-                            gist_rx = Some(spawn_gist_fetch());
+                            channels.gist = Some(spawn_gist_fetch());
                         }
                         Err(error) => state.set_status(format!("remove failed: {error}")),
                     },
@@ -438,7 +439,7 @@ pub(super) fn run_loop(
                         Ok(_) => {
                             state.set_status(format!("Updated description for gist {gist_id}"));
                             state.loading = true;
-                            gist_rx = Some(spawn_gist_fetch());
+                            channels.gist = Some(spawn_gist_fetch());
                         }
                         Err(error) => {
                             state.set_status(format!("description update failed: {error}"))
@@ -478,7 +479,7 @@ pub(super) fn run_loop(
                                 "Compacted \"{label}\" ({count} → 1 revision)"
                             ));
                             state.loading = true;
-                            gist_rx = Some(spawn_gist_fetch());
+                            channels.gist = Some(spawn_gist_fetch());
                         }
                         Err(error) => state.set_status(format!("compact failed: {error}")),
                     },
@@ -584,7 +585,7 @@ pub(super) fn run_loop(
                                 state.set_status(format!("unstarred {gist_id}"));
                             }
                             state.loading = true;
-                            gist_rx = Some(spawn_gist_fetch());
+                            channels.gist = Some(spawn_gist_fetch());
                         }
                         Err(error) => state.set_status(format!("star toggle failed: {error}")),
                     },
@@ -592,7 +593,7 @@ pub(super) fn run_loop(
                         Ok(()) => {
                             state.set_status(format!("forked {gist_id} into your account"));
                             state.loading = true;
-                            gist_rx = Some(spawn_gist_fetch());
+                            channels.gist = Some(spawn_gist_fetch());
                         }
                         Err(error) => state.set_status(format!("fork failed: {error}")),
                     },
@@ -613,11 +614,11 @@ pub(super) fn run_loop(
                             state.revision.index = 0;
                             state.revision.entries = None;
                             state.loading = true;
-                            gist_rx = Some(spawn_gist_fetch());
+                            channels.gist = Some(spawn_gist_fetch());
                             if let Some(gist_id) = state.revision.gist_id.clone() {
                                 spawn_bg(
                                     &mut state,
-                                    &mut bg_rx,
+                                    &mut channels.bg,
                                     "Loading revisions…",
                                     move || {
                                         let result = crate::gh::fetch_gist_commits_json(&gist_id)
@@ -656,7 +657,7 @@ pub(super) fn run_loop(
                 if state.bg_task_msg.is_some() {
                     if key.code == KeyCode::Esc {
                         state.bg_task_msg = None;
-                        bg_rx = None;
+                        channels.bg = None;
                         state.set_status("Cancelled");
                     }
                     continue;
@@ -706,7 +707,7 @@ pub(super) fn run_loop(
                 let target = state.cwd.join(&filename);
                 let upload_orientation = state.focus == FocusPane::Local;
 
-                spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
+                spawn_bg(&mut state, &mut channels.bg, "Loading diff…", move || {
                     let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
                     BgTaskOutcome::PreviewDiff {
                         result,
@@ -730,7 +731,7 @@ pub(super) fn run_loop(
                 let target = state.cwd.join(&filename);
                 let (local_label, gist_label) = diff_labels(Some(&target), &gist);
 
-                spawn_bg(&mut state, &mut bg_rx, "Downloading…", move || {
+                spawn_bg(&mut state, &mut channels.bg, "Downloading…", move || {
                     let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
                     BgTaskOutcome::DownloadSelected {
                         result,
@@ -763,13 +764,18 @@ pub(super) fn run_loop(
                 }
                 state.detail.comments_loading = true;
                 let fetch_id = gist_id.clone();
-                spawn_bg(&mut state, &mut bg_rx, "Loading comments…", move || {
-                    let result = load_initial_comments(&fetch_id);
-                    BgTaskOutcome::CommentsInitialLoaded {
-                        gist_id: fetch_id,
-                        result,
-                    }
-                });
+                spawn_bg(
+                    &mut state,
+                    &mut channels.bg,
+                    "Loading comments…",
+                    move || {
+                        let result = load_initial_comments(&fetch_id);
+                        BgTaskOutcome::CommentsInitialLoaded {
+                            gist_id: fetch_id,
+                            result,
+                        }
+                    },
+                );
             }
             KeyOutcome::LoadOlderComments => {
                 let Some(gist_id) = state.detail.gist_id.clone() else {
@@ -786,7 +792,7 @@ pub(super) fn run_loop(
                 let fetch_id = gist_id.clone();
                 spawn_bg(
                     &mut state,
-                    &mut bg_rx,
+                    &mut channels.bg,
                     "Loading older comments…",
                     move || {
                         let result = crate::gh::fetch_gist_comments_page(
@@ -818,21 +824,26 @@ pub(super) fn run_loop(
                     group.description.clone()
                 };
 
-                spawn_bg(&mut state, &mut bg_rx, "Checking revisions…", move || {
-                    let result = crate::actions::execute_command(
-                        &crate::actions::gist_revision_count_command(&gist_id),
-                    )
-                    .map_err(|e| e.to_string())
-                    .and_then(|out| {
-                        crate::actions::parse_revision_count(&out)
-                            .ok_or_else(|| "could not parse revision count".to_string())
-                    });
-                    BgTaskOutcome::CompactAnalyze {
-                        result,
-                        gist_id,
-                        label,
-                    }
-                });
+                spawn_bg(
+                    &mut state,
+                    &mut channels.bg,
+                    "Checking revisions…",
+                    move || {
+                        let result = crate::actions::execute_command(
+                            &crate::actions::gist_revision_count_command(&gist_id),
+                        )
+                        .map_err(|e| e.to_string())
+                        .and_then(|out| {
+                            crate::actions::parse_revision_count(&out)
+                                .ok_or_else(|| "could not parse revision count".to_string())
+                        });
+                        BgTaskOutcome::CompactAnalyze {
+                            result,
+                            gist_id,
+                            label,
+                        }
+                    },
+                );
             }
             KeyOutcome::Pin => pin_selected(&mut state),
             KeyOutcome::Unpin => unpin_selected(&mut state),
@@ -912,7 +923,7 @@ pub(super) fn run_loop(
                 let raw_url = gist_file.raw_url.clone();
                 let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
 
-                spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
+                spawn_bg(&mut state, &mut channels.bg, "Loading diff…", move || {
                     let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
                     BgTaskOutcome::UploadPreview {
                         result,
@@ -968,7 +979,7 @@ pub(super) fn run_loop(
                 };
 
                 state.back_to_list();
-                spawn_bg(&mut state, &mut bg_rx, "Uploading…", move || {
+                spawn_bg(&mut state, &mut channels.bg, "Uploading…", move || {
                     let result = crate::actions::execute_command(&plan)
                         .map(|_| ())
                         .map_err(|e| e.to_string());
@@ -993,16 +1004,21 @@ pub(super) fn run_loop(
                 let description = state.description_input.to_string();
                 let plan = crate::actions::create_command(&local_path, public, &description);
 
-                spawn_bg(&mut state, &mut bg_rx, "Creating gist…", move || {
-                    let result = crate::actions::execute_command(&plan)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string());
-                    BgTaskOutcome::CreateGist {
-                        result,
-                        local_path,
-                        public,
-                    }
-                });
+                spawn_bg(
+                    &mut state,
+                    &mut channels.bg,
+                    "Creating gist…",
+                    move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        BgTaskOutcome::CreateGist {
+                            result,
+                            local_path,
+                            public,
+                        }
+                    },
+                );
             }
             KeyOutcome::PreviewContent => {
                 // A detail-view number key records the exact file in `preview_request`;
@@ -1027,14 +1043,20 @@ pub(super) fn run_loop(
                     let filename = key.1.clone();
                     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
                     let preview_title = format!("Preview: {gist_id} / {filename}");
-                    spawn_bg(&mut state, &mut bg_rx, "Loading preview…", move || {
-                        let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
-                        BgTaskOutcome::PreviewContent {
-                            result,
-                            key,
-                            preview_title,
-                        }
-                    });
+                    spawn_bg(
+                        &mut state,
+                        &mut channels.bg,
+                        "Loading preview…",
+                        move || {
+                            let result =
+                                fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
+                            BgTaskOutcome::PreviewContent {
+                                result,
+                                key,
+                                preview_title,
+                            }
+                        },
+                    );
                 }
             }
             KeyOutcome::RefreshPreview => {
@@ -1044,14 +1066,20 @@ pub(super) fn run_loop(
                     let filename = key.1.clone();
                     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
                     let preview_title = format!("Preview: {gist_id} / {filename}");
-                    spawn_bg(&mut state, &mut bg_rx, "Loading preview…", move || {
-                        let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
-                        BgTaskOutcome::PreviewContent {
-                            result,
-                            key,
-                            preview_title,
-                        }
-                    });
+                    spawn_bg(
+                        &mut state,
+                        &mut channels.bg,
+                        "Loading preview…",
+                        move || {
+                            let result =
+                                fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
+                            BgTaskOutcome::PreviewContent {
+                                result,
+                                key,
+                                preview_title,
+                            }
+                        },
+                    );
                 }
             }
             KeyOutcome::OpenBrowser => open_browser(&mut state),
@@ -1066,12 +1094,17 @@ pub(super) fn run_loop(
                 let plan = crate::actions::delete_command(&gist_id);
                 state.back_to_list();
 
-                spawn_bg(&mut state, &mut bg_rx, "Deleting gist…", move || {
-                    let result = crate::actions::execute_command(&plan)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string());
-                    BgTaskOutcome::DeleteGist { result, gist_id }
-                });
+                spawn_bg(
+                    &mut state,
+                    &mut channels.bg,
+                    "Deleting gist…",
+                    move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        BgTaskOutcome::DeleteGist { result, gist_id }
+                    },
+                );
             }
             KeyOutcome::ExecuteRemoveFile => {
                 let Some(PendingAction::RemoveFile {
@@ -1083,16 +1116,21 @@ pub(super) fn run_loop(
                 let plan = crate::actions::remove_file_command(&gist_id, &filename);
                 state.back_to_list();
 
-                spawn_bg(&mut state, &mut bg_rx, "Removing file…", move || {
-                    let result = crate::actions::execute_command(&plan)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string());
-                    BgTaskOutcome::RemoveFile {
-                        result,
-                        gist_id,
-                        filename,
-                    }
-                });
+                spawn_bg(
+                    &mut state,
+                    &mut channels.bg,
+                    "Removing file…",
+                    move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        BgTaskOutcome::RemoveFile {
+                            result,
+                            gist_id,
+                            filename,
+                        }
+                    },
+                );
             }
             KeyOutcome::ExecuteCompactGist => {
                 let Some(PendingAction::CompactGist {
@@ -1108,7 +1146,7 @@ pub(super) fn run_loop(
 
                 spawn_bg(
                     &mut state,
-                    &mut bg_rx,
+                    &mut channels.bg,
                     "Compacting revisions…",
                     move || {
                         let result = crate::actions::execute_compact_gist(&gist_id)
@@ -1138,7 +1176,7 @@ pub(super) fn run_loop(
 
                 spawn_bg(
                     &mut state,
-                    &mut bg_rx,
+                    &mut channels.bg,
                     "Updating description…",
                     move || {
                         let result = crate::actions::execute_command(&plan)
@@ -1151,7 +1189,7 @@ pub(super) fn run_loop(
             KeyOutcome::RefreshLocals => {
                 state.set_status("Scanning files…");
                 state.local_scanning = true;
-                local_rx = Some(spawn_local_scan(
+                channels.local = Some(spawn_local_scan(
                     state.cwd.clone(),
                     state.pinned.clone(),
                     state.local_recursive,
@@ -1179,8 +1217,12 @@ pub(super) fn run_loop(
                 };
                 let m = state.pinned[idx].clone();
                 match state.pin_sync_status(idx) {
-                    crate::domain::SyncStatus::Push => spawn_pin_push(&mut state, &mut bg_rx, &m),
-                    crate::domain::SyncStatus::Pull => spawn_pin_pull(&mut state, &mut bg_rx, &m),
+                    crate::domain::SyncStatus::Push => {
+                        spawn_pin_push(&mut state, &mut channels.bg, &m)
+                    }
+                    crate::domain::SyncStatus::Pull => {
+                        spawn_pin_pull(&mut state, &mut channels.bg, &m)
+                    }
                     crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
                     crate::domain::SyncStatus::Unknown => state
                         .set_status("can't tell which side is newer — use u to push or d to pull"),
@@ -1188,12 +1230,12 @@ pub(super) fn run_loop(
             }
             KeyOutcome::SyncPinPush => {
                 if let Some(m) = selected_pin(&state) {
-                    spawn_pin_push(&mut state, &mut bg_rx, &m);
+                    spawn_pin_push(&mut state, &mut channels.bg, &m);
                 }
             }
             KeyOutcome::SyncPinPull => {
                 if let Some(m) = selected_pin(&state) {
-                    spawn_pin_pull(&mut state, &mut bg_rx, &m);
+                    spawn_pin_pull(&mut state, &mut channels.bg, &m);
                 }
             }
             KeyOutcome::SyncPinAuto => {
@@ -1203,7 +1245,9 @@ pub(super) fn run_loop(
                 let m = state.pinned[pin_idx].clone();
                 match state.pin_sync_status(pin_idx) {
                     crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
-                    crate::domain::SyncStatus::Pull => spawn_pin_pull(&mut state, &mut bg_rx, &m),
+                    crate::domain::SyncStatus::Pull => {
+                        spawn_pin_pull(&mut state, &mut channels.bg, &m)
+                    }
                     crate::domain::SyncStatus::Push => {
                         // Cheap, network-free no-op check: if the local file still
                         // hashes to last_seen_hash, the newer mtime is a touch with
@@ -1220,7 +1264,7 @@ pub(super) fn run_loop(
                         if unchanged {
                             state.set_status("already in sync");
                         } else {
-                            spawn_pin_push(&mut state, &mut bg_rx, &m);
+                            spawn_pin_push(&mut state, &mut channels.bg, &m);
                         }
                     }
                     crate::domain::SyncStatus::Unknown => state
@@ -1230,7 +1274,7 @@ pub(super) fn run_loop(
             KeyOutcome::PreviewPinDiff => {
                 if let Some(m) = selected_pin(&state) {
                     state.diff_return = Screen::Pins;
-                    spawn_pin_diff(&mut state, &mut bg_rx, &m);
+                    spawn_pin_diff(&mut state, &mut channels.bg, &m);
                 }
             }
             KeyOutcome::PersistDiffContext => persist_diff_context(&mut state),
@@ -1239,14 +1283,19 @@ pub(super) fn run_loop(
                 let Some(gist_id) = state.revision.gist_id.clone() else {
                     continue;
                 };
-                spawn_bg(&mut state, &mut bg_rx, "Loading revisions…", move || {
-                    let result = crate::gh::fetch_gist_commits_json(&gist_id)
-                        .map_err(|e| e.to_string())
-                        .and_then(|raw| {
-                            crate::gh::parse_gist_commits_json(&raw).map_err(|e| e.to_string())
-                        });
-                    BgTaskOutcome::RevisionsFetched { gist_id, result }
-                });
+                spawn_bg(
+                    &mut state,
+                    &mut channels.bg,
+                    "Loading revisions…",
+                    move || {
+                        let result = crate::gh::fetch_gist_commits_json(&gist_id)
+                            .map_err(|e| e.to_string())
+                            .and_then(|raw| {
+                                crate::gh::parse_gist_commits_json(&raw).map_err(|e| e.to_string())
+                            });
+                        BgTaskOutcome::RevisionsFetched { gist_id, result }
+                    },
+                );
             }
             KeyOutcome::RevisionDiffIncremental => {
                 let Some(gist_id) = state.revision.gist_id.clone() else {
@@ -1272,7 +1321,7 @@ pub(super) fn run_loop(
                 };
                 let new_label = format!("revision {child_label}");
                 let owner_login = state.gist_owner_login(&gist_id);
-                spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
+                spawn_bg(&mut state, &mut channels.bg, "Loading diff…", move || {
                     let result = fetch_revision_incremental_pair(
                         &gist_id,
                         &child_version,
@@ -1301,7 +1350,7 @@ pub(super) fn run_loop(
                 let new_label = format!("current {filename}");
                 let raw_url = state.gist_file_raw_url(&gist_id, &filename);
                 let owner_login = state.gist_owner_login(&gist_id);
-                spawn_bg(&mut state, &mut bg_rx, "Loading diff…", move || {
+                spawn_bg(&mut state, &mut channels.bg, "Loading diff…", move || {
                     let result = fetch_revision_pair(
                         &gist_id,
                         &version,
@@ -1330,22 +1379,27 @@ pub(super) fn run_loop(
                 let version_label = revision_version_label(&revision);
                 let raw_url = state.gist_file_raw_url(&gist_id, &filename);
                 let owner_login = state.gist_owner_login(&gist_id);
-                spawn_bg(&mut state, &mut bg_rx, "Loading revision…", move || {
-                    let result = fetch_revision_pair_for_restore(
-                        &gist_id,
-                        &version,
-                        &filename,
-                        raw_url.as_deref(),
-                        &owner_login,
-                    );
-                    BgTaskOutcome::RestoreRevisionReady {
-                        result,
-                        gist_id,
-                        filename,
-                        version,
-                        version_label,
-                    }
-                });
+                spawn_bg(
+                    &mut state,
+                    &mut channels.bg,
+                    "Loading revision…",
+                    move || {
+                        let result = fetch_revision_pair_for_restore(
+                            &gist_id,
+                            &version,
+                            &filename,
+                            raw_url.as_deref(),
+                            &owner_login,
+                        );
+                        BgTaskOutcome::RestoreRevisionReady {
+                            result,
+                            gist_id,
+                            filename,
+                            version,
+                            version_label,
+                        }
+                    },
+                );
             }
             KeyOutcome::ExecuteRestoreRevision => {
                 let Some(PendingAction::RestoreRevision {
@@ -1374,17 +1428,22 @@ pub(super) fn run_loop(
                     continue;
                 }
                 let plan = crate::actions::restore_revision_command(&gist_id, &json_path);
-                spawn_bg(&mut state, &mut bg_rx, "Restoring revision…", move || {
-                    let result = crate::actions::execute_command(&plan)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string());
-                    let _ = std::fs::remove_dir_all(&temp_dir);
-                    BgTaskOutcome::RestoreRevisionDone {
-                        result,
-                        gist_id,
-                        filename,
-                    }
-                });
+                spawn_bg(
+                    &mut state,
+                    &mut channels.bg,
+                    "Restoring revision…",
+                    move || {
+                        let result = crate::actions::execute_command(&plan)
+                            .map(|_| ())
+                            .map_err(|e| e.to_string());
+                        let _ = std::fs::remove_dir_all(&temp_dir);
+                        BgTaskOutcome::RestoreRevisionDone {
+                            result,
+                            gist_id,
+                            filename,
+                        }
+                    },
+                );
             }
             KeyOutcome::ToggleGistStar => {
                 let Some(gist_id) = state.context_gist_id() else {
@@ -1402,7 +1461,7 @@ pub(super) fn run_loop(
                 } else {
                     "Unstarring…"
                 };
-                spawn_bg(&mut state, &mut bg_rx, msg, move || {
+                spawn_bg(&mut state, &mut channels.bg, msg, move || {
                     let result = crate::actions::execute_command(&plan)
                         .map(|_| ())
                         .map_err(|e| e.to_string());
@@ -1423,7 +1482,7 @@ pub(super) fn run_loop(
                     continue;
                 }
                 let plan = crate::actions::fork_gist_command(&gist_id);
-                spawn_bg(&mut state, &mut bg_rx, "Forking…", move || {
+                spawn_bg(&mut state, &mut channels.bg, "Forking…", move || {
                     let result = crate::actions::execute_command(&plan)
                         .map(|_| ())
                         .map_err(|e| e.to_string());
@@ -2284,4 +2343,16 @@ fn unpin_at_pin_index(state: &mut AppState) {
 
 fn upload_local_filename(local: &std::path::Path) -> Option<String> {
     local.file_name().and_then(|n| n.to_str()).map(String::from)
+}
+
+/// The seven background-work receivers `run_loop` drains each iteration, bundled so the
+/// extracted loop steps take one `&mut BgChannels` instead of seven `&mut` parameters.
+struct BgChannels {
+    update: Option<std::sync::mpsc::Receiver<crate::update_check::UpdateCheckOutcome>>,
+    gist: Option<std::sync::mpsc::Receiver<GistFetchResult>>,
+    fork: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>>,
+    star: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>>,
+    fork_meta: Option<std::sync::mpsc::Receiver<ForkMetaResult>>,
+    local: Option<std::sync::mpsc::Receiver<Vec<LocalCandidate>>>,
+    bg: BgRx,
 }
