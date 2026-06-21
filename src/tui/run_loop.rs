@@ -3,6 +3,10 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseButton, MouseEve
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 
+/// Owned-fork metadata (gist id → upstream id), or the reason fork detection failed. Named so
+/// the channel/receiver types stay readable.
+type ForkMetaResult = Result<std::collections::HashMap<String, Option<String>>, String>;
+
 pub(super) fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     no_mouse: bool,
@@ -36,9 +40,7 @@ pub(super) fn run_loop(
         None;
     let mut star_rx: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>> =
         None;
-    let mut fork_meta_rx: Option<
-        std::sync::mpsc::Receiver<std::collections::HashMap<String, Option<String>>>,
-    > = None;
+    let mut fork_meta_rx: Option<std::sync::mpsc::Receiver<ForkMetaResult>> = None;
     let mut local_rx: Option<std::sync::mpsc::Receiver<Vec<LocalCandidate>>> = None;
     let mut bg_rx: Option<std::sync::mpsc::Receiver<BgTaskOutcome>> = None;
 
@@ -128,9 +130,14 @@ pub(super) fn run_loop(
         }
 
         if let Some(ref rx) = fork_meta_rx {
-            if let Ok(fork_of) = rx.try_recv() {
-                crate::gh::apply_fork_of_ids(&mut state.gists, &fork_of);
-                persist_gist_cache_from_state(&state);
+            if let Ok(result) = rx.try_recv() {
+                match result {
+                    Ok(fork_of) => {
+                        crate::gh::apply_fork_of_ids(&mut state.gists, &fork_of);
+                        persist_gist_cache_from_state(&state);
+                    }
+                    Err(error) => state.set_status(format!("fork detection unavailable: {error}")),
+                }
                 fork_meta_rx = None;
             }
         }
@@ -1756,7 +1763,7 @@ fn spawn_star_count_fetch(
 
 fn spawn_fork_metadata_fetch(
     owned_ids: std::collections::HashSet<String>,
-) -> std::sync::mpsc::Receiver<std::collections::HashMap<String, Option<String>>> {
+) -> std::sync::mpsc::Receiver<ForkMetaResult> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let fork_of = crate::gh::collect_owned_fork_of_ids(owned_ids);

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Fixed: owned-fork detection now paginates past 100 gists (the `forked` filter no longer misses forks on large accounts), and a failed fork-detection query surfaces a `fork detection unavailable` hint instead of silently showing no forks.
 - Fixed three rough edges: opening a gist in the browser (`o`) no longer briefly freezes the UI; upload/restore temp files are written to the system temp directory instead of the working directory (no stray `.gistui_*` dirs if the process is killed mid-op); and an unreadable local file now reports an error instead of silently showing the whole gist as additions on upload.
 - Performance: syntax-highlighted diff and preview panes are memoised, so scrolling no longer re-tokenises the whole buffer on every frame — smoother on large, highlighted files.
 - TUI polish: the Gists and Gist-detail footers now surface `y copy url`; destructive-key and comment-error colours follow the theme (keeping contrast in light mode); and the filter hint wording is consistent (`Enter apply`).
