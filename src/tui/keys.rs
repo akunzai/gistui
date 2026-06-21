@@ -604,6 +604,11 @@ impl AppState {
                     }
                 }
             }
+            KeyCode::Char('m') if self.detail_focus == DetailFocus::Comments => {
+                if self.can_load_older_comments() {
+                    return KeyOutcome::LoadOlderComments;
+                }
+            }
             KeyCode::Char('?') => self.open_help(),
             _ => {}
         }
@@ -878,6 +883,23 @@ impl AppState {
         None
     }
 
+    /// A click on the GistDetail "load older comments" affordance line.
+    fn click_comments_load_older(
+        &mut self,
+        col: u16,
+        row: u16,
+        layout: &MouseLayout,
+    ) -> Option<KeyOutcome> {
+        if self.screen != Screen::GistDetail || self.detail_focus != DetailFocus::Comments {
+            return None;
+        }
+        let rect = layout.comments_load_older?;
+        if point_in(rect, col, row) && self.can_load_older_comments() {
+            return Some(KeyOutcome::LoadOlderComments);
+        }
+        None
+    }
+
     /// Translate a classified mouse intent into a state change, reusing existing keyboard
     /// logic. Pure (no IO, no clock); returns a `KeyOutcome` so `run_loop` can perform any
     /// follow-up IO (e.g. `PreviewDiff` on double-click).
@@ -906,6 +928,9 @@ impl AppState {
                 }
                 // A GistDetail tab header click switches focus (single-click action).
                 if let Some(outcome) = self.click_detail_tab(col, row, layout) {
+                    return outcome;
+                }
+                if let Some(outcome) = self.click_comments_load_older(col, row, layout) {
                     return outcome;
                 }
                 self.click_select(col, row, layout);

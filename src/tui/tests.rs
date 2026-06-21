@@ -4756,3 +4756,41 @@ fn can_load_older_false_while_loading_more() {
     s.comments_loading_more = true;
     assert!(!s.can_load_older_comments());
 }
+
+#[test]
+fn m_key_loads_older_when_available() {
+    use crate::tui::InitialComments;
+    let mut s = crate::tui::initial_state();
+    s.screen = Screen::GistDetail;
+    s.detail_focus = DetailFocus::Comments;
+    s.detail_gist_id = Some("g1".into());
+    s.apply_initial_comments(
+        "g1",
+        Ok(InitialComments {
+            comments: vec![sample_comment("a", "x")],
+            total: 90,
+            oldest_page: 3,
+        }),
+    );
+    let out = s.handle_key(KeyCode::Char('m'));
+    assert!(matches!(out, KeyOutcome::LoadOlderComments));
+}
+
+#[test]
+fn m_key_noop_when_at_oldest_page() {
+    use crate::tui::InitialComments;
+    let mut s = crate::tui::initial_state();
+    s.screen = Screen::GistDetail;
+    s.detail_focus = DetailFocus::Comments;
+    s.detail_gist_id = Some("g1".into());
+    s.apply_initial_comments(
+        "g1",
+        Ok(InitialComments {
+            comments: vec![sample_comment("a", "x")],
+            total: 10,
+            oldest_page: 1,
+        }),
+    );
+    let out = s.handle_key(KeyCode::Char('m'));
+    assert!(matches!(out, KeyOutcome::None));
+}
