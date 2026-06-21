@@ -88,8 +88,8 @@ pub(super) fn run_loop(
                         state.gist_index = 0;
                     }
                     let count = state.visible_gist_groups().len();
-                    if count > 0 && state.gists_index >= count {
-                        state.gists_index = count - 1;
+                    if count > 0 && state.gist_manager.index >= count {
+                        state.gist_manager.index = count - 1;
                     }
                     gist_rx = None;
                     let gist_ids: std::collections::HashSet<String> = state

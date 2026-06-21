@@ -143,8 +143,9 @@ pub enum GistView {
     Id,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum GistTypeFilter {
+    #[default]
     All,
     Public,
     Secret,
@@ -201,6 +202,13 @@ cycling_enum! {
     pub enum GistGroupSort {
         Updated => "updated",
         Created => "created",
+    }
+}
+
+impl Default for GistGroupSort {
+    /// `Updated` mirrors the gh list's default updated-first order.
+    fn default() -> Self {
+        GistGroupSort::Updated
     }
 }
 
@@ -498,6 +506,18 @@ pub struct PinsState {
     pub sort: PinSort,
 }
 
+/// Gist-manager screen state (`Screen::Gists`). Named `gist_manager` on `AppState` because
+/// the `gists` field name is taken by the gist list `Vec`. Data only — methods stay on `AppState`.
+#[derive(Debug, Clone, Default)]
+pub struct GistsManagerState {
+    pub index: usize,
+    pub hscroll: u16,
+    pub sort: GistGroupSort,
+    pub type_filter: GistTypeFilter,
+    pub filtering: bool,
+    pub filter_query: TextInput,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub locals: Vec<LocalCandidate>,
@@ -582,12 +602,7 @@ pub struct AppState {
     pub scan_depth: u32,
     pub local_scanning: bool,
     pub pins: PinsState,
-    pub gists_index: usize,
-    pub gists_hscroll: u16,
-    pub gists_sort: GistGroupSort,
-    pub gists_type_filter: GistTypeFilter,
-    pub gists_filtering: bool,
-    pub gists_filter_query: TextInput,
+    pub gist_manager: GistsManagerState,
     pub editing_description: bool,
     pub description_input: TextInput,
     pub bg_task_msg: Option<String>,
@@ -747,7 +762,7 @@ impl AppState {
     }
 
     fn manager_gist_source(&self) -> &[GistFile] {
-        if self.gists_type_filter.uses_starred_source() {
+        if self.gist_manager.type_filter.uses_starred_source() {
             &self.starred_gists
         } else {
             &self.gists
@@ -906,17 +921,17 @@ impl AppState {
     /// are applied. This is the single source of truth for navigation, selection, and
     /// rendering in `Screen::Gists`.
     pub fn visible_gist_groups(&self) -> Vec<GistGroup> {
-        let query = self.gists_filter_query.to_lowercase();
+        let query = self.gist_manager.filter_query.to_lowercase();
         let mut groups: Vec<GistGroup> = group_gists(self.manager_gist_source())
             .into_iter()
-            .filter(|g| self.gists_type_filter.matches_group(g))
+            .filter(|g| self.gist_manager.type_filter.matches_group(g))
             .filter(|g| {
                 query.is_empty()
                     || g.description.to_lowercase().contains(&query)
                     || g.id.to_lowercase().contains(&query)
             })
             .collect();
-        match self.gists_sort {
+        match self.gist_manager.sort {
             GistGroupSort::Updated => groups.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)),
             GistGroupSort::Created => groups.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
         }
@@ -925,7 +940,9 @@ impl AppState {
 
     /// The gist highlighted in the gist-level view.
     pub fn selected_group(&self) -> Option<GistGroup> {
-        self.visible_gist_groups().into_iter().nth(self.gists_index)
+        self.visible_gist_groups()
+            .into_iter()
+            .nth(self.gist_manager.index)
     }
 
     /// Highest horizontal-scroll offset for the gist-level view, based on its longest
@@ -937,7 +954,7 @@ impl AppState {
                 gist_group_row_label(
                     g,
                     unix_now(),
-                    self.gists_sort,
+                    self.gist_manager.sort,
                     (
                         self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
                         self.gist_star_counts.get(&g.id).copied().unwrap_or(0),
@@ -1471,12 +1488,7 @@ pub fn initial_state() -> AppState {
         scan_depth: crate::config::AppConfig::default().scan_depth,
         local_scanning: false,
         pins: PinsState::default(),
-        gists_index: 0,
-        gists_hscroll: 0,
-        gists_sort: GistGroupSort::Updated,
-        gists_type_filter: GistTypeFilter::All,
-        gists_filtering: false,
-        gists_filter_query: TextInput::default(),
+        gist_manager: GistsManagerState::default(),
         editing_description: false,
         description_input: TextInput::default(),
         bg_task_msg: None,

@@ -53,7 +53,7 @@ impl AppState {
             && theme_toggle_modifiers_ok(modifiers)
             && !self.filtering
             && !self.pins.filtering
-            && !self.gists_filtering
+            && !self.gist_manager.filtering
             && !self.editing_description
         {
             self.theme_choice = match self.theme_choice {
@@ -101,7 +101,7 @@ impl AppState {
         }
         // While filtering, arrows/hjkl are typed or handled in the filter branches; page keys
         // still jump the live selection by PAGE_SCROLL.
-        if (self.filtering || self.pins.filtering || self.gists_filtering)
+        if (self.filtering || self.pins.filtering || self.gist_manager.filtering)
             && !matches!(action, NavAction::PageUp | NavAction::PageDown)
         {
             return false;
@@ -179,34 +179,37 @@ impl AppState {
                 let groups = self.visible_gist_groups();
                 match action {
                     NavAction::Down => {
-                        if self.gists_index + 1 < groups.len() {
-                            self.gists_index += 1;
-                            self.gists_hscroll = 0;
+                        if self.gist_manager.index + 1 < groups.len() {
+                            self.gist_manager.index += 1;
+                            self.gist_manager.hscroll = 0;
                         }
                     }
                     NavAction::Up => {
-                        if self.gists_index > 0 {
-                            self.gists_index -= 1;
-                            self.gists_hscroll = 0;
+                        if self.gist_manager.index > 0 {
+                            self.gist_manager.index -= 1;
+                            self.gist_manager.hscroll = 0;
                         }
                     }
                     NavAction::Right => {
-                        self.gists_hscroll = (self.gists_hscroll + 1).min(self.gists_hscroll_max());
+                        self.gist_manager.hscroll =
+                            (self.gist_manager.hscroll + 1).min(self.gists_hscroll_max());
                     }
                     NavAction::Left => {
-                        self.gists_hscroll = self.gists_hscroll.saturating_sub(1);
+                        self.gist_manager.hscroll = self.gist_manager.hscroll.saturating_sub(1);
                     }
                     NavAction::PageDown => {
                         let len = groups.len();
                         if len > 0 {
                             let max = len - 1;
-                            self.gists_index = (self.gists_index + PAGE_SCROLL as usize).min(max);
-                            self.gists_hscroll = 0;
+                            self.gist_manager.index =
+                                (self.gist_manager.index + PAGE_SCROLL as usize).min(max);
+                            self.gist_manager.hscroll = 0;
                         }
                     }
                     NavAction::PageUp => {
-                        self.gists_index = self.gists_index.saturating_sub(PAGE_SCROLL as usize);
-                        self.gists_hscroll = 0;
+                        self.gist_manager.index =
+                            self.gist_manager.index.saturating_sub(PAGE_SCROLL as usize);
+                        self.gist_manager.hscroll = 0;
                     }
                 }
                 true
@@ -412,30 +415,30 @@ impl AppState {
     fn handle_key_gists(&mut self, code: KeyCode) -> KeyOutcome {
         self.status = None;
         // Inline text filter: live-navigate with arrows; Tab is a no-op (single pane).
-        if self.gists_filtering {
+        if self.gist_manager.filtering {
             match code {
-                KeyCode::Up if self.gists_index > 0 => {
-                    self.gists_index -= 1;
-                    self.gists_hscroll = 0;
+                KeyCode::Up if self.gist_manager.index > 0 => {
+                    self.gist_manager.index -= 1;
+                    self.gist_manager.hscroll = 0;
                 }
                 KeyCode::Up => {}
                 KeyCode::Down => {
-                    if self.gists_index + 1 < self.visible_gist_groups().len() {
-                        self.gists_index += 1;
-                        self.gists_hscroll = 0;
+                    if self.gist_manager.index + 1 < self.visible_gist_groups().len() {
+                        self.gist_manager.index += 1;
+                        self.gist_manager.hscroll = 0;
                     }
                 }
-                _ => match apply_filter_edit(code, &mut self.gists_filter_query) {
+                _ => match apply_filter_edit(code, &mut self.gist_manager.filter_query) {
                     FilterKey::Edited => {
-                        self.gists_index = 0;
-                        self.gists_hscroll = 0;
+                        self.gist_manager.index = 0;
+                        self.gist_manager.hscroll = 0;
                     }
                     FilterKey::Cleared => {
-                        self.gists_filtering = false;
-                        self.gists_index = 0;
-                        self.gists_hscroll = 0;
+                        self.gist_manager.filtering = false;
+                        self.gist_manager.index = 0;
+                        self.gist_manager.hscroll = 0;
                     }
-                    FilterKey::Exited => self.gists_filtering = false,
+                    FilterKey::Exited => self.gist_manager.filtering = false,
                     FilterKey::Moved | FilterKey::Pass => {}
                 },
             }
@@ -444,28 +447,28 @@ impl AppState {
         let groups = self.visible_gist_groups();
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
-            KeyCode::Char('/') => self.gists_filtering = true,
+            KeyCode::Char('/') => self.gist_manager.filtering = true,
             KeyCode::Char('s') => {
-                self.gists_sort = self.gists_sort.next();
-                self.gists_index = 0;
-                self.gists_hscroll = 0;
+                self.gist_manager.sort = self.gist_manager.sort.next();
+                self.gist_manager.index = 0;
+                self.gist_manager.hscroll = 0;
             }
             KeyCode::Char('v') => {
-                self.gists_type_filter = self.gists_type_filter.next();
-                self.gists_index = 0;
-                self.gists_hscroll = 0;
+                self.gist_manager.type_filter = self.gist_manager.type_filter.next();
+                self.gist_manager.index = 0;
+                self.gist_manager.hscroll = 0;
             }
             KeyCode::Char('*') => return self.star_toggle_intent(),
-            KeyCode::Enter if self.gists_index < groups.len() => {
+            KeyCode::Enter if self.gist_manager.index < groups.len() => {
                 return KeyOutcome::OpenGistDetail;
             }
-            KeyCode::Char('o') if self.gists_index < groups.len() => {
+            KeyCode::Char('o') if self.gist_manager.index < groups.len() => {
                 return KeyOutcome::OpenBrowser
             }
-            KeyCode::Char('y') if self.gists_index < groups.len() => {
+            KeyCode::Char('y') if self.gist_manager.index < groups.len() => {
                 return KeyOutcome::CopyGistUrl
             }
-            KeyCode::Char('H') if self.gists_index < groups.len() => {
+            KeyCode::Char('H') if self.gist_manager.index < groups.len() => {
                 if self.open_revisions(Screen::Gists) {
                     return KeyOutcome::FetchRevisions;
                 }
@@ -733,8 +736,8 @@ impl AppState {
                 if let Some(hit) = layout.list {
                     if point_in(hit.rect, col, row) {
                         if let Some(idx) = hit.index_at(row, self.visible_gist_groups().len()) {
-                            self.gists_index = idx;
-                            self.gists_hscroll = 0;
+                            self.gist_manager.index = idx;
+                            self.gist_manager.hscroll = 0;
                             return true;
                         }
                     }
@@ -1240,15 +1243,15 @@ impl AppState {
             self.status = Some("no gists to manage".into());
             return;
         }
-        self.gists_filtering = false;
-        self.gists_filter_query.clear();
-        self.gists_type_filter = GistTypeFilter::All;
-        self.gists_hscroll = 0;
+        self.gist_manager.filtering = false;
+        self.gist_manager.filter_query.clear();
+        self.gist_manager.type_filter = GistTypeFilter::All;
+        self.gist_manager.hscroll = 0;
         self.editing_description = false;
         self.description_input.clear();
         let target = self.selected_gist().map(|g| g.file.gist_id);
         let groups = self.visible_gist_groups();
-        self.gists_index = target
+        self.gist_manager.index = target
             .and_then(|id| groups.iter().position(|g| g.id == id))
             .unwrap_or(0);
         self.screen = Screen::Gists;
