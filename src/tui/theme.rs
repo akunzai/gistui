@@ -5,7 +5,7 @@ use ratatui::style::{Color, Style};
 /// The dark set are bright ANSI hues tuned for a terminal-native background; the light set are
 /// fixed 256-colour dark shades that keep contrast on the light-grey canvas (bright ANSI hues
 /// wash out there). Kinds that share a hue (digit/boolean, attribute/header) map to one field.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SyntaxPalette {
     /// `comment` tokens.
     pub comment: Color,
