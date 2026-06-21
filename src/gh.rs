@@ -248,8 +248,15 @@ pub fn check_gh_ready_with(runner: &dyn CommandRunner) -> Result<()> {
     Ok(())
 }
 
+/// Parse a `gh api /gists…` JSON array into raw `GhGist` rows. Centralises the
+/// `from_str + context` boilerplate shared by the list / comment-count / fork-count /
+/// starred-id parsers.
+fn parse_gh_gists(raw: &str) -> Result<Vec<GhGist>> {
+    serde_json::from_str(raw).context("parse gh gist list JSON")
+}
+
 pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
-    let gists: Vec<GhGist> = serde_json::from_str(raw).context("parse gh gist list JSON")?;
+    let gists = parse_gh_gists(raw)?;
     let mut files = Vec::new();
 
     for gist in gists {
@@ -307,14 +314,14 @@ pub fn merge_gist_node_id_maps(
 /// Map each gist id to its comment count, parsed from the same gist-list JSON. The count rides
 /// along in the list response, so this needs no extra `gh` call.
 pub fn parse_gist_comment_counts(raw: &str) -> Result<HashMap<String, u32>> {
-    let gists: Vec<GhGist> = serde_json::from_str(raw).context("parse gh gist list JSON")?;
+    let gists = parse_gh_gists(raw)?;
     Ok(gists.into_iter().map(|g| (g.id, g.comments)).collect())
 }
 
 /// Map each gist id to how many forks it has. Uses the `forks` array when the JSON
 /// includes it (full gist); list responses omit it and return 0.
 pub fn parse_gist_fork_counts(raw: &str) -> Result<HashMap<String, u32>> {
-    let gists: Vec<GhGist> = serde_json::from_str(raw).context("parse gh gist list JSON")?;
+    let gists = parse_gh_gists(raw)?;
     Ok(gists
         .into_iter()
         .map(|g| (g.id, g.forks.len() as u32))
@@ -631,7 +638,7 @@ pub fn fetch_current_user_login_with(runner: &dyn CommandRunner) -> Result<Strin
 
 /// Unique gist ids from a parsed gist-list JSON payload.
 pub fn parse_starred_gist_ids(raw: &str) -> Result<std::collections::HashSet<String>> {
-    let gists: Vec<GhGist> = serde_json::from_str(raw).context("parse gh gist list JSON")?;
+    let gists = parse_gh_gists(raw)?;
     Ok(gists.into_iter().map(|g| g.id).collect())
 }
 
