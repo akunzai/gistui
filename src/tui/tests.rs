@@ -2320,20 +2320,20 @@ fn confirm_upload_json_toggles() {
         local_path: PathBuf::from("/tmp/settings.json"),
     });
     state.screen = Screen::Confirm;
-    assert!(!state.upload_json_pretty);
-    assert!(!state.upload_json_sort);
+    assert!(!state.upload.json_pretty);
+    assert!(!state.upload.json_sort);
 
     // Toggle pretty
     assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::None);
-    assert!(state.upload_json_pretty);
+    assert!(state.upload.json_pretty);
 
     // Toggle sort
     assert_eq!(state.handle_key(KeyCode::Char('s')), KeyOutcome::None);
-    assert!(state.upload_json_sort);
+    assert!(state.upload.json_sort);
 
     // Toggle pretty off
     assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::None);
-    assert!(!state.upload_json_pretty);
+    assert!(!state.upload.json_pretty);
 }
 
 #[test]
