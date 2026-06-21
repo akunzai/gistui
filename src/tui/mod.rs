@@ -144,16 +144,6 @@ pub enum GistView {
     Id,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum GistTypeFilter {
-    #[default]
-    All,
-    Public,
-    Secret,
-    Starred,
-    Forked,
-}
-
 /// Generates a small enum whose variants cycle in declaration order. `next()` advances to the
 /// following variant (wrapping past the last) and `label()` returns each variant's short
 /// status-footer label. Keeping the variant↔label pairing in one place lets the sort enums
@@ -241,6 +231,25 @@ impl Default for PinSort {
     }
 }
 
+cycling_enum! {
+    /// Visibility/type filter for the gist panes, cycled with `v`. `next`/`label` come from
+    /// the macro; the filtering helpers live in a separate `impl` block below.
+    pub enum GistTypeFilter {
+        All => "all",
+        Public => "public",
+        Secret => "secret",
+        Starred => "starred",
+        Forked => "forked",
+    }
+}
+
+impl Default for GistTypeFilter {
+    /// `All` (no filtering) is the natural default.
+    fn default() -> Self {
+        GistTypeFilter::All
+    }
+}
+
 impl GistSort {
     /// Re-orders ranked gists. `Match` keeps the incoming order; the others override it.
     fn apply(self, gists: &mut [RankedGistFile]) {
@@ -290,26 +299,6 @@ impl GistTypeFilter {
             GistTypeFilter::Public => group.public,
             GistTypeFilter::Secret => !group.public,
             GistTypeFilter::Forked => group.fork_of_id.is_some(),
-        }
-    }
-
-    fn next(self) -> Self {
-        match self {
-            GistTypeFilter::All => GistTypeFilter::Public,
-            GistTypeFilter::Public => GistTypeFilter::Secret,
-            GistTypeFilter::Secret => GistTypeFilter::Starred,
-            GistTypeFilter::Starred => GistTypeFilter::Forked,
-            GistTypeFilter::Forked => GistTypeFilter::All,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            GistTypeFilter::All => "all",
-            GistTypeFilter::Public => "public",
-            GistTypeFilter::Secret => "secret",
-            GistTypeFilter::Starred => "starred",
-            GistTypeFilter::Forked => "forked",
         }
     }
 }
