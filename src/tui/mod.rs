@@ -97,9 +97,10 @@ impl HelpTopic {
 /// Which tab `Screen::GistDetail` shows, and which the navigation keys drive: the file list
 /// or the comments (only one is visible at a time). Defaults to `Files` — the gist's primary
 /// content — with the comments one `Tab` away.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DetailFocus {
     Comments,
+    #[default]
     Files,
 }
 
@@ -518,6 +519,37 @@ pub struct GistsManagerState {
     pub filter_query: TextInput,
 }
 
+/// Gist-detail screen state (`Screen::GistDetail`), including its Comments tab. Data only —
+/// the detail/comment methods stay on `AppState`. The `comments_*` count/paging fields keep
+/// their prefix so they don't collide with the `comments` Vec.
+#[derive(Debug, Clone, Default)]
+pub struct DetailState {
+    /// The gist currently shown; also guards stale comment responses.
+    pub gist_id: Option<String>,
+    /// Comments: `None` until the Comments tab is opened; `Some` is the fetched result.
+    pub comments: Option<Vec<GistComment>>,
+    /// True while a comment fetch is in flight (after the user opens the Comments tab).
+    pub comments_loading: bool,
+    /// Comment-fetch error message, if any.
+    pub comments_error: Option<String>,
+    /// Exact total comment count (from the per_page=1 probe); for the title only.
+    pub comments_total: Option<u32>,
+    /// Smallest 1-based page index currently loaded. 0 = none loaded yet.
+    pub comments_loaded_oldest_page: u32,
+    /// A "load older" request is in flight (distinct from the initial load).
+    pub comments_loading_more: bool,
+    /// One-shot: run_loop scrolls the comments pane to the bottom on the next draw.
+    pub comments_scroll_to_bottom: bool,
+    /// Comment-pane scroll offset.
+    pub scroll: u16,
+    /// Which detail-view pane Tab/arrows currently drive (Comments vs Files).
+    pub focus: DetailFocus,
+    /// Cursor index into the detail gist's files when `focus == Files`.
+    pub file_cursor: usize,
+    /// Screen to return to after a compaction confirm is cancelled/finished (Gists or GistDetail).
+    pub compact_return_screen: Screen,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub locals: Vec<LocalCandidate>,
@@ -617,30 +649,7 @@ pub struct AppState {
     pub download_gist_filename: Option<String>,
     /// Screen to return to when leaving the diff (default: List; set to Pins for pin diffs).
     pub diff_return: Screen,
-    /// The gist currently shown in `Screen::GistDetail`; also guards stale comment responses.
-    pub detail_gist_id: Option<String>,
-    /// Comments: `None` until the Comments tab is opened; `Some` is the fetched result.
-    pub detail_comments: Option<Vec<GistComment>>,
-    /// True while a comment fetch is in flight (after the user opens the Comments tab).
-    pub detail_comments_loading: bool,
-    /// Comment-fetch error message, if any.
-    pub detail_comments_error: Option<String>,
-    /// Exact total comment count (from the per_page=1 probe); for the title only.
-    pub comments_total: Option<u32>,
-    /// Smallest 1-based page index currently loaded. 0 = none loaded yet.
-    pub comments_loaded_oldest_page: u32,
-    /// A "load older" request is in flight (distinct from the initial load).
-    pub comments_loading_more: bool,
-    /// One-shot: run_loop scrolls the comments pane to the bottom on the next draw.
-    pub comments_scroll_to_bottom: bool,
-    /// Comment-pane scroll offset.
-    pub detail_scroll: u16,
-    /// Which detail-view pane Tab/arrows currently drive (Comments vs Files).
-    pub detail_focus: DetailFocus,
-    /// Cursor index into the detail gist's files when `detail_focus == Files`.
-    pub detail_file_cursor: usize,
-    /// Screen to return to after a compaction confirm is cancelled/finished (Gists or GistDetail).
-    pub compact_return_screen: Screen,
+    pub detail: DetailState,
     /// Monotonic tick advanced once per event-loop iteration (~150ms); drives the in-progress
     /// spinner animation. Wraps freely — only its value modulo the frame count is observed.
     pub spinner_frame: usize,
@@ -1112,7 +1121,7 @@ impl AppState {
     pub fn open_revisions(&mut self, return_screen: Screen) -> bool {
         let gist_id = match return_screen {
             Screen::List => self.selected_gist().map(|g| g.file.gist_id.clone()),
-            Screen::GistDetail => self.detail_gist_id.clone(),
+            Screen::GistDetail => self.detail.gist_id.clone(),
             Screen::Gists => self.selected_group().map(|g| g.id.clone()),
             _ => None,
         };
@@ -1127,7 +1136,7 @@ impl AppState {
                 .filter(|f| filenames.iter().any(|name| name == f)),
             Screen::GistDetail => filenames
                 .into_iter()
-                .nth(self.detail_file_cursor)
+                .nth(self.detail.file_cursor)
                 .or_else(|| self.gist_filenames(&gist_id).first().cloned()),
             Screen::Gists => filenames.first().cloned(),
             _ => None,
@@ -1207,7 +1216,7 @@ impl AppState {
     pub fn context_gist_id(&self) -> Option<String> {
         match self.screen {
             Screen::Gists => self.selected_group().map(|g| g.id),
-            Screen::GistDetail => self.detail_gist_id.clone(),
+            Screen::GistDetail => self.detail.gist_id.clone(),
             _ => self.selected_gist().map(|g| g.file.gist_id),
         }
     }
@@ -1498,18 +1507,10 @@ pub fn initial_state() -> AppState {
         download_gist_id: None,
         download_gist_filename: None,
         diff_return: Screen::List,
-        detail_gist_id: None,
-        detail_comments: None,
-        detail_comments_loading: false,
-        detail_comments_error: None,
-        comments_total: None,
-        comments_loaded_oldest_page: 0,
-        comments_loading_more: false,
-        comments_scroll_to_bottom: false,
-        detail_scroll: 0,
-        detail_focus: DetailFocus::Files,
-        detail_file_cursor: 0,
-        compact_return_screen: Screen::Gists,
+        detail: DetailState {
+            compact_return_screen: Screen::Gists,
+            ..Default::default()
+        },
         spinner_frame: 0,
         gist_comment_counts: std::collections::HashMap::new(),
         gist_fork_counts: std::collections::HashMap::new(),
@@ -1661,13 +1662,13 @@ impl AppState {
     /// Reset comment-pagination state (called when (re)opening a gist detail or switching
     /// the loaded gist), so a fresh Tab re-fetches from the newest page.
     pub fn reset_comment_pagination(&mut self) {
-        self.detail_comments = None;
-        self.detail_comments_loading = false;
-        self.detail_comments_error = None;
-        self.comments_total = None;
-        self.comments_loaded_oldest_page = 0;
-        self.comments_loading_more = false;
-        self.comments_scroll_to_bottom = false;
+        self.detail.comments = None;
+        self.detail.comments_loading = false;
+        self.detail.comments_error = None;
+        self.detail.comments_total = None;
+        self.detail.comments_loaded_oldest_page = 0;
+        self.detail.comments_loading_more = false;
+        self.detail.comments_scroll_to_bottom = false;
     }
 
     /// Apply the initial newest-page load. Ignored if the user navigated to another gist
@@ -1678,19 +1679,19 @@ impl AppState {
         gist_id: &str,
         result: Result<InitialComments, String>,
     ) {
-        if self.detail_gist_id.as_deref() != Some(gist_id) {
+        if self.detail.gist_id.as_deref() != Some(gist_id) {
             return;
         }
-        self.detail_comments_loading = false;
+        self.detail.comments_loading = false;
         match result {
             Ok(init) => {
-                self.comments_total = Some(init.total);
-                self.comments_loaded_oldest_page = init.oldest_page;
-                self.detail_comments = Some(init.comments);
-                self.comments_scroll_to_bottom = true;
+                self.detail.comments_total = Some(init.total);
+                self.detail.comments_loaded_oldest_page = init.oldest_page;
+                self.detail.comments = Some(init.comments);
+                self.detail.comments_scroll_to_bottom = true;
             }
             Err(error) => {
-                self.detail_comments_error = Some(error);
+                self.detail.comments_error = Some(error);
             }
         }
     }
@@ -1703,25 +1704,28 @@ impl AppState {
         gist_id: &str,
         result: Result<Vec<GistComment>, String>,
     ) {
-        if self.detail_gist_id.as_deref() != Some(gist_id) {
+        if self.detail.gist_id.as_deref() != Some(gist_id) {
             return;
         }
-        self.comments_loading_more = false;
+        self.detail.comments_loading_more = false;
         match result {
             Ok(mut older) => {
                 let added = crate::tui::render::comment_lines_count(&older);
-                if let Some(existing) = self.detail_comments.as_mut() {
+                if let Some(existing) = self.detail.comments.as_mut() {
                     older.append(existing);
                     *existing = older;
                 } else {
-                    self.detail_comments = Some(older);
+                    self.detail.comments = Some(older);
                 }
-                self.comments_loaded_oldest_page =
-                    self.comments_loaded_oldest_page.saturating_sub(1).max(1);
-                self.detail_scroll = self.detail_scroll.saturating_add(added);
+                self.detail.comments_loaded_oldest_page = self
+                    .detail
+                    .comments_loaded_oldest_page
+                    .saturating_sub(1)
+                    .max(1);
+                self.detail.scroll = self.detail.scroll.saturating_add(added);
             }
             Err(error) => {
-                self.detail_comments_error = Some(error);
+                self.detail.comments_error = Some(error);
             }
         }
     }
@@ -1729,10 +1733,10 @@ impl AppState {
     /// Whether a "load older" action should be offered: comments are loaded, an older page
     /// exists, and no load is already in flight.
     pub fn can_load_older_comments(&self) -> bool {
-        self.detail_comments.is_some()
-            && self.comments_loaded_oldest_page > 1
-            && !self.comments_loading_more
-            && !self.detail_comments_loading
+        self.detail.comments.is_some()
+            && self.detail.comments_loaded_oldest_page > 1
+            && !self.detail.comments_loading_more
+            && !self.detail.comments_loading
     }
 }
 

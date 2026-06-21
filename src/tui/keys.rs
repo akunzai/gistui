@@ -507,7 +507,7 @@ impl AppState {
                 }
             }
             KeyCode::Char('e') => {
-                let Some(id) = self.detail_gist_id.clone() else {
+                let Some(id) = self.detail.gist_id.clone() else {
                     return KeyOutcome::None;
                 };
                 if !self.gist_is_owned(&id) {
@@ -519,13 +519,13 @@ impl AppState {
                 }
             }
             KeyCode::Char('c') => {
-                let Some(id) = self.detail_gist_id.clone() else {
+                let Some(id) = self.detail.gist_id.clone() else {
                     return KeyOutcome::None;
                 };
                 if !self.gist_is_owned(&id) {
                     return KeyOutcome::None;
                 }
-                self.compact_return_screen = Screen::GistDetail;
+                self.detail.compact_return_screen = Screen::GistDetail;
                 return KeyOutcome::CompactGist;
             }
             KeyCode::Char('*') => return self.star_toggle_intent(),
@@ -535,13 +535,13 @@ impl AppState {
                 return self.preview_detail_file((c as u8 - b'1') as usize);
             }
             KeyCode::Tab => {
-                self.detail_focus = match self.detail_focus {
+                self.detail.focus = match self.detail.focus {
                     DetailFocus::Comments => DetailFocus::Files,
                     DetailFocus::Files => DetailFocus::Comments,
                 };
-                if self.detail_focus == DetailFocus::Comments
-                    && self.detail_comments.is_none()
-                    && !self.detail_comments_loading
+                if self.detail.focus == DetailFocus::Comments
+                    && self.detail.comments.is_none()
+                    && !self.detail.comments_loading
                 {
                     return KeyOutcome::FetchComments;
                 }
@@ -550,7 +550,8 @@ impl AppState {
             // which lands on the list once the gist is gone. Owned gists only (no-op otherwise).
             KeyCode::Char('X') => {
                 if let Some(group) = self
-                    .detail_gist_id
+                    .detail
+                    .gist_id
                     .clone()
                     .filter(|id| self.gist_is_owned(id))
                     .and_then(|id| self.group_by_id(&id))
@@ -573,9 +574,9 @@ impl AppState {
                     self.screen = Screen::Confirm;
                 }
             }
-            KeyCode::Enter if self.detail_focus == DetailFocus::Files => {
-                if let Some(gist_id) = self.detail_gist_id.clone() {
-                    let cursor = self.detail_file_cursor;
+            KeyCode::Enter if self.detail.focus == DetailFocus::Files => {
+                if let Some(gist_id) = self.detail.gist_id.clone() {
+                    let cursor = self.detail.file_cursor;
                     if let Some(filename) = self.gist_filenames(&gist_id).into_iter().nth(cursor) {
                         if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
                             return KeyOutcome::None;
@@ -586,7 +587,7 @@ impl AppState {
                     }
                 }
             }
-            KeyCode::Char('m') if self.detail_focus == DetailFocus::Comments => {
+            KeyCode::Char('m') if self.detail.focus == DetailFocus::Comments => {
                 if self.can_load_older_comments() {
                     return KeyOutcome::LoadOlderComments;
                 }
@@ -655,17 +656,18 @@ impl AppState {
     /// Move within the focused detail pane: scroll comments, or move the file cursor
     /// (clamped to the gist's file count). `delta` is signed rows.
     fn detail_nav(&mut self, delta: i32) {
-        match self.detail_focus {
+        match self.detail.focus {
             DetailFocus::Comments => {
-                self.detail_scroll = if delta < 0 {
-                    self.detail_scroll.saturating_sub((-delta) as u16)
+                self.detail.scroll = if delta < 0 {
+                    self.detail.scroll.saturating_sub((-delta) as u16)
                 } else {
-                    self.detail_scroll.saturating_add(delta as u16)
+                    self.detail.scroll.saturating_add(delta as u16)
                 };
             }
             DetailFocus::Files => {
                 let count = self
-                    .detail_gist_id
+                    .detail
+                    .gist_id
                     .as_deref()
                     .map(|id| self.gist_filenames(id).len())
                     .unwrap_or(0);
@@ -673,8 +675,8 @@ impl AppState {
                     return;
                 }
                 let max = count - 1;
-                let next = self.detail_file_cursor as i64 + delta as i64;
-                self.detail_file_cursor = next.clamp(0, max as i64) as usize;
+                let next = self.detail.file_cursor as i64 + delta as i64;
+                self.detail.file_cursor = next.clamp(0, max as i64) as usize;
             }
         }
     }
@@ -687,7 +689,7 @@ impl AppState {
             Screen::Diff | Screen::Preview | Screen::Confirm => 3,
             // GistDetail: the comments body scrolls like content (3 lines); the file list
             // steps one file at a time.
-            Screen::GistDetail if self.detail_focus == DetailFocus::Comments => 3,
+            Screen::GistDetail if self.detail.focus == DetailFocus::Comments => 3,
             Screen::Help if !self.help.index_open => 3, // help body scrolls; topic index is a list
             _ => 1, // List/Pins/Gists/Revisions/Help index/GistDetail Files
         }
@@ -773,13 +775,14 @@ impl AppState {
                 if let Some(hit) = layout.detail_files {
                     if point_in(hit.rect, col, row) {
                         // Clicking the file list focuses the Files tab; a row also moves the cursor.
-                        self.detail_focus = DetailFocus::Files;
+                        self.detail.focus = DetailFocus::Files;
                         let count = self
-                            .detail_gist_id
+                            .detail
+                            .gist_id
                             .as_deref()
                             .map_or(0, |id| self.gist_filenames(id).len());
                         if let Some(idx) = hit.index_at(row, count) {
-                            self.detail_file_cursor = idx;
+                            self.detail.file_cursor = idx;
                             return true;
                         }
                     }
@@ -796,7 +799,7 @@ impl AppState {
         match self.screen {
             // GistDetail files have no `Enter`; they preview via number keys, so a
             // double-click previews the file under the cursor.
-            Screen::GistDetail => self.preview_detail_file(self.detail_file_cursor),
+            Screen::GistDetail => self.preview_detail_file(self.detail.file_cursor),
             _ => self.handle_key_with(KeyCode::Enter, KeyModifiers::NONE),
         }
     }
@@ -804,7 +807,7 @@ impl AppState {
     /// Preview the `index`-th file of the gist shown on `Screen::GistDetail` (full-screen),
     /// the action behind the `1`–`9` keys and a file double-click.
     fn preview_detail_file(&mut self, index: usize) -> KeyOutcome {
-        if let Some(gist_id) = self.detail_gist_id.clone() {
+        if let Some(gist_id) = self.detail.gist_id.clone() {
             if let Some(filename) = self.gist_filenames(&gist_id).into_iter().nth(index) {
                 if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
                     return KeyOutcome::None;
@@ -825,14 +828,14 @@ impl AppState {
         }
         if let Some(rect) = layout.detail_tab_files {
             if point_in(rect, col, row) {
-                self.detail_focus = DetailFocus::Files;
+                self.detail.focus = DetailFocus::Files;
                 return Some(KeyOutcome::None);
             }
         }
         if let Some(rect) = layout.detail_tab_comments {
             if point_in(rect, col, row) {
-                self.detail_focus = DetailFocus::Comments;
-                if self.detail_comments.is_none() && !self.detail_comments_loading {
+                self.detail.focus = DetailFocus::Comments;
+                if self.detail.comments.is_none() && !self.detail.comments_loading {
                     return Some(KeyOutcome::FetchComments);
                 }
                 return Some(KeyOutcome::None);
@@ -848,7 +851,7 @@ impl AppState {
         row: u16,
         layout: &MouseLayout,
     ) -> Option<KeyOutcome> {
-        if self.screen != Screen::GistDetail || self.detail_focus != DetailFocus::Comments {
+        if self.screen != Screen::GistDetail || self.detail.focus != DetailFocus::Comments {
             return None;
         }
         let rect = layout.comments_load_older?;
@@ -1471,7 +1474,7 @@ impl AppState {
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     // Return to whichever screen launched the compaction (Gists or GistDetail).
                     self.pending_action = None;
-                    self.screen = self.compact_return_screen;
+                    self.screen = self.detail.compact_return_screen;
                 }
                 _ => {}
             },

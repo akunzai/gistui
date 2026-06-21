@@ -959,7 +959,7 @@ pub(super) fn render_gist_info_and_files(
             Style::default().add_modifier(Modifier::BOLD),
         )),
     ];
-    let cursor = state.detail_file_cursor.min(files.len().saturating_sub(1));
+    let cursor = state.detail.file_cursor.min(files.len().saturating_sub(1));
     // Visible file rows = area height minus borders(2), info line, blank, "Files (n)" header (3).
     let visible_rows = (area.height as usize).saturating_sub(5);
     let offset = file_list_scroll(cursor, visible_rows, files.len());
@@ -1005,7 +1005,7 @@ fn render_detail_header(
             state.gist_is_starred(gist_id),
             state.gist_counts(gist_id),
         )),
-        detail_focus_tabs_line(state.detail_focus, &state.theme),
+        detail_focus_tabs_line(state.detail.focus, &state.theme),
     ];
     frame.render_widget(
         Paragraph::new(lines).style(state.theme.base_style()).block(
@@ -1040,7 +1040,7 @@ fn render_gist_file_list(
     layout: &mut MouseLayout,
 ) {
     let files = state.gist_file_display_names(gist_id);
-    let cursor = state.detail_file_cursor.min(files.len().saturating_sub(1));
+    let cursor = state.detail.file_cursor.min(files.len().saturating_sub(1));
     let visible_rows = (area.height as usize).saturating_sub(2);
     let offset = file_list_scroll(cursor, visible_rows, files.len());
     if state.mouse_enabled {
@@ -1102,8 +1102,8 @@ fn dim_line<'a>(text: &'a str, state: &AppState) -> Line<'a> {
 
 /// Title for the comments block: shows the loaded range out of the total when known.
 fn comments_title(state: &AppState) -> String {
-    match (&state.detail_comments, state.comments_total) {
-        (Some(c), _) if state.detail_comments_error.is_some() => format!("Comments ({})", c.len()),
+    match (&state.detail.comments, state.detail.comments_total) {
+        (Some(c), _) if state.detail.comments_error.is_some() => format!("Comments ({})", c.len()),
         (Some(c), Some(total)) if !c.is_empty() => {
             let loaded = c.len() as u32;
             let first = total.saturating_sub(loaded) + 1;
@@ -1128,9 +1128,9 @@ pub(super) fn render_gist_comments(
     let mut affordance_present = false;
 
     match (
-        &state.detail_comments,
-        state.detail_comments_loading,
-        &state.detail_comments_error,
+        &state.detail.comments,
+        state.detail.comments_loading,
+        &state.detail.comments_error,
     ) {
         (None, true, _) => body.push(dim_line("Loading comments…", state)),
         (None, false, _) => body.push(dim_line("Tab here to load comments", state)),
@@ -1143,9 +1143,9 @@ pub(super) fn render_gist_comments(
         }
         (Some(comments), _, None) => {
             // Top affordance line: load-older / loading / start-of-thread.
-            let label = if state.comments_loading_more {
+            let label = if state.detail.comments_loading_more {
                 "Loading…"
-            } else if state.comments_loaded_oldest_page > 1 {
+            } else if state.detail.comments_loaded_oldest_page > 1 {
                 affordance_present = true;
                 "↑ Load 30 older comments"
             } else {
@@ -1179,7 +1179,7 @@ pub(super) fn render_gist_comments(
     frame.render_widget(
         Paragraph::new(body)
             .style(state.theme.base_style())
-            .scroll((state.detail_scroll, 0))
+            .scroll((state.detail.scroll, 0))
             .wrap(Wrap { trim: false })
             .block(
                 Block::default()
@@ -1190,7 +1190,7 @@ pub(super) fn render_gist_comments(
             ),
         area,
     );
-    render_text_scrollbar(frame, area, total_lines, state.detail_scroll as usize);
+    render_text_scrollbar(frame, area, total_lines, state.detail.scroll as usize);
 }
 
 /// Footer text + whether to colourise it: a one-shot `state.status` message (shown plain) when
@@ -1264,10 +1264,11 @@ pub(super) fn detail_focus_tabs_line(focus: DetailFocus, theme: &Theme) -> Line<
 pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
     let owned = state
-        .detail_gist_id
+        .detail
+        .gist_id
         .as_deref()
         .is_some_and(|id| state.gist_is_owned(id));
-    let (footer, colored) = detail_footer(state.status.as_deref(), state.detail_focus, owned);
+    let (footer, colored) = detail_footer(state.status.as_deref(), state.detail.focus, owned);
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     // Fixed 4-row header (borders + basic-info line + focus tabs); the active tab — the file
     // list or the comments, never both — fills the rest above the footer.
@@ -1279,9 +1280,9 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &m
             Constraint::Length(footer_lines + 1),
         ])
         .split(area);
-    if let Some(id) = state.detail_gist_id.as_deref() {
+    if let Some(id) = state.detail.gist_id.as_deref() {
         render_detail_header(frame, chunks[0], state, id, layout);
-        match state.detail_focus {
+        match state.detail.focus {
             DetailFocus::Files => render_gist_file_list(frame, chunks[1], state, id, layout),
             DetailFocus::Comments => render_gist_comments(frame, chunks[1], state, layout),
         }
