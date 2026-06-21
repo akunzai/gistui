@@ -351,16 +351,32 @@ pub fn fetch_gist_fork_count_with(runner: &dyn CommandRunner, gist_id: &str) -> 
 }
 
 /// GraphQL query: the REST gist *list* omits `fork_of`, but `isFork` is reliable here.
-const GIST_FORK_FLAGS_QUERY: &str = "{ viewer { gists(first: 100) { nodes { name isFork } } } }";
+/// One page of the viewer's gists with their `isFork` flag. Accounts with >100 gists need
+/// pagination: `after` carries the previous page's `endCursor` (escaped, since it is opaque
+/// API text), and the response's `pageInfo` drives the loop in
+/// [`fetch_forked_gist_ids_graphql_with`].
+fn gist_fork_flags_graphql_query(after: Option<&str>) -> String {
+    let connection = match after {
+        Some(cursor) => format!(
+            "gists(first: 100, after: \"{}\")",
+            escape_graphql_string(cursor)
+        ),
+        None => "gists(first: 100)".to_string(),
+    };
+    format!(
+        "{{ viewer {{ {connection} {{ nodes {{ name isFork }} \
+         pageInfo {{ hasNextPage endCursor }} }} }} }}"
+    )
+}
 
-pub fn gist_fork_flags_graphql_plan() -> CommandPlan {
+pub fn gist_fork_flags_graphql_plan(after: Option<&str>) -> CommandPlan {
     CommandPlan {
         program: "gh".into(),
         args: vec![
             "api".into(),
             "graphql".into(),
             "-f".into(),
-            format!("query={GIST_FORK_FLAGS_QUERY}"),
+            format!("query={}", gist_fork_flags_graphql_query(after)),
         ],
     }
 }
@@ -378,8 +394,18 @@ pub fn fetch_forked_gist_ids_graphql() -> Result<HashSet<String>> {
 }
 
 pub fn fetch_forked_gist_ids_graphql_with(runner: &dyn CommandRunner) -> Result<HashSet<String>> {
-    let raw = run_command(runner, &gist_fork_flags_graphql_plan())?;
-    parse_forked_gist_ids_graphql(&raw)
+    let mut all = HashSet::new();
+    let mut after: Option<String> = None;
+    loop {
+        let raw = run_command(runner, &gist_fork_flags_graphql_plan(after.as_deref()))?;
+        let (ids, next) = parse_fork_flags_page(&raw)?;
+        all.extend(ids);
+        match next {
+            Some(cursor) => after = Some(cursor),
+            None => break,
+        }
+    }
+    Ok(all)
 }
 
 #[derive(Debug, Deserialize)]
@@ -400,6 +426,17 @@ struct GraphqlForkFlagsViewer {
 #[derive(Debug, Deserialize)]
 struct GraphqlForkFlagsConnection {
     nodes: Vec<GraphqlForkFlagsNode>,
+    /// Absent in older single-page fixtures, so default to a terminal page.
+    #[serde(rename = "pageInfo", default)]
+    page_info: GraphqlPageInfo,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct GraphqlPageInfo {
+    #[serde(rename = "hasNextPage", default)]
+    has_next_page: bool,
+    #[serde(rename = "endCursor", default)]
+    end_cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -410,19 +447,30 @@ struct GraphqlForkFlagsNode {
     is_fork: bool,
 }
 
-/// Owned gist ids flagged as forks by the GraphQL viewer query.
-pub fn parse_forked_gist_ids_graphql(raw: &str) -> Result<HashSet<String>> {
+/// Parse one fork-flags page into its fork ids plus the cursor for the next page (`None`
+/// when `hasNextPage` is false).
+fn parse_fork_flags_page(raw: &str) -> Result<(HashSet<String>, Option<String>)> {
     let resp: GraphqlForkFlagsResponse =
         serde_json::from_str(raw).context("parse gist fork flags GraphQL")?;
-    Ok(resp
-        .data
-        .viewer
-        .gists
+    let connection = resp.data.viewer.gists;
+    let ids = connection
         .nodes
         .into_iter()
         .filter(|n| n.is_fork)
         .map(|n| n.name)
-        .collect())
+        .collect();
+    let next = connection
+        .page_info
+        .has_next_page
+        .then_some(connection.page_info.end_cursor)
+        .flatten();
+    Ok((ids, next))
+}
+
+/// Owned gist ids flagged as forks by a single GraphQL viewer page (the cursor is dropped).
+/// Pagination is handled by [`fetch_forked_gist_ids_graphql_with`].
+pub fn parse_forked_gist_ids_graphql(raw: &str) -> Result<HashSet<String>> {
+    parse_fork_flags_page(raw).map(|(ids, _)| ids)
 }
 
 pub fn fetch_gist_fork_of_id(gist_id: &str) -> Result<Option<String>> {
@@ -440,18 +488,20 @@ pub fn fetch_gist_fork_of_id_with(
 
 /// Map owned gist id → upstream `fork_of` id. Uses GraphQL `isFork` (one call) then
 /// `GET /gists/{id}` only for the handful of owned forks (list JSON omits `fork_of`).
-pub fn collect_owned_fork_of_ids(owned_ids: HashSet<String>) -> HashMap<String, Option<String>> {
-    let fork_ids = match fetch_forked_gist_ids_graphql() {
-        Ok(ids) => ids,
-        Err(_) => return HashMap::new(),
-    };
+pub fn collect_owned_fork_of_ids(
+    owned_ids: HashSet<String>,
+) -> Result<HashMap<String, Option<String>>, String> {
+    // Surface a failure of the single fork-detection query — a transient error or expired
+    // token would otherwise leave every owned fork undetected with no hint why the `forked`
+    // filter is empty. Per-gist `fork_of` lookups stay best-effort (one bad gist is skipped).
+    let fork_ids = fetch_forked_gist_ids_graphql().map_err(|e| e.to_string())?;
     let mut out = HashMap::new();
     for id in fork_ids.intersection(&owned_ids) {
         if let Ok(fork_of) = fetch_gist_fork_of_id(id) {
             out.insert(id.clone(), fork_of);
         }
     }
-    out
+    Ok(out)
 }
 
 /// Stamp `fork_of_id` onto every [`GistFile`] row for gists present in `fork_of`.
@@ -1060,6 +1110,36 @@ mod tests {
         assert_eq!(ids.len(), 2);
         assert!(ids.contains("fork1"));
         assert!(ids.contains("fork2"));
+    }
+
+    #[test]
+    fn fork_flags_page_reports_next_cursor_then_stops() {
+        // A page with hasNextPage drives the pagination loop forward via its endCursor.
+        let more = r#"{ "data": { "viewer": { "gists": {
+            "nodes": [{"name": "fork1", "isFork": true}, {"name": "owned1", "isFork": false}],
+            "pageInfo": {"hasNextPage": true, "endCursor": "CUR2"}
+        } } } }"#;
+        let (ids, next) = parse_fork_flags_page(more).unwrap();
+        assert_eq!(
+            ids.into_iter().collect::<Vec<_>>(),
+            vec!["fork1".to_string()]
+        );
+        assert_eq!(next, Some("CUR2".to_string()));
+
+        // The last page has no next cursor — the loop terminates.
+        let last = r#"{ "data": { "viewer": { "gists": {
+            "nodes": [{"name": "fork2", "isFork": true}],
+            "pageInfo": {"hasNextPage": false, "endCursor": "CUR9"}
+        } } } }"#;
+        let (_, next) = parse_fork_flags_page(last).unwrap();
+        assert_eq!(next, None);
+    }
+
+    #[test]
+    fn fork_flags_query_escapes_cursor_and_omits_after_on_first_page() {
+        assert!(!gist_fork_flags_graphql_query(None).contains("after"));
+        let q = gist_fork_flags_graphql_query(Some("a\"b"));
+        assert!(q.contains(r#"after: "a\"b""#));
     }
 
     #[test]
