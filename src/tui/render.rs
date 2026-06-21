@@ -1092,39 +1092,87 @@ pub(super) fn comment_lines_count(comments: &[GistComment]) -> u16 {
         .min(u16::MAX as usize) as u16
 }
 
-/// Comments pane: loading / error / empty / list (plain text wrapped to width, scrollable).
-pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppState) {
+/// Dim helper line (matches the existing dim placeholder styling).
+fn dim_line<'a>(text: &'a str, state: &AppState) -> Line<'a> {
+    Line::from(Span::styled(text, Style::default().fg(state.theme.dim)))
+}
+
+/// Title for the comments block: shows the loaded range out of the total when known.
+fn comments_title(state: &AppState) -> String {
+    match (&state.detail_comments, state.comments_total) {
+        (Some(c), _) if state.detail_comments_error.is_some() => format!("Comments ({})", c.len()),
+        (Some(c), Some(total)) if !c.is_empty() => {
+            let loaded = c.len() as u32;
+            let first = total.saturating_sub(loaded) + 1;
+            format!("Comments ({first}–{total} / {total})")
+        }
+        (Some(c), None) if !c.is_empty() => format!("Comments (newest {})", c.len()),
+        _ => "Comments".to_string(),
+    }
+}
+
+/// Comments pane: loading / error / empty / a paged window (newest page first; older pages
+/// prepended). Renders a clickable "load older" affordance at the top, styles each comment,
+/// and publishes the affordance rect + max scroll into `layout`.
+pub(super) fn render_gist_comments(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+    layout: &mut MouseLayout,
+) {
     let now = unix_now();
-    let body: Vec<Line> = match (
+    let mut body: Vec<Line> = Vec::new();
+    let mut affordance_present = false;
+
+    match (
         &state.detail_comments,
         state.detail_comments_loading,
         &state.detail_comments_error,
     ) {
-        (None, true, _) => vec![Line::from(Span::styled(
-            "Loading comments…",
-            Style::default().fg(state.theme.dim),
-        ))],
-        (None, false, _) => vec![Line::from(Span::styled(
-            "Tab here to load comments",
-            Style::default().fg(state.theme.dim),
-        ))],
-        (Some(_), _, Some(err)) => vec![Line::from(Span::styled(
+        (None, true, _) => body.push(dim_line("Loading comments…", state)),
+        (None, false, _) => body.push(dim_line("Tab here to load comments", state)),
+        (Some(_), _, Some(err)) => body.push(Line::from(Span::styled(
             format!("comments error: {err}"),
             Style::default().fg(Color::Red),
-        ))],
-        (Some(comments), _, None) if comments.is_empty() => vec![Line::from(Span::styled(
-            "No comments",
-            Style::default().fg(state.theme.dim),
-        ))],
-        (Some(comments), _, None) => comment_lines(comments, &state.theme, now as i64),
+        ))),
+        (Some(comments), _, None) if comments.is_empty() => {
+            body.push(dim_line("No comments", state))
+        }
+        (Some(comments), _, None) => {
+            // Top affordance line: load-older / loading / start-of-thread.
+            let label = if state.comments_loading_more {
+                "Loading…"
+            } else if state.comments_loaded_oldest_page > 1 {
+                affordance_present = true;
+                "↑ Load 30 older comments"
+            } else {
+                "— Start of thread —"
+            };
+            body.push(dim_line(label, state));
+            body.push(Line::from(""));
+            body.extend(comment_lines(comments, &state.theme, now as i64));
+        }
+    }
+
+    // Record the affordance hit region (line 0 inside the bordered area) for mouse clicks.
+    layout.comments_load_older = if affordance_present {
+        Some(Rect::new(
+            area.x + 1,
+            area.y + 1,
+            area.width.saturating_sub(2),
+            1,
+        ))
+    } else {
+        None
     };
-    let title = match &state.detail_comments {
-        Some(c) if state.detail_comments_error.is_none() => format!("Comments ({})", c.len()),
-        _ => "Comments".to_string(),
-    };
+
     // The scrollbar uses the logical line count, which shares units with `detail_scroll`, so the
     // thumb position is exact (its size is approximate when long comments soft-wrap).
     let total_lines = body.len();
+    let inner_rows = area.height.saturating_sub(2);
+    layout.comments_max_scroll = Some((total_lines as u16).saturating_sub(inner_rows));
+
+    let title = comments_title(state);
     frame.render_widget(
         Paragraph::new(body)
             .style(state.theme.base_style())
@@ -1135,8 +1183,7 @@ pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppSta
                     .title(title)
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .style(state.theme.base_style())
-                    .padding(Padding::horizontal(1)),
+                    .style(state.theme.base_style()),
             ),
         area,
     );
@@ -1233,7 +1280,7 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &m
         render_detail_header(frame, chunks[0], state, id, layout);
         match state.detail_focus {
             DetailFocus::Files => render_gist_file_list(frame, chunks[1], state, id, layout),
-            DetailFocus::Comments => render_gist_comments(frame, chunks[1], state),
+            DetailFocus::Comments => render_gist_comments(frame, chunks[1], state, layout),
         }
     }
     render_footer(frame, chunks[2], "", &footer, colored, &state.theme);
@@ -1244,6 +1291,7 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &m
         layout.detail_files = None;
         layout.detail_tab_files = None;
         layout.detail_tab_comments = None;
+        layout.comments_load_older = None;
         Some(render_centered_modal_input(
             frame,
             "Edit description (Enter apply · Esc cancel)",
