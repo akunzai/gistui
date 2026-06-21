@@ -225,6 +225,13 @@ cycling_enum! {
     }
 }
 
+impl Default for PinSort {
+    /// The `Default` variant (config/insertion order) is the natural default.
+    fn default() -> Self {
+        PinSort::Default
+    }
+}
+
 impl GistSort {
     /// Re-orders ranked gists. `Match` keeps the incoming order; the others override it.
     fn apply(self, gists: &mut [RankedGistFile]) {
@@ -481,6 +488,16 @@ pub struct HelpState {
     pub index_sel: usize,
 }
 
+/// Pins-screen state (`Screen::Pins`). Data only — the pins methods stay on `AppState`.
+#[derive(Debug, Clone, Default)]
+pub struct PinsState {
+    pub index: usize,
+    pub hscroll: u16,
+    pub filtering: bool,
+    pub filter_query: TextInput,
+    pub sort: PinSort,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub locals: Vec<LocalCandidate>,
@@ -564,11 +581,7 @@ pub struct AppState {
     pub skip_dirs: Vec<String>,
     pub scan_depth: u32,
     pub local_scanning: bool,
-    pub pins_index: usize,
-    pub pins_hscroll: u16,
-    pub pins_filtering: bool,
-    pub pins_filter_query: TextInput,
-    pub pins_sort: PinSort,
+    pub pins: PinsState,
     pub gists_index: usize,
     pub gists_hscroll: u16,
     pub gists_sort: GistGroupSort,
@@ -959,7 +972,7 @@ impl AppState {
     /// Empty query → every index. Matched against the cwd/home-shortened local path plus
     /// the gist filename (the meaningful, visible parts of the row).
     pub fn visible_pin_indices(&self) -> Vec<usize> {
-        let query = self.pins_filter_query.to_lowercase();
+        let query = self.pins.filter_query.to_lowercase();
         let mut indices: Vec<usize> = self
             .pinned
             .iter()
@@ -978,7 +991,7 @@ impl AppState {
             })
             .map(|(i, _)| i)
             .collect();
-        match self.pins_sort {
+        match self.pins.sort {
             PinSort::Default => {}
             PinSort::Local => indices.sort_by(|&a, &b| {
                 crate::config::display_path(&self.pinned[a].local_path)
@@ -996,7 +1009,7 @@ impl AppState {
     /// The true `self.pinned` index of the currently selected Pins row (selection is a
     /// position within the filtered view).
     pub fn selected_pin_index(&self) -> Option<usize> {
-        self.visible_pin_indices().get(self.pins_index).copied()
+        self.visible_pin_indices().get(self.pins.index).copied()
     }
 
     /// Number of files the given gist holds in the current in-memory list. Used to guard
@@ -1457,11 +1470,7 @@ pub fn initial_state() -> AppState {
         skip_dirs: crate::config::AppConfig::default().skip_dirs,
         scan_depth: crate::config::AppConfig::default().scan_depth,
         local_scanning: false,
-        pins_index: 0,
-        pins_hscroll: 0,
-        pins_filtering: false,
-        pins_filter_query: TextInput::default(),
-        pins_sort: PinSort::Default,
+        pins: PinsState::default(),
         gists_index: 0,
         gists_hscroll: 0,
         gists_sort: GistGroupSort::Updated,

@@ -2878,13 +2878,13 @@ fn pins_state_with_long_home_path() -> AppState {
         direction: None,
         last_seen_hash: None,
     }];
-    state.pins_index = 0;
+    state.pins.index = 0;
     state
 }
 
 #[test]
 fn pins_hscroll_starts_at_zero() {
-    assert_eq!(initial_state().pins_hscroll, 0);
+    assert_eq!(initial_state().pins.hscroll, 0);
 }
 
 #[test]
@@ -2953,14 +2953,14 @@ fn pin_row_label_shows_home_as_tilde() {
 fn pins_right_scrolls_then_clamps_at_a_bound() {
     let mut state = pins_state_with_long_home_path();
     state.handle_key(KeyCode::Right);
-    assert_eq!(state.pins_hscroll, 1, "Right should advance the scroll");
+    assert_eq!(state.pins.hscroll, 1, "Right should advance the scroll");
     // Far past the end clamps to a stable maximum (does not run away).
     for _ in 0..500 {
         state.handle_key(KeyCode::Right);
     }
-    let clamped = state.pins_hscroll;
+    let clamped = state.pins.hscroll;
     state.handle_key(KeyCode::Right);
-    assert_eq!(state.pins_hscroll, clamped, "scroll must clamp at its max");
+    assert_eq!(state.pins.hscroll, clamped, "scroll must clamp at its max");
     assert!(clamped > 0, "a long path must be scrollable");
 }
 
@@ -2970,7 +2970,7 @@ fn pins_left_clamps_at_zero() {
     state.handle_key(KeyCode::Right);
     state.handle_key(KeyCode::Left);
     state.handle_key(KeyCode::Left);
-    assert_eq!(state.pins_hscroll, 0);
+    assert_eq!(state.pins.hscroll, 0);
 }
 
 #[test]
@@ -2984,20 +2984,20 @@ fn pins_hscroll_resets_when_selection_moves() {
         last_seen_hash: None,
     });
     state.handle_key(KeyCode::Right);
-    assert!(state.pins_hscroll > 0);
+    assert!(state.pins.hscroll > 0);
     state.handle_key(KeyCode::Down);
-    assert_eq!(state.pins_hscroll, 0, "moving selection resets hscroll");
+    assert_eq!(state.pins.hscroll, 0, "moving selection resets hscroll");
 }
 
 #[test]
 fn entering_pins_screen_resets_hscroll() {
     let mut state = pins_state_with_long_home_path();
     state.handle_key(KeyCode::Right);
-    assert!(state.pins_hscroll > 0);
+    assert!(state.pins.hscroll > 0);
     state.screen = Screen::List;
     state.handle_key(KeyCode::Char('P'));
     assert_eq!(state.screen, Screen::Pins);
-    assert_eq!(state.pins_hscroll, 0);
+    assert_eq!(state.pins.hscroll, 0);
 }
 
 #[test]
@@ -3378,10 +3378,10 @@ fn visible_pin_indices_filters_by_path_and_filename() {
     ]);
     assert_eq!(state.visible_pin_indices(), vec![0, 1, 2]);
 
-    state.pins_filter_query = "lua".into(); // matches filename of row 1
+    state.pins.filter_query = "lua".into(); // matches filename of row 1
     assert_eq!(state.visible_pin_indices(), vec![1]);
 
-    state.pins_filter_query = "ZSH".into(); // case-insensitive, matches path of row 0
+    state.pins.filter_query = "ZSH".into(); // case-insensitive, matches path of row 0
     assert_eq!(state.visible_pin_indices(), vec![0]);
 }
 
@@ -3392,8 +3392,8 @@ fn selected_pin_index_maps_through_filter() {
         ("/cwd/beta", "g2", "beta"),
         ("/cwd/gamma", "g3", "gamma"),
     ]);
-    state.pins_filter_query = "gamma".into(); // only row 2 visible
-    state.pins_index = 0; // first (and only) visible row
+    state.pins.filter_query = "gamma".into(); // only row 2 visible
+    state.pins.index = 0; // first (and only) visible row
     assert_eq!(state.selected_pin_index(), Some(2)); // TRUE index, not 0
 }
 
@@ -3404,43 +3404,43 @@ fn pins_down_clamps_to_filtered_count() {
         ("/cwd/blua", "g2", "blua"),
         ("/cwd/c", "g3", "c"),
     ]);
-    state.pins_filter_query = "lua".into(); // 1 visible
+    state.pins.filter_query = "lua".into(); // 1 visible
     state.handle_key(KeyCode::Down);
-    assert_eq!(state.pins_index, 0); // clamped to the single filtered row
+    assert_eq!(state.pins.index, 0); // clamped to the single filtered row
 }
 
 #[test]
 fn pins_filter_input_behaviors() {
     let mut state = state_with_pins(&[("/cwd/a", "g1", "a"), ("/cwd/b", "g2", "b")]);
-    state.pins_filtering = true;
+    state.pins.filtering = true;
 
     // live nav while typing
     state.handle_key(KeyCode::Down);
-    assert_eq!(state.pins_index, 1);
-    assert!(state.pins_filtering);
+    assert_eq!(state.pins.index, 1);
+    assert!(state.pins.filtering);
 
     // Tab is a no-op (single pane)
     state.handle_key(KeyCode::Char('a'));
     state.handle_key(KeyCode::Tab);
-    assert!(state.pins_filtering);
-    assert_eq!(state.pins_filter_query, "a");
+    assert!(state.pins.filtering);
+    assert_eq!(state.pins.filter_query, "a");
 
     // Esc clears + exits
     state.handle_key(KeyCode::Esc);
-    assert!(!state.pins_filtering);
-    assert_eq!(state.pins_filter_query, "");
+    assert!(!state.pins.filtering);
+    assert_eq!(state.pins.filter_query, "");
 
     // Backspace on empty exits
-    state.pins_filtering = true;
+    state.pins.filtering = true;
     state.handle_key(KeyCode::Backspace);
-    assert!(!state.pins_filtering);
+    assert!(!state.pins.filtering);
 
     // Enter keeps query + exits
-    state.pins_filtering = true;
+    state.pins.filtering = true;
     state.handle_key(KeyCode::Char('b'));
     state.handle_key(KeyCode::Enter);
-    assert!(!state.pins_filtering);
-    assert_eq!(state.pins_filter_query, "b");
+    assert!(!state.pins.filtering);
+    assert_eq!(state.pins.filter_query, "b");
 }
 
 #[test]
@@ -3716,9 +3716,9 @@ fn pins_page_keys_jump_selection() {
         })
         .collect();
     state.handle_key_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
-    assert_eq!(state.pins_index, 10);
+    assert_eq!(state.pins.index, 10);
     state.handle_key(KeyCode::PageUp);
-    assert_eq!(state.pins_index, 0);
+    assert_eq!(state.pins.index, 0);
 }
 
 #[test]
@@ -4535,7 +4535,7 @@ fn pins_click_selects_and_double_click_matches_enter() {
     };
     let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
     assert_eq!(out, KeyOutcome::None);
-    assert_eq!(state.pins_index, 1);
+    assert_eq!(state.pins.index, 1);
     let mut by_key = state.clone();
     let key_out = by_key.handle_key(KeyCode::Enter);
     let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);

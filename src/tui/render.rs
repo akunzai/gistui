@@ -376,10 +376,10 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
     } else {
         "↑↓ move · ←→ scroll · / filter · o sort · Enter diff · s sync · u push · d pull · x unpin · ? help  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back"
     };
-    let (ftitle, footer, colored) = if state.pins_filtering {
+    let (ftitle, footer, colored) = if state.pins.filtering {
         (
             "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
-            format!("/{}_", state.pins_filter_query),
+            format!("/{}_", state.pins.filter_query),
             false,
         )
     } else {
@@ -424,22 +424,22 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
                         &age(lts),
                         &age(rts),
                     ),
-                    state.pins_hscroll,
+                    state.pins.hscroll,
                 ))
             })
             .collect()
     };
 
-    let selected = (!visible.is_empty()).then_some(state.pins_index);
+    let selected = (!visible.is_empty()).then_some(state.pins.index);
     let mut title = format!(
         "Pinned Mappings {}",
         count_label(visible.len(), state.pinned.len())
     );
-    if !state.pins_filter_query.is_empty() {
-        title.push_str(&format!(" · /{}", state.pins_filter_query));
+    if !state.pins.filter_query.is_empty() {
+        title.push_str(&format!(" · /{}", state.pins.filter_query));
     }
-    if state.pins_sort != crate::tui::PinSort::Default {
-        title.push_str(&format!(" · sort:{}", state.pins_sort.label()));
+    if state.pins.sort != crate::tui::PinSort::Default {
+        title.push_str(&format!(" · sort:{}", state.pins.sort.label()));
     }
     let list = List::new(items)
         .block(
@@ -470,12 +470,12 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
         });
     }
 
-    if state.pins_filtering {
+    if state.pins.filtering {
         render_footer_line(
             frame,
             chunks[1],
             &ftitle,
-            input_line("/", &state.pins_filter_query, ""),
+            input_line("/", &state.pins.filter_query, ""),
             &state.theme,
         );
     } else {
