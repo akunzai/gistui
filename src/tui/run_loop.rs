@@ -820,10 +820,10 @@ pub(super) fn run_loop(
             KeyOutcome::Unpin => unpin_selected(&mut state),
             KeyOutcome::UploadAdd => {
                 let (local_path, gist_id) = if state.is_pin_diff_context() {
-                    (
-                        state.preview_local.clone(),
-                        state.download_gist_id.clone().unwrap(),
-                    )
+                    let Some(gist_id) = state.download_gist_id.clone() else {
+                        continue;
+                    };
+                    (state.preview_local.clone(), gist_id)
                 } else {
                     let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist())
                     else {
@@ -849,8 +849,10 @@ pub(super) fn run_loop(
             }
             KeyOutcome::UploadPreview => {
                 let (local_path, gist_id, gist_file) = if state.is_pin_diff_context() {
+                    let Some(gist_id) = state.download_gist_id.clone() else {
+                        continue;
+                    };
                     let local_path = state.preview_local.clone();
-                    let gist_id = state.download_gist_id.clone().unwrap();
                     let filename = state.download_gist_filename.clone().unwrap_or_default();
                     let gist_file = state
                         .gists
