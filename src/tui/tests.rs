@@ -1174,21 +1174,21 @@ fn question_opens_contextual_help_from_list() {
     let mut state = initial_state();
     state.handle_key(KeyCode::Char('?'));
     assert_eq!(state.screen, Screen::Help);
-    assert_eq!(state.help_topic, HelpTopic::List);
-    assert_eq!(state.help_return, Screen::List);
-    assert!(!state.help_index_open);
+    assert_eq!(state.help.topic, HelpTopic::List);
+    assert_eq!(state.help.return_screen, Screen::List);
+    assert!(!state.help.index_open);
     // Arrow keys scroll help
     state.handle_key(KeyCode::Down);
     assert_eq!(state.screen, Screen::Help);
-    assert_eq!(state.help_scroll, 1);
+    assert_eq!(state.help.scroll, 1);
     state.handle_key(KeyCode::Up);
     assert_eq!(state.screen, Screen::Help);
-    assert_eq!(state.help_scroll, 0);
+    assert_eq!(state.help.scroll, 0);
     // Esc closes help and resets scroll
-    state.help_scroll = 5;
+    state.help.scroll = 5;
     state.handle_key(KeyCode::Esc);
     assert_eq!(state.screen, Screen::List);
-    assert_eq!(state.help_scroll, 0);
+    assert_eq!(state.help.scroll, 0);
 }
 
 #[test]
@@ -3797,38 +3797,38 @@ fn question_mark_opens_contextual_help_from_pins() {
     state.screen = Screen::Pins;
     state.handle_key(KeyCode::Char('?'));
     assert_eq!(state.screen, Screen::Help);
-    assert_eq!(state.help_topic, HelpTopic::Pins);
-    assert_eq!(state.help_return, Screen::Pins);
-    assert!(!state.help_index_open);
+    assert_eq!(state.help.topic, HelpTopic::Pins);
+    assert_eq!(state.help.return_screen, Screen::Pins);
+    assert!(!state.help.index_open);
 }
 
 #[test]
 fn help_topic_view_tab_opens_index_at_current_topic() {
     let mut state = initial_state();
     state.screen = Screen::Help;
-    state.help_topic = HelpTopic::GistManager; // index 2
+    state.help.topic = HelpTopic::GistManager; // index 2
     state.handle_key(KeyCode::Tab);
-    assert!(state.help_index_open);
-    assert_eq!(state.help_index_sel, 2);
+    assert!(state.help.index_open);
+    assert_eq!(state.help.index_sel, 2);
 }
 
 #[test]
 fn help_topic_view_number_switches_topic() {
     let mut state = initial_state();
     state.screen = Screen::Help;
-    state.help_topic = HelpTopic::List;
-    state.help_scroll = 5;
+    state.help.topic = HelpTopic::List;
+    state.help.scroll = 5;
     state.handle_key(KeyCode::Char('2')); // 2 -> Pins (index 1)
-    assert_eq!(state.help_topic, HelpTopic::Pins);
-    assert_eq!(state.help_scroll, 0);
-    assert!(!state.help_index_open);
+    assert_eq!(state.help.topic, HelpTopic::Pins);
+    assert_eq!(state.help.scroll, 0);
+    assert!(!state.help.index_open);
 }
 
 #[test]
 fn help_topic_view_esc_returns_to_origin() {
     let mut state = initial_state();
     state.screen = Screen::Help;
-    state.help_return = Screen::Gists;
+    state.help.return_screen = Screen::Gists;
     state.handle_key(KeyCode::Esc);
     assert_eq!(state.screen, Screen::Gists);
 }
@@ -3837,36 +3837,36 @@ fn help_topic_view_esc_returns_to_origin() {
 fn help_index_navigates_and_enter_opens_topic() {
     let mut state = initial_state();
     state.screen = Screen::Help;
-    state.help_index_open = true;
-    state.help_index_sel = 0;
+    state.help.index_open = true;
+    state.help.index_sel = 0;
     state.handle_key(KeyCode::Down); // -> 1
     state.handle_key(KeyCode::Down); // -> 2 (GistManager)
-    assert_eq!(state.help_index_sel, 2);
+    assert_eq!(state.help.index_sel, 2);
     state.handle_key(KeyCode::Enter);
-    assert!(!state.help_index_open);
-    assert_eq!(state.help_topic, HelpTopic::GistManager);
+    assert!(!state.help.index_open);
+    assert_eq!(state.help.topic, HelpTopic::GistManager);
 }
 
 #[test]
 fn help_index_esc_returns_to_origin() {
     let mut state = initial_state();
     state.screen = Screen::Help;
-    state.help_index_open = true;
-    state.help_return = Screen::List;
+    state.help.index_open = true;
+    state.help.return_screen = Screen::List;
     state.handle_key(KeyCode::Esc);
     assert_eq!(state.screen, Screen::List);
-    assert!(!state.help_index_open);
+    assert!(!state.help.index_open);
 }
 
 #[test]
 fn help_index_question_mark_exits_help() {
     let mut state = initial_state();
     state.screen = Screen::Help;
-    state.help_index_open = true;
-    state.help_return = Screen::Pins;
+    state.help.index_open = true;
+    state.help.return_screen = Screen::Pins;
     state.handle_key(KeyCode::Char('?'));
     assert_eq!(state.screen, Screen::Pins);
-    assert!(!state.help_index_open);
+    assert!(!state.help.index_open);
 }
 
 #[test]
@@ -4271,7 +4271,7 @@ fn scroll_up_moves_content_three_lines() {
 fn close_button_click_returns_from_help() {
     let mut state = state_with_gists();
     // Simulate entering Help (mirrors what open_help() does).
-    state.help_return = Screen::List;
+    state.help.return_screen = Screen::List;
     state.screen = Screen::Help;
     let layout = MouseLayout {
         close_button: Some(Rect::new(36, 0, 5, 1)),
@@ -4285,7 +4285,7 @@ fn close_button_click_returns_from_help() {
 #[test]
 fn close_button_click_outside_is_noop() {
     let mut state = state_with_gists();
-    state.help_return = Screen::List;
+    state.help.return_screen = Screen::List;
     state.screen = Screen::Help;
     let layout = MouseLayout {
         close_button: Some(Rect::new(36, 0, 5, 1)),
@@ -4386,7 +4386,7 @@ fn click_in_pane_blank_focuses_without_selecting() {
 #[test]
 fn click_off_list_screen_is_noop() {
     let mut state = state_with_gists();
-    state.help_return = Screen::List;
+    state.help.return_screen = Screen::List;
     state.screen = Screen::Help;
     let hit = PaneHit {
         rect: Rect::new(20, 0, 20, 10),
@@ -4481,10 +4481,10 @@ fn wheel_step_help_body_moves_three() {
     // Help body (help_index_open = false): one scroll-down tick must advance help_scroll by 3.
     let mut state = initial_state();
     state.screen = Screen::Help;
-    state.help_index_open = false;
-    state.help_scroll = 0;
+    state.help.index_open = false;
+    state.help.scroll = 0;
     state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
-    assert_eq!(state.help_scroll, 3);
+    assert_eq!(state.help.scroll, 3);
 }
 
 #[test]
@@ -4492,10 +4492,10 @@ fn wheel_step_help_index_moves_one() {
     // Help topic index (help_index_open = true): one scroll-down tick must move index by 1.
     let mut state = initial_state();
     state.screen = Screen::Help;
-    state.help_index_open = true;
-    state.help_index_sel = 0;
+    state.help.index_open = true;
+    state.help.index_sel = 0;
     state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
-    assert_eq!(state.help_index_sel, 1);
+    assert_eq!(state.help.index_sel, 1);
 }
 
 #[test]

@@ -223,7 +223,7 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
 }
 
 pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    if state.help_index_open {
+    if state.help.index_open {
         let items: Vec<ListItem> = HelpTopic::all()
             .iter()
             .enumerate()
@@ -247,17 +247,17 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut Mous
             )
             .highlight_symbol("▶ ");
         let mut list_state = ListState::default();
-        list_state.select(Some(state.help_index_sel));
+        list_state.select(Some(state.help.index_sel));
         frame.render_stateful_widget(list, frame.area(), &mut list_state);
     } else {
         let title = format!(
             "Help · {} — Tab topics · ↑↓ scroll · Esc back",
-            state.help_topic.title()
+            state.help.topic.title()
         );
         frame.render_widget(
-            Paragraph::new(help_topic_body(state.help_topic))
+            Paragraph::new(help_topic_body(state.help.topic))
                 .style(state.theme.base_style())
-                .scroll((state.help_scroll, 0))
+                .scroll((state.help.scroll, 0))
                 .block(
                     Block::default()
                         .title(title)

@@ -35,8 +35,9 @@ pub enum Screen {
 }
 
 /// A help topic — one per key-dense area. Ordered for the index list and `1`-`8` quick-jump.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HelpTopic {
+    #[default]
     List,
     Pins,
     GistManager,
@@ -466,6 +467,20 @@ pub struct RevisionState {
     pub fetch_error: Option<String>,
 }
 
+/// Per-screen Help-view state (`Screen::Help`). Data only — the help methods stay on `AppState`.
+#[derive(Debug, Clone, Default)]
+pub struct HelpState {
+    pub scroll: u16,
+    /// Screen to return to when leaving Help (mirrors `preview_return` / `diff_return`).
+    pub return_screen: Screen,
+    /// The topic shown in the Help screen's topic view.
+    pub topic: HelpTopic,
+    /// When true the Help screen shows the topic index instead of a topic body.
+    pub index_open: bool,
+    /// Highlighted row in the Help topic index.
+    pub index_sel: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub locals: Vec<LocalCandidate>,
@@ -566,15 +581,7 @@ pub struct AppState {
     /// Set after the first `q`/`Esc` on the main list; a second press confirms the quit. Any
     /// other key clears it. Prevents an accidental single-key exit.
     pub quit_armed: bool,
-    pub help_scroll: u16,
-    /// Screen to return to when leaving Help (mirrors `preview_return` / `diff_return`).
-    pub help_return: Screen,
-    /// The topic shown in the Help screen's topic view.
-    pub help_topic: HelpTopic,
-    /// When true the Help screen shows the topic index instead of a topic body.
-    pub help_index_open: bool,
-    /// Highlighted row in the Help topic index.
-    pub help_index_sel: usize,
+    pub help: HelpState,
     pub upload: UploadState,
     /// gist_id of the active download (set when entering the diff Confirm for a pull).
     pub download_gist_id: Option<String>,
@@ -1465,11 +1472,7 @@ pub fn initial_state() -> AppState {
         description_input: TextInput::default(),
         bg_task_msg: None,
         quit_armed: false,
-        help_scroll: 0,
-        help_return: Screen::List,
-        help_topic: HelpTopic::List,
-        help_index_open: false,
-        help_index_sel: 0,
+        help: HelpState::default(),
         upload: UploadState::default(),
         download_gist_id: None,
         download_gist_filename: None,
