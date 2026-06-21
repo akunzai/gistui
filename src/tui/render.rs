@@ -93,7 +93,7 @@ Actions (on the selected local file + gist)
              pane — Gist pane = download view, Local pane = upload view
              (--- old / +++ new; local label = yellow, gist label = blue)
   Space      preview the gist file's content (R in preview to force-refresh;
-             blocked for images/binary — use o or d instead)
+             blocked for images/binary — use d to download instead)
   H          open revision history for the selected gist file
   d          download the gist into the cwd
   u          upload the local file into the gist
@@ -232,7 +232,7 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut Mous
         let list = List::new(items)
             .block(
                 Block::default()
-                    .title("Help — pick a topic (1-8 / ↑↓ Enter · Esc back)")
+                    .title("Help — pick a topic (1-9 / ↑↓ Enter · Esc back)")
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .style(state.theme.base_style())
