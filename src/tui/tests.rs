@@ -4649,3 +4649,26 @@ fn wheel_step_gist_detail_files_moves_one() {
     state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
     assert_eq!(state.detail_file_cursor, 1);
 }
+
+#[test]
+fn comment_lines_count_matches_built_lines() {
+    use crate::domain::GistComment;
+    use crate::tui::render::{comment_lines, comment_lines_count};
+    let theme = crate::tui::theme::Theme::for_choice(crate::config::ThemeChoice::Dark);
+    let comments = vec![
+        GistComment {
+            author: "alice".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            body: "one line".into(),
+        },
+        GistComment {
+            author: "bob".into(),
+            created_at: "2026-01-02T00:00:00Z".into(),
+            body: "two\nlines".into(),
+        },
+    ];
+    // Each comment: 1 header + body.lines() + 1 blank.
+    // alice: 1 + 1 + 1 = 3 ; bob: 1 + 2 + 1 = 4 ; total 7.
+    assert_eq!(comment_lines_count(&comments), 7);
+    assert_eq!(comment_lines(&comments, &theme, 0).len(), 7);
+}

@@ -1058,6 +1058,41 @@ fn render_gist_file_list(
     );
 }
 
+/// Build the styled lines for a run of comments (author·age header, 2-space-indented body,
+/// trailing blank). Pure so the count below can mirror it exactly for scroll compensation.
+pub(super) fn comment_lines<'a>(
+    comments: &'a [GistComment],
+    theme: &Theme,
+    now: i64,
+) -> Vec<Line<'a>> {
+    let mut lines = Vec::new();
+    for c in comments {
+        let age = crate::domain::parse_rfc3339_to_unix(&c.created_at)
+            .map(|t| crate::domain::humanize_age(now - t as i64))
+            .unwrap_or_else(|| "?".into());
+        lines.push(Line::from(Span::styled(
+            format!("{} · {age}", c.author),
+            Style::default().fg(theme.accent),
+        )));
+        for raw in c.body.lines() {
+            lines.push(Line::from(format!("  {raw}")));
+        }
+        lines.push(Line::from(""));
+    }
+    lines
+}
+
+/// Logical line count of `comment_lines(comments, …)` — the amount to add to
+/// `detail_scroll` when older comments are prepended, so the viewport does not jump.
+#[allow(dead_code)] // consumed by a later task; test coverage in tui::tests
+pub(super) fn comment_lines_count(comments: &[GistComment]) -> u16 {
+    comments
+        .iter()
+        .map(|c| 2 + c.body.lines().count())
+        .sum::<usize>()
+        .min(u16::MAX as usize) as u16
+}
+
 /// Comments pane: loading / error / empty / list (plain text wrapped to width, scrollable).
 pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppState) {
     let now = unix_now();
@@ -1082,23 +1117,7 @@ pub(super) fn render_gist_comments(frame: &mut Frame, area: Rect, state: &AppSta
             "No comments",
             Style::default().fg(state.theme.dim),
         ))],
-        (Some(comments), _, None) => {
-            let mut lines = Vec::new();
-            for c in comments {
-                let age = crate::domain::parse_rfc3339_to_unix(&c.created_at)
-                    .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
-                    .unwrap_or_else(|| "?".into());
-                lines.push(Line::from(Span::styled(
-                    format!("{} · {age}", c.author),
-                    Style::default().fg(state.theme.accent),
-                )));
-                for raw in c.body.lines() {
-                    lines.push(Line::from(format!("  {raw}")));
-                }
-                lines.push(Line::from(""));
-            }
-            lines
-        }
+        (Some(comments), _, None) => comment_lines(comments, &state.theme, now as i64),
     };
     let title = match &state.detail_comments {
         Some(c) if state.detail_comments_error.is_none() => format!("Comments ({})", c.len()),
