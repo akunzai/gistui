@@ -486,10 +486,18 @@ pub fn collect_gist_fork_counts(
 
 const STARGAZER_GRAPHQL_CHUNK: usize = 40;
 
+/// Escape a value for safe interpolation inside a GraphQL double-quoted string literal:
+/// backslash first, then the quote (GraphQL string literals follow JSON escaping). Keeps a
+/// stray `"`/`\` in an API-supplied node id from breaking out of the query.
+fn escape_graphql_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// Build a batched GraphQL query (`n0`…`n{k}` aliases) for stargazer counts.
 pub fn build_stargazer_graphql_query(node_ids: &[String]) -> String {
     let mut query = String::from("query { ");
     for (i, id) in node_ids.iter().enumerate() {
+        let id = escape_graphql_string(id);
         query.push_str(&format!(
             "n{i}: node(id: \"{id}\") {{ ... on Gist {{ name stargazerCount }} }} "
         ));
@@ -1003,6 +1011,19 @@ mod tests {
         assert!(q.contains(r#"n0: node(id: "G_a")"#));
         assert!(q.contains(r#"n1: node(id: "G_b")"#));
         assert!(q.contains("stargazerCount"));
+    }
+
+    #[test]
+    fn build_stargazer_graphql_query_escapes_quotes_and_backslashes() {
+        // A node_id carrying a double-quote or backslash must stay inside its string
+        // literal rather than break out of the query (defensive against malformed ids).
+        let q = build_stargazer_graphql_query(&["a\"b".into(), "c\\d".into()]);
+        assert!(q.contains(r#"n0: node(id: "a\"b")"#));
+        assert!(q.contains(r#"n1: node(id: "c\\d")"#));
+        // The injected quote does not prematurely close the literal: a break-out attempt
+        // like `") {} #` stays escaped, so no bare `) {` from the payload appears.
+        let inj = build_stargazer_graphql_query(&["x\") { __typename } #".into()]);
+        assert!(inj.contains(r#"node(id: "x\") { __typename } #")"#));
     }
 
     #[test]
