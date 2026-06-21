@@ -1704,6 +1704,100 @@ fn local_selection_changes_ranked_gists() {
     assert_eq!(state.ranked_gists()[0].file.filename, "statusline.sh");
 }
 
+/// `ranked_gists` / `visible_locals` are recomputed from current state on every call —
+/// there is intentionally NO cache for them (see #154, closed by-design: a content-hash /
+/// epoch memo could silently render a stale ordering the unit suite would not catch).
+/// `selected_gist` / `selected_local` are defined as `list[index]`, so they must stay
+/// identical to a fresh recompute even after an earlier read and an input mutation. This
+/// test pins that invariant: a future stale cache would break it loudly here.
+#[test]
+fn selected_accessors_track_recomputed_lists_with_no_cache() {
+    let mut state = initial_state();
+    state.locals = vec![
+        LocalCandidate {
+            path: PathBuf::from("/tmp/settings.json"),
+            pinned: false,
+            modified: None,
+        },
+        LocalCandidate {
+            path: PathBuf::from("/tmp/statusline.sh"),
+            pinned: false,
+            modified: None,
+        },
+    ];
+    state.gists = vec![
+        GistFile {
+            gist_id: "a".into(),
+            description: "settings".into(),
+            filename: "settings.json".into(),
+            public: false,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            owner_login: String::new(),
+            fork_of_id: None,
+            raw_url: None,
+            content_type: None,
+            node_id: None,
+        },
+        GistFile {
+            gist_id: "b".into(),
+            description: "status".into(),
+            filename: "statusline.sh".into(),
+            public: false,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            owner_login: String::new(),
+            fork_of_id: None,
+            raw_url: None,
+            content_type: None,
+            node_id: None,
+        },
+    ];
+
+    // Read both lists first — this would warm any hypothetical cache.
+    let _ = state.ranked_gists();
+    let _ = state.visible_locals();
+    // Accessors equal a fresh recompute at the current indices.
+    assert_eq!(
+        state.selected_gist().map(|g| g.file.filename),
+        state
+            .ranked_gists()
+            .into_iter()
+            .nth(state.gist_index)
+            .map(|g| g.file.filename),
+    );
+    assert_eq!(
+        state.selected_local().map(|l| l.path),
+        state
+            .visible_locals()
+            .into_iter()
+            .nth(state.local_index)
+            .map(|r| r.candidate.path),
+    );
+    assert_eq!(state.ranked_gists()[0].file.filename, "settings.json");
+
+    // Move the local selection: ranking must reflect the *new* state, not the earlier read.
+    state.handle_key(KeyCode::Down);
+    assert_eq!(state.ranked_gists()[0].file.filename, "statusline.sh");
+    // The accessors still match a fresh recompute after the mutation.
+    assert_eq!(
+        state.selected_gist().map(|g| g.file.filename),
+        state
+            .ranked_gists()
+            .into_iter()
+            .nth(state.gist_index)
+            .map(|g| g.file.filename),
+    );
+    assert_eq!(
+        state.selected_local().map(|l| l.path),
+        state
+            .visible_locals()
+            .into_iter()
+            .nth(state.local_index)
+            .map(|r| r.candidate.path),
+    );
+}
+
 #[test]
 fn changing_local_selection_resets_gist_index() {
     let mut state = initial_state();
