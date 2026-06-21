@@ -885,6 +885,25 @@ mod tests {
     }
 
     #[test]
+    fn download_writes_new_file_without_confirmation() {
+        // Writing a path that does not exist yet is allowed directly (no diff/confirm gate),
+        // creating any missing parent directories along the way.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nested/dir/settings.json");
+        execute_download(&path, "hello", false).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
+    }
+
+    #[test]
+    fn download_overwrites_existing_when_confirmed() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        std::fs::write(&path, "old").unwrap();
+        execute_download(&path, "new", true).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+    }
+
+    #[test]
     fn unpin_mapping_removes_mapping_for_local_path() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
@@ -906,6 +925,51 @@ mod tests {
         assert!(config.pinned.is_empty());
         let loaded = load_config(&config_path).unwrap();
         assert!(loaded.pinned.is_empty());
+    }
+
+    #[test]
+    fn unpin_mapping_exact_removes_only_matching_local_and_gist() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let mut config = AppConfig::default();
+        // Same local path pinned to two different gists — exact unpin must remove only the
+        // named gist and leave the other pin intact.
+        for gid in ["g1", "g2"] {
+            config.pinned.push(PinnedMapping {
+                local_path: PathBuf::from("/tmp/a.txt"),
+                gist_id: gid.into(),
+                gist_filename: "a.txt".into(),
+                direction: None,
+                last_seen_hash: None,
+            });
+        }
+
+        let config =
+            unpin_mapping_exact(&config_path, config, Path::new("/tmp/a.txt"), "g1").unwrap();
+        assert_eq!(config.pinned.len(), 1);
+        assert_eq!(config.pinned[0].gist_id, "g2");
+        let loaded = load_config(&config_path).unwrap();
+        assert_eq!(loaded.pinned.len(), 1);
+        assert_eq!(loaded.pinned[0].gist_id, "g2");
+    }
+
+    #[test]
+    fn unpin_mapping_exact_no_match_leaves_pins_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let mut config = AppConfig::default();
+        config.pinned.push(PinnedMapping {
+            local_path: PathBuf::from("/tmp/a.txt"),
+            gist_id: "g1".into(),
+            gist_filename: "a.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+        });
+
+        let config =
+            unpin_mapping_exact(&config_path, config, Path::new("/tmp/a.txt"), "nope").unwrap();
+        assert_eq!(config.pinned.len(), 1);
+        assert_eq!(config.pinned[0].gist_id, "g1");
     }
 
     #[test]
