@@ -46,11 +46,11 @@ pub(super) fn run_loop(
 
     loop {
         terminal.draw(|frame| render(frame, &state, &mut mouse_layout))?;
-        if state.comments_scroll_to_bottom {
+        if state.detail.comments_scroll_to_bottom {
             if let Some(max) = mouse_layout.comments_max_scroll {
-                state.detail_scroll = max;
+                state.detail.scroll = max;
             }
-            state.comments_scroll_to_bottom = false;
+            state.detail.comments_scroll_to_bottom = false;
         }
         // Advance the spinner once per iteration; the poll below caps the loop at ~150ms, so
         // in-progress states (scanning/loading/working) animate even with no input.
@@ -748,20 +748,20 @@ pub(super) fn run_loop(
                 };
                 let gist_id = group.id.clone();
                 state.screen = Screen::GistDetail;
-                state.detail_gist_id = Some(gist_id);
+                state.detail.gist_id = Some(gist_id);
                 state.reset_comment_pagination();
-                state.detail_scroll = 0;
-                state.detail_focus = DetailFocus::Files;
-                state.detail_file_cursor = 0;
+                state.detail.scroll = 0;
+                state.detail.focus = DetailFocus::Files;
+                state.detail.file_cursor = 0;
             }
             KeyOutcome::FetchComments => {
-                let Some(gist_id) = state.detail_gist_id.clone() else {
+                let Some(gist_id) = state.detail.gist_id.clone() else {
                     continue;
                 };
-                if state.detail_comments.is_some() || state.detail_comments_loading {
+                if state.detail.comments.is_some() || state.detail.comments_loading {
                     continue;
                 }
-                state.detail_comments_loading = true;
+                state.detail.comments_loading = true;
                 let fetch_id = gist_id.clone();
                 spawn_bg(&mut state, &mut bg_rx, "Loading comments…", move || {
                     let result = load_initial_comments(&fetch_id);
@@ -772,17 +772,17 @@ pub(super) fn run_loop(
                 });
             }
             KeyOutcome::LoadOlderComments => {
-                let Some(gist_id) = state.detail_gist_id.clone() else {
+                let Some(gist_id) = state.detail.gist_id.clone() else {
                     continue;
                 };
                 if !state.can_load_older_comments() {
                     continue;
                 }
-                let page = state.comments_loaded_oldest_page.saturating_sub(1);
+                let page = state.detail.comments_loaded_oldest_page.saturating_sub(1);
                 if page == 0 {
                     continue;
                 }
-                state.comments_loading_more = true;
+                state.detail.comments_loading_more = true;
                 let fetch_id = gist_id.clone();
                 spawn_bg(
                     &mut state,
@@ -1104,7 +1104,7 @@ pub(super) fn run_loop(
                     continue;
                 };
                 state.pending_action = None;
-                state.screen = state.compact_return_screen;
+                state.screen = state.detail.compact_return_screen;
 
                 spawn_bg(
                     &mut state,
@@ -1123,7 +1123,8 @@ pub(super) fn run_loop(
             }
             KeyOutcome::ApplyDescription => {
                 let gist_id = state
-                    .detail_gist_id
+                    .detail
+                    .gist_id
                     .clone()
                     .or_else(|| state.selected_group().map(|g| g.id.clone()));
                 let Some(gist_id) = gist_id else {
