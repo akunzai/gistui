@@ -28,6 +28,12 @@ mouse = true
 # (The `--no-update-check` CLI flag also forces it off for a single session.)
 check_updates = true
 
+# Treat a difference that is *only* a file-final newline as "no difference". GitHub stores
+# gist content with a trailing newline, so a local file without one would otherwise show a
+# phantom change in the diff and trigger a needless overwrite confirm. Default: true.
+# Set false for strict, byte-exact diffs.
+ignore_trailing_newline = true
+
 # Directories skipped when recursive local file discovery is active (r key).
 # Hidden directories (names starting with ".") are always skipped regardless
 # of this list. Add project-specific build output dirs here as needed.

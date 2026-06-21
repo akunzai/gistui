@@ -1321,11 +1321,11 @@ fn header_line_tints_local_yellow_and_gist_blue() {
 #[test]
 fn preview_diff_text_flips_with_focus() {
     // Download orientation (gist pane focused): old = local, new = gist.
-    let dl = preview_diff_text(false, "local: a", "old\n", "gist b", "new\n");
+    let dl = preview_diff_text(false, "local: a", "old\n", "gist b", "new\n", false);
     assert!(dl.starts_with("--- local: a\n+++ gist b\n"));
 
     // Upload orientation (local pane focused): old = gist, new = local.
-    let ul = preview_diff_text(true, "local: a", "old\n", "gist b", "new\n");
+    let ul = preview_diff_text(true, "local: a", "old\n", "gist b", "new\n", false);
     assert!(ul.starts_with("--- gist b\n+++ local: a\n"));
 }
 

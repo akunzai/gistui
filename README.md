@@ -91,7 +91,9 @@ The footer also shows keys for the focused pane.
 ## Safety
 
 gistui is conservative about writes: downloads land only in `./<gist-filename>`; an existing
-file is never overwritten without a diff and `y/n` confirmation; destructive remote actions
+file is never overwritten without a diff and `y/n` confirmation (a difference that is *only* a
+file-final newline counts as no change — disable with `ignore_trailing_newline = false`);
+destructive remote actions
 each get their own confirm. Others' gists (e.g. starred) are read-only for pin/upload/delete
 — fork with `F` in gist detail. No GitHub token is stored; gist content is never written to
 config. Mouse is on by default and can be disabled with `mouse = false` in the config file or
@@ -111,6 +113,7 @@ automatically the first time you pin a file. All fields are optional.
 |-------|------|-------------|
 | `scan_depth` | `integer` | Maximum directory depth for recursive discovery (`r` key). Default `2`. |
 | `skip_dirs` | `[string]` | Directory names skipped during recursive discovery (`r` key). Defaults to common build/dependency dirs (`node_modules`, `target`, …). Hidden dirs (`.`-prefix) are always skipped. |
+| `ignore_trailing_newline` | `bool` | Treat a difference that is *only* a file-final newline as no change in the diff view and the overwrite-confirm gate. Default `true`; set `false` for strict, byte-exact diffs. |
 | `[[pinned]]` | `table array` | Local-file ↔ gist mappings managed by the `p`/`P` keys. Can also be edited by hand. |
 
 Copy [`config.example.toml`](config.example.toml) from the repo for an annotated

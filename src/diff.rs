@@ -1,7 +1,36 @@
 use similar::{ChangeTag, TextDiff};
 use std::fmt::Write;
 
-pub fn unified_diff(old_label: &str, old: &str, new_label: &str, new: &str) -> String {
+/// Strip at most one file-final `\n` so that a trailing-newline-only difference does not
+/// register as a change. Intentionally removes a single terminator (not all of them), so a
+/// genuine blank-line change at EOF (`"a\n"` vs `"a\n\n"`) is still surfaced.
+fn strip_final_newline(s: &str) -> &str {
+    s.strip_suffix('\n').unwrap_or(s)
+}
+
+/// Whether `a` and `b` hold the same content. When `ignore_trailing_newline` is set, an
+/// optional file-final newline is disregarded, so `"}"` and `"}\n"` compare equal — this is
+/// the predicate the overwrite-confirm gate uses to decide a download/upload is a no-op.
+pub fn content_eq(a: &str, b: &str, ignore_trailing_newline: bool) -> bool {
+    if ignore_trailing_newline {
+        strip_final_newline(a) == strip_final_newline(b)
+    } else {
+        a == b
+    }
+}
+
+pub fn unified_diff(
+    old_label: &str,
+    old: &str,
+    new_label: &str,
+    new: &str,
+    ignore_trailing_newline: bool,
+) -> String {
+    let (old, new) = if ignore_trailing_newline {
+        (strip_final_newline(old), strip_final_newline(new))
+    } else {
+        (old, new)
+    };
     let diff = TextDiff::from_lines(old, new);
     let mut out = format!("--- {old_label}\n+++ {new_label}\n");
 
@@ -70,9 +99,43 @@ mod tests {
 
     #[test]
     fn diff_shows_insert_and_delete() {
-        let diff = unified_diff("gist", "a\nb\n", "local", "a\nc\n");
+        let diff = unified_diff("gist", "a\nb\n", "local", "a\nc\n", false);
         assert!(diff.contains("-b\n"));
         assert!(diff.contains("+c\n"));
+    }
+
+    #[test]
+    fn trailing_newline_only_difference_is_a_phantom_when_strict() {
+        // Strict mode reproduces issue #149: a file-final newline shows as a -}/+} pair.
+        let diff = unified_diff("gist", "x\n}\n", "local", "x\n}", false);
+        assert!(diff.contains("-}\n"));
+        assert!(diff.contains("+}"));
+    }
+
+    #[test]
+    fn ignore_trailing_newline_suppresses_the_phantom() {
+        // With the option on, the trailing-newline-only delta disappears entirely.
+        let diff = unified_diff("gist", "x\n}\n", "local", "x\n}", true);
+        assert!(!diff.contains("-}"));
+        assert!(!diff.contains("+}"));
+        assert!(diff.contains(" }"));
+    }
+
+    #[test]
+    fn ignore_trailing_newline_still_shows_real_changes() {
+        let diff = unified_diff("gist", "a\nb\n", "local", "a\nc", true);
+        assert!(diff.contains("-b"));
+        assert!(diff.contains("+c"));
+    }
+
+    #[test]
+    fn content_eq_respects_trailing_newline_setting() {
+        assert!(content_eq("}\n", "}", true));
+        assert!(!content_eq("}\n", "}", false));
+        // Only one terminator is ignored: a genuine trailing blank line still differs.
+        assert!(!content_eq("a\n\n", "a\n", true));
+        // Real content changes never compare equal.
+        assert!(!content_eq("a\n", "b\n", true));
     }
 
     #[test]
@@ -80,7 +143,7 @@ mod tests {
         // 6 equal lines, a change, 6 more equal lines; radius 2 keeps 2 each side.
         let old = "a\nb\nc\nd\ne\nf\nX\ng\nh\ni\nj\nk\nl\n";
         let new = "a\nb\nc\nd\ne\nf\nY\ng\nh\ni\nj\nk\nl\n";
-        let collapsed = collapse_context(&unified_diff("old", old, "new", new), 2);
+        let collapsed = collapse_context(&unified_diff("old", old, "new", new, false), 2);
         let lines: Vec<&str> = collapsed.lines().collect();
 
         // The change is preserved.
@@ -101,7 +164,7 @@ mod tests {
 
     #[test]
     fn collapse_context_with_large_radius_is_lossless() {
-        let diff = unified_diff("g", "a\nb\nc\n", "l", "a\nx\nc\n");
+        let diff = unified_diff("g", "a\nb\nc\n", "l", "a\nx\nc\n", false);
         let collapsed = collapse_context(&diff, 100);
         assert!(!collapsed.contains("hidden"));
         assert!(collapsed.contains(" a"));

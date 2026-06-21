@@ -470,6 +470,9 @@ pub struct AppState {
     /// When true the diff view shows the full file; when false it collapses to
     /// `diff_context` lines. Toggled with `c` and persisted to config.
     pub diff_show_full: bool,
+    /// Treat a file-final-newline-only delta as no change in the diff view and the
+    /// overwrite-confirm gate (from config; default `true`).
+    pub ignore_trailing_newline: bool,
     pub preview_remote: String,
     pub preview_local: PathBuf,
     pub download_target: PathBuf,
@@ -652,7 +655,13 @@ impl AppState {
         let local_label = self.upload_local_label.clone().unwrap_or_default();
         let gist_label = self.upload_gist_label.clone().unwrap_or_default();
 
-        let diff = crate::diff::unified_diff(&gist_label, &remote, &local_label, &local_content);
+        let diff = crate::diff::unified_diff(
+            &gist_label,
+            &remote,
+            &local_label,
+            &local_content,
+            self.ignore_trailing_newline,
+        );
         self.diff_text = diff;
     }
 
@@ -1390,6 +1399,7 @@ pub fn initial_state() -> AppState {
         diff_identical: false,
         diff_context: 3,
         diff_show_full: false,
+        ignore_trailing_newline: true,
         preview_remote: String::new(),
         preview_local: PathBuf::new(),
         download_target: PathBuf::new(),
@@ -1478,6 +1488,7 @@ pub fn load_startup_state(no_mouse: bool, no_update_check: bool) -> Result<AppSt
     state.scan_depth = config.scan_depth;
     state.diff_context = config.diff_context;
     state.diff_show_full = config.diff_show_full;
+    state.ignore_trailing_newline = config.ignore_trailing_newline;
     state.theme_choice = config.theme;
     state.theme = Theme::for_choice(config.theme);
     // Honour NO_COLOR for the syntax-highlight feature only (existing semantic colours stay).

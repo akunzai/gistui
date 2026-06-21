@@ -30,6 +30,10 @@ fn default_check_updates() -> bool {
     true
 }
 
+fn default_ignore_trailing_newline() -> bool {
+    true
+}
+
 fn default_skip_dirs() -> Vec<String> {
     [
         "node_modules",
@@ -80,6 +84,11 @@ pub struct AppConfig {
     /// `true`; set `false` to opt out (the `--no-update-check` CLI flag also forces it off).
     #[serde(default = "default_check_updates")]
     pub check_updates: bool,
+    /// Treat a difference that is *only* a file-final newline as "no difference": the diff
+    /// view hides the phantom change and the overwrite-confirm gate counts the sides as
+    /// identical. Default `true`; set `false` for strict, byte-exact diffs.
+    #[serde(default = "default_ignore_trailing_newline")]
+    pub ignore_trailing_newline: bool,
 }
 
 impl Default for AppConfig {
@@ -93,6 +102,7 @@ impl Default for AppConfig {
             theme: ThemeChoice::Dark,
             mouse: true,
             check_updates: true,
+            ignore_trailing_newline: true,
         }
     }
 }
@@ -257,6 +267,7 @@ mod tests {
             theme: ThemeChoice::Dark,
             mouse: true,
             check_updates: true,
+            ignore_trailing_newline: true,
         };
 
         save_config(&path, &config).unwrap();
@@ -460,6 +471,25 @@ mod tests {
         let toml = "scan_depth = 4\n";
         let config: AppConfig = toml::from_str(toml).unwrap();
         assert!(config.check_updates);
+    }
+
+    #[test]
+    fn ignore_trailing_newline_defaults_to_true_when_absent() {
+        // A config file with no `ignore_trailing_newline` key must load as enabled.
+        let toml = "scan_depth = 4\n";
+        let config: AppConfig = toml::from_str(toml).unwrap();
+        assert!(config.ignore_trailing_newline);
+    }
+
+    #[test]
+    fn ignore_trailing_newline_round_trips() {
+        let config = AppConfig {
+            ignore_trailing_newline: false,
+            ..Default::default()
+        };
+        let text = toml::to_string(&config).unwrap();
+        let parsed: AppConfig = toml::from_str(&text).unwrap();
+        assert!(!parsed.ignore_trailing_newline);
     }
 
     #[test]
