@@ -72,7 +72,6 @@ without resetting order. Pinned pairs show `📌`; same-filename candidates are 
 | `n` | create a new gist from the selected local file |
 | `p` / `P` | pin pair / open Pins view |
 | `g` | gist manager (per-gist view; `Enter` for detail, `v` visibility, `*` star) |
-| `m` | load 30 older comments (Gist detail → Comments tab; also click the top line) |
 | `a` | flip anchor pane · `/` filter focused pane · `?` help |
 
 Press **`?`** anytime for the **full, contextual keymap** — it opens the current screen's
@@ -113,8 +112,13 @@ automatically the first time you pin a file. All fields are optional.
 | Field | Type | Description |
 |-------|------|-------------|
 | `scan_depth` | `integer` | Maximum directory depth for recursive discovery (`r` key). Default `2`. |
-| `skip_dirs` | `[string]` | Directory names skipped during recursive discovery (`r` key). Defaults to common build/dependency dirs (`node_modules`, `target`, …). Hidden dirs (`.`-prefix) are always skipped. |
+| `diff_context` | `integer` | Unchanged context lines kept around each change in the diff view; `c` toggles between this radius and the full file. Default `3`. |
+| `diff_show_full` | `bool` | Remembered state of the diff `c` toggle: `true` shows the full file, `false` collapses to `diff_context` lines. Rewritten when you press `c`. Default `false`. |
+| `theme` | `string` | Built-in colour theme: `"dark"` (default) or `"light"` (for light-background terminals). |
+| `mouse` | `bool` | Enable mouse support (wheel scroll, click/double-click, close button). Default `true`; `--no-mouse` forces it off for one session. |
+| `check_updates` | `bool` | Check GitHub once a day on startup for a newer release and show a footer hint. Default `true`; `--no-update-check` forces it off for one session. |
 | `ignore_trailing_newline` | `bool` | Treat a difference that is *only* a file-final newline as no change in the diff view and the overwrite-confirm gate. Default `true`; set `false` for strict, byte-exact diffs. |
+| `skip_dirs` | `[string]` | Directory names skipped during recursive discovery (`r` key). Defaults to common build/dependency dirs (`node_modules`, `target`, …). Hidden dirs (`.`-prefix) are always skipped. |
 | `[[pinned]]` | `table array` | Local-file ↔ gist mappings managed by the `p`/`P` keys. Can also be edited by hand. |
 
 Copy [`config.example.toml`](config.example.toml) from the repo for an annotated
