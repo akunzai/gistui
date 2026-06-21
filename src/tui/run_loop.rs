@@ -1380,6 +1380,7 @@ pub(super) fn run_loop(
                     BgTaskOutcome::ForkGist { result, gist_id }
                 });
             }
+            KeyOutcome::LoadOlderComments => {}
             KeyOutcome::None => {}
         }
     }

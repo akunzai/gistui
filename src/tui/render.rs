@@ -1084,7 +1084,6 @@ pub(super) fn comment_lines<'a>(
 
 /// Logical line count of `comment_lines(comments, …)` — the amount to add to
 /// `detail_scroll` when older comments are prepended, so the viewport does not jump.
-#[allow(dead_code)] // consumed by a later task; test coverage in tui::tests
 pub(super) fn comment_lines_count(comments: &[GistComment]) -> u16 {
     comments
         .iter()

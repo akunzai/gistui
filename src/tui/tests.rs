@@ -4672,3 +4672,87 @@ fn comment_lines_count_matches_built_lines() {
     assert_eq!(comment_lines_count(&comments), 7);
     assert_eq!(comment_lines(&comments, &theme, 0).len(), 7);
 }
+
+fn sample_comment(author: &str, body: &str) -> crate::domain::GistComment {
+    crate::domain::GistComment {
+        author: author.into(),
+        created_at: "2026-01-01T00:00:00Z".into(),
+        body: body.into(),
+    }
+}
+
+#[test]
+fn apply_initial_comments_sets_window_and_requests_bottom_scroll() {
+    use crate::tui::InitialComments;
+    let mut s = crate::tui::initial_state();
+    s.detail_gist_id = Some("g1".into());
+    s.apply_initial_comments(
+        "g1",
+        Ok(InitialComments {
+            comments: vec![sample_comment("a", "x")],
+            total: 910,
+            oldest_page: 31,
+        }),
+    );
+    assert_eq!(s.comments_total, Some(910));
+    assert_eq!(s.comments_loaded_oldest_page, 31);
+    assert!(s.comments_scroll_to_bottom);
+    assert!(s.can_load_older_comments()); // page 31 > 1
+    assert_eq!(s.detail_comments.as_ref().unwrap().len(), 1);
+}
+
+#[test]
+fn apply_initial_comments_ignored_when_gist_changed() {
+    use crate::tui::InitialComments;
+    let mut s = crate::tui::initial_state();
+    s.detail_gist_id = Some("g2".into());
+    s.apply_initial_comments(
+        "g1",
+        Ok(InitialComments {
+            comments: vec![],
+            total: 0,
+            oldest_page: 1,
+        }),
+    );
+    assert!(s.detail_comments.is_none()); // stale response dropped
+}
+
+#[test]
+fn apply_older_comments_prepends_and_compensates_scroll() {
+    use crate::tui::InitialComments;
+    let mut s = crate::tui::initial_state();
+    s.detail_gist_id = Some("g1".into());
+    s.apply_initial_comments(
+        "g1",
+        Ok(InitialComments {
+            comments: vec![sample_comment("newer", "n")],
+            total: 60,
+            oldest_page: 2,
+        }),
+    );
+    s.detail_scroll = 5;
+    // One older comment = 1 header + 1 body + 1 blank = 3 lines prepended.
+    s.apply_older_comments("g1", Ok(vec![sample_comment("older", "o")]));
+    assert_eq!(s.comments_loaded_oldest_page, 1);
+    assert!(!s.can_load_older_comments()); // reached page 1
+    assert_eq!(s.detail_comments.as_ref().unwrap()[0].author, "older"); // prepended
+    assert_eq!(s.detail_scroll, 5 + 3); // viewport held in place
+    assert!(!s.comments_loading_more);
+}
+
+#[test]
+fn can_load_older_false_while_loading_more() {
+    use crate::tui::InitialComments;
+    let mut s = crate::tui::initial_state();
+    s.detail_gist_id = Some("g1".into());
+    s.apply_initial_comments(
+        "g1",
+        Ok(InitialComments {
+            comments: vec![sample_comment("a", "x")],
+            total: 90,
+            oldest_page: 3,
+        }),
+    );
+    s.comments_loading_more = true;
+    assert!(!s.can_load_older_comments());
+}
