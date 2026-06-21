@@ -18,8 +18,9 @@ pub enum FocusPane {
     Gist,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Screen {
+    #[default]
     List,
     Diff,
     Confirm,
@@ -446,6 +447,25 @@ pub struct UploadState {
     pub gist_label: Option<String>,
 }
 
+/// Per-screen revision-history state (`Screen::Revisions`). Data only — the revision
+/// methods stay on `AppState`.
+#[derive(Debug, Clone, Default)]
+pub struct RevisionState {
+    /// Gist whose revisions are shown.
+    pub gist_id: Option<String>,
+    /// Fetched revision rows (`None` while the initial list fetch is in flight).
+    pub entries: Option<Vec<GistRevision>>,
+    /// Cursor into `entries` (0 = current head).
+    pub index: usize,
+    pub hscroll: u16,
+    /// File within the gist that preview/diff/restore target.
+    pub target_file: String,
+    /// Where `q`/`Esc` returns from `Screen::Revisions`.
+    pub return_screen: Screen,
+    /// Error from the commits-list fetch, if any.
+    pub fetch_error: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub locals: Vec<LocalCandidate>,
@@ -601,19 +621,7 @@ pub struct AppState {
     pub theme_choice: crate::config::ThemeChoice,
     /// Resolved colour palette for the current theme choice (from config).
     pub theme: Theme,
-    /// Gist whose revisions are shown on `Screen::Revisions`.
-    pub revision_gist_id: Option<String>,
-    /// Fetched revision rows (`None` while the initial list fetch is in flight).
-    pub revision_entries: Option<Vec<GistRevision>>,
-    /// Cursor into `revision_entries` (0 = current head).
-    pub revision_index: usize,
-    pub revision_hscroll: u16,
-    /// File within the gist that preview/diff/restore target.
-    pub revision_target_file: String,
-    /// Where `q`/`Esc` returns from `Screen::Revisions`.
-    pub revision_return_screen: Screen,
-    /// Error from the commits-list fetch, if any.
-    pub revision_fetch_error: Option<String>,
+    pub revision: RevisionState,
 }
 
 fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
@@ -1090,26 +1098,26 @@ impl AppState {
         let Some(target_file) = target_file else {
             return false;
         };
-        self.revision_gist_id = Some(gist_id);
-        self.revision_target_file = target_file;
-        self.revision_return_screen = return_screen;
-        self.revision_index = 0;
-        self.revision_hscroll = 0;
-        self.revision_entries = None;
-        self.revision_fetch_error = None;
+        self.revision.gist_id = Some(gist_id);
+        self.revision.target_file = target_file;
+        self.revision.return_screen = return_screen;
+        self.revision.index = 0;
+        self.revision.hscroll = 0;
+        self.revision.entries = None;
+        self.revision.fetch_error = None;
         self.screen = Screen::Revisions;
         true
     }
 
     pub fn selected_revision(&self) -> Option<&GistRevision> {
-        let entries = self.revision_entries.as_ref()?;
-        entries.get(self.revision_index)
+        let entries = self.revision.entries.as_ref()?;
+        entries.get(self.revision.index)
     }
 
     /// Advance `revision_target_file` to the next filename in this gist (wraps). Returns
     /// false when the gist has at most one file.
     pub fn cycle_revision_target_file(&mut self) -> bool {
-        let Some(gist_id) = self.revision_gist_id.clone() else {
+        let Some(gist_id) = self.revision.gist_id.clone() else {
             return false;
         };
         let files = self.gist_filenames(&gist_id);
@@ -1118,9 +1126,9 @@ impl AppState {
         }
         let current = files
             .iter()
-            .position(|f| f == &self.revision_target_file)
+            .position(|f| f == &self.revision.target_file)
             .unwrap_or(0);
-        self.revision_target_file = files[(current + 1) % files.len()].clone();
+        self.revision.target_file = files[(current + 1) % files.len()].clone();
         true
     }
 
@@ -1132,19 +1140,19 @@ impl AppState {
 
     /// Footer label for the revision-history target file, including `(n/total)` when multi-file.
     pub fn revision_target_file_label(&self) -> String {
-        let Some(gist_id) = self.revision_gist_id.as_deref() else {
-            return self.revision_target_file.clone();
+        let Some(gist_id) = self.revision.gist_id.as_deref() else {
+            return self.revision.target_file.clone();
         };
         let files = self.gist_filenames(gist_id);
         if files.len() <= 1 {
-            return self.revision_target_file.clone();
+            return self.revision.target_file.clone();
         }
         let pos = files
             .iter()
-            .position(|f| f == &self.revision_target_file)
+            .position(|f| f == &self.revision.target_file)
             .map(|i| i + 1)
             .unwrap_or(1);
-        format!("{} ({pos}/{})", self.revision_target_file, files.len())
+        format!("{} ({pos}/{})", self.revision.target_file, files.len())
     }
 
     pub fn group_by_id(&self, gist_id: &str) -> Option<GistGroup> {
@@ -1484,13 +1492,10 @@ pub fn initial_state() -> AppState {
         gist_star_counts: std::collections::HashMap::new(),
         theme_choice: crate::config::ThemeChoice::Dark,
         theme: Theme::DARK,
-        revision_gist_id: None,
-        revision_entries: None,
-        revision_index: 0,
-        revision_hscroll: 0,
-        revision_target_file: String::new(),
-        revision_return_screen: Screen::GistDetail,
-        revision_fetch_error: None,
+        revision: RevisionState {
+            return_screen: Screen::GistDetail,
+            ..Default::default()
+        },
     }
 }
 

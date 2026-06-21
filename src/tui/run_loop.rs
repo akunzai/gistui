@@ -489,15 +489,16 @@ pub(super) fn run_loop(
                         state.apply_older_comments(&gist_id, result);
                     }
                     BgTaskOutcome::RevisionsFetched { gist_id, result } => {
-                        if state.revision_gist_id.as_deref() != Some(gist_id.as_str()) {
+                        if state.revision.gist_id.as_deref() != Some(gist_id.as_str()) {
                             continue;
                         }
                         match result {
                             Ok(entries) => {
-                                state.revision_fetch_error = None;
-                                state.revision_entries = Some(entries);
+                                state.revision.fetch_error = None;
+                                state.revision.entries = Some(entries);
                                 if state
-                                    .revision_entries
+                                    .revision
+                                    .entries
                                     .as_ref()
                                     .is_some_and(|e| e.len() <= 1)
                                 {
@@ -505,8 +506,8 @@ pub(super) fn run_loop(
                                 }
                             }
                             Err(error) => {
-                                state.revision_entries = Some(Vec::new());
-                                state.revision_fetch_error = Some(error);
+                                state.revision.entries = Some(Vec::new());
+                                state.revision.fetch_error = Some(error);
                             }
                         }
                     }
@@ -609,11 +610,11 @@ pub(super) fn run_loop(
                             ));
                             state.pending_action = None;
                             state.screen = Screen::Revisions;
-                            state.revision_index = 0;
-                            state.revision_entries = None;
+                            state.revision.index = 0;
+                            state.revision.entries = None;
                             state.loading = true;
                             gist_rx = Some(spawn_gist_fetch());
-                            if let Some(gist_id) = state.revision_gist_id.clone() {
+                            if let Some(gist_id) = state.revision.gist_id.clone() {
                                 spawn_bg(
                                     &mut state,
                                     &mut bg_rx,
@@ -1234,7 +1235,7 @@ pub(super) fn run_loop(
             KeyOutcome::PersistDiffContext => persist_diff_context(&mut state),
             KeyOutcome::ThemeToggle => persist_theme(&mut state),
             KeyOutcome::FetchRevisions => {
-                let Some(gist_id) = state.revision_gist_id.clone() else {
+                let Some(gist_id) = state.revision.gist_id.clone() else {
                     continue;
                 };
                 spawn_bg(&mut state, &mut bg_rx, "Loading revisions…", move || {
@@ -1247,19 +1248,20 @@ pub(super) fn run_loop(
                 });
             }
             KeyOutcome::RevisionDiffIncremental => {
-                let Some(gist_id) = state.revision_gist_id.clone() else {
+                let Some(gist_id) = state.revision.gist_id.clone() else {
                     continue;
                 };
                 let Some(child) = state.selected_revision().cloned() else {
                     continue;
                 };
-                let filename = state.revision_target_file.clone();
+                let filename = state.revision.target_file.clone();
                 let child_version = child.version.clone();
                 let child_label = revision_version_label(&child);
                 let parent = state
-                    .revision_entries
+                    .revision
+                    .entries
                     .as_ref()
-                    .and_then(|entries| entries.get(state.revision_index + 1).cloned());
+                    .and_then(|entries| entries.get(state.revision.index + 1).cloned());
                 let (parent_version, old_label) = match parent {
                     Some(parent) => {
                         let label = revision_version_label(&parent);
@@ -1285,13 +1287,13 @@ pub(super) fn run_loop(
                 });
             }
             KeyOutcome::RevisionDiff => {
-                let Some(gist_id) = state.revision_gist_id.clone() else {
+                let Some(gist_id) = state.revision.gist_id.clone() else {
                     continue;
                 };
                 let Some(revision) = state.selected_revision().cloned() else {
                     continue;
                 };
-                let filename = state.revision_target_file.clone();
+                let filename = state.revision.target_file.clone();
                 let version = revision.version.clone();
                 let version_label = revision_version_label(&revision);
                 let old_label = format!("revision {version_label}");
@@ -1316,13 +1318,13 @@ pub(super) fn run_loop(
                 });
             }
             KeyOutcome::RestoreRevisionPreview => {
-                let Some(gist_id) = state.revision_gist_id.clone() else {
+                let Some(gist_id) = state.revision.gist_id.clone() else {
                     continue;
                 };
                 let Some(revision) = state.selected_revision().cloned() else {
                     continue;
                 };
-                let filename = state.revision_target_file.clone();
+                let filename = state.revision.target_file.clone();
                 let version = revision.version.clone();
                 let version_label = revision_version_label(&revision);
                 let raw_url = state.gist_file_raw_url(&gist_id, &filename);

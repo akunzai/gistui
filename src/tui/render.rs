@@ -759,9 +759,9 @@ pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut
     let area = frame.area();
     let (ftitle, footer, colored) = if let Some(message) = &state.status {
         (String::new(), message.clone(), false)
-    } else if state.revision_entries.is_none() {
+    } else if state.revision.entries.is_none() {
         (String::new(), "Loading revisions…".to_string(), false)
-    } else if let Some(err) = &state.revision_fetch_error {
+    } else if let Some(err) = &state.revision.fetch_error {
         (String::new(), err.clone(), false)
     } else {
         (
@@ -769,7 +769,8 @@ pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut
             {
                 let file = state.revision_target_file_label();
                 let file_key = if state
-                    .revision_gist_id
+                    .revision
+                    .gist_id
                     .as_ref()
                     .is_some_and(|id| state.gist_filenames(id).len() > 1)
                 {
@@ -790,7 +791,7 @@ pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut
         .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 1)])
         .split(area);
 
-    let gist_id = state.revision_gist_id.as_deref().unwrap_or("");
+    let gist_id = state.revision.gist_id.as_deref().unwrap_or("");
     let label = state
         .group_by_id(gist_id)
         .map(|g| {
@@ -802,14 +803,15 @@ pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut
         })
         .unwrap_or_else(|| gist_id.to_string());
     let count = state
-        .revision_entries
+        .revision
+        .entries
         .as_ref()
         .map(|e| e.len())
         .unwrap_or(0);
     let now = unix_now();
 
     let items: Vec<ListItem> =
-        match &state.revision_entries {
+        match &state.revision.entries {
             None => vec![ListItem::new("  ⏳ Loading revisions…")
                 .style(Style::default().fg(state.theme.dim))],
             Some(entries) if entries.is_empty() => {
@@ -822,13 +824,13 @@ pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut
                 .map(|(i, rev)| {
                     ListItem::new(hscroll_str(
                         &revision_row_label(rev, i, now),
-                        state.revision_hscroll,
+                        state.revision.hscroll,
                     ))
                 })
                 .collect(),
         };
 
-    let selected = (count > 0).then_some(state.revision_index);
+    let selected = (count > 0).then_some(state.revision.index);
     let title = format!("Revisions: {label} {}", count_label(count, count));
     let list = List::new(items)
         .block(

@@ -3477,9 +3477,9 @@ fn capital_h_from_list_opens_revisions_for_selected_gist_file() {
     let outcome = state.handle_key(KeyCode::Char('H'));
     assert_eq!(outcome, KeyOutcome::FetchRevisions);
     assert_eq!(state.screen, Screen::Revisions);
-    assert_eq!(state.revision_gist_id.as_deref(), Some("a"));
-    assert_eq!(state.revision_target_file, "settings.json");
-    assert_eq!(state.revision_return_screen, Screen::List);
+    assert_eq!(state.revision.gist_id.as_deref(), Some("a"));
+    assert_eq!(state.revision.target_file, "settings.json");
+    assert_eq!(state.revision.return_screen, Screen::List);
 }
 
 #[test]
@@ -3491,17 +3491,17 @@ fn capital_h_from_gist_detail_opens_revisions_and_fetches() {
     let outcome = state.handle_key(KeyCode::Char('H'));
     assert_eq!(outcome, KeyOutcome::FetchRevisions);
     assert_eq!(state.screen, Screen::Revisions);
-    assert_eq!(state.revision_gist_id.as_deref(), Some("g1"));
-    assert_eq!(state.revision_target_file, "b.txt");
-    assert_eq!(state.revision_return_screen, Screen::GistDetail);
-    assert!(state.revision_entries.is_none());
+    assert_eq!(state.revision.gist_id.as_deref(), Some("g1"));
+    assert_eq!(state.revision.target_file, "b.txt");
+    assert_eq!(state.revision.return_screen, Screen::GistDetail);
+    assert!(state.revision.entries.is_none());
 }
 
 #[test]
 fn revisions_r_on_head_is_blocked() {
     let mut state = state_with_gists();
     state.screen = Screen::Revisions;
-    state.revision_entries = Some(vec![crate::domain::GistRevision {
+    state.revision.entries = Some(vec![crate::domain::GistRevision {
         version: "abc".into(),
         committed_at: "2026-06-10T00:00:00Z".into(),
         user: "u".into(),
@@ -3522,8 +3522,8 @@ fn revisions_r_on_head_is_blocked() {
 fn revisions_capital_d_on_current_shows_status() {
     let mut state = state_with_gists();
     state.screen = Screen::Revisions;
-    state.revision_index = 0;
-    state.revision_entries = Some(vec![
+    state.revision.index = 0;
+    state.revision.entries = Some(vec![
         crate::domain::GistRevision {
             version: "v2".into(),
             committed_at: "2026-06-10T00:00:00Z".into(),
@@ -3547,7 +3547,7 @@ fn revisions_capital_d_on_current_shows_status() {
     ]);
     assert_eq!(state.handle_key(KeyCode::Char('D')), KeyOutcome::None);
     assert_eq!(state.status.as_deref(), Some("already at current revision"));
-    state.revision_index = 1;
+    state.revision.index = 1;
     assert_eq!(
         state.handle_key(KeyCode::Char('D')),
         KeyOutcome::RevisionDiff
@@ -3558,8 +3558,8 @@ fn revisions_capital_d_on_current_shows_status() {
 fn revisions_enter_triggers_incremental_diff() {
     let mut state = state_with_gists();
     state.screen = Screen::Revisions;
-    state.revision_index = 0;
-    state.revision_entries = Some(vec![
+    state.revision.index = 0;
+    state.revision.entries = Some(vec![
         crate::domain::GistRevision {
             version: "v2".into(),
             committed_at: "2026-06-10T00:00:00Z".into(),
@@ -3585,7 +3585,7 @@ fn revisions_enter_triggers_incremental_diff() {
         state.handle_key(KeyCode::Enter),
         KeyOutcome::RevisionDiffIncremental
     );
-    state.revision_index = 1;
+    state.revision.index = 1;
     assert_eq!(
         state.handle_key(KeyCode::Enter),
         KeyOutcome::RevisionDiffIncremental
@@ -3609,13 +3609,13 @@ fn revision_diff_omits_download_upload() {
 fn revisions_capital_f_cycles_target_file() {
     let mut state = state_with_gists();
     state.screen = Screen::Revisions;
-    state.revision_gist_id = Some("g1".into());
-    state.revision_target_file = "a.txt".into();
-    state.revision_entries = Some(vec![]);
+    state.revision.gist_id = Some("g1".into());
+    state.revision.target_file = "a.txt".into();
+    state.revision.entries = Some(vec![]);
     state.handle_key(KeyCode::Char('F'));
-    assert_eq!(state.revision_target_file, "b.txt");
+    assert_eq!(state.revision.target_file, "b.txt");
     state.handle_key(KeyCode::Char('F'));
-    assert_eq!(state.revision_target_file, "a.txt");
+    assert_eq!(state.revision.target_file, "a.txt");
     assert_eq!(state.revision_target_file_label(), "a.txt (1/2)");
 }
 
@@ -3639,9 +3639,9 @@ fn revisions_capital_f_on_single_file_gist_shows_status() {
         node_id: None,
     }];
     state.screen = Screen::Revisions;
-    state.revision_gist_id = Some("g1".into());
-    state.revision_target_file = "only.txt".into();
-    state.revision_entries = Some(vec![]);
+    state.revision.gist_id = Some("g1".into());
+    state.revision.target_file = "only.txt".into();
+    state.revision.entries = Some(vec![]);
     state.handle_key(KeyCode::Char('F'));
     assert_eq!(state.status.as_deref(), Some("only one file in this gist"));
 }
@@ -4546,8 +4546,8 @@ fn pins_click_selects_and_double_click_matches_enter() {
 fn revisions_click_selects_and_double_click_matches_enter() {
     let mut state = state_with_gists();
     state.screen = Screen::Revisions;
-    state.revision_index = 0;
-    state.revision_entries = Some(vec![
+    state.revision.index = 0;
+    state.revision.entries = Some(vec![
         crate::domain::GistRevision {
             version: "v2".into(),
             committed_at: "2026-06-10T00:00:00Z".into(),
@@ -4579,7 +4579,7 @@ fn revisions_click_selects_and_double_click_matches_enter() {
     };
     let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
     assert_eq!(out, KeyOutcome::None);
-    assert_eq!(state.revision_index, 1);
+    assert_eq!(state.revision.index, 1);
     let mut by_key = state.clone();
     let key_out = by_key.handle_key(KeyCode::Enter);
     let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);

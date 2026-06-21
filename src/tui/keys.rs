@@ -222,30 +222,30 @@ impl AppState {
                 true
             }
             Screen::Revisions => {
-                let entries_len = self.revision_entries.as_ref().map(|e| e.len()).unwrap_or(0);
+                let entries_len = self.revision.entries.as_ref().map(|e| e.len()).unwrap_or(0);
                 if entries_len == 0 {
                     return false;
                 }
                 match action {
                     NavAction::Down => {
-                        self.revision_index = (self.revision_index + 1).min(entries_len - 1);
+                        self.revision.index = (self.revision.index + 1).min(entries_len - 1);
                     }
                     NavAction::Up => {
-                        self.revision_index = self.revision_index.saturating_sub(1);
+                        self.revision.index = self.revision.index.saturating_sub(1);
                     }
                     NavAction::PageDown => {
-                        self.revision_index =
-                            (self.revision_index + PAGE_SCROLL as usize).min(entries_len - 1);
+                        self.revision.index =
+                            (self.revision.index + PAGE_SCROLL as usize).min(entries_len - 1);
                     }
                     NavAction::PageUp => {
-                        self.revision_index =
-                            self.revision_index.saturating_sub(PAGE_SCROLL as usize);
+                        self.revision.index =
+                            self.revision.index.saturating_sub(PAGE_SCROLL as usize);
                     }
                     NavAction::Left => {
-                        self.revision_hscroll = self.revision_hscroll.saturating_sub(1);
+                        self.revision.hscroll = self.revision.hscroll.saturating_sub(1);
                     }
                     NavAction::Right => {
-                        self.revision_hscroll = self.revision_hscroll.saturating_add(1);
+                        self.revision.hscroll = self.revision.hscroll.saturating_add(1);
                     }
                 }
                 true
@@ -596,15 +596,15 @@ impl AppState {
 
     fn handle_key_revisions(&mut self, code: KeyCode) -> KeyOutcome {
         self.status = None;
-        let entries_len = self.revision_entries.as_ref().map(|e| e.len()).unwrap_or(0);
+        let entries_len = self.revision.entries.as_ref().map(|e| e.len()).unwrap_or(0);
         match code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                self.screen = self.revision_return_screen;
+                self.screen = self.revision.return_screen;
             }
             KeyCode::Enter if entries_len > 0 => {
                 if let (Some(id), file) = (
-                    self.revision_gist_id.clone(),
-                    self.revision_target_file.clone(),
+                    self.revision.gist_id.clone(),
+                    self.revision.target_file.clone(),
                 ) {
                     if self.block_if_non_previewable_gist_file(&id, &file) {
                         return KeyOutcome::None;
@@ -612,10 +612,10 @@ impl AppState {
                 }
                 return KeyOutcome::RevisionDiffIncremental;
             }
-            KeyCode::Char('D') if entries_len > 0 && self.revision_index > 0 => {
+            KeyCode::Char('D') if entries_len > 0 && self.revision.index > 0 => {
                 if let (Some(id), file) = (
-                    self.revision_gist_id.clone(),
-                    self.revision_target_file.clone(),
+                    self.revision.gist_id.clone(),
+                    self.revision.target_file.clone(),
                 ) {
                     if self.block_if_non_previewable_gist_file(&id, &file) {
                         return KeyOutcome::None;
@@ -626,8 +626,8 @@ impl AppState {
             KeyCode::Char('D') if entries_len > 0 => {
                 self.set_status("already at current revision");
             }
-            KeyCode::Char('r') if entries_len > 1 && self.revision_index > 0 => {
-                if let Some(id) = self.revision_gist_id.clone() {
+            KeyCode::Char('r') if entries_len > 1 && self.revision.index > 0 => {
+                if let Some(id) = self.revision.gist_id.clone() {
                     if !self.gist_is_owned(&id) {
                         return KeyOutcome::None;
                     }
@@ -637,7 +637,7 @@ impl AppState {
             KeyCode::Char('r') if entries_len <= 1 => {
                 self.set_status("only one revision — nothing to restore");
             }
-            KeyCode::Char('r') if self.revision_index == 0 => {
+            KeyCode::Char('r') if self.revision.index == 0 => {
                 self.set_status("already at current revision");
             }
             KeyCode::Char('F') if !self.cycle_revision_target_file() => {
@@ -756,10 +756,10 @@ impl AppState {
             Screen::Revisions => {
                 if let Some(hit) = layout.list {
                     if point_in(hit.rect, col, row) {
-                        let count = self.revision_entries.as_ref().map_or(0, |e| e.len());
+                        let count = self.revision.entries.as_ref().map_or(0, |e| e.len());
                         if let Some(idx) = hit.index_at(row, count) {
-                            self.revision_index = idx;
-                            self.revision_hscroll = 0;
+                            self.revision.index = idx;
+                            self.revision.hscroll = 0;
                             return true;
                         }
                     }
