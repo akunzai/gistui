@@ -378,7 +378,7 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
     };
     let (ftitle, footer, colored) = if state.pins_filtering {
         (
-            "Filter (↑↓ move · Enter keep · Esc clear)".to_string(),
+            "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
             format!("/{}_", state.pins_filter_query),
             false,
         )
@@ -570,7 +570,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut Mou
     // result) when present, else the command hints. Only the hints get key colouring.
     let (ftitle, footer, colored) = if state.gists_filtering {
         (
-            "Filter (↑↓ move · Enter keep · Esc clear)".to_string(),
+            "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
             format!("/{}_", state.gists_filter_query),
             false,
         )
@@ -579,7 +579,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut Mou
     } else {
         (
             String::new(),
-            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · * star · H history · o browser · ? help · q back"
+            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · * star · H history · o browser · y copy url · ? help · q back"
                 .to_string(),
             true,
         )
@@ -1134,7 +1134,7 @@ pub(super) fn render_gist_comments(
         (None, false, _) => body.push(dim_line("Tab here to load comments", state)),
         (Some(_), _, Some(err)) => body.push(Line::from(Span::styled(
             format!("comments error: {err}"),
-            Style::default().fg(Color::Red),
+            Style::default().fg(state.theme.del_color),
         ))),
         (Some(comments), _, None) if comments.is_empty() => {
             body.push(dim_line("No comments", state))
@@ -1215,10 +1215,10 @@ pub(super) fn detail_footer(
     };
     let hints = match focus {
         DetailFocus::Comments => format!(
-            "Tab files · ↑↓ scroll · 1-9 preview · H history · * star · o browser{manage} · ? help · q back"
+            "Tab files · ↑↓ scroll · 1-9 preview · H history · * star · o browser · y copy url{manage} · ? help · q back"
         ),
         DetailFocus::Files => format!(
-            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · H history · * star · o browser{manage} · ? help · q back"
+            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · H history · * star · o browser · y copy url{manage} · ? help · q back"
         ),
     };
     footer_with_status(status, &hints)
@@ -1465,7 +1465,7 @@ pub(super) fn action_color(label: &str, theme: &Theme) -> Color {
     for word in label.split_whitespace() {
         let word = word.to_ascii_lowercase();
         if DESTRUCTIVE.contains(&word.as_str()) {
-            return Color::Red;
+            return theme.del_color;
         }
         if WRITE.contains(&word.as_str()) {
             color = theme.write_color;
