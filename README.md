@@ -72,6 +72,7 @@ without resetting order. Pinned pairs show `📌`; same-filename candidates are 
 | `n` | create a new gist from the selected local file |
 | `p` / `P` | pin pair / open Pins view |
 | `g` | gist manager (per-gist view; `Enter` for detail, `v` visibility, `*` star) |
+| `m` | load 30 older comments (Gist detail → Comments tab; also click the top line) |
 | `a` | flip anchor pane · `/` filter focused pane · `?` help |
 
 Press **`?`** anytime for the **full, contextual keymap** — it opens the current screen's
@@ -85,7 +86,7 @@ The footer also shows keys for the focused pane.
 | Wheel up/down | scroll the focused list or content pane |
 | Click a row | select it (List panes also switch focus) |
 | Double-click a row | open it — List diff, gist detail, pin diff, revision diff, or file preview (same as `Enter`) |
-| Click a tab (Gist details) | switch between Files / Comments |
+| Click a tab (Gist details) | switch between Files / Comments (newest 30 comments load first; `m` or clicking the top line loads 30 older comments) |
 | Click `[✕]` button (pop-up screens) | close / go back |
 
 ## Safety

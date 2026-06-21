@@ -3031,48 +3031,6 @@ fn list_screen_capital_s_syncs_selected_pair() {
 }
 
 #[test]
-fn fetched_comments_apply_when_viewing_same_gist() {
-    let mut state = initial_state();
-    state.detail_gist_id = Some("g1".into());
-    state.apply_fetched_comments(
-        "g1",
-        Ok(vec![GistComment {
-            author: "alice".into(),
-            created_at: "2026-06-10T00:00:00Z".into(),
-            body: "hi".into(),
-        }]),
-    );
-    assert_eq!(state.detail_comments.as_ref().unwrap().len(), 1);
-    assert!(state.detail_comments_error.is_none());
-}
-
-#[test]
-fn fetched_comments_ignored_when_gist_changed() {
-    let mut state = initial_state();
-    state.detail_gist_id = Some("g2".into());
-    state.detail_comments = None;
-    state.apply_fetched_comments(
-        "g1",
-        Ok(vec![GistComment {
-            author: "alice".into(),
-            created_at: "2026-06-10T00:00:00Z".into(),
-            body: "stale".into(),
-        }]),
-    );
-    // Result was for g1 but user is on g2 → ignored.
-    assert!(state.detail_comments.is_none());
-}
-
-#[test]
-fn fetched_comments_error_sets_empty_list_and_message() {
-    let mut state = initial_state();
-    state.detail_gist_id = Some("g1".into());
-    state.apply_fetched_comments("g1", Err("boom".into()));
-    assert_eq!(state.detail_comments.as_ref().unwrap().len(), 0);
-    assert_eq!(state.detail_comments_error.as_deref(), Some("boom"));
-}
-
-#[test]
 fn gist_group_row_age_tracks_active_sort() {
     let group = GistGroup {
         id: "g1".into(),
@@ -4648,4 +4606,149 @@ fn wheel_step_gist_detail_files_moves_one() {
     state.detail_file_cursor = 0;
     state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
     assert_eq!(state.detail_file_cursor, 1);
+}
+
+#[test]
+fn comment_lines_count_matches_built_lines() {
+    use crate::domain::GistComment;
+    use crate::tui::render::{comment_lines, comment_lines_count};
+    let theme = crate::tui::theme::Theme::for_choice(crate::config::ThemeChoice::Dark);
+    let comments = vec![
+        GistComment {
+            author: "alice".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            body: "one line".into(),
+        },
+        GistComment {
+            author: "bob".into(),
+            created_at: "2026-01-02T00:00:00Z".into(),
+            body: "two\nlines".into(),
+        },
+    ];
+    // Each comment: 1 header + body.lines() + 1 blank.
+    // alice: 1 + 1 + 1 = 3 ; bob: 1 + 2 + 1 = 4 ; total 7.
+    assert_eq!(comment_lines_count(&comments), 7);
+    assert_eq!(comment_lines(&comments, &theme, 0).len(), 7);
+}
+
+fn sample_comment(author: &str, body: &str) -> crate::domain::GistComment {
+    crate::domain::GistComment {
+        author: author.into(),
+        created_at: "2026-01-01T00:00:00Z".into(),
+        body: body.into(),
+    }
+}
+
+#[test]
+fn apply_initial_comments_sets_window_and_requests_bottom_scroll() {
+    use crate::tui::InitialComments;
+    let mut s = crate::tui::initial_state();
+    s.detail_gist_id = Some("g1".into());
+    s.apply_initial_comments(
+        "g1",
+        Ok(InitialComments {
+            comments: vec![sample_comment("a", "x")],
+            total: 910,
+            oldest_page: 31,
+        }),
+    );
+    assert_eq!(s.comments_total, Some(910));
+    assert_eq!(s.comments_loaded_oldest_page, 31);
+    assert!(s.comments_scroll_to_bottom);
+    assert!(s.can_load_older_comments()); // page 31 > 1
+    assert_eq!(s.detail_comments.as_ref().unwrap().len(), 1);
+}
+
+#[test]
+fn apply_initial_comments_ignored_when_gist_changed() {
+    use crate::tui::InitialComments;
+    let mut s = crate::tui::initial_state();
+    s.detail_gist_id = Some("g2".into());
+    s.apply_initial_comments(
+        "g1",
+        Ok(InitialComments {
+            comments: vec![],
+            total: 0,
+            oldest_page: 1,
+        }),
+    );
+    assert!(s.detail_comments.is_none()); // stale response dropped
+}
+
+#[test]
+fn apply_older_comments_prepends_and_compensates_scroll() {
+    use crate::tui::InitialComments;
+    let mut s = crate::tui::initial_state();
+    s.detail_gist_id = Some("g1".into());
+    s.apply_initial_comments(
+        "g1",
+        Ok(InitialComments {
+            comments: vec![sample_comment("newer", "n")],
+            total: 60,
+            oldest_page: 2,
+        }),
+    );
+    s.detail_scroll = 5;
+    // One older comment = 1 header + 1 body + 1 blank = 3 lines prepended.
+    s.apply_older_comments("g1", Ok(vec![sample_comment("older", "o")]));
+    assert_eq!(s.comments_loaded_oldest_page, 1);
+    assert!(!s.can_load_older_comments()); // reached page 1
+    assert_eq!(s.detail_comments.as_ref().unwrap()[0].author, "older"); // prepended
+    assert_eq!(s.detail_scroll, 5 + 3); // viewport held in place
+    assert!(!s.comments_loading_more);
+}
+
+#[test]
+fn can_load_older_false_while_loading_more() {
+    use crate::tui::InitialComments;
+    let mut s = crate::tui::initial_state();
+    s.detail_gist_id = Some("g1".into());
+    s.apply_initial_comments(
+        "g1",
+        Ok(InitialComments {
+            comments: vec![sample_comment("a", "x")],
+            total: 90,
+            oldest_page: 3,
+        }),
+    );
+    s.comments_loading_more = true;
+    assert!(!s.can_load_older_comments());
+}
+
+#[test]
+fn m_key_loads_older_when_available() {
+    use crate::tui::InitialComments;
+    let mut s = crate::tui::initial_state();
+    s.screen = Screen::GistDetail;
+    s.detail_focus = DetailFocus::Comments;
+    s.detail_gist_id = Some("g1".into());
+    s.apply_initial_comments(
+        "g1",
+        Ok(InitialComments {
+            comments: vec![sample_comment("a", "x")],
+            total: 90,
+            oldest_page: 3,
+        }),
+    );
+    let out = s.handle_key(KeyCode::Char('m'));
+    assert!(matches!(out, KeyOutcome::LoadOlderComments));
+}
+
+#[test]
+fn m_key_noop_when_at_oldest_page() {
+    use crate::tui::InitialComments;
+    let mut s = crate::tui::initial_state();
+    s.screen = Screen::GistDetail;
+    s.detail_focus = DetailFocus::Comments;
+    s.detail_gist_id = Some("g1".into());
+    s.apply_initial_comments(
+        "g1",
+        Ok(InitialComments {
+            comments: vec![sample_comment("a", "x")],
+            total: 10,
+            oldest_page: 1,
+        }),
+    );
+    let out = s.handle_key(KeyCode::Char('m'));
+    assert!(matches!(out, KeyOutcome::None));
 }

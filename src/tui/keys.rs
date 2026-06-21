@@ -604,6 +604,11 @@ impl AppState {
                     }
                 }
             }
+            KeyCode::Char('m') if self.detail_focus == DetailFocus::Comments => {
+                if self.can_load_older_comments() {
+                    return KeyOutcome::LoadOlderComments;
+                }
+            }
             KeyCode::Char('?') => self.open_help(),
             _ => {}
         }
@@ -688,30 +693,6 @@ impl AppState {
                 let max = count - 1;
                 let next = self.detail_file_cursor as i64 + delta as i64;
                 self.detail_file_cursor = next.clamp(0, max as i64) as usize;
-            }
-        }
-    }
-
-    /// Apply a finished comment fetch, ignoring it if the user has since navigated to a
-    /// different gist (stale response). On error, comments become an empty list and the
-    /// error message is retained so the detail view can surface it.
-    pub fn apply_fetched_comments(
-        &mut self,
-        gist_id: &str,
-        result: Result<Vec<GistComment>, String>,
-    ) {
-        if self.detail_gist_id.as_deref() != Some(gist_id) {
-            return;
-        }
-        self.detail_comments_loading = false;
-        match result {
-            Ok(comments) => {
-                self.detail_comments = Some(comments);
-                self.detail_comments_error = None;
-            }
-            Err(error) => {
-                self.detail_comments = Some(Vec::new());
-                self.detail_comments_error = Some(error);
             }
         }
     }
@@ -878,6 +859,23 @@ impl AppState {
         None
     }
 
+    /// A click on the GistDetail "load older comments" affordance line.
+    fn click_comments_load_older(
+        &mut self,
+        col: u16,
+        row: u16,
+        layout: &MouseLayout,
+    ) -> Option<KeyOutcome> {
+        if self.screen != Screen::GistDetail || self.detail_focus != DetailFocus::Comments {
+            return None;
+        }
+        let rect = layout.comments_load_older?;
+        if point_in(rect, col, row) && self.can_load_older_comments() {
+            return Some(KeyOutcome::LoadOlderComments);
+        }
+        None
+    }
+
     /// Translate a classified mouse intent into a state change, reusing existing keyboard
     /// logic. Pure (no IO, no clock); returns a `KeyOutcome` so `run_loop` can perform any
     /// follow-up IO (e.g. `PreviewDiff` on double-click).
@@ -906,6 +904,9 @@ impl AppState {
                 }
                 // A GistDetail tab header click switches focus (single-click action).
                 if let Some(outcome) = self.click_detail_tab(col, row, layout) {
+                    return outcome;
+                }
+                if let Some(outcome) = self.click_comments_load_older(col, row, layout) {
                     return outcome;
                 }
                 self.click_select(col, row, layout);

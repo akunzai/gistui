@@ -319,6 +319,7 @@ pub enum KeyOutcome {
     OpenGistDetail,
     /// Fetch comments for the gist shown on `Screen::GistDetail` (lazy, on Comments tab).
     FetchComments,
+    LoadOlderComments,
     /// Analyse the selected Gist-manager gist's revision count, then ask to confirm a compaction.
     CompactGist,
     /// Run the confirmed compaction (clone → squash → force-push) on the pending gist.
@@ -397,6 +398,11 @@ pub struct MouseLayout {
     pub detail_tab_files: Option<Rect>,
     pub detail_tab_comments: Option<Rect>,
     pub close_button: Option<Rect>,
+    /// GistDetail Comments: the clickable "load older" affordance line.
+    pub comments_load_older: Option<Rect>,
+    /// GistDetail Comments: max useful vertical scroll (set by render; used by run_loop
+    /// to honour a one-shot scroll-to-bottom after the newest page loads).
+    pub comments_max_scroll: Option<u16>,
 }
 
 /// A classified mouse intent handed to the pure `handle_mouse`.
@@ -557,6 +563,14 @@ pub struct AppState {
     pub detail_comments_loading: bool,
     /// Comment-fetch error message, if any.
     pub detail_comments_error: Option<String>,
+    /// Exact total comment count (from the per_page=1 probe); for the title only.
+    pub comments_total: Option<u32>,
+    /// Smallest 1-based page index currently loaded. 0 = none loaded yet.
+    pub comments_loaded_oldest_page: u32,
+    /// A "load older" request is in flight (distinct from the initial load).
+    pub comments_loading_more: bool,
+    /// One-shot: run_loop scrolls the comments pane to the bottom on the next draw.
+    pub comments_scroll_to_bottom: bool,
     /// Comment-pane scroll offset.
     pub detail_scroll: u16,
     /// Which detail-view pane Tab/arrows currently drive (Comments vs Files).
@@ -1457,6 +1471,10 @@ pub fn initial_state() -> AppState {
         detail_comments: None,
         detail_comments_loading: false,
         detail_comments_error: None,
+        comments_total: None,
+        comments_loaded_oldest_page: 0,
+        comments_loading_more: false,
+        comments_scroll_to_bottom: false,
         detail_scroll: 0,
         detail_focus: DetailFocus::Files,
         detail_file_cursor: 0,
@@ -1599,6 +1617,94 @@ impl AppState {
     pub fn pin_sync_status(&self, index: usize) -> crate::domain::SyncStatus {
         let (local_ts, remote_ts) = self.pin_mtimes(index);
         crate::domain::sync_status(local_ts, remote_ts)
+    }
+}
+
+/// The result of the initial newest-first comment load: the newest page plus the metadata
+/// needed to page backwards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitialComments {
+    pub comments: Vec<GistComment>,
+    pub total: u32,
+    pub oldest_page: u32,
+}
+
+impl AppState {
+    /// Reset comment-pagination state (called when (re)opening a gist detail or switching
+    /// the loaded gist), so a fresh Tab re-fetches from the newest page.
+    pub fn reset_comment_pagination(&mut self) {
+        self.detail_comments = None;
+        self.detail_comments_loading = false;
+        self.detail_comments_error = None;
+        self.comments_total = None;
+        self.comments_loaded_oldest_page = 0;
+        self.comments_loading_more = false;
+        self.comments_scroll_to_bottom = false;
+    }
+
+    /// Apply the initial newest-page load. Ignored if the user navigated to another gist
+    /// (stale response). On success, requests a one-shot scroll-to-bottom so the newest
+    /// comment is visible.
+    pub fn apply_initial_comments(
+        &mut self,
+        gist_id: &str,
+        result: Result<InitialComments, String>,
+    ) {
+        if self.detail_gist_id.as_deref() != Some(gist_id) {
+            return;
+        }
+        self.detail_comments_loading = false;
+        match result {
+            Ok(init) => {
+                self.comments_total = Some(init.total);
+                self.comments_loaded_oldest_page = init.oldest_page;
+                self.detail_comments = Some(init.comments);
+                self.comments_scroll_to_bottom = true;
+            }
+            Err(error) => {
+                self.detail_comments_error = Some(error);
+            }
+        }
+    }
+
+    /// Apply a "load older" page: prepend it (older comments sort first) and bump
+    /// `detail_scroll` by the prepended line count so the viewport stays put. Ignored on
+    /// stale gist.
+    pub fn apply_older_comments(
+        &mut self,
+        gist_id: &str,
+        result: Result<Vec<GistComment>, String>,
+    ) {
+        if self.detail_gist_id.as_deref() != Some(gist_id) {
+            return;
+        }
+        self.comments_loading_more = false;
+        match result {
+            Ok(mut older) => {
+                let added = crate::tui::render::comment_lines_count(&older);
+                if let Some(existing) = self.detail_comments.as_mut() {
+                    older.append(existing);
+                    *existing = older;
+                } else {
+                    self.detail_comments = Some(older);
+                }
+                self.comments_loaded_oldest_page =
+                    self.comments_loaded_oldest_page.saturating_sub(1).max(1);
+                self.detail_scroll = self.detail_scroll.saturating_add(added);
+            }
+            Err(error) => {
+                self.detail_comments_error = Some(error);
+            }
+        }
+    }
+
+    /// Whether a "load older" action should be offered: comments are loaded, an older page
+    /// exists, and no load is already in flight.
+    pub fn can_load_older_comments(&self) -> bool {
+        self.detail_comments.is_some()
+            && self.comments_loaded_oldest_page > 1
+            && !self.comments_loading_more
+            && !self.detail_comments_loading
     }
 }
 
