@@ -209,8 +209,13 @@ pub(super) fn run_loop(
                                         &local_content,
                                         &gist_label,
                                         &remote,
+                                        state.ignore_trailing_newline,
                                     );
-                                    let identical = local_content == remote;
+                                    let identical = crate::diff::content_eq(
+                                        &local_content,
+                                        &remote,
+                                        state.ignore_trailing_newline,
+                                    );
                                     state.enter_diff(
                                         diff,
                                         remote,
@@ -241,8 +246,13 @@ pub(super) fn run_loop(
                                             &local_content,
                                             &gist_label,
                                             &remote,
+                                            state.ignore_trailing_newline,
                                         );
-                                        let identical = local_content == remote;
+                                        let identical = crate::diff::content_eq(
+                                            &local_content,
+                                            &remote,
+                                            state.ignore_trailing_newline,
+                                        );
                                         state.download_gist_id = Some(gist_id);
                                         state.download_gist_filename = Some(filename);
                                         state.enter_diff(diff, remote, target.clone(), target);
@@ -485,6 +495,7 @@ pub(super) fn run_loop(
                                 &old_content,
                                 &new_label,
                                 &new_content,
+                                state.ignore_trailing_newline,
                             );
                             state.diff_text = diff;
                             state.diff_scroll = 0;
@@ -515,6 +526,7 @@ pub(super) fn run_loop(
                                 &revision_content,
                                 &new_label,
                                 &current_content,
+                                state.ignore_trailing_newline,
                             );
                             state.diff_text = diff;
                             state.diff_scroll = 0;

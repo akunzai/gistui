@@ -188,6 +188,8 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   c          toggle context: configured radius <-> full file (remembered)
   d / u      download / upload from the diff
   syntax     unchanged context lines are syntax-highlighted by file type
+  newline    a file-final-newline-only difference counts as identical
+             (set ignore_trailing_newline = false for byte-exact diffs)
   Esc / q    back"
         }
         HelpTopic::Preview => {
@@ -2483,10 +2485,23 @@ pub(super) fn preview_diff_text(
     local_content: &str,
     gist_label: &str,
     remote: &str,
+    ignore_trailing_newline: bool,
 ) -> String {
     if upload_orientation {
-        crate::diff::unified_diff(gist_label, remote, local_label, local_content)
+        crate::diff::unified_diff(
+            gist_label,
+            remote,
+            local_label,
+            local_content,
+            ignore_trailing_newline,
+        )
     } else {
-        crate::diff::unified_diff(local_label, local_content, gist_label, remote)
+        crate::diff::unified_diff(
+            local_label,
+            local_content,
+            gist_label,
+            remote,
+            ignore_trailing_newline,
+        )
     }
 }

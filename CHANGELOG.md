@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Diff view: a difference that is *only* a file-final newline no longer shows as a phantom change and no longer forces an overwrite confirm (GitHub stores gists with a trailing newline that local files often lack); disable with `ignore_trailing_newline = false` for byte-exact diffs.
+
 ## [0.13.0] — 2026-06-20
 
 - Mouse support: wheel scroll, click to focus/select, double-click to open, and a clickable close button on pop-up screens (on by default; disable with `mouse = false` or `--no-mouse`).
