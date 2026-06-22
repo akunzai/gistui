@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-06-22
+
 - Fixed: owned-fork detection now paginates past 100 gists (the `forked` filter no longer misses forks on large accounts), and a failed fork-detection query surfaces a `fork detection unavailable` hint instead of silently showing no forks.
 - Fixed three rough edges: opening a gist in the browser (`o`) no longer briefly freezes the UI; upload/restore temp files are written to the system temp directory instead of the working directory (no stray `.gistui_*` dirs if the process is killed mid-op); and an unreadable local file now reports an error instead of silently showing the whole gist as additions on upload.
 - Performance: syntax-highlighted diff and preview panes are memoised, so scrolling no longer re-tokenises the whole buffer on every frame — smoother on large, highlighted files.
@@ -135,7 +137,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.13.0...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/akunzai/gistui/releases/tag/v0.14.0
 [0.13.0]: https://github.com/akunzai/gistui/releases/tag/v0.13.0
 [0.12.0]: https://github.com/akunzai/gistui/releases/tag/v0.12.0
 [0.11.0]: https://github.com/akunzai/gistui/releases/tag/v0.11.0
