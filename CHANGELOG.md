@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.1] — 2026-06-23
+
+- Fixed: a gist you own *and* starred no longer shows its files twice in the detail view (it was fetched by both the owned and starred list APIs and merged without deduplication).
+
 ## [0.14.0] — 2026-06-22
 
 - Fixed: owned-fork detection now paginates past 100 gists (the `forked` filter no longer misses forks on large accounts), and a failed fork-detection query surfaces a `fork detection unavailable` hint instead of silently showing no forks.
@@ -137,7 +141,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.14.0...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.14.1...HEAD
+[0.14.1]: https://github.com/akunzai/gistui/releases/tag/v0.14.1
 [0.14.0]: https://github.com/akunzai/gistui/releases/tag/v0.14.0
 [0.13.0]: https://github.com/akunzai/gistui/releases/tag/v0.13.0
 [0.12.0]: https://github.com/akunzai/gistui/releases/tag/v0.12.0
