@@ -771,7 +771,16 @@ impl AppState {
     /// Iterator over every in-memory gist file — owned first, then starred. The shared base
     /// for the many lookups that must search both lists.
     fn all_gist_files(&self) -> impl Iterator<Item = &GistFile> {
-        self.gists.iter().chain(self.starred_gists.iter())
+        // A gist you own *and* starred is fetched by both `/gists` and `/gists/starred`,
+        // so it appears in both lists. Owned takes precedence; skip the starred copy to
+        // avoid showing each of its files twice in the detail view (issue #188).
+        let owned_ids: std::collections::HashSet<&str> =
+            self.gists.iter().map(|g| g.gist_id.as_str()).collect();
+        self.gists.iter().chain(
+            self.starred_gists
+                .iter()
+                .filter(move |g| !owned_ids.contains(g.gist_id.as_str())),
+        )
     }
 
     pub fn gist_owner_login(&self, gist_id: &str) -> String {
