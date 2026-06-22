@@ -3271,6 +3271,35 @@ fn gist_info_line_shows_counts_when_nonzero() {
     assert!(rich.contains(&group.id));
 }
 
+// A gist you own *and* starred lands in both `gists` and `starred_gists`. The detail
+// file list (gist_filenames -> all_gist_files) must not show each file twice (issue #188).
+#[test]
+fn gist_filenames_dedupes_owned_gist_that_is_also_starred() {
+    let make = |filename: &str| GistFile {
+        gist_id: "g1".into(),
+        description: "My ZSH profile".into(),
+        filename: filename.into(),
+        public: true,
+        updated_at: "2026-06-10T00:00:00Z".into(),
+        created_at: "2020-01-01T00:00:00Z".into(),
+        owner_login: "akunzai".into(),
+        fork_of_id: None,
+        raw_url: None,
+        content_type: None,
+        node_id: None,
+    };
+    let mut state = initial_state();
+    state.gists = vec![make(".zprofile"), make(".zshenv"), make(".zshrc")];
+    // Same gist, fetched again from /gists/starred because the owner starred it.
+    state.starred_gists = vec![make(".zprofile"), make(".zshenv"), make(".zshrc")];
+
+    assert_eq!(
+        state.gist_filenames("g1"),
+        vec![".zprofile", ".zshenv", ".zshrc"]
+    );
+    assert_eq!(state.gist_file_display_names("g1").len(), 3);
+}
+
 #[test]
 fn list_filter_routes_chars_to_focused_pane() {
     let mut state = state_with_local_paths(&["/cwd/a.json", "/cwd/b.txt"]);
