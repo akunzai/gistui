@@ -47,7 +47,7 @@ similar = "3"
 synoptic = "2.2.9"
 tar = "0.4"
 toml = "1.1"
-ureq = "2"
+ureq = "3"
 # Only DEFLATE is needed: the Windows release asset is built with PowerShell
 # Compress-Archive (always DEFLATE) and upgrade.rs only reads entries by name.
 zip = { version = "8", default-features = false, features = ["deflate"] }

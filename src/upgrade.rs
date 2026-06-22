@@ -75,23 +75,25 @@ pub struct UreqClient;
 impl ReleaseClient for UreqClient {
     fn fetch_latest_tag(&self) -> Result<String> {
         let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
-        let response = ureq::get(&url)
-            .set("User-Agent", "gistui-upgrader")
-            .set("Accept", "application/vnd.github+json")
+        let mut response = ureq::get(&url)
+            .header("User-Agent", "gistui-upgrader")
+            .header("Accept", "application/vnd.github+json")
             .call()
             .with_context(|| format!("could not query latest release at {url}"))?;
         let body = response
-            .into_string()
+            .body_mut()
+            .read_to_string()
             .context("failed to read latest-release response")?;
         parse_latest_release_tag(body.as_bytes())
     }
 
     fn download(&self, url: &str) -> Result<Vec<u8>> {
-        let response = ureq::get(url)
-            .set("User-Agent", "gistui-upgrader")
+        let mut reader = ureq::get(url)
+            .header("User-Agent", "gistui-upgrader")
             .call()
-            .with_context(|| format!("download failed: {url}"))?;
-        let mut reader = response.into_reader();
+            .with_context(|| format!("download failed: {url}"))?
+            .into_body()
+            .into_reader();
         let mut body = Vec::new();
         reader
             .read_to_end(&mut body)
