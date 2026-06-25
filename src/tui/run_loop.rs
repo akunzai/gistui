@@ -688,9 +688,48 @@ fn copy_preview_content(state: &mut AppState) {
     }
 }
 
+/// Split a `$VISUAL`/`$EDITOR` string into `(program, args)`, injecting a "wait" flag for
+/// known GUI editors that fork and return immediately (`zed`, `code`, `cursor`, `subl`, …).
+/// Without it `Command::status()` returns *before* the user saves, so the caller reads back
+/// the stale, pre-edit buffer — which for the upload redact flow would silently publish the
+/// **un-redacted** original. Terminal editors (`vi`, `nano`, `emacs -nw`) already block and
+/// are left untouched. The file path is appended by the caller, so it always lands last.
+/// Returns `None` only when the string is blank (no program).
+pub(super) fn editor_command(editor: &str) -> Option<(String, Vec<String>)> {
+    let mut parts = editor.split_whitespace();
+    let program = parts.next()?.to_string();
+    let mut args: Vec<String> = parts.map(str::to_string).collect();
+
+    // GUI editors that need an explicit flag to block until the file is closed. All of the
+    // ones below accept `--wait`; key by the program's basename so a full path still matches.
+    let base = std::path::Path::new(&program)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(&program)
+        .to_ascii_lowercase();
+    let needs_wait = matches!(
+        base.as_str(),
+        "code"
+            | "code-insiders"
+            | "codium"
+            | "vscodium"
+            | "cursor"
+            | "windsurf"
+            | "zed"
+            | "subl"
+            | "sublime_text"
+    );
+    if needs_wait && !args.iter().any(|a| a == "--wait" || a == "-w") {
+        args.push("--wait".to_string());
+    }
+
+    Some((program, args))
+}
+
 /// Opens the selected local file in `$VISUAL`/`$EDITOR` (default `vi`). A terminal editor
 /// needs the full terminal, so the TUI leaves raw mode / the alternate screen for the
-/// duration and restores afterwards. `$EDITOR` may include flags (e.g. `code --wait`).
+/// duration and restores afterwards. `$EDITOR` may include flags (e.g. `code --wait`); a
+/// wait flag is added automatically for known GUI editors (see [`editor_command`]).
 fn edit_local(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
@@ -701,12 +740,10 @@ fn edit_local(
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "vi".to_string());
-    let mut parts = editor.split_whitespace();
-    let Some(program) = parts.next() else {
+    let Some((program, args)) = editor_command(&editor) else {
         state.set_status("no editor configured (set $EDITOR)");
         return Ok(());
     };
-    let args: Vec<&str> = parts.collect();
 
     if state.mouse_enabled {
         execute!(terminal.backend_mut(), DisableMouseCapture)?;
@@ -761,13 +798,11 @@ fn edit_upload_buffer(
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "vi".to_string());
-    let mut parts = editor.split_whitespace();
-    let Some(program) = parts.next() else {
+    let Some((program, args)) = editor_command(&editor) else {
         state.set_status("no editor configured (set $EDITOR)");
         let _ = std::fs::remove_file(&temp_file_path);
         return Ok(());
     };
-    let args: Vec<&str> = parts.collect();
 
     if state.mouse_enabled {
         execute!(terminal.backend_mut(), DisableMouseCapture)?;

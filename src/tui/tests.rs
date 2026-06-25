@@ -2430,6 +2430,87 @@ fn confirm_upload_json_toggles() {
     assert!(!state.upload.json_pretty);
 }
 
+// The upload buffer (and the local-file edit) shell out to `$EDITOR` and read the file back
+// once the editor exits. GUI editors that fork and return immediately (zed, code, …) must be
+// given a wait flag, or the read happens before the user saves and the *pre-edit* content is
+// uploaded — silently defeating a redact. `editor_command` injects that flag.
+
+#[test]
+fn editor_command_injects_wait_for_gui_editors() {
+    for ed in ["zed", "code", "code-insiders", "cursor", "windsurf", "subl"] {
+        let (program, args) = super::run_loop::editor_command(ed).unwrap();
+        assert_eq!(program, ed);
+        assert!(
+            args.iter().any(|a| a == "--wait" || a == "-w"),
+            "expected a wait flag for GUI editor {ed:?}, got {args:?}"
+        );
+    }
+}
+
+#[test]
+fn editor_command_matches_gui_editor_by_basename() {
+    // A full path or a `.exe` suffix must still be recognised as a GUI editor.
+    let (program, args) = super::run_loop::editor_command("/usr/local/bin/zed -n").unwrap();
+    assert_eq!(program, "/usr/local/bin/zed");
+    assert_eq!(args, vec!["-n", "--wait"]);
+}
+
+#[test]
+fn editor_command_leaves_terminal_editors_untouched() {
+    for ed in ["vi", "vim", "nvim", "nano", "emacs", "hx"] {
+        let (program, args) = super::run_loop::editor_command(ed).unwrap();
+        assert_eq!(program, ed);
+        assert!(
+            args.is_empty(),
+            "terminal editor {ed:?} should get no injected flag, got {args:?}"
+        );
+    }
+}
+
+#[test]
+fn editor_command_keeps_an_existing_wait_flag() {
+    // Don't duplicate a wait flag the user already configured (either spelling).
+    let (_, args) = super::run_loop::editor_command("code --wait").unwrap();
+    assert_eq!(args, vec!["--wait"]);
+    let (_, args) = super::run_loop::editor_command("subl -w").unwrap();
+    assert_eq!(args, vec!["-w"]);
+}
+
+#[test]
+fn editor_command_blank_is_none() {
+    assert!(super::run_loop::editor_command("").is_none());
+    assert!(super::run_loop::editor_command("   ").is_none());
+}
+
+// Whichever editor is used, the confirmed upload must send the edited (redacted) buffer, not
+// the original file snapshot taken at preview time.
+
+#[test]
+fn content_to_upload_prefers_edited_content() {
+    let mut state = initial_state();
+    state.pending_action = Some(PendingAction::Upload {
+        gist_id: "a".into(),
+        filename: "notes.txt".into(),
+        local_path: PathBuf::from("/tmp/notes.txt"),
+    });
+    state.upload.original_content = "token=abc123secret".into();
+    state.upload.edited_content = Some("token=REDACTED".into());
+    assert_eq!(state.content_to_upload(), "token=REDACTED");
+}
+
+#[test]
+fn content_to_upload_prefers_edited_content_for_json() {
+    let mut state = initial_state();
+    state.pending_action = Some(PendingAction::Upload {
+        gist_id: "a".into(),
+        filename: "settings.json".into(),
+        local_path: PathBuf::from("/tmp/settings.json"),
+    });
+    state.upload.original_content = r#"{"token":"abc123secret"}"#.into();
+    state.upload.edited_content = Some(r#"{"token":"REDACTED"}"#.into());
+    assert_eq!(state.content_to_upload(), r#"{"token":"REDACTED"}"#);
+}
+
 #[test]
 fn n_opens_create_confirm() {
     let mut state = initial_state();

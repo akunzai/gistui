@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Fixed: editing the upload buffer (`e`) or a local file with a GUI editor (`zed`, `code`, `cursor`, `subl`, …) now works even when `$EDITOR`/`$VISUAL` omits a wait flag — gistui adds `--wait` automatically, so it no longer reads the file back before you save and upload the pre-edit (un-redacted) content.
+
 ## [0.14.1] — 2026-06-23
 
 - Fixed: a gist you own *and* starred no longer shows its files twice in the detail view (it was fetched by both the owned and starred list APIs and merged without deduplication).
