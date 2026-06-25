@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.2] — 2026-06-25
+
 - Fixed: editing the upload buffer (`e`) or a local file with a GUI editor (`zed`, `code`, `cursor`, `subl`, …) now works even when `$EDITOR`/`$VISUAL` omits a wait flag — gistui adds `--wait` automatically, so it no longer reads the file back before you save and upload the pre-edit (un-redacted) content.
 
 ## [0.14.1] — 2026-06-23
@@ -143,7 +145,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.14.1...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.14.2...HEAD
+[0.14.2]: https://github.com/akunzai/gistui/releases/tag/v0.14.2
 [0.14.1]: https://github.com/akunzai/gistui/releases/tag/v0.14.1
 [0.14.0]: https://github.com/akunzai/gistui/releases/tag/v0.14.0
 [0.13.0]: https://github.com/akunzai/gistui/releases/tag/v0.13.0
