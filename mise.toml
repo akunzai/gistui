@@ -1,0 +1,47 @@
+# Developer toolchain for gistui, pinned so contributors and CI resolve the same
+# versions. Run `mise install` to provision everything, then `mise run check`
+# before committing. See https://mise.jdx.dev.
+#
+# Note: `gh` is intentionally not pinned here — the shipped app shells out to the
+# user's own `gh` at runtime, so it stays a user-provided dependency.
+
+[tools]
+rust = { version = "stable", components = "rustfmt,clippy" }
+uv = "latest"                    # runs the demo scripts + provisions Python/Pillow on demand
+"aqua:asciinema/agg" = "latest"  # renders docs/demo.gif (aqua: checksum-verified)
+
+# Tasks mirror the AGENTS.md verification gate and demo harness so the same
+# commands run locally and in CI. List them with `mise tasks`.
+
+[tasks.fmt]
+description = "Check formatting (rustfmt)"
+run = "cargo fmt --check"
+
+[tasks.lint]
+description = "Clippy with warnings denied"
+run = "cargo clippy --all-targets -- -D warnings"
+
+[tasks.test]
+description = "Run the test suite (locked)"
+run = "cargo test --locked"
+
+[tasks.check]
+description = "Verification gate — fmt, lint, test, check (all must pass)"
+run = [
+  "cargo fmt --check",
+  "cargo clippy --all-targets -- -D warnings",
+  "cargo test --locked",
+  "cargo check",
+]
+
+[tasks.run]
+description = "Launch the TUI"
+run = "cargo run"
+
+[tasks.demo]
+description = "Regenerate the README demo GIF"
+run = "scripts/demo/record.sh"
+
+[tasks.shots]
+description = "Regenerate the still PNG screenshots"
+run = "scripts/demo/shots.sh"

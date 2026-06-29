@@ -43,7 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/akunzai/gistui/main/install.sh | ba
 On Windows, use the [PowerShell installer](reference/INSTALL.md#windows-powershell) instead of
 piping `install.sh` into `bash`.
 
-Homebrew, Scoop, crates.io, manual download, build-from-source, and self-upgrade
+Homebrew, Scoop, crates.io, mise, manual download, build-from-source, and self-upgrade
 (`gistui --upgrade`) are documented in **[reference/INSTALL.md](reference/INSTALL.md)**.
 
 ## Usage

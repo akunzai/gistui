@@ -54,7 +54,14 @@ so diff/preview syntax highlighting is captured even when the host shell disable
 
 ## Requirements
 
-- `cargo`, `python3`
+`mise install` (from the repo root) provisions `cargo`, `uv`, and `agg` from the
+pinned [`mise.toml`](../../mise.toml); `mise run demo` then wraps `record.sh`.
+The Python helpers run through `uv run`, which provisions the interpreter (and
+Pillow, for screenshots) on demand — no manual virtualenv. The interpreter
+version is pinned in [`.python-version`](.python-version) and picked up
+automatically. To set them up manually instead:
+
+- `cargo`, [`uv`](https://docs.astral.sh/uv/)
 - [`agg`](https://github.com/asciinema/agg) — `brew install agg`
 - A monospace font with box-drawing + emoji glyphs (default `JetBrains Mono` +
   `Apple Color Emoji`; override with `FONT=`).
@@ -93,7 +100,7 @@ extracts the frame to a PNG with Pillow. Each entry in the `SHOTS` array maps
 
 `shoot.py` differs from `record.py` in one way: it writes the cast *before* the
 TUI tears down, so leaving the alternate screen never blanks the captured frame.
-Pillow is installed automatically into `scripts/demo/.venv` (kept out of the
-system python per PEP 668; gitignored), so no extra setup is needed.
+Pillow is pulled in on demand via `uv run --with pillow`, so no manual setup or
+virtualenv is needed.
 
 Tunables (env): `FONT`, `FONT_SIZE`, `COLS` / `ROWS`, `OUT_DIR` (default `docs/`).
