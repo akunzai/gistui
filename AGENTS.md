@@ -4,18 +4,27 @@
 
 ## Build / Test / Run
 
+The dev toolchain (Rust + components, `agg`, and `uv` for the demo's Python
+helpers) is pinned in [`mise.toml`](mise.toml). Run `mise install` once to
+provision it; `mise tasks` lists the wrappers. `gh` is **not** pinned — it is a
+user-provided runtime dependency. Plain `cargo` still works if you manage your
+own toolchain.
+
 ```bash
+mise install            # provision the pinned toolchain (one-time)
 cargo run               # launch the TUI (needs a TTY)
 cargo run -- --check    # print gh readiness, then exit (no TUI)
 cargo test              # full suite; must NOT touch the network or require gh auth
-scripts/demo/record.sh  # regenerate the README demo GIF; re-run after any UI change
+mise run demo           # regenerate the README demo GIF; re-run after any UI change
+mise run shots          # regenerate the still PNG screenshots (docs/*.png)
 ```
 
 The demo recording harness (`scripts/demo/`) drives the **real** binary in a pseudo-tty against a **fake `gh`** over fake data, then renders `docs/demo.gif` with `agg`. Only the GIF is versioned (the cast is a throwaway intermediate). Edit `storyboard.json` to change what the demo shows; see `scripts/demo/README.md`.
 
 ## Verification Gate (run before every commit)
 
-All four MUST pass — the project treats clippy warnings as errors:
+All four MUST pass — the project treats clippy warnings as errors. Run them
+together with `mise run check`, or individually:
 
 ```bash
 cargo fmt --check

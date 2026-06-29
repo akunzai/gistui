@@ -95,6 +95,21 @@ Or grab the same checksummed release binaries without compiling, via
 cargo binstall gistui
 ```
 
+## mise
+
+[mise](https://mise.jdx.dev) can install and version-manage `gistui` through its
+`cargo` backend (the same crates.io crate as above):
+
+```bash
+mise use -g cargo:gistui          # latest; pin with cargo:gistui@X.Y.Z
+```
+
+By default mise reuses the checksummed release binaries via
+[`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) (honouring the
+`[package.metadata.binstall]` mapping in `Cargo.toml`), so no compilation is
+needed on supported targets. To force a source build instead, set
+`mise settings cargo.binstall=false`.
+
 ## Build from source
 
 With a Rust toolchain, install into `~/.cargo/bin` (make sure that directory is on your

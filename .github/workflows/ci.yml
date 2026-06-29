@@ -17,22 +17,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # mise.toml is the single source of truth for the toolchain (rust +
+      # components, plus dev tools). rust-cache still handles cargo artifacts.
+      - name: Set up toolchain (mise)
+        uses: jdx/mise-action@v4
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
-        run: cargo fmt --check
+        run: mise run fmt
 
       - name: Clippy (deny warnings)
-        run: cargo clippy --all-targets -- -D warnings
+        run: mise run lint
 
       - name: Test
-        run: cargo test --locked
+        run: mise run test
 
       - name: Build
         run: cargo build --locked --release

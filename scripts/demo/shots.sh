@@ -8,8 +8,9 @@
 # Pipeline per shot: drive the real TUI to one screen (shoot.py) -> render the
 # captured frame to a GIF with agg -> extract that frame to a PNG with Pillow.
 #
-# Requirements: cargo, python3, agg, and a monospace font with box-drawing +
-# emoji glyphs. Pillow is installed automatically into scripts/demo/.venv.
+# Requirements: cargo, uv (runs the Python helpers), agg, and a monospace font
+# with box-drawing + emoji glyphs. uv pulls in Pillow on demand (--with pillow),
+# so no manual virtualenv is needed.
 #
 # Tunables (env): FONT, FONT_SIZE, COLS, ROWS, OUT_DIR.
 set -euo pipefail
@@ -24,17 +25,15 @@ OUT_DIR="${OUT_DIR:-$REPO_ROOT/docs}"
 # Each shot drives scripts/demo/shots/<name>.json and writes $OUT_DIR/<name>.png.
 SHOTS=("gist-manager")
 
-for tool in cargo python3 agg; do
+# Python helpers run through `uv run`, which provisions the interpreter on demand
+# (version from scripts/demo/.python-version, discovered via `--directory`). The
+# seed/drive helpers are stdlib only; last_frame.py needs Pillow (--with).
+PY=(uv run --no-project --directory "$SCRIPT_DIR" python)
+PY_PILLOW=(uv run --no-project --directory "$SCRIPT_DIR" --with pillow python)
+
+for tool in cargo uv agg; do
   command -v "$tool" >/dev/null 2>&1 || { echo "error: '$tool' not found on PATH" >&2; exit 1; }
 done
-
-# Pillow lives in an isolated venv so the system python stays clean (PEP 668).
-VENV="$SCRIPT_DIR/.venv"
-if [ ! -x "$VENV/bin/python" ]; then
-  echo "==> creating venv + installing Pillow ($VENV)"
-  python3 -m venv "$VENV"
-  "$VENV/bin/python" -m pip install --quiet --upgrade pip pillow
-fi
 
 echo "==> building gistui (release)"
 cargo build --release --manifest-path "$REPO_ROOT/Cargo.toml"
@@ -62,16 +61,16 @@ for name in "${SHOTS[@]}"; do
   [ -f "$steps" ] || { echo "error: missing storyboard $steps" >&2; exit 1; }
 
   echo "==> [$name] seeding fake gist store + workdir"
-  python3 "$SCRIPT_DIR/seed.py" >/dev/null
+  "${PY[@]}" "$SCRIPT_DIR/seed.py" >/dev/null
 
   echo "==> [$name] driving TUI to the target screen"
-  GISTUI_DEMO_STEPS="$steps" python3 "$SCRIPT_DIR/shoot.py"
+  GISTUI_DEMO_STEPS="$steps" "${PY[@]}" "$SCRIPT_DIR/shoot.py"
 
   gif="$WORKSPACE/$name.gif"
   echo "==> [$name] rendering frame"
   agg --font-family "$FONT" --font-size "$FONT_SIZE" "$GISTUI_DEMO_CAST" "$gif" >/dev/null 2>&1
 
-  "$VENV/bin/python" "$SCRIPT_DIR/last_frame.py" "$gif" "$OUT_DIR/$name.png"
+  "${PY_PILLOW[@]}" "$SCRIPT_DIR/last_frame.py" "$gif" "$OUT_DIR/$name.png"
 done
 
 echo "==> done"
