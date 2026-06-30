@@ -38,10 +38,14 @@ run = [
 description = "Launch the TUI"
 run = "cargo run"
 
-[tasks.demo]
+[tasks.demo-gif]
 description = "Regenerate the README demo GIF"
 run = "scripts/demo/record.sh"
 
-[tasks.shots]
+[tasks.demo-png]
 description = "Regenerate the still PNG screenshots"
 run = "scripts/demo/shots.sh"
+
+[tasks.demo]
+description = "Regenerate all demo media (GIF + still PNGs)"
+depends = ["demo-gif", "demo-png"]
