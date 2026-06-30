@@ -55,7 +55,9 @@ so diff/preview syntax highlighting is captured even when the host shell disable
 ## Requirements
 
 `mise install` (from the repo root) provisions `cargo`, `uv`, and `agg` from the
-pinned [`mise.toml`](../../mise.toml); `mise run demo` then wraps `record.sh`.
+pinned [`mise.toml`](../../mise.toml); `mise run demo-gif` then wraps `record.sh`
+(and `mise run demo-png` wraps `shots.sh`; `mise run demo` regenerates all media
+— the GIF and the still PNGs — by depending on both).
 The Python helpers run through `uv run`, which provisions the interpreter (and
 Pillow, for screenshots) on demand — no manual virtualenv. The interpreter
 version is pinned in [`.python-version`](.python-version) and picked up
