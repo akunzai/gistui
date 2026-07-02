@@ -4365,6 +4365,37 @@ fn pin_mtimes_local_falls_back_to_disk_when_not_discovered() {
 }
 
 #[test]
+fn pin_sync_status_is_missing_when_local_file_absent() {
+    // A pinned local path that doesn't exist on disk should report Missing,
+    // not the generic Unknown ambiguity used when a timestamp is merely
+    // unavailable for other reasons.
+    let dir = tempfile::tempdir().unwrap();
+    let gone = dir.path().join("settings.json");
+    // Deliberately never created — this path must not exist.
+
+    let mut state = initial_state();
+    state.locals.clear();
+    state.pinned = vec![crate::domain::PinnedMapping {
+        local_path: gone,
+        gist_id: "g1".into(),
+        gist_filename: "settings.json".into(),
+        direction: None,
+        last_seen_hash: None,
+    }];
+    state.gists = vec![GistFile {
+        updated_at: "2026-01-01T00:00:00Z".into(),
+        ..GistFile::for_sync("g1".into(), "settings.json".into(), None)
+    }];
+
+    assert_eq!(
+        state.pin_sync_status(0),
+        crate::domain::SyncStatus::Missing,
+        "a pin whose local file doesn't exist must report Missing even though \
+         the gist side has a known mtime"
+    );
+}
+
+#[test]
 fn forked_filter_shows_only_forks() {
     let mut state = initial_state();
     state.gists = vec![

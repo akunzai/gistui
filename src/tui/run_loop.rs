@@ -2272,6 +2272,9 @@ fn dispatch_outcome(
                 crate::domain::SyncStatus::Push => spawn_pin_push(state, &mut channels.bg, &m),
                 crate::domain::SyncStatus::Pull => spawn_pin_pull(state, &mut channels.bg, &m),
                 crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
+                crate::domain::SyncStatus::Missing => {
+                    state.set_status("local file is missing — use d to pull it back")
+                }
                 crate::domain::SyncStatus::Unknown => {
                     state.set_status("can't tell which side is newer — use u to push or d to pull")
                 }
@@ -2313,6 +2316,9 @@ fn dispatch_outcome(
                     } else {
                         spawn_pin_push(state, &mut channels.bg, &m);
                     }
+                }
+                crate::domain::SyncStatus::Missing => {
+                    state.set_status("local file is missing — use d to pull it back")
                 }
                 crate::domain::SyncStatus::Unknown => {
                     state.set_status("can't tell which side is newer — use u to push or d to pull")
