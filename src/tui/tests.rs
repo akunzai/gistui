@@ -2733,6 +2733,31 @@ fn apply_upload_edit_event_discards_when_a_different_upload_is_now_pending() {
 }
 
 #[test]
+fn apply_upload_edit_event_discards_stale_event_after_cancel_reentry_same_identity() {
+    let mut state = initial_state();
+    // Simulates: user cancelled a GUI-editor watch session (n resets watching to false but
+    // does NOT kill the background thread), then re-entered upload for the SAME gist/file
+    // without pressing `e` again. An event from the abandoned first session's thread must
+    // not silently overwrite this new, non-watching session's content.
+    state.screen = Screen::Confirm;
+    state.pending_action = Some(upload_pending("a", "notes.txt"));
+    state.upload.watching = false; // never re-entered edit mode this session
+    state.upload.edited_content = None;
+
+    state.apply_upload_edit_event(super::run_loop::UploadEditWatchEvent::ContentChanged {
+        gist_id: "a".into(),
+        filename: "notes.txt".into(),
+        content: "leaked from abandoned session".into(),
+    });
+
+    assert_eq!(
+        state.upload.edited_content, None,
+        "an event from an abandoned (cancelled, still-running) watch session must not \
+         leak into a new, non-watching session with the same gist/file identity"
+    );
+}
+
+#[test]
 fn n_opens_create_confirm() {
     let mut state = initial_state();
     state.locals = vec![LocalCandidate {
