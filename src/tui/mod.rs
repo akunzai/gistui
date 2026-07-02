@@ -1663,6 +1663,15 @@ pub fn run(no_mouse: bool, no_update_check: bool) -> Result<()> {
 }
 
 impl AppState {
+    /// Resolve a pin's absolute local path against `cwd`.
+    fn pin_local_abs(&self, m: &crate::domain::PinnedMapping) -> PathBuf {
+        if m.local_path.is_absolute() {
+            m.local_path.clone()
+        } else {
+            self.cwd.join(&m.local_path)
+        }
+    }
+
     /// `(local_ts, remote_ts)` Unix-seconds for `pinned[index]`. The remote side comes
     /// from the matching gist's in-memory `updated_at`; the local side prefers the
     /// discovered candidate's mtime and falls back to stat-ing the path on disk.
@@ -1670,11 +1679,7 @@ impl AppState {
         let Some(m) = self.pinned.get(index) else {
             return (None, None);
         };
-        let local_abs = if m.local_path.is_absolute() {
-            m.local_path.clone()
-        } else {
-            self.cwd.join(&m.local_path)
-        };
+        let local_abs = self.pin_local_abs(m);
         let local_ts = self
             .locals
             .iter()
@@ -1698,12 +1703,33 @@ impl AppState {
         (local_ts, remote_ts)
     }
 
-    /// Derive the [`SyncStatus`] for `pinned[index]` from in-memory mtimes.
-    /// Local mtime comes from the matching local candidate (if discovered);
-    /// remote mtime from the matching gist's `updated_at`.
+    /// Derive the [`SyncStatus`] for `pinned[index]` from in-memory mtimes, with a
+    /// content-hash fallback: when the timestamps disagree (`Push`/`Pull`) but the local
+    /// file's current content still hashes to the pin's `last_seen_hash` baseline, report
+    /// `InSync` instead — the timestamp drifted but nothing actually changed. The extra
+    /// file read only happens for this ambiguous, has-a-baseline case, not on every pin.
     pub fn pin_sync_status(&self, index: usize) -> crate::domain::SyncStatus {
         let (local_ts, remote_ts) = self.pin_mtimes(index);
-        crate::domain::sync_status(local_ts, remote_ts)
+        let status = crate::domain::sync_status(local_ts, remote_ts);
+        if !matches!(
+            status,
+            crate::domain::SyncStatus::Push | crate::domain::SyncStatus::Pull
+        ) {
+            return status;
+        }
+        let Some(m) = self.pinned.get(index) else {
+            return status;
+        };
+        let Some(baseline) = m.last_seen_hash.as_deref() else {
+            return status;
+        };
+        let local_abs = self.pin_local_abs(m);
+        match std::fs::read(&local_abs) {
+            Ok(bytes) if crate::domain::sha256_hex(&bytes) == baseline => {
+                crate::domain::SyncStatus::InSync
+            }
+            _ => status,
+        }
     }
 }
 
