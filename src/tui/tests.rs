@@ -2479,6 +2479,26 @@ fn confirm_upload_n_cancels_and_resets_watching() {
 }
 
 #[test]
+fn confirm_upload_n_cancels_to_diff_return_screen() {
+    let mut state = initial_state();
+    state.pending_action = Some(PendingAction::Upload {
+        gist_id: "a".into(),
+        filename: "settings.json".into(),
+        local_path: PathBuf::from("/tmp/settings.json"),
+    });
+    state.screen = Screen::Confirm;
+    state.diff_return = Screen::Pins;
+
+    assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
+    assert!(state.pending_action.is_none());
+    assert_eq!(
+        state.screen,
+        Screen::Pins,
+        "cancelling an upload initiated from Pins must return to Pins, not always List"
+    );
+}
+
+#[test]
 fn confirm_upload_json_toggles() {
     let mut state = initial_state();
     state.pending_action = Some(PendingAction::Upload {

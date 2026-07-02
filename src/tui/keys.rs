@@ -1428,7 +1428,9 @@ impl AppState {
                 KeyCode::Char('y') => return KeyOutcome::Upload,
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     self.pending_action = None;
-                    self.screen = Screen::List;
+                    // Return to wherever the upload was initiated from (List, or Pins for
+                    // a pin push) instead of always snapping back to List.
+                    self.screen = self.diff_return;
                     // The background watch thread (if any) is not force-killed — it cleans
                     // itself up once the editor closes. Reset the flag now so a stale
                     // late-arriving event (see AppState::apply_upload_edit_event) doesn't
