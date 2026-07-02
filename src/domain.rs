@@ -28,6 +28,8 @@ pub enum SyncStatus {
     Push,
     /// Remote is newer → download the gist into the local file.
     Pull,
+    /// The local file could not be stat-ed (almost always: it no longer exists).
+    Missing,
     /// A timestamp is unavailable — direction cannot be suggested.
     Unknown,
 }
@@ -39,19 +41,23 @@ impl SyncStatus {
             SyncStatus::InSync => "✓",
             SyncStatus::Push => "↑",
             SyncStatus::Pull => "↓",
+            SyncStatus::Missing => "✕",
             SyncStatus::Unknown => "?",
         }
     }
 }
 
 /// Pure decision: which side is newer? `local_ts`/`remote_ts` are Unix seconds;
-/// `None` means the timestamp was unavailable.
+/// `None` means the timestamp was unavailable. A missing `local_ts` always means
+/// `Missing`, regardless of `remote_ts` — that's a stronger, more actionable fact
+/// than "remote timestamp unknown" (which stays `Unknown`).
 pub fn sync_status(local_ts: Option<u64>, remote_ts: Option<u64>) -> SyncStatus {
     match (local_ts, remote_ts) {
+        (None, _) => SyncStatus::Missing,
         (Some(l), Some(r)) if l > r => SyncStatus::Push,
         (Some(l), Some(r)) if r > l => SyncStatus::Pull,
         (Some(_), Some(_)) => SyncStatus::InSync,
-        _ => SyncStatus::Unknown,
+        (Some(_), None) => SyncStatus::Unknown,
     }
 }
 
@@ -400,9 +406,17 @@ mod tests {
         assert_eq!(sync_status(Some(20), Some(10)), SyncStatus::Push); // local newer
         assert_eq!(sync_status(Some(10), Some(20)), SyncStatus::Pull); // remote newer
         assert_eq!(sync_status(Some(15), Some(15)), SyncStatus::InSync);
-        assert_eq!(sync_status(None, Some(10)), SyncStatus::Unknown);
-        assert_eq!(sync_status(Some(10), None), SyncStatus::Unknown);
-        assert_eq!(sync_status(None, None), SyncStatus::Unknown);
+        assert_eq!(
+            sync_status(None, Some(10)),
+            SyncStatus::Missing,
+            "local file is gone (or unreadable) even though the gist has a known mtime"
+        );
+        assert_eq!(sync_status(Some(10), None), SyncStatus::Unknown); // local exists, remote mtime unknown
+        assert_eq!(
+            sync_status(None, None),
+            SyncStatus::Missing,
+            "local missing takes priority even when remote mtime is also unknown"
+        );
     }
 
     #[test]
@@ -410,6 +424,7 @@ mod tests {
         assert_eq!(SyncStatus::InSync.icon(), "✓");
         assert_eq!(SyncStatus::Push.icon(), "↑");
         assert_eq!(SyncStatus::Pull.icon(), "↓");
+        assert_eq!(SyncStatus::Missing.icon(), "✕");
         assert_eq!(SyncStatus::Unknown.icon(), "?");
     }
 
