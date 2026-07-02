@@ -1149,9 +1149,6 @@ struct BgChannels {
     /// open (see `spawn_upload_edit_watch`). Unlike the other fields above (one-shot
     /// results), this channel can carry multiple `ContentChanged` events before its
     /// terminal `EditorClosed`/`ReadError` — drained in a loop in `absorb_background_results`.
-    // Read by Task 5's absorb_background_results drain loop, landing in a later commit on this
-    // branch.
-    #[allow(dead_code)]
     upload_edit_watch: Option<std::sync::mpsc::Receiver<UploadEditWatchEvent>>,
     bg: BgRx,
 }
@@ -1307,6 +1304,28 @@ fn absorb_background_results(
                 crate::update_check::UpdateCheckOutcome::Failed => {}
             }
         }
+    }
+
+    // Absorb upload-edit-watch events. Unlike the other channels above (one-shot), this one
+    // can carry several `ContentChanged` events before its terminal EditorClosed/ReadError —
+    // drain all of them so a burst of saves doesn't lag a tick behind.
+    let mut upload_watch_finished = false;
+    if let Some(ref rx) = channels.upload_edit_watch {
+        while let Ok(event) = rx.try_recv() {
+            if matches!(
+                event,
+                UploadEditWatchEvent::EditorClosed { .. } | UploadEditWatchEvent::ReadError { .. }
+            ) {
+                upload_watch_finished = true;
+            }
+            state.apply_upload_edit_event(event);
+            if upload_watch_finished {
+                break;
+            }
+        }
+    }
+    if upload_watch_finished {
+        channels.upload_edit_watch = None;
     }
 
     // Absorb a completed background per-action task.

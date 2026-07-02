@@ -759,9 +759,6 @@ impl AppState {
     /// upload state. Discarded (no-op) if the Confirm/Upload context has since moved on — the
     /// user left Confirm, or a different upload edit session is now in progress — identified
     /// by comparing the event's `gist_id`/`filename` against the current `PendingAction::Upload`.
-    // Wired up by Task 4 (spawn_upload_edit_watch) and Task 5 (absorb_background_results) later
-    // in this branch — no caller yet.
-    #[allow(dead_code)]
     fn apply_upload_edit_event(&mut self, event: run_loop::UploadEditWatchEvent) {
         use run_loop::UploadEditWatchEvent as Ev;
         let (event_gist_id, event_filename) = match &event {
