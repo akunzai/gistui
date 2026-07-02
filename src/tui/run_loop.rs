@@ -542,6 +542,7 @@ fn pin_local_abs(state: &AppState, m: &crate::domain::PinnedMapping) -> PathBuf 
 /// Spawn the push (upload local → gist) flow for a pin: lands in the existing
 /// upload `Screen::Confirm` diff.
 fn spawn_pin_push(state: &mut AppState, bg_rx: &mut BgRx, m: &crate::domain::PinnedMapping) {
+    state.diff_return = Screen::Pins;
     let local_path = pin_local_abs(state, m);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
@@ -1487,7 +1488,11 @@ fn absorb_background_results(
                                 crate::domain::SyncDirection::Upload,
                             );
                         }
+                        // Return to wherever this upload was initiated from (List, or Pins
+                        // for a pin push) instead of always snapping to List.
+                        let return_screen = state.diff_return;
                         state.back_to_list();
+                        state.screen = return_screen;
                         state.loading = true;
                         channels.gist = Some(spawn_gist_fetch());
                     }
@@ -1927,6 +1932,9 @@ fn dispatch_outcome(
                 };
                 (state.preview_local.clone(), gist_id)
             } else {
+                // List-originated upload: reset any leftover Pins origin from an earlier
+                // pin push (mirrors KeyOutcome::PreviewDiff's own reset).
+                state.diff_return = Screen::List;
                 let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist())
                 else {
                     return Ok(LoopFlow::Proceed);
@@ -1973,6 +1981,9 @@ fn dispatch_outcome(
                     .unwrap_or_else(|| GistFile::for_sync(gist_id.clone(), filename.clone(), None));
                 (local_path, gist_id, gist_file)
             } else {
+                // List-originated upload: reset any leftover Pins origin from an earlier
+                // pin push (mirrors KeyOutcome::PreviewDiff's own reset).
+                state.diff_return = Screen::List;
                 let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist())
                 else {
                     return Ok(LoopFlow::Proceed);
@@ -2045,7 +2056,11 @@ fn dispatch_outcome(
                 crate::actions::upload_add_command(&temp_file_path, &gist_id)
             };
 
+            // Return to wherever this upload was initiated from (List, or Pins for a pin
+            // push) instead of always snapping to List (mirrors download()).
+            let return_screen = state.diff_return;
             state.back_to_list();
+            state.screen = return_screen;
             spawn_bg(state, &mut channels.bg, "Uploading…", move || {
                 let result = crate::actions::execute_command(&plan)
                     .map(|_| ())

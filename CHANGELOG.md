@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Editing the upload redact buffer (`e` on the upload confirm) in a GUI editor (`zed`, `code`, `cursor`, `subl`, …) now live-updates the diff as you save, instead of only refreshing after you close the editor; `y`/`e` are disabled until you do. Terminal editors are unchanged.
 - Fixed: a diff line whose old-side text has no trailing newline (and is no longer the file's last line) no longer merges with the line that follows it into one malformed row in the diff view.
+- Fixed: completing or cancelling an upload started from the Pins view now stays on the Pins view instead of returning to the File List view.
 
 ## [0.14.2] — 2026-06-25
 
