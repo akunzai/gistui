@@ -42,6 +42,9 @@ pub fn unified_diff(
         };
         out.push_str(sign);
         out.push_str(change.value());
+        if change.missing_newline() {
+            out.push('\n');
+        }
     }
 
     out
@@ -119,6 +122,23 @@ mod tests {
         assert!(!diff.contains("-}"));
         assert!(!diff.contains("+}"));
         assert!(diff.contains(" }"));
+    }
+
+    #[test]
+    fn missing_newline_on_a_non_final_line_does_not_merge_into_the_next() {
+        // Regression: `old`'s last line has no trailing newline, but `new` appends more
+        // content after that same line, so it is no longer the diff's true final line.
+        // Without compensating for `Change::missing_newline`, the delete and the following
+        // insert/change were concatenated onto a single raw line (no `\n` between them).
+        let old = "a\nreset-author = x";
+        let new = "a\nreset-author = x\ncleanup = y\n";
+        let diff = unified_diff("gist", old, "local", new, false);
+        let lines: Vec<&str> = diff.lines().collect();
+        assert!(lines.contains(&"-reset-author = x"));
+        assert!(lines.contains(&"+reset-author = x"));
+        assert!(lines.contains(&"+cleanup = y"));
+        // Each change lands on its own line — none of them got glued together.
+        assert!(!lines.iter().any(|l| l.contains("x+")));
     }
 
     #[test]

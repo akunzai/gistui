@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Fixed: a diff line whose old-side text has no trailing newline (and is no longer the file's last line) no longer merges with the line that follows it into one malformed row in the diff view.
+
 ## [0.14.2] — 2026-06-25
 
 - Fixed: editing the upload buffer (`e`) or a local file with a GUI editor (`zed`, `code`, `cursor`, `subl`, …) now works even when `$EDITOR`/`$VISUAL` omits a wait flag — gistui adds `--wait` automatically, so it no longer reads the file back before you save and upload the pre-edit (un-redacted) content.
