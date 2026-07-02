@@ -688,6 +688,35 @@ fn copy_preview_content(state: &mut AppState) {
     }
 }
 
+/// Whether `program`'s basename matches a known GUI editor that forks and returns
+/// immediately (so it both needs `--wait` injected by `editor_command`, and — for the
+/// upload-redact-buffer flow — can be watched non-blocking instead of taking over the
+/// terminal). Keyed by basename so a full path or a `.exe` suffix still matches.
+pub(super) fn editor_is_gui(program: &str) -> bool {
+    // Extract basename handling both Unix (/) and Windows (\) separators, then strip .exe if present.
+    let basename = program
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(program);
+    let base = std::path::Path::new(basename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(basename)
+        .to_ascii_lowercase();
+    matches!(
+        base.as_str(),
+        "code"
+            | "code-insiders"
+            | "codium"
+            | "vscodium"
+            | "cursor"
+            | "windsurf"
+            | "zed"
+            | "subl"
+            | "sublime_text"
+    )
+}
+
 /// Split a `$VISUAL`/`$EDITOR` string into `(program, args)`, injecting a "wait" flag for
 /// known GUI editors that fork and return immediately (`zed`, `code`, `cursor`, `subl`, …).
 /// Without it `Command::status()` returns *before* the user saves, so the caller reads back
@@ -700,26 +729,7 @@ pub(super) fn editor_command(editor: &str) -> Option<(String, Vec<String>)> {
     let program = parts.next()?.to_string();
     let mut args: Vec<String> = parts.map(str::to_string).collect();
 
-    // GUI editors that need an explicit flag to block until the file is closed. All of the
-    // ones below accept `--wait`; key by the program's basename so a full path still matches.
-    let base = std::path::Path::new(&program)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(&program)
-        .to_ascii_lowercase();
-    let needs_wait = matches!(
-        base.as_str(),
-        "code"
-            | "code-insiders"
-            | "codium"
-            | "vscodium"
-            | "cursor"
-            | "windsurf"
-            | "zed"
-            | "subl"
-            | "sublime_text"
-    );
-    if needs_wait && !args.iter().any(|a| a == "--wait" || a == "-w") {
+    if editor_is_gui(&program) && !args.iter().any(|a| a == "--wait" || a == "-w") {
         args.push("--wait".to_string());
     }
 

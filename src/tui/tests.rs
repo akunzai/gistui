@@ -2482,6 +2482,42 @@ fn editor_command_blank_is_none() {
     assert!(super::run_loop::editor_command("   ").is_none());
 }
 
+#[test]
+fn editor_is_gui_matches_known_gui_editors() {
+    for ed in [
+        "zed",
+        "code",
+        "code-insiders",
+        "codium",
+        "vscodium",
+        "cursor",
+        "windsurf",
+        "subl",
+        "sublime_text",
+    ] {
+        assert!(
+            super::run_loop::editor_is_gui(ed),
+            "{ed} should be recognised as a GUI editor"
+        );
+    }
+}
+
+#[test]
+fn editor_is_gui_rejects_terminal_editors() {
+    for ed in ["vi", "vim", "nvim", "nano", "emacs", "hx"] {
+        assert!(
+            !super::run_loop::editor_is_gui(ed),
+            "{ed} should not be recognised as a GUI editor"
+        );
+    }
+}
+
+#[test]
+fn editor_is_gui_matches_by_basename_from_full_path() {
+    assert!(super::run_loop::editor_is_gui("/usr/local/bin/zed"));
+    assert!(super::run_loop::editor_is_gui("C:\\Tools\\code.exe"));
+}
+
 // Whichever editor is used, the confirmed upload must send the edited (redacted) buffer, not
 // the original file snapshot taken at preview time.
 
