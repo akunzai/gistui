@@ -10,10 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-07-02
+
 - Editing the upload redact buffer (`e` on the upload confirm) in a GUI editor (`zed`, `code`, `cursor`, `subl`, …) now live-updates the diff as you save, instead of only refreshing after you close the editor; `y`/`e` are disabled until you do. Terminal editors are unchanged.
 - Fixed: a diff line whose old-side text has no trailing newline (and is no longer the file's last line) no longer merges with the line that follows it into one malformed row in the diff view.
 - Fixed: completing or cancelling an upload started from the Pins view now stays on the Pins view instead of returning to the File List view.
 - Pins view: a pinned entry whose local file no longer exists on disk is now flagged in the list (a distinct `✕` icon and a red row) instead of only surfacing as an error after you select or act on it.
+- Pins view: a pinned entry whose content is actually identical on both sides now shows the synced (`✓`) indicator instead of a misleading push/pull arrow, even if the local and gist timestamps differ.
 
 ## [0.14.2] — 2026-06-25
 
@@ -150,7 +153,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.14.2...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/akunzai/gistui/releases/tag/v0.15.0
 [0.14.2]: https://github.com/akunzai/gistui/releases/tag/v0.14.2
 [0.14.1]: https://github.com/akunzai/gistui/releases/tag/v0.14.1
 [0.14.0]: https://github.com/akunzai/gistui/releases/tag/v0.14.0
