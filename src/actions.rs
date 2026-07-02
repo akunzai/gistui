@@ -517,10 +517,10 @@ pub fn pin_mapping(
     Ok(config)
 }
 
-/// Record the result of a successful sync for the pin identified by
-/// `(local_path, gist_id, gist_filename)`: set `last_seen_hash` to the agreed
-/// content hash and `direction` to the direction performed, then persist.
-/// No-op if the pin is not found.
+/// Records that `local_path`'s content (hashed to `hash`) is now known to match the gist side.
+/// `direction: Some(d)` also records which action produced that state (an actual push/pull);
+/// `None` means the match was passively confirmed (e.g. a diff turned out identical) — the
+/// mapping's existing `direction` is left untouched in that case.
 pub fn record_sync(
     config_path: &Path,
     mut config: AppConfig,
@@ -528,13 +528,15 @@ pub fn record_sync(
     gist_id: &str,
     gist_filename: &str,
     hash: &str,
-    direction: SyncDirection,
+    direction: Option<SyncDirection>,
 ) -> Result<AppConfig> {
     if let Some(mapping) = config.pinned.iter_mut().find(|m| {
         m.local_path == local_path && m.gist_id == gist_id && m.gist_filename == gist_filename
     }) {
         mapping.last_seen_hash = Some(hash.to_string());
-        mapping.direction = Some(direction);
+        if let Some(direction) = direction {
+            mapping.direction = Some(direction);
+        }
         save_config(config_path, &config)?;
     }
     Ok(config)
@@ -992,13 +994,51 @@ mod tests {
             "g1",
             "a.txt",
             "deadbeef",
-            SyncDirection::Upload,
+            Some(SyncDirection::Upload),
         )
         .unwrap();
 
         let m = &updated.pinned[0];
         assert_eq!(m.last_seen_hash.as_deref(), Some("deadbeef"));
         assert_eq!(m.direction, Some(SyncDirection::Upload));
+    }
+
+    #[test]
+    fn record_sync_with_none_direction_updates_hash_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = dir.path().join("config.toml");
+        let mut config = AppConfig::default();
+        config.pinned.push(PinnedMapping {
+            local_path: PathBuf::from("/tmp/a.txt"),
+            gist_id: "g1".into(),
+            gist_filename: "a.txt".into(),
+            direction: Some(SyncDirection::Download),
+            last_seen_hash: Some("stale".into()),
+        });
+
+        let updated = record_sync(
+            &cfg_path,
+            config,
+            Path::new("/tmp/a.txt"),
+            "g1",
+            "a.txt",
+            "freshhash",
+            None,
+        )
+        .unwrap();
+
+        let m = &updated.pinned[0];
+        assert_eq!(
+            m.last_seen_hash.as_deref(),
+            Some("freshhash"),
+            "the hash must still update even when no direction is recorded"
+        );
+        assert_eq!(
+            m.direction,
+            Some(SyncDirection::Download),
+            "a None direction must leave the mapping's prior direction untouched, \
+             not clear it — this call means \"confirmed equal\", not \"synced\""
+        );
     }
 
     #[test]
