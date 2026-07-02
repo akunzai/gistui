@@ -119,6 +119,36 @@ pub(super) fn run_loop(
     Ok(())
 }
 
+/// Emitted by the background thread `spawn_upload_edit_watch` spawns while a GUI editor has
+/// the upload-redact temp file open. `gist_id`/`filename` (the target `PendingAction::Upload`
+/// identity) ride along on every variant so `AppState::apply_upload_edit_event` can detect a
+/// stale event (the user left Confirm, or started a different upload edit) and discard it.
+// Wired up by Task 4 (spawn_upload_edit_watch) and Task 5 (absorb_background_results) later in
+// this branch — no caller yet.
+#[allow(dead_code)]
+pub(super) enum UploadEditWatchEvent {
+    /// The temp file's mtime changed — re-read and live-update the diff.
+    ContentChanged {
+        gist_id: String,
+        filename: String,
+        content: String,
+    },
+    /// The editor process exited; this is the final content, and the temp file has already
+    /// been deleted by the sending thread.
+    EditorClosed {
+        gist_id: String,
+        filename: String,
+        content: String,
+    },
+    /// Either the editor failed to start, or the final read after it closed failed. The temp
+    /// file has already been cleaned up (best-effort) by the sending thread.
+    ReadError {
+        gist_id: String,
+        filename: String,
+        message: String,
+    },
+}
+
 enum BgTaskOutcome {
     PreviewDiff {
         result: std::result::Result<String, String>,
@@ -694,10 +724,7 @@ fn copy_preview_content(state: &mut AppState) {
 /// terminal). Keyed by basename so a full path or a `.exe` suffix still matches.
 pub(super) fn editor_is_gui(program: &str) -> bool {
     // Extract basename handling both Unix (/) and Windows (\) separators, then strip .exe if present.
-    let basename = program
-        .rsplit(['/', '\\'])
-        .next()
-        .unwrap_or(program);
+    let basename = program.rsplit(['/', '\\']).next().unwrap_or(program);
     let base = std::path::Path::new(basename)
         .file_stem()
         .and_then(|s| s.to_str())

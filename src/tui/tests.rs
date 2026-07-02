@@ -2547,6 +2547,118 @@ fn content_to_upload_prefers_edited_content_for_json() {
     assert_eq!(state.content_to_upload(), r#"{"token":"REDACTED"}"#);
 }
 
+fn upload_pending(gist_id: &str, filename: &str) -> PendingAction {
+    PendingAction::Upload {
+        gist_id: gist_id.into(),
+        filename: filename.into(),
+        local_path: PathBuf::from(format!("/tmp/{filename}")),
+    }
+}
+
+#[test]
+fn apply_upload_edit_event_content_changed_updates_diff_live() {
+    let mut state = initial_state();
+    state.screen = Screen::Confirm;
+    state.pending_action = Some(upload_pending("a", "notes.txt"));
+    state.upload.watching = true;
+    state.upload.remote_content = Some("old\n".into());
+    state.upload.local_label = Some("local".into());
+    state.upload.gist_label = Some("gist".into());
+
+    state.apply_upload_edit_event(super::run_loop::UploadEditWatchEvent::ContentChanged {
+        gist_id: "a".into(),
+        filename: "notes.txt".into(),
+        content: "new\n".into(),
+    });
+
+    assert_eq!(state.upload.edited_content.as_deref(), Some("new\n"));
+    assert!(
+        state.upload.watching,
+        "still watching — editor hasn't closed yet"
+    );
+    assert!(state.diff_text.contains("new"));
+}
+
+#[test]
+fn apply_upload_edit_event_editor_closed_stops_watching() {
+    let mut state = initial_state();
+    state.screen = Screen::Confirm;
+    state.pending_action = Some(upload_pending("a", "notes.txt"));
+    state.upload.watching = true;
+
+    state.apply_upload_edit_event(super::run_loop::UploadEditWatchEvent::EditorClosed {
+        gist_id: "a".into(),
+        filename: "notes.txt".into(),
+        content: "final\n".into(),
+    });
+
+    assert_eq!(state.upload.edited_content.as_deref(), Some("final\n"));
+    assert!(!state.upload.watching);
+}
+
+#[test]
+fn apply_upload_edit_event_read_error_stops_watching_and_sets_status() {
+    let mut state = initial_state();
+    state.screen = Screen::Confirm;
+    state.pending_action = Some(upload_pending("a", "notes.txt"));
+    state.upload.watching = true;
+
+    state.apply_upload_edit_event(super::run_loop::UploadEditWatchEvent::ReadError {
+        gist_id: "a".into(),
+        filename: "notes.txt".into(),
+        message: "permission denied".into(),
+    });
+
+    assert!(!state.upload.watching);
+    assert_eq!(
+        state.status.as_deref(),
+        Some("failed to read edited file: permission denied")
+    );
+}
+
+#[test]
+fn apply_upload_edit_event_discards_when_context_is_stale() {
+    let mut state = initial_state();
+    // The user already left Confirm (e.g. cancelled) before this late event arrived.
+    state.screen = Screen::List;
+    state.pending_action = None;
+    state.upload.watching = false;
+    state.upload.edited_content = None;
+
+    state.apply_upload_edit_event(super::run_loop::UploadEditWatchEvent::ContentChanged {
+        gist_id: "a".into(),
+        filename: "notes.txt".into(),
+        content: "should be ignored".into(),
+    });
+
+    assert_eq!(state.upload.edited_content, None);
+}
+
+#[test]
+fn apply_upload_edit_event_discards_when_a_different_upload_is_now_pending() {
+    let mut state = initial_state();
+    // A new upload edit session started before the OLD one's final event arrived.
+    state.screen = Screen::Confirm;
+    state.pending_action = Some(upload_pending("a", "other.txt"));
+    state.upload.watching = true;
+    state.upload.edited_content = Some("current session content".into());
+
+    state.apply_upload_edit_event(super::run_loop::UploadEditWatchEvent::EditorClosed {
+        gist_id: "a".into(),
+        filename: "notes.txt".into(), // stale session's filename, not "other.txt"
+        content: "stale content".into(),
+    });
+
+    assert_eq!(
+        state.upload.edited_content.as_deref(),
+        Some("current session content")
+    );
+    assert!(
+        state.upload.watching,
+        "the current session's watch must not be cancelled"
+    );
+}
+
 #[test]
 fn n_opens_create_confirm() {
     let mut state = initial_state();
