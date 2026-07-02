@@ -42,6 +42,7 @@ pub(super) fn run_loop(
         star: None,
         fork_meta: None,
         local: None,
+        upload_edit_watch: None,
         bg: None,
     };
 
@@ -117,6 +118,33 @@ pub(super) fn run_loop(
     }
 
     Ok(())
+}
+
+/// Emitted by the background thread `spawn_upload_edit_watch` spawns while a GUI editor has
+/// the upload-redact temp file open. `gist_id`/`filename` (the target `PendingAction::Upload`
+/// identity) ride along on every variant so `AppState::apply_upload_edit_event` can detect a
+/// stale event (the user left Confirm, or started a different upload edit) and discard it.
+pub(super) enum UploadEditWatchEvent {
+    /// The temp file's mtime changed — re-read and live-update the diff.
+    ContentChanged {
+        gist_id: String,
+        filename: String,
+        content: String,
+    },
+    /// The editor process exited; this is the final content, and the temp file has already
+    /// been deleted by the sending thread.
+    EditorClosed {
+        gist_id: String,
+        filename: String,
+        content: String,
+    },
+    /// Either the editor failed to start, or the final read after it closed failed. The temp
+    /// file has already been cleaned up (best-effort) by the sending thread.
+    ReadError {
+        gist_id: String,
+        filename: String,
+        message: String,
+    },
 }
 
 enum BgTaskOutcome {
@@ -688,6 +716,32 @@ fn copy_preview_content(state: &mut AppState) {
     }
 }
 
+/// Whether `program`'s basename matches a known GUI editor that forks and returns
+/// immediately (so it both needs `--wait` injected by `editor_command`, and — for the
+/// upload-redact-buffer flow — can be watched non-blocking instead of taking over the
+/// terminal). Keyed by basename so a full path or a `.exe` suffix still matches.
+pub(super) fn editor_is_gui(program: &str) -> bool {
+    // Extract basename handling both Unix (/) and Windows (\) separators, then strip .exe if present.
+    let basename = program.rsplit(['/', '\\']).next().unwrap_or(program);
+    let base = std::path::Path::new(basename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(basename)
+        .to_ascii_lowercase();
+    matches!(
+        base.as_str(),
+        "code"
+            | "code-insiders"
+            | "codium"
+            | "vscodium"
+            | "cursor"
+            | "windsurf"
+            | "zed"
+            | "subl"
+            | "sublime_text"
+    )
+}
+
 /// Split a `$VISUAL`/`$EDITOR` string into `(program, args)`, injecting a "wait" flag for
 /// known GUI editors that fork and return immediately (`zed`, `code`, `cursor`, `subl`, …).
 /// Without it `Command::status()` returns *before* the user saves, so the caller reads back
@@ -700,26 +754,7 @@ pub(super) fn editor_command(editor: &str) -> Option<(String, Vec<String>)> {
     let program = parts.next()?.to_string();
     let mut args: Vec<String> = parts.map(str::to_string).collect();
 
-    // GUI editors that need an explicit flag to block until the file is closed. All of the
-    // ones below accept `--wait`; key by the program's basename so a full path still matches.
-    let base = std::path::Path::new(&program)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(&program)
-        .to_ascii_lowercase();
-    let needs_wait = matches!(
-        base.as_str(),
-        "code"
-            | "code-insiders"
-            | "codium"
-            | "vscodium"
-            | "cursor"
-            | "windsurf"
-            | "zed"
-            | "subl"
-            | "sublime_text"
-    );
-    if needs_wait && !args.iter().any(|a| a == "--wait" || a == "-w") {
+    if editor_is_gui(&program) && !args.iter().any(|a| a == "--wait" || a == "-w") {
         args.push("--wait".to_string());
     }
 
@@ -771,14 +806,87 @@ fn edit_local(
     Ok(())
 }
 
+/// Watches `temp_file_path` while a non-blocking GUI-editor child process has it open,
+/// sending a `ContentChanged` event on every detected save (polled every 500ms) and a
+/// terminal `EditorClosed`/`ReadError` event once the editor exits or fails to start. Deletes
+/// the temp file itself before returning — the caller never needs to clean up after this
+/// thread. This is the non-blocking counterpart to the `Command::status()` call further down
+/// in `edit_upload_buffer`, used only for editors `editor_is_gui` recognises.
+fn spawn_upload_edit_watch(
+    program: String,
+    args: Vec<String>,
+    temp_file_path: PathBuf,
+    gist_id: String,
+    filename: String,
+) -> std::sync::mpsc::Receiver<UploadEditWatchEvent> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut child = match std::process::Command::new(&program)
+            .args(&args)
+            .arg(&temp_file_path)
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(e) => {
+                let _ = tx.send(UploadEditWatchEvent::ReadError {
+                    gist_id,
+                    filename,
+                    message: format!("editor failed to start: {e}"),
+                });
+                let _ = std::fs::remove_file(&temp_file_path);
+                return;
+            }
+        };
+
+        let mut last_modified = std::fs::metadata(&temp_file_path)
+            .and_then(|m| m.modified())
+            .ok();
+        loop {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if let Ok(modified) = std::fs::metadata(&temp_file_path).and_then(|m| m.modified()) {
+                if Some(modified) != last_modified {
+                    last_modified = Some(modified);
+                    if let Ok(content) = std::fs::read_to_string(&temp_file_path) {
+                        let _ = tx.send(UploadEditWatchEvent::ContentChanged {
+                            gist_id: gist_id.clone(),
+                            filename: filename.clone(),
+                            content,
+                        });
+                    }
+                }
+            }
+        }
+
+        let final_event = match std::fs::read_to_string(&temp_file_path) {
+            Ok(content) => UploadEditWatchEvent::EditorClosed {
+                gist_id,
+                filename,
+                content,
+            },
+            Err(e) => UploadEditWatchEvent::ReadError {
+                gist_id,
+                filename,
+                message: format!("failed to read edited file: {e}"),
+            },
+        };
+        let _ = tx.send(final_event);
+        let _ = std::fs::remove_file(&temp_file_path);
+    });
+    rx
+}
+
 fn edit_upload_buffer(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
+    channels: &mut BgChannels,
 ) -> Result<()> {
     let Some(local_path) = state.upload_local_path() else {
         return Ok(());
     };
-    let Some(filename) = local_path.file_name().and_then(|n| n.to_str()) else {
+    let Some(local_filename) = local_path.file_name().and_then(|n| n.to_str()) else {
         return Ok(());
     };
 
@@ -787,7 +895,7 @@ fn edit_upload_buffer(
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let temp_file_path =
-        std::env::temp_dir().join(format!(".gistui_redact_{timestamp}_{filename}"));
+        std::env::temp_dir().join(format!(".gistui_redact_{timestamp}_{local_filename}"));
 
     let current_content = state.content_to_upload();
     if let Err(e) = std::fs::write(&temp_file_path, &current_content) {
@@ -803,6 +911,31 @@ fn edit_upload_buffer(
         let _ = std::fs::remove_file(&temp_file_path);
         return Ok(());
     };
+
+    // GUI editors run in their own window, so gistui doesn't need the terminal back — spawn
+    // non-blocking and watch the temp file for saves instead of blocking on Command::status().
+    // Terminal editors (below) still need the full terminal and stay fully blocking.
+    if editor_is_gui(&program) {
+        let Some(PendingAction::Upload {
+            gist_id,
+            filename: gist_filename,
+            ..
+        }) = state.pending_action.clone()
+        else {
+            let _ = std::fs::remove_file(&temp_file_path);
+            return Ok(());
+        };
+        channels.upload_edit_watch = Some(spawn_upload_edit_watch(
+            program,
+            args,
+            temp_file_path,
+            gist_id,
+            gist_filename,
+        ));
+        state.upload.watching = true;
+        state.set_status("Editing in external editor — diff updates live");
+        return Ok(());
+    }
 
     if state.mouse_enabled {
         execute!(terminal.backend_mut(), DisableMouseCapture)?;
@@ -1003,8 +1136,8 @@ fn upload_local_filename(local: &std::path::Path) -> Option<String> {
     local.file_name().and_then(|n| n.to_str()).map(String::from)
 }
 
-/// The seven background-work receivers `run_loop` drains each iteration, bundled so the
-/// extracted loop steps take one `&mut BgChannels` instead of seven `&mut` parameters.
+/// The background-work receivers `run_loop` drains each iteration, bundled so the
+/// extracted loop steps take one `&mut BgChannels` instead of separate `&mut` parameters.
 struct BgChannels {
     update: Option<std::sync::mpsc::Receiver<crate::update_check::UpdateCheckOutcome>>,
     gist: Option<std::sync::mpsc::Receiver<GistFetchResult>>,
@@ -1012,6 +1145,11 @@ struct BgChannels {
     star: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>>,
     fork_meta: Option<std::sync::mpsc::Receiver<ForkMetaResult>>,
     local: Option<std::sync::mpsc::Receiver<Vec<LocalCandidate>>>,
+    /// Streams `UploadEditWatchEvent`s while a GUI editor has the upload-redact temp file
+    /// open (see `spawn_upload_edit_watch`). Unlike the other fields above (one-shot
+    /// results), this channel can carry multiple `ContentChanged` events before its
+    /// terminal `EditorClosed`/`ReadError` — drained in a loop in `absorb_background_results`.
+    upload_edit_watch: Option<std::sync::mpsc::Receiver<UploadEditWatchEvent>>,
     bg: BgRx,
 }
 
@@ -1166,6 +1304,28 @@ fn absorb_background_results(
                 crate::update_check::UpdateCheckOutcome::Failed => {}
             }
         }
+    }
+
+    // Absorb upload-edit-watch events. Unlike the other channels above (one-shot), this one
+    // can carry several `ContentChanged` events before its terminal EditorClosed/ReadError —
+    // drain all of them so a burst of saves doesn't lag a tick behind.
+    let mut upload_watch_finished = false;
+    if let Some(ref rx) = channels.upload_edit_watch {
+        while let Ok(event) = rx.try_recv() {
+            if matches!(
+                event,
+                UploadEditWatchEvent::EditorClosed { .. } | UploadEditWatchEvent::ReadError { .. }
+            ) {
+                upload_watch_finished = true;
+            }
+            state.apply_upload_edit_event(event);
+            if upload_watch_finished {
+                break;
+            }
+        }
+    }
+    if upload_watch_finished {
+        channels.upload_edit_watch = None;
     }
 
     // Absorb a completed background per-action task.
@@ -1901,7 +2061,7 @@ fn dispatch_outcome(
             });
         }
         KeyOutcome::EditUpload => {
-            edit_upload_buffer(terminal, state)?;
+            edit_upload_buffer(terminal, state, channels)?;
         }
         KeyOutcome::Create(public) => {
             let Some(PendingAction::Create { local_path }) = state.pending_action.clone() else {

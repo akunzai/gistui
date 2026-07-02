@@ -208,6 +208,8 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   y          confirm and execute the upload
   n / Esc    cancel the upload
   e          edit / redact the upload content in $EDITOR before upload
+             (GUI editors: the diff updates live while the editor stays open;
+             y/e wait until you close it — n still cancels immediately)
   p          (JSON only) toggle pretty-print formatting
   s          (JSON only) toggle recursive key sorting"
         }
@@ -2123,6 +2125,16 @@ pub(super) fn confirm_prompt(state: &AppState) -> String {
             format!(
                 "Create gist from {} ({desc})?  s secret  p public  Esc cancel",
                 crate::config::display_path(local_path)
+            )
+        }
+        Some(PendingAction::Upload {
+            gist_id: _,
+            filename: _,
+            local_path: _,
+        }) if state.upload.watching => {
+            format!(
+                "{} watching for edits — close the editor to continue  ·  n cancel",
+                spinner_glyph(state.spinner_frame)
             )
         }
         Some(PendingAction::Upload {

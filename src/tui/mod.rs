@@ -451,6 +451,10 @@ pub struct UploadState {
     pub remote_content: Option<String>,
     pub local_label: Option<String>,
     pub gist_label: Option<String>,
+    /// True while a GUI-editor background watch (see `run_loop::spawn_upload_edit_watch`) is
+    /// live-updating the diff. Gates `y`/`e` in `handle_key_confirm` — the upload can't be
+    /// confirmed, and a second editor instance can't be spawned, until the editor closes.
+    pub watching: bool,
 }
 
 /// Per-screen revision-history state (`Screen::Revisions`). Data only — the revision
@@ -749,6 +753,56 @@ impl AppState {
         self.upload.gist_label = Some(gist_label);
         self.update_upload_diff();
         Ok(())
+    }
+
+    /// Applies a background upload-edit-watch event (see `run_loop::UploadEditWatchEvent`) to
+    /// upload state. Discarded (no-op) if the Confirm/Upload context has since moved on — the
+    /// user left Confirm, a different upload edit session is now in progress, or the current
+    /// session isn't actively watching (e.g. the user cancelled with `n`, which stops the
+    /// watch flag but does not kill the background thread; that thread's stale events must not
+    /// leak into a later, unrelated Confirm session for the same gist/file) — identified by
+    /// comparing the event's `gist_id`/`filename` against the current `PendingAction::Upload`
+    /// and requiring `self.upload.watching`.
+    fn apply_upload_edit_event(&mut self, event: run_loop::UploadEditWatchEvent) {
+        use run_loop::UploadEditWatchEvent as Ev;
+        let (event_gist_id, event_filename) = match &event {
+            Ev::ContentChanged {
+                gist_id, filename, ..
+            }
+            | Ev::EditorClosed {
+                gist_id, filename, ..
+            }
+            | Ev::ReadError {
+                gist_id, filename, ..
+            } => (gist_id.as_str(), filename.as_str()),
+        };
+        let context_matches = self.screen == Screen::Confirm
+            && self.upload.watching
+            && matches!(
+                &self.pending_action,
+                Some(PendingAction::Upload { gist_id, filename, .. })
+                    if gist_id == event_gist_id && filename == event_filename
+            );
+        if !context_matches {
+            return;
+        }
+
+        match event {
+            Ev::ContentChanged { content, .. } => {
+                self.upload.edited_content = Some(content);
+                self.update_upload_diff();
+            }
+            Ev::EditorClosed { content, .. } => {
+                self.upload.edited_content = Some(content);
+                self.update_upload_diff();
+                self.upload.watching = false;
+                self.set_status("Edited redact buffer");
+            }
+            Ev::ReadError { message, .. } => {
+                self.upload.watching = false;
+                self.set_status(format!("failed to read edited file: {message}"));
+            }
+        }
     }
 
     fn list_gist_source(&self) -> &[GistFile] {
