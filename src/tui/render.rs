@@ -126,7 +126,7 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   u          force push  (upload local → gist)
   d          force pull  (download gist → local, diff + y/n confirm)
   x          unpin the selected pair
-  status     ✓ synced · ↑ local newer · ↓ remote newer · ? unknown
+  status     ✓ synced · ↑ local newer · ↓ remote newer · ✕ missing · ? unknown
   Each row shows (local <age> · gist <age>) relative modification times."
         }
         HelpTopic::GistManager => {
@@ -376,7 +376,7 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
     let hints = if state.pinned.is_empty() {
         "Esc/q back"
     } else {
-        "↑↓ move · ←→ scroll · / filter · o sort · Enter diff · s sync · u push · d pull · x unpin · ? help  ·  ✓ synced ↑ local-newer ↓ remote-newer ? n/a  ·  Esc/q back"
+        "↑↓ move · ←→ scroll · / filter · o sort · Enter diff · s sync · u push · d pull · x unpin · ? help  ·  ✓ synced ↑ local-newer ↓ remote-newer ✕ missing ? n/a  ·  Esc/q back"
     };
     let (ftitle, footer, colored) = if state.pins.filtering {
         (
@@ -417,17 +417,28 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
                     ts.map(|t| crate::domain::humanize_age(now - t as i64))
                         .unwrap_or_else(|| "?".to_string())
                 };
-                ListItem::new(hscroll_str(
+                let status = state.pin_sync_status(i);
+                let local_age = if status == crate::domain::SyncStatus::Missing {
+                    "missing".to_string()
+                } else {
+                    age(lts)
+                };
+                let item = ListItem::new(hscroll_str(
                     &pin_row_label(
-                        state.pin_sync_status(i).icon(),
+                        status.icon(),
                         &m.local_path,
                         &m.gist_id,
                         &m.gist_filename,
-                        &age(lts),
+                        &local_age,
                         &age(rts),
                     ),
                     state.pins.hscroll,
-                ))
+                ));
+                if status == crate::domain::SyncStatus::Missing {
+                    item.style(Style::default().fg(state.theme.del_color))
+                } else {
+                    item
+                }
             })
             .collect()
     };
