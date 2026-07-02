@@ -638,7 +638,7 @@ fn record_pin_sync(
     gist_id: &str,
     filename: &str,
     content: &str,
-    direction: crate::domain::SyncDirection,
+    direction: Option<crate::domain::SyncDirection>,
 ) {
     // Find the pin using its STORED (possibly relative) local_path form.
     let stored_local = state.pinned.iter().find_map(|m| {
@@ -993,7 +993,7 @@ fn download(state: &mut AppState) {
                     &gid,
                     &fname,
                     &content,
-                    crate::domain::SyncDirection::Download,
+                    Some(crate::domain::SyncDirection::Download),
                 );
             }
             state.back_to_list();
@@ -1367,6 +1367,30 @@ fn absorb_background_results(
                                     target,
                                 );
                                 state.diff_identical = identical;
+                                // A pin diff that turns out identical confirms the cached
+                                // last_seen_hash is (still) accurate — refresh it for free
+                                // using the content we already fetched, so the Pins list's
+                                // content-hash check (AppState::pin_sync_status) stays
+                                // correct even if the gist changed elsewhere since the last
+                                // real sync. Hash the LOCAL content's raw bytes (not the
+                                // trailing-newline-normalized `identical` comparison), so
+                                // this matches the raw-byte hashing pin_sync_status does.
+                                if identical {
+                                    if let (Some(gid), Some(fname)) = (
+                                        state.download_gist_id.clone(),
+                                        state.download_gist_filename.clone(),
+                                    ) {
+                                        let local_abs = state.preview_local.clone();
+                                        record_pin_sync(
+                                            state,
+                                            &local_abs,
+                                            &gid,
+                                            &fname,
+                                            &local_content,
+                                            None,
+                                        );
+                                    }
+                                }
                             }
                             Err(error) => state.set_status(format!("read failed: {error}")),
                         }
@@ -1420,7 +1444,7 @@ fn absorb_background_results(
                                         &gist_id,
                                         &filename,
                                         &remote,
-                                        crate::domain::SyncDirection::Download,
+                                        Some(crate::domain::SyncDirection::Download),
                                     );
                                     refresh_locals(state);
                                 }
@@ -1485,7 +1509,7 @@ fn absorb_background_results(
                                 &gist_id,
                                 &filename,
                                 &content,
-                                crate::domain::SyncDirection::Upload,
+                                Some(crate::domain::SyncDirection::Upload),
                             );
                         }
                         // Return to wherever this upload was initiated from (List, or Pins
@@ -2298,25 +2322,10 @@ fn dispatch_outcome(
             match state.pin_sync_status(pin_idx) {
                 crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
                 crate::domain::SyncStatus::Pull => spawn_pin_pull(state, &mut channels.bg, &m),
-                crate::domain::SyncStatus::Push => {
-                    // Cheap, network-free no-op check: if the local file still
-                    // hashes to last_seen_hash, the newer mtime is a touch with
-                    // no content change. Note: only fires for plain pushes — a
-                    // push whose baseline was a JSON-transformed/redacted upload
-                    // won't match the raw file, so it harmlessly falls through to
-                    // a full push.
-                    let local_abs = pin_local_abs(state, &m);
-                    let unchanged = m.last_seen_hash.as_deref().is_some_and(|baseline| {
-                        std::fs::read(&local_abs)
-                            .map(|b| crate::domain::sha256_hex(&b) == baseline)
-                            .unwrap_or(false)
-                    });
-                    if unchanged {
-                        state.set_status("already in sync");
-                    } else {
-                        spawn_pin_push(state, &mut channels.bg, &m);
-                    }
-                }
+                // The content-hash no-op check now happens upstream in
+                // AppState::pin_sync_status (a matching hash is already reclassified to
+                // InSync above), so a genuine Push here always means a real change.
+                crate::domain::SyncStatus::Push => spawn_pin_push(state, &mut channels.bg, &m),
                 crate::domain::SyncStatus::Missing => {
                     state.set_status("local file is missing — use d to pull it back")
                 }
