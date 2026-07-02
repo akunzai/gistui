@@ -2406,6 +2406,60 @@ fn confirm_upload_e_returns_edit_upload() {
 }
 
 #[test]
+fn confirm_upload_y_is_blocked_while_watching() {
+    let mut state = initial_state();
+    state.pending_action = Some(PendingAction::Upload {
+        gist_id: "a".into(),
+        filename: "settings.json".into(),
+        local_path: PathBuf::from("/tmp/settings.json"),
+    });
+    state.screen = Screen::Confirm;
+    state.upload.watching = true;
+
+    assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::None);
+    assert_eq!(
+        state.status.as_deref(),
+        Some("editor still open — finish editing first")
+    );
+}
+
+#[test]
+fn confirm_upload_e_is_blocked_while_watching() {
+    let mut state = initial_state();
+    state.pending_action = Some(PendingAction::Upload {
+        gist_id: "a".into(),
+        filename: "settings.json".into(),
+        local_path: PathBuf::from("/tmp/settings.json"),
+    });
+    state.screen = Screen::Confirm;
+    state.upload.watching = true;
+
+    assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::None);
+    assert_eq!(state.status.as_deref(), Some("editor already open"));
+}
+
+#[test]
+fn confirm_upload_n_cancels_and_resets_watching() {
+    let mut state = initial_state();
+    state.pending_action = Some(PendingAction::Upload {
+        gist_id: "a".into(),
+        filename: "settings.json".into(),
+        local_path: PathBuf::from("/tmp/settings.json"),
+    });
+    state.screen = Screen::Confirm;
+    state.upload.watching = true;
+
+    assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
+    assert!(state.pending_action.is_none());
+    assert_eq!(state.screen, Screen::List);
+    assert!(
+        !state.upload.watching,
+        "cancelling must reset watching so a future upload-edit session isn't blocked forever \
+         by a stale flag (the background thread is not force-killed and cleans up on its own)"
+    );
+}
+
+#[test]
 fn confirm_upload_json_toggles() {
     let mut state = initial_state();
     state.pending_action = Some(PendingAction::Upload {

@@ -1422,10 +1422,21 @@ impl AppState {
                 _ => {}
             },
             Some(PendingAction::Upload { ref local_path, .. }) => match code {
+                KeyCode::Char('y') if self.upload.watching => {
+                    self.set_status("editor still open — finish editing first");
+                }
                 KeyCode::Char('y') => return KeyOutcome::Upload,
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     self.pending_action = None;
                     self.screen = Screen::List;
+                    // The background watch thread (if any) is not force-killed — it cleans
+                    // itself up once the editor closes. Reset the flag now so a stale
+                    // late-arriving event (see AppState::apply_upload_edit_event) doesn't
+                    // matter, and so a future upload-edit session isn't blocked by it.
+                    self.upload.watching = false;
+                }
+                KeyCode::Char('e') if self.upload.watching => {
+                    self.set_status("editor already open");
                 }
                 KeyCode::Char('e') => return KeyOutcome::EditUpload,
                 KeyCode::Char('p') if is_json_file(local_path) => {
