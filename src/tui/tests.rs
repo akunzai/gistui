@@ -1432,6 +1432,25 @@ fn confirm_prompt_shows_description_editor_for_create() {
 }
 
 #[test]
+fn confirm_prompt_shows_watching_indicator_for_upload() {
+    let mut state = initial_state();
+    state.pending_action = Some(PendingAction::Upload {
+        gist_id: "a".into(),
+        filename: "notes.txt".into(),
+        local_path: PathBuf::from("/tmp/notes.txt"),
+    });
+    state.screen = Screen::Confirm;
+    state.upload.watching = true;
+
+    let prompt = confirm_prompt(&state);
+    assert!(prompt.contains("watching for edits"));
+    assert!(
+        !prompt.contains("y yes"),
+        "y/e hints should be hidden while watching"
+    );
+}
+
+#[test]
 fn row_mark_pinned_beats_same_name() {
     assert_eq!(
         row_mark(&[MatchReason::Pinned, MatchReason::ExactFilename]),
