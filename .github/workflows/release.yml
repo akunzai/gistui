@@ -117,3 +117,15 @@ jobs:
         with:
           files: artifacts/*
           generate_release_notes: true
+
+      - name: Update Homebrew formula
+        env:
+          HOMEBREW_BUMP_TOKEN: ${{ secrets.HOMEBREW_BUMP_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: scripts/release/update-homebrew-formula.sh
+
+      - name: Update Scoop manifest
+        env:
+          HOMEBREW_BUMP_TOKEN: ${{ secrets.HOMEBREW_BUMP_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: scripts/release/update-scoop-manifest.sh
