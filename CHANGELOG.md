@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.1] — 2026-07-08
+
 - The Homebrew formula (`akunzai/tap/gistui`) now installs a prebuilt binary instead of compiling from source, cutting install time from 1-2 minutes to a few seconds; `brew install --HEAD` still builds from source.
 
 ## [0.15.0] — 2026-07-02
@@ -155,7 +157,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.15.0...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.15.1...HEAD
+[0.15.1]: https://github.com/akunzai/gistui/releases/tag/v0.15.1
 [0.15.0]: https://github.com/akunzai/gistui/releases/tag/v0.15.0
 [0.14.2]: https://github.com/akunzai/gistui/releases/tag/v0.14.2
 [0.14.1]: https://github.com/akunzai/gistui/releases/tag/v0.14.1
