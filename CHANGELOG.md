@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- The Homebrew formula (`akunzai/tap/gistui`) now installs a prebuilt binary instead of compiling from source, cutting install time from 1-2 minutes to a few seconds; `brew install --HEAD` still builds from source.
+
 ## [0.15.0] — 2026-07-02
 
 - Editing the upload redact buffer (`e` on the upload confirm) in a GUI editor (`zed`, `code`, `cursor`, `subl`, …) now live-updates the diff as you save, instead of only refreshing after you close the editor; `y`/`e` are disabled until you do. Terminal editors are unchanged.
