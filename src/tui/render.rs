@@ -374,11 +374,6 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
     let area = frame.area();
     // Sync feedback (e.g. "already in sync", "can't tell which side is newer") is set via
     // state.status while staying on this screen, so the footer must surface it (see #72).
-    let hints = if state.pinned.is_empty() {
-        "Esc/q back"
-    } else {
-        "↑↓ move · ←→ scroll · / filter · o sort · Enter diff · s sync · u push · d pull · x unpin · ? help  ·  ✓ synced ↑ local-newer ↓ remote-newer ✕ missing ? n/a  ·  Esc/q back"
-    };
     let (ftitle, footer, colored) = if state.pins.filtering {
         (
             "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
@@ -386,7 +381,7 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
             false,
         )
     } else {
-        let (footer, colored) = footer_with_status(state.status.as_deref(), hints);
+        let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
         (String::new(), footer, colored)
     };
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
@@ -597,15 +592,9 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut Mou
             format!("/{}_", state.gist_manager.filter_query),
             false,
         )
-    } else if let Some(message) = &state.status {
-        (String::new(), message.clone(), false)
     } else {
-        (
-            String::new(),
-            "↑↓ move · ←→ scroll · Enter detail · / filter · s sort · v type · * star · H history · o browser · y copy url · ? help · q back"
-                .to_string(),
-            true,
-        )
+        let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
+        (String::new(), footer, colored)
     };
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
@@ -796,26 +785,8 @@ pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut
     } else if let Some(err) = &state.revision.fetch_error {
         (String::new(), err.clone(), false)
     } else {
-        (
-            String::new(),
-            {
-                let file = state.revision_target_file_label();
-                let file_key = if state
-                    .revision
-                    .gist_id
-                    .as_ref()
-                    .is_some_and(|id| state.gist_filenames(id).len() > 1)
-                {
-                    "F next file · "
-                } else {
-                    ""
-                };
-                format!(
-                    "file={file} · {file_key}Enter incremental diff · D vs current · r restore · ? help · q back"
-                )
-            },
-            true,
-        )
+        let file = state.revision_target_file_label();
+        (String::new(), format!("file={file} · {MINIMAL_HINT}"), true)
     };
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
@@ -1223,6 +1194,11 @@ pub(super) fn render_gist_comments(
     render_text_scrollbar(frame, area, total_lines, state.detail.scroll as usize);
 }
 
+/// The default (idle) footer hint everywhere the footer used to print a long per-screen
+/// hotkey list. Discoverability now lives in the `?` Help topic (and, from Phase 3/4 of the
+/// TUI UX redesign, the right-click context menu and Ctrl+P command palette).
+pub(super) const MINIMAL_HINT: &str = "? Help";
+
 /// Footer text + whether to colourise it: a one-shot `state.status` message (shown plain) when
 /// present, else the colourised key `hints`. Shared by every screen so action results/errors
 /// surface consistently and are never swallowed by a hard-coded footer (see #72, #66).
@@ -1231,29 +1207,6 @@ pub(super) fn footer_with_status(status: Option<&str>, hints: &str) -> (String, 
         Some(message) => (message.to_string(), false),
         None => (hints.to_string(), true),
     }
-}
-
-/// The detail-view footer: a one-shot `state.status` message (e.g. the compaction result,
-/// including "nothing to compact") when present, else the focus-aware key hints.
-pub(super) fn detail_footer(
-    status: Option<&str>,
-    focus: DetailFocus,
-    owned: bool,
-) -> (String, bool) {
-    let manage = if owned {
-        " · e desc · c compact · X delete"
-    } else {
-        " · F fork"
-    };
-    let hints = match focus {
-        DetailFocus::Comments => format!(
-            "Tab files · ↑↓ scroll · 1-9 preview · H history · * star · o browser · y copy url{manage} · ? help · q back"
-        ),
-        DetailFocus::Files => format!(
-            "Tab comments · ↑↓ select · ⏎ preview · 1-9 preview · H history · * star · o browser · y copy url{manage} · ? help · q back"
-        ),
-    };
-    footer_with_status(status, &hints)
 }
 
 /// The Files|Comments tab index, mirroring `detail_focus`. Pure so the tab selection is
@@ -1293,12 +1246,7 @@ pub(super) fn detail_focus_tabs_line(focus: DetailFocus, theme: &Theme) -> Line<
 
 pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
-    let owned = state
-        .detail
-        .gist_id
-        .as_deref()
-        .is_some_and(|id| state.gist_is_owned(id));
-    let (footer, colored) = detail_footer(state.status.as_deref(), state.detail.focus, owned);
+    let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     // Fixed 4-row header (borders + basic-info line + focus tabs); the active tab — the file
     // list or the comments, never both — fills the rest above the footer.
@@ -1434,28 +1382,6 @@ pub(super) fn gist_row_display(g: &RankedGistFile, view: GistView, state: &AppSt
         gist_badge_prefix(state.gist_is_starred(&g.file.gist_id), g.file.is_fork()),
         base
     )
-}
-
-/// Command hint tailored to the focused pane: local-file actions on the left, gist actions
-/// on the right, plus the always-available navigation/help/quit keys. The footer word-wraps
-/// it to the terminal width.
-pub(super) fn commands_hint(focus: FocusPane) -> String {
-    // Focus-relevant common keys only; the full reference lives in the `?` help overlay.
-    let mut items = vec!["Tab panes", "↑↓/jk move", "Enter diff", "a anchor"];
-    match focus {
-        FocusPane::Local => items.extend(["r recursive", "e edit", "n create", "P pins"]),
-        FocusPane::Gist => items.extend([
-            "Space preview",
-            "H history",
-            "d download",
-            "u upload",
-            "X remove file",
-            "* star",
-            "g gists",
-        ]),
-    }
-    items.extend(["? help", "Esc/q quit"]);
-    items.join("  ·  ")
 }
 
 /// Greedy word-wrap line count, matching how `Paragraph` with `Wrap { trim: true }` breaks
@@ -1670,7 +1596,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
     } else {
         match &state.status {
             Some(message) => message.clone(),
-            None => commands_hint(state.focus),
+            None => MINIMAL_HINT.to_string(),
         }
     };
     // Only the command-hint variant gets key colouring; filter input and status stay plain.
