@@ -180,7 +180,6 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   Dbl-click  open the clicked row (diff / detail / pin diff / preview)
   Tab click  switch Files / Comments on the Gist details screen
   [✕] btn    close / go back on any pop-up screen
-  Repo click open the GitHub repository in the browser
   Top bar    click (G)ists / (P)ins / (?)Help (top-right, every screen) to jump there"
         }
         HelpTopic::Pins => {
@@ -291,7 +290,50 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   Up/Down    scroll this help text
   NO_COLOR   set this env var to disable syntax highlighting (preview + diff)"
         }
+        HelpTopic::About => {
+            unreachable!(
+                "About has its own dynamic body in about_topic_lines, rendered before help_topic_body is ever called"
+            )
+        }
     }
+}
+
+/// Fixed row (0-indexed, within the topic body) of the clickable repo-URL line — used to
+/// place `MouseLayout::repo_link`'s hit-rect. Kept stable regardless of update-check state
+/// (see `about_topic_lines`) so this constant never has to change.
+const ABOUT_REPO_LINE: u16 = 2;
+
+/// The `About` topic's body: version, the clickable repo link (relocated from the old
+/// per-screen footer — see `render_footer`), and the update-check status if a newer release
+/// is available. Unlike every other topic's `&'static str` (`help_topic_body`), this one
+/// needs `state`, so it returns owned `Line`s instead.
+fn about_topic_lines(state: &AppState) -> Vec<Line<'static>> {
+    let repo = env!("CARGO_PKG_REPOSITORY")
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let mut lines = vec![
+        Line::from(format!("gistui v{}", env!("CARGO_PKG_VERSION"))),
+        Line::from(""),
+        // The leading indent is a plain (unstyled) span so only the repo URL itself is
+        // underlined — not the whitespace in front of it.
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                repo.to_string(),
+                Style::default()
+                    .fg(state.theme.fg)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+        ]),
+        Line::from(""),
+    ];
+    if let Some(latest) = &state.update_available {
+        lines.push(Line::from(crate::update_check::update_hint(
+            latest,
+            &state.install_method,
+        )));
+    }
+    lines
 }
 
 pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
@@ -301,12 +343,19 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut Mous
         let items: Vec<ListItem> = HelpTopic::all()
             .iter()
             .enumerate()
-            .map(|(i, t)| ListItem::new(format!("  {}  {}", i + 1, t.title())))
+            .map(|(i, t)| {
+                let key = if i == 9 {
+                    "0".to_string()
+                } else {
+                    (i + 1).to_string()
+                };
+                ListItem::new(format!("  {}  {}", key, t.title()))
+            })
             .collect();
         let list = List::new(items)
             .block(
                 Block::default()
-                    .title("Help — pick a topic (1-9 / ↑↓ Enter · Esc back)")
+                    .title("Help — pick a topic (1-9,0 / ↑↓ Enter · Esc back)")
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .style(state.theme.base_style())
@@ -323,13 +372,24 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut Mous
         let mut list_state = ListState::default();
         list_state.select(Some(state.help.index_sel));
         frame.render_stateful_widget(list, area, &mut list_state);
+        if state.mouse_enabled {
+            layout.list = Some(PaneHit {
+                rect: area,
+                offset: list_state.offset(),
+            });
+        }
     } else {
         let title = format!(
             "Help · {} — Tab topics · ↑↓ scroll · Esc back",
             state.help.topic.title()
         );
+        let body: Text = if state.help.topic == HelpTopic::About {
+            Text::from(about_topic_lines(state))
+        } else {
+            Text::from(help_topic_body(state.help.topic))
+        };
         frame.render_widget(
-            Paragraph::new(help_topic_body(state.help.topic))
+            Paragraph::new(body)
                 .style(state.theme.base_style())
                 .scroll((state.help.scroll, 0))
                 .block(
@@ -342,6 +402,21 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut Mous
                 ),
             area,
         );
+        // The repo-link line only gets a click target while it's actually the About topic and
+        // currently scrolled into view — if the user has scrolled it off-screen, the hit-rect
+        // is simply omitted this frame rather than tracked at a stale position.
+        if state.help.topic == HelpTopic::About && state.mouse_enabled {
+            let visible_row = ABOUT_REPO_LINE as i32 - state.help.scroll as i32;
+            let inner_height = area.height.saturating_sub(2);
+            if visible_row >= 0 && (visible_row as u16) < inner_height {
+                layout.repo_link = Some(Rect::new(
+                    area.x + 1,
+                    area.y + 1 + visible_row as u16,
+                    area.width.saturating_sub(2),
+                    1,
+                ));
+            }
+        }
     }
     if state.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, area, &state.theme));
@@ -457,10 +532,12 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
         let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
         (String::new(), footer, colored)
     };
-    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 1)])
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(footer_height(&footer, area.width)),
+        ])
         .split(area);
 
     let visible = state.visible_pin_indices();
@@ -670,10 +747,12 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut Mou
         let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
         (String::new(), footer, colored)
     };
-    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 1)])
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(footer_height(&footer, area.width)),
+        ])
         .split(area);
 
     let groups = state.visible_gist_groups();
@@ -1324,7 +1403,6 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &m
     let area = frame.area();
     let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
     let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
-    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     // Fixed 4-row header (borders + basic-info line + focus tabs); the active tab — the file
     // list or the comments, never both — fills the rest above the footer.
     let chunks = Layout::default()
@@ -1332,7 +1410,7 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &m
         .constraints([
             Constraint::Length(4),
             Constraint::Min(3),
-            Constraint::Length(footer_lines + 1),
+            Constraint::Length(footer_height(&footer, area.width)),
         ])
         .split(area);
     if let Some(id) = state.detail.gist_id.as_deref() {
@@ -1484,6 +1562,19 @@ pub(super) fn wrap_line_count(text: &str, width: u16) -> u16 {
     lines
 }
 
+/// Height to reserve for a screen's footer `Layout` row: `0` when `text` is empty (the footer
+/// fully collapses — no divider, no blank row — reclaiming the space for content above it) or
+/// the wrapped line count plus one (for the divider) otherwise. Screens whose footer always has
+/// real content (Diff, Preview) don't need this — only the ones whose idle state can be
+/// genuinely empty (`MINIMAL_HINT`) call it.
+pub(super) fn footer_height(text: &str, width: u16) -> u16 {
+    if text.is_empty() {
+        0
+    } else {
+        wrap_line_count(text, width.saturating_sub(2)).max(1) + 1
+    }
+}
+
 /// Colour a command key by what its action does, so destructive and mutating keys stand apart
 /// from plain navigation at a glance: destructive (delete/remove/unpin) → Red, write/sync
 /// (download/upload/create/sync/…) → Green, everything else (navigation/view) → Cyan. Matched on
@@ -1541,29 +1632,21 @@ pub(super) fn hint_line(text: &str, theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The shared borderless footer block: a single dim top divider that carries the left `title` and
-/// the repo URL pinned to the bottom-right corner of every screen.
-///
-/// Deliberately omits the version number: printing it here would make every version bump a
-/// visible diff in the demo GIF/PNG, forcing a re-recording that the release flow doesn't
-/// otherwise need. The in-app update check already surfaces version freshness.
-pub(super) fn footer_block(title: &str, theme: &Theme) -> Block<'static> {
-    // Repo URL (scheme stripped — the host/path already names the project).
-    let repo = env!("CARGO_PKG_REPOSITORY")
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let repo_span = Span::styled(
-        repo.to_string(),
-        Style::default()
-            .fg(theme.fg)
-            .add_modifier(ratatui::style::Modifier::UNDERLINED),
-    );
-    let line = Line::from(vec![Span::raw(" "), repo_span, Span::raw(" ")]).right_aligned();
-
+/// The shared footer block: a dim top divider that carries the left `title` (the filter-input
+/// label while filtering; empty otherwise), shown only when there's something to divide from
+/// (`show_divider`) — an idle footer with no status/hint text renders with no border at all,
+/// rather than a stray horizontal rule above nothing. The repo URL, app version, and
+/// update-check status used to live here (via `title` and a right-aligned repo span) but have
+/// moved to the Help → About topic (see `about_topic_lines`).
+pub(super) fn footer_block(title: &str, theme: &Theme, show_divider: bool) -> Block<'static> {
+    let borders = if show_divider {
+        Borders::TOP
+    } else {
+        Borders::NONE
+    };
     Block::default()
         .title(title.to_string())
-        .title_top(line)
-        .borders(Borders::TOP)
+        .borders(borders)
         .border_style(Style::default().fg(theme.dim))
         .style(theme.base_style())
         .padding(Padding::horizontal(1))
@@ -1578,18 +1661,8 @@ pub(super) fn render_footer(
     text: &str,
     colored: bool,
     theme: &Theme,
-    layout: &mut MouseLayout,
+    _layout: &mut MouseLayout,
 ) {
-    let repo = env!("CARGO_PKG_REPOSITORY")
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let label = format!(" {} ", repo);
-    let label_len = label.chars().count() as u16;
-    let repo_x = area.x + area.width.saturating_sub(label_len);
-    let repo_width = label_len.min(area.width);
-    let repo_rect = Rect::new(repo_x, area.y, repo_width, 1);
-    layout.repo_link = Some(repo_rect);
-
     let para = if colored {
         Paragraph::new(hint_line(text, theme))
     } else {
@@ -1598,36 +1671,27 @@ pub(super) fn render_footer(
     frame.render_widget(
         para.style(theme.base_style())
             .wrap(Wrap { trim: true })
-            .block(footer_block(title, theme)),
+            .block(footer_block(title, theme, !text.is_empty())),
         area,
     );
 }
 
 /// Like [`render_footer`] but draws a prebuilt styled `line`, used for active text inputs
-/// so the cursor can be reverse-highlighted at its real position.
+/// so the cursor can be reverse-highlighted at its real position. Always shows the divider —
+/// unlike `render_footer`'s idle case, an active text input is never blank.
 pub(super) fn render_footer_line(
     frame: &mut Frame,
     area: Rect,
     title: &str,
     line: Line,
     theme: &Theme,
-    layout: &mut MouseLayout,
+    _layout: &mut MouseLayout,
 ) {
-    let repo = env!("CARGO_PKG_REPOSITORY")
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let label = format!(" {} ", repo);
-    let label_len = label.chars().count() as u16;
-    let repo_x = area.x + area.width.saturating_sub(label_len);
-    let repo_width = label_len.min(area.width);
-    let repo_rect = Rect::new(repo_x, area.y, repo_width, 1);
-    layout.repo_link = Some(repo_rect);
-
     frame.render_widget(
         Paragraph::new(line)
             .style(theme.base_style())
             .wrap(Wrap { trim: true })
-            .block(footer_block(title, theme)),
+            .block(footer_block(title, theme, true)),
         area,
     );
 }
@@ -1679,16 +1743,12 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
     };
     // Only the command-hint variant gets key colouring; filter input and status stay plain.
     let footer_is_command = !state.filtering && state.status.is_none();
-    // A newer-release hint rides the footer's top-border title slot (non-intrusive, persistent).
-    let footer_title = match &state.update_available {
-        Some(v) => crate::update_check::update_hint(v, &state.install_method),
-        None => String::new(),
-    };
-    // Width inside the footer block: minus the 2 horizontal padding columns (no side borders).
-    let footer_lines = wrap_line_count(&footer_body, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 1)])
+        .constraints([
+            Constraint::Min(5),
+            Constraint::Length(footer_height(&footer_body, area.width)),
+        ])
         .split(area);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -1826,7 +1886,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
         render_footer(
             frame,
             chunks[1],
-            &footer_title,
+            "",
             &footer_body,
             footer_is_command,
             &state.theme,

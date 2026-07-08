@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Click the repository URL in the footer to open the GitHub repository in the system's default browser.
-- Every screen now shows a `(G)ists (P)ins (?)Help` shortcut bar in the top-right corner (click, or use the existing `g`/`P`/`?` keys, from any screen); the footer's long per-screen hotkey list is gone — it now drops its idle hint (just the repository URL remains), since Help discoverability lives in the top bar (press `?` for the full keymap).
+- Every screen now shows a `(G)ists (P)ins (?)Help` shortcut bar in the top-right corner (click, or use the existing `g`/`P`/`?` keys, from any screen); the footer's long per-screen hotkey list is gone and it now fully collapses when idle (no divider, no blank row — the space goes back to content), since Help discoverability lives in the top bar (press `?` for the full keymap).
+- The app version, the GitHub repo link (click to open in the browser), and update-check status have moved from the footer into a new **About** topic in `?` Help (press `0` from the Help index, or `Tab` then scroll to it).
+- The `?` Help topic index is now clickable: click a row to select it, double-click (or `Enter`) to open it — matching every other list in the app.
 
 ## [0.15.2] — 2026-07-08
 

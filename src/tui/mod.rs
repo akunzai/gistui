@@ -34,7 +34,8 @@ pub enum Screen {
     Revisions,
 }
 
-/// A help topic — one per key-dense area. Ordered for the index list and `1`-`8` quick-jump.
+/// A help topic — one per key-dense area, plus `About` (version/repo/update info, not tied
+/// to a screen). Ordered for the index list and `1`-`9`,`0` quick-jump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HelpTopic {
     #[default]
@@ -47,11 +48,12 @@ pub enum HelpTopic {
     Upload,
     Revisions,
     General,
+    About,
 }
 
 impl HelpTopic {
     /// All topics in index / quick-jump order.
-    pub fn all() -> [HelpTopic; 9] {
+    pub fn all() -> [HelpTopic; 10] {
         use HelpTopic::*;
         [
             List,
@@ -63,6 +65,7 @@ impl HelpTopic {
             Preview,
             Upload,
             General,
+            About,
         ]
     }
 
@@ -78,6 +81,7 @@ impl HelpTopic {
             HelpTopic::Preview => "Preview",
             HelpTopic::Upload => "Upload confirmation",
             HelpTopic::General => "General",
+            HelpTopic::About => "About",
         }
     }
 
@@ -398,7 +402,7 @@ impl PaneHit {
 pub struct MouseLayout {
     pub local: Option<PaneHit>,
     pub gist: Option<PaneHit>,
-    /// Single-list screens (Gists / Pins / Revisions).
+    /// Single-list screens (Gists / Pins / Revisions) and the Help topic index.
     pub list: Option<PaneHit>,
     /// GistDetail file list (Files tab).
     pub detail_files: Option<PaneHit>,

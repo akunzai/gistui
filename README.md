@@ -76,9 +76,10 @@ without resetting order. Pinned pairs show `📌`; same-filename candidates are 
 
 Press **`?`** anytime for the **full, contextual keymap** — it opens the current screen's
 topic; `Tab` browses all topics (List, Pins, Gist manager, Gist detail, Diff, Preview, …).
-The footer drops its idle hotkey hint (just the repository URL remains); every screen
-shows a `(G)ists (P)ins (?)Help` shortcut bar in the top-right corner instead (click,
-or use the underlying key).
+The footer stays empty when idle; every screen shows a `(G)ists (P)ins (?)Help`
+shortcut bar in the top-right corner instead (click, or use the underlying key). The
+app version, the GitHub repo link, and update-check status live in `?` Help's
+**About** topic (press `0` from the Help index, or `Tab` then scroll to it).
 
 **Mouse** (on by default; disable with `mouse = false` in config or `--no-mouse`):
 
@@ -86,11 +87,11 @@ or use the underlying key).
 |--------|--------|
 | Wheel up/down | scroll the focused list or content pane |
 | Click a row | select it (List panes also switch focus) |
-| Double-click a row | open it — List diff, gist detail, pin diff, revision diff, or file preview (same as `Enter`) |
+| Double-click a row | open it — List diff, gist detail, pin diff, revision diff, file preview, or Help topic (same as `Enter`) |
 | Click a tab (Gist details) | switch between Files / Comments (newest 30 comments load first; `m` or clicking the top line loads 30 older comments) |
 | Click `[✕]` button (pop-up screens) | close / go back |
 | Click `(G)ists` / `(P)ins` / `(?)Help` (top bar) | jump to that screen, from anywhere — same as pressing `g` / `P` / `?` |
-| Click the repository URL | open the GitHub repository in the system's default browser |
+| Click the repository URL (`?` Help → About) | open the GitHub repository in the system's default browser |
 
 ## Safety
 
@@ -101,9 +102,9 @@ destructive remote actions
 each get their own confirm. Others' gists (e.g. starred) are read-only for pin/upload/delete
 — fork with `F` in gist detail. No GitHub token is stored; gist content is never written to
 config. Mouse is on by default and can be disabled with `mouse = false` in the config file or
-the `--no-mouse` flag. On startup gistui checks GitHub once a day for a newer release and shows
-a footer hint if one exists (no telemetry; fails silently offline) — disable with
-`check_updates = false` or `--no-update-check`.
+the `--no-mouse` flag. On startup gistui checks GitHub once a day for a newer release and
+surfaces it on the `?` Help → About topic if one exists (no telemetry; fails silently offline)
+— disable with `check_updates = false` or `--no-update-check`.
 
 Full rules: **[docs/SAFETY.md](docs/SAFETY.md)**.
 
@@ -120,7 +121,7 @@ automatically the first time you pin a file. All fields are optional.
 | `diff_show_full` | `bool` | Remembered state of the diff `c` toggle: `true` shows the full file, `false` collapses to `diff_context` lines. Rewritten when you press `c`. Default `false`. |
 | `theme` | `string` | Built-in colour theme: `"dark"` (default) or `"light"` (for light-background terminals). |
 | `mouse` | `bool` | Enable mouse support (wheel scroll, click/double-click, close button). Default `true`; `--no-mouse` forces it off for one session. |
-| `check_updates` | `bool` | Check GitHub once a day on startup for a newer release and show a footer hint. Default `true`; `--no-update-check` forces it off for one session. |
+| `check_updates` | `bool` | Check GitHub once a day on startup for a newer release and surface it on the `?` Help → About topic. Default `true`; `--no-update-check` forces it off for one session. |
 | `ignore_trailing_newline` | `bool` | Treat a difference that is *only* a file-final newline as no change in the diff view and the overwrite-confirm gate. Default `true`; set `false` for strict, byte-exact diffs. |
 | `skip_dirs` | `[string]` | Directory names skipped during recursive discovery (`r` key). Defaults to common build/dependency dirs (`node_modules`, `target`, …). Hidden dirs (`.`-prefix) are always skipped. |
 | `[[pinned]]` | `table array` | Local-file ↔ gist mappings managed by the `p`/`P` keys. Can also be edited by hand. |

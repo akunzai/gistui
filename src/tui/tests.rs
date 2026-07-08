@@ -1322,6 +1322,13 @@ fn wrap_line_count_is_responsive_to_width() {
 }
 
 #[test]
+fn footer_height_collapses_to_zero_when_empty_else_wraps_plus_divider() {
+    assert_eq!(footer_height("", 100), 0);
+    assert_eq!(footer_height("? Help", 100), 2); // 1 wrapped line + 1 divider row
+    assert_eq!(footer_height("aaa bbb ccc", 9), 3); // 2 wrapped lines (width-2=7) + 1 divider row
+}
+
+#[test]
 fn minimal_hint_is_empty_when_idle() {
     assert_eq!(MINIMAL_HINT, "");
     let (hint, colored) = footer_with_status(None, MINIMAL_HINT);
@@ -3943,11 +3950,13 @@ fn pins_filter_input_behaviors() {
 #[test]
 fn help_topic_all_is_ordered_and_titled() {
     let all = HelpTopic::all();
-    assert_eq!(all.len(), 9);
+    assert_eq!(all.len(), 10);
     assert_eq!(all[0], HelpTopic::List);
     assert_eq!(all[4], HelpTopic::Revisions);
     assert_eq!(all[8], HelpTopic::General);
+    assert_eq!(all[9], HelpTopic::About);
     assert_eq!(HelpTopic::Pins.title(), "Pinned Mappings");
+    assert_eq!(HelpTopic::About.title(), "About");
 }
 
 #[test]
@@ -4319,6 +4328,39 @@ fn help_topic_view_number_switches_topic() {
     assert_eq!(state.help.topic, HelpTopic::Pins);
     assert_eq!(state.help.scroll, 0);
     assert!(!state.help.index_open);
+}
+
+#[test]
+fn help_topic_view_zero_key_switches_to_about() {
+    let mut state = initial_state();
+    state.screen = Screen::Help;
+    state.help.topic = HelpTopic::List;
+    state.help.scroll = 5;
+    state.handle_key(KeyCode::Char('0')); // 0 -> About (index 9, the 10th topic)
+    assert_eq!(state.help.topic, HelpTopic::About);
+    assert_eq!(state.help.scroll, 0);
+    assert!(!state.help.index_open);
+}
+
+#[test]
+fn help_index_zero_key_opens_about_from_the_index_list() {
+    let mut state = initial_state();
+    state.screen = Screen::Help;
+    state.help.index_open = true;
+    state.handle_key(KeyCode::Char('0'));
+    assert!(!state.help.index_open);
+    assert_eq!(state.help.topic, HelpTopic::About);
+}
+
+#[test]
+fn repo_link_click_opens_repo_url_regardless_of_which_screen_set_the_rect() {
+    let mut state = initial_state();
+    let layout = MouseLayout {
+        repo_link: Some(Rect::new(5, 10, 20, 1)),
+        ..Default::default()
+    };
+    let out = state.handle_mouse(MouseInput::Click { col: 10, row: 10 }, &layout);
+    assert_eq!(out, KeyOutcome::OpenRepoUrl);
 }
 
 #[test]
@@ -5201,6 +5243,31 @@ fn revisions_click_selects_and_double_click_matches_enter() {
     let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
     assert_eq!(by_mouse, key_out);
     assert_eq!(by_mouse, KeyOutcome::RevisionDiffIncremental);
+}
+
+#[test]
+fn help_index_click_selects_and_double_click_opens_topic() {
+    let mut state = initial_state();
+    state.screen = Screen::Help;
+    state.help.index_open = true;
+    let hit = PaneHit {
+        rect: Rect::new(0, 0, 40, 15),
+        offset: 0,
+    };
+    let layout = MouseLayout {
+        list: Some(hit),
+        ..Default::default()
+    };
+    // Row 2 is the 2nd content row (border at row 0) -> idx 1 (Pins).
+    let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.help.index_sel, 1);
+    assert!(state.help.index_open); // a single click only selects, it doesn't open yet
+
+    let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
+    assert_eq!(by_mouse, KeyOutcome::None);
+    assert!(!state.help.index_open);
+    assert_eq!(state.help.topic, HelpTopic::Pins);
 }
 
 #[test]

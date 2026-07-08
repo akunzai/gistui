@@ -316,6 +316,11 @@ impl AppState {
                     self.help.index_open = false;
                     self.help.scroll = 0;
                 }
+                KeyCode::Char('0') if topics.len() > 9 => {
+                    self.help.topic = topics[9];
+                    self.help.index_open = false;
+                    self.help.scroll = 0;
+                }
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
                     self.screen = self.help.return_screen;
                     self.help.index_open = false;
@@ -334,6 +339,10 @@ impl AppState {
                 }
                 KeyCode::Char(c @ '1'..='9') if (c as u8 - b'1') < topics.len() as u8 => {
                     self.help.topic = topics[(c as u8 - b'1') as usize];
+                    self.help.scroll = 0;
+                }
+                KeyCode::Char('0') if topics.len() > 9 => {
+                    self.help.topic = topics[9];
                     self.help.scroll = 0;
                 }
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
@@ -771,6 +780,19 @@ impl AppState {
                         if let Some(idx) = hit.index_at(row, count) {
                             self.revision.index = idx;
                             self.revision.hscroll = 0;
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
+            // Only set when the topic index is open (render_help), so this is a no-op while
+            // viewing a topic's body.
+            Screen::Help => {
+                if let Some(hit) = layout.list {
+                    if point_in(hit.rect, col, row) {
+                        if let Some(idx) = hit.index_at(row, HelpTopic::all().len()) {
+                            self.help.index_sel = idx;
                             return true;
                         }
                     }
