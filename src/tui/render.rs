@@ -861,7 +861,7 @@ pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut
         (String::new(), err.clone(), false)
     } else {
         let file = state.revision_target_file_label();
-        (String::new(), format!("file={file} · {MINIMAL_HINT}"), true)
+        (String::new(), format!("file={file}"), false)
     };
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
@@ -1269,10 +1269,11 @@ pub(super) fn render_gist_comments(
     render_text_scrollbar(frame, area, total_lines, state.detail.scroll as usize);
 }
 
-/// The default (idle) footer hint everywhere the footer used to print a long per-screen
-/// hotkey list. Discoverability now lives in the `?` Help topic (and, from Phase 3/4 of the
-/// TUI UX redesign, the right-click context menu and Ctrl+P command palette).
-pub(super) const MINIMAL_HINT: &str = "? Help";
+/// The default (idle) footer hint. Empty in Phase 1: the `(?)Help` shortcut in the
+/// top bar (see `render_top_bar`) already covers Help discoverability, so repeating it
+/// here would be a duplicate. Phase 3/4 of the TUI UX redesign will populate this with
+/// `; Menu` and `Ctrl+p Palette` once those features exist.
+pub(super) const MINIMAL_HINT: &str = "";
 
 /// Footer text + whether to colourise it: a one-shot `state.status` message (shown plain) when
 /// present, else the colourised key `hints`. Shared by every screen so action results/errors

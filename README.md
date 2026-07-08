@@ -76,8 +76,8 @@ without resetting order. Pinned pairs show `📌`; same-filename candidates are 
 
 Press **`?`** anytime for the **full, contextual keymap** — it opens the current screen's
 topic; `Tab` browses all topics (List, Pins, Gist manager, Gist detail, Diff, Preview, …).
-The footer stays minimal (`? Help`); every screen also shows a `(G)ists (P)ins (?)Help`
-shortcut bar in the top-right corner (click, or use the underlying key).
+The footer stays empty when idle; every screen shows a `(G)ists (P)ins (?)Help`
+shortcut bar in the top-right corner instead (click, or use the underlying key).
 
 **Mouse** (on by default; disable with `mouse = false` in config or `--no-mouse`):
 

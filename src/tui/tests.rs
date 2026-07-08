@@ -1322,10 +1322,10 @@ fn wrap_line_count_is_responsive_to_width() {
 }
 
 #[test]
-fn minimal_hint_points_to_help() {
-    assert_eq!(MINIMAL_HINT, "? Help");
+fn minimal_hint_is_empty_when_idle() {
+    assert_eq!(MINIMAL_HINT, "");
     let (hint, colored) = footer_with_status(None, MINIMAL_HINT);
-    assert_eq!(hint, "? Help");
+    assert_eq!(hint, "");
     assert!(colored);
     let (status, colored) = footer_with_status(Some("Downloaded file.txt"), MINIMAL_HINT);
     assert_eq!(status, "Downloaded file.txt");
