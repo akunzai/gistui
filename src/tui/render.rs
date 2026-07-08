@@ -1607,28 +1607,14 @@ pub(super) fn hint_line(text: &str, theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The shared borderless footer block: a single dim top divider that carries the left `title` and
-/// the repo URL pinned to the bottom-right corner of every screen.
-///
-/// Deliberately omits the version number: printing it here would make every version bump a
-/// visible diff in the demo GIF/PNG, forcing a re-recording that the release flow doesn't
-/// otherwise need. The in-app update check already surfaces version freshness.
+/// The shared borderless footer block: a single dim top divider that carries the left `title`
+/// (the filter-input label while filtering; empty otherwise). The repo URL, app version, and
+/// update-check status used to live here (via `title` and a right-aligned repo span) but have
+/// moved to the Help → About topic (see `about_topic_lines`) — the footer is genuinely empty
+/// when idle now.
 pub(super) fn footer_block(title: &str, theme: &Theme) -> Block<'static> {
-    // Repo URL (scheme stripped — the host/path already names the project).
-    let repo = env!("CARGO_PKG_REPOSITORY")
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let repo_span = Span::styled(
-        repo.to_string(),
-        Style::default()
-            .fg(theme.fg)
-            .add_modifier(ratatui::style::Modifier::UNDERLINED),
-    );
-    let line = Line::from(vec![Span::raw(" "), repo_span, Span::raw(" ")]).right_aligned();
-
     Block::default()
         .title(title.to_string())
-        .title_top(line)
         .borders(Borders::TOP)
         .border_style(Style::default().fg(theme.dim))
         .style(theme.base_style())
@@ -1644,18 +1630,8 @@ pub(super) fn render_footer(
     text: &str,
     colored: bool,
     theme: &Theme,
-    layout: &mut MouseLayout,
+    _layout: &mut MouseLayout,
 ) {
-    let repo = env!("CARGO_PKG_REPOSITORY")
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let label = format!(" {} ", repo);
-    let label_len = label.chars().count() as u16;
-    let repo_x = area.x + area.width.saturating_sub(label_len);
-    let repo_width = label_len.min(area.width);
-    let repo_rect = Rect::new(repo_x, area.y, repo_width, 1);
-    layout.repo_link = Some(repo_rect);
-
     let para = if colored {
         Paragraph::new(hint_line(text, theme))
     } else {
@@ -1677,18 +1653,8 @@ pub(super) fn render_footer_line(
     title: &str,
     line: Line,
     theme: &Theme,
-    layout: &mut MouseLayout,
+    _layout: &mut MouseLayout,
 ) {
-    let repo = env!("CARGO_PKG_REPOSITORY")
-        .trim_start_matches("https://")
-        .trim_start_matches("http://");
-    let label = format!(" {} ", repo);
-    let label_len = label.chars().count() as u16;
-    let repo_x = area.x + area.width.saturating_sub(label_len);
-    let repo_width = label_len.min(area.width);
-    let repo_rect = Rect::new(repo_x, area.y, repo_width, 1);
-    layout.repo_link = Some(repo_rect);
-
     frame.render_widget(
         Paragraph::new(line)
             .style(theme.base_style())
@@ -1745,11 +1711,6 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
     };
     // Only the command-hint variant gets key colouring; filter input and status stay plain.
     let footer_is_command = !state.filtering && state.status.is_none();
-    // A newer-release hint rides the footer's top-border title slot (non-intrusive, persistent).
-    let footer_title = match &state.update_available {
-        Some(v) => crate::update_check::update_hint(v, &state.install_method),
-        None => String::new(),
-    };
     // Width inside the footer block: minus the 2 horizontal padding columns (no side borders).
     let footer_lines = wrap_line_count(&footer_body, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
@@ -1892,7 +1853,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
         render_footer(
             frame,
             chunks[1],
-            &footer_title,
+            "",
             &footer_body,
             footer_is_command,
             &state.theme,
