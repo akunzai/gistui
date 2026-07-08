@@ -8,7 +8,7 @@
 [tools]
 rust = { version = "stable", components = "rustfmt,clippy" }
 uv = "latest"                    # runs the demo scripts + provisions Python/Pillow on demand
-"aqua:asciinema/agg" = "latest"  # renders docs/demo.gif (aqua: checksum-verified)
+"aqua:asciinema/agg" = "latest"  # renders website/demo.gif (aqua: checksum-verified)
 
 # Tasks mirror the AGENTS.md verification gate and demo harness so the same
 # commands run locally and in CI. List them with `mise tasks`.

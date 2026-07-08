@@ -16,11 +16,11 @@ cargo run               # launch the TUI (needs a TTY)
 cargo run -- --check    # print gh readiness, then exit (no TUI)
 cargo test              # full suite; must NOT touch the network or require gh auth
 mise run demo-gif       # regenerate the README demo GIF; re-run after any UI change
-mise run demo-png       # regenerate the still PNG screenshots (docs/*.png)
+mise run demo-png       # regenerate the still PNG screenshots (website/*.png)
 mise run demo           # regenerate all demo media (demo-gif + demo-png)
 ```
 
-The demo recording harness (`scripts/demo/`) drives the **real** binary in a pseudo-tty against a **fake `gh`** over fake data, then renders `docs/demo.gif` with `agg`. Only the GIF is versioned (the cast is a throwaway intermediate). Edit `storyboard.json` to change what the demo shows; see `scripts/demo/README.md`.
+The demo recording harness (`scripts/demo/`) drives the **real** binary in a pseudo-tty against a **fake `gh`** over fake data, then renders `website/demo.gif` with `agg`. Only the GIF is versioned (the cast is a throwaway intermediate). Edit `storyboard.json` to change what the demo shows; see `scripts/demo/README.md`.
 
 ## Verification Gate (run before every commit)
 

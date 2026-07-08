@@ -21,7 +21,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SPEED="${SPEED:-1.25}"
 FONT="${FONT:-JetBrains Mono,Apple Color Emoji}"
 FONT_SIZE="${FONT_SIZE:-16}"
-GIF="${GIF:-$REPO_ROOT/docs/demo.gif}"
+GIF="${GIF:-$REPO_ROOT/website/demo.gif}"
 
 # Python helpers run through `uv run`, which provisions the interpreter on demand
 # (stdlib only here — no third-party deps). The version comes from

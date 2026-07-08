@@ -1,6 +1,6 @@
 # Demo recording harness
 
-Regenerates the README demo (`docs/demo.gif`) by driving the **real** `gistui`
+Regenerates the README demo (`website/demo.gif`) by driving the **real** `gistui`
 binary against **fake** data, fully scripted and reproducible — no real GitHub
 account, no manual keypresses.
 
@@ -8,7 +8,7 @@ account, no manual keypresses.
 scripts/demo/record.sh
 ```
 
-That builds `gistui`, records a session, and writes `docs/demo.gif`. The
+That builds `gistui`, records a session, and writes `website/demo.gif`. The
 intermediate asciinema `.cast` is recorded into a throwaway workspace and
 discarded — the GIF is fully reproducible from this harness, so only it is
 versioned.
@@ -78,7 +78,7 @@ Environment variables understood by `record.sh`:
 | `FONT` | `JetBrains Mono,Apple Color Emoji` | `agg --font-family`. |
 | `FONT_SIZE` | `16` | `agg --font-size`. |
 | `COLS` / `ROWS` | `100` / `30` | Recording terminal size. |
-| `GIF` | `docs/demo.gif` | Output GIF path. |
+| `GIF` | `website/demo.gif` | Output GIF path. |
 | `CAST` | `<workspace>/demo.cast` | Intermediate cast (discarded by default). |
 
 ## Still screenshots
@@ -94,15 +94,15 @@ It reuses the same fake `gh` + `seed.py` data, then for each shot: drives the re
 TUI to one screen (`shoot.py`), renders that frame to a GIF with `agg`, and
 extracts the frame to a PNG with Pillow. Each entry in the `SHOTS` array maps
 `shots/<name>.json` (a storyboard, same format as `storyboard.json`) to
-`docs/<name>.png`. The current shots:
+`website/<name>.png`. The current shots:
 
 | Shot | Screen | Output |
 |------|--------|--------|
-| `gist-manager` | the gist manager (`g`) | `docs/gist-manager.png` |
+| `gist-manager` | the gist manager (`g`) | `website/gist-manager.png` |
 
 `shoot.py` differs from `record.py` in one way: it writes the cast *before* the
 TUI tears down, so leaving the alternate screen never blanks the captured frame.
 Pillow is pulled in on demand via `uv run --with pillow`, so no manual setup or
 virtualenv is needed.
 
-Tunables (env): `FONT`, `FONT_SIZE`, `COLS` / `ROWS`, `OUT_DIR` (default `docs/`).
+Tunables (env): `FONT`, `FONT_SIZE`, `COLS` / `ROWS`, `OUT_DIR` (default `website/`).
