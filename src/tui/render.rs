@@ -301,7 +301,7 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
 /// Fixed row (0-indexed, within the topic body) of the clickable repo-URL line — used to
 /// place `MouseLayout::repo_link`'s hit-rect. Kept stable regardless of update-check state
 /// (see `about_topic_lines`) so this constant never has to change.
-const ABOUT_REPO_LINE: u16 = 3;
+const ABOUT_REPO_LINE: u16 = 2;
 
 /// The `About` topic's body: version, the clickable repo link (relocated from the old
 /// per-screen footer — see `render_footer`), and the update-check status if a newer release
@@ -314,13 +314,17 @@ fn about_topic_lines(state: &AppState) -> Vec<Line<'static>> {
     let mut lines = vec![
         Line::from(format!("gistui v{}", env!("CARGO_PKG_VERSION"))),
         Line::from(""),
-        Line::from("Repository (click to open in the browser)"),
-        Line::from(Span::styled(
-            format!("  {repo}"),
-            Style::default()
-                .fg(state.theme.fg)
-                .add_modifier(Modifier::UNDERLINED),
-        )),
+        // The leading indent is a plain (unstyled) span so only the repo URL itself is
+        // underlined — not the whitespace in front of it.
+        Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                repo.to_string(),
+                Style::default()
+                    .fg(state.theme.fg)
+                    .add_modifier(Modifier::UNDERLINED),
+            ),
+        ]),
         Line::from(""),
     ];
     if let Some(latest) = &state.update_available {
@@ -368,6 +372,12 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut Mous
         let mut list_state = ListState::default();
         list_state.select(Some(state.help.index_sel));
         frame.render_stateful_widget(list, area, &mut list_state);
+        if state.mouse_enabled {
+            layout.list = Some(PaneHit {
+                rect: area,
+                offset: list_state.offset(),
+            });
+        }
     } else {
         let title = format!(
             "Help · {} — Tab topics · ↑↓ scroll · Esc back",
@@ -1606,15 +1616,21 @@ pub(super) fn hint_line(text: &str, theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The shared borderless footer block: a single dim top divider that carries the left `title`
-/// (the filter-input label while filtering; empty otherwise). The repo URL, app version, and
+/// The shared footer block: a dim top divider that carries the left `title` (the filter-input
+/// label while filtering; empty otherwise), shown only when there's something to divide from
+/// (`show_divider`) — an idle footer with no status/hint text renders with no border at all,
+/// rather than a stray horizontal rule above nothing. The repo URL, app version, and
 /// update-check status used to live here (via `title` and a right-aligned repo span) but have
-/// moved to the Help → About topic (see `about_topic_lines`) — the footer is genuinely empty
-/// when idle now.
-pub(super) fn footer_block(title: &str, theme: &Theme) -> Block<'static> {
+/// moved to the Help → About topic (see `about_topic_lines`).
+pub(super) fn footer_block(title: &str, theme: &Theme, show_divider: bool) -> Block<'static> {
+    let borders = if show_divider {
+        Borders::TOP
+    } else {
+        Borders::NONE
+    };
     Block::default()
         .title(title.to_string())
-        .borders(Borders::TOP)
+        .borders(borders)
         .border_style(Style::default().fg(theme.dim))
         .style(theme.base_style())
         .padding(Padding::horizontal(1))
@@ -1639,13 +1655,14 @@ pub(super) fn render_footer(
     frame.render_widget(
         para.style(theme.base_style())
             .wrap(Wrap { trim: true })
-            .block(footer_block(title, theme)),
+            .block(footer_block(title, theme, !text.is_empty())),
         area,
     );
 }
 
 /// Like [`render_footer`] but draws a prebuilt styled `line`, used for active text inputs
-/// so the cursor can be reverse-highlighted at its real position.
+/// so the cursor can be reverse-highlighted at its real position. Always shows the divider —
+/// unlike `render_footer`'s idle case, an active text input is never blank.
 pub(super) fn render_footer_line(
     frame: &mut Frame,
     area: Rect,
@@ -1658,7 +1675,7 @@ pub(super) fn render_footer_line(
         Paragraph::new(line)
             .style(theme.base_style())
             .wrap(Wrap { trim: true })
-            .block(footer_block(title, theme)),
+            .block(footer_block(title, theme, true)),
         area,
     );
 }

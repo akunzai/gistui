@@ -402,7 +402,7 @@ impl PaneHit {
 pub struct MouseLayout {
     pub local: Option<PaneHit>,
     pub gist: Option<PaneHit>,
-    /// Single-list screens (Gists / Pins / Revisions).
+    /// Single-list screens (Gists / Pins / Revisions) and the Help topic index.
     pub list: Option<PaneHit>,
     /// GistDetail file list (Files tab).
     pub detail_files: Option<PaneHit>,

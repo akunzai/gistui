@@ -5239,6 +5239,31 @@ fn revisions_click_selects_and_double_click_matches_enter() {
 }
 
 #[test]
+fn help_index_click_selects_and_double_click_opens_topic() {
+    let mut state = initial_state();
+    state.screen = Screen::Help;
+    state.help.index_open = true;
+    let hit = PaneHit {
+        rect: Rect::new(0, 0, 40, 15),
+        offset: 0,
+    };
+    let layout = MouseLayout {
+        list: Some(hit),
+        ..Default::default()
+    };
+    // Row 2 is the 2nd content row (border at row 0) -> idx 1 (Pins).
+    let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.help.index_sel, 1);
+    assert!(state.help.index_open); // a single click only selects, it doesn't open yet
+
+    let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
+    assert_eq!(by_mouse, KeyOutcome::None);
+    assert!(!state.help.index_open);
+    assert_eq!(state.help.topic, HelpTopic::Pins);
+}
+
+#[test]
 fn gist_detail_file_click_selects_and_double_previews() {
     let mut state = state_with_gists(); // g1: a.txt (0), b.txt (1)
     state.screen = Screen::GistDetail;

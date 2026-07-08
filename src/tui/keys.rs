@@ -786,6 +786,19 @@ impl AppState {
                 }
                 false
             }
+            // Only set when the topic index is open (render_help), so this is a no-op while
+            // viewing a topic's body.
+            Screen::Help => {
+                if let Some(hit) = layout.list {
+                    if point_in(hit.rect, col, row) {
+                        if let Some(idx) = hit.index_at(row, HelpTopic::all().len()) {
+                            self.help.index_sel = idx;
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
             Screen::GistDetail => {
                 if let Some(hit) = layout.detail_files {
                     if point_in(hit.rect, col, row) {
