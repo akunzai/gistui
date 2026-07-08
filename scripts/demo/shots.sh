@@ -20,7 +20,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 FONT="${FONT:-JetBrains Mono,Apple Color Emoji}"
 FONT_SIZE="${FONT_SIZE:-16}"
-OUT_DIR="${OUT_DIR:-$REPO_ROOT/docs}"
+OUT_DIR="${OUT_DIR:-$REPO_ROOT/website}"
 
 # Each shot drives scripts/demo/shots/<name>.json and writes $OUT_DIR/<name>.png.
 SHOTS=("gist-manager")
