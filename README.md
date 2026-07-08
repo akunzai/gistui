@@ -8,7 +8,7 @@ A terminal UI for managing GitHub Gists. Browse, diff, download, upload, create,
 pin your gists — and pair them with files in your working directory — all through the
 GitHub CLI (`gh`).
 
-![gistui demo](https://raw.githubusercontent.com/akunzai/gistui/main/docs/demo.gif)
+![gistui demo](https://raw.githubusercontent.com/akunzai/gistui/main/website/demo.gif)
 
 ## Why gistui?
 
@@ -40,11 +40,11 @@ be installed and authenticated wherever you run `gistui`.
 curl -fsSL https://raw.githubusercontent.com/akunzai/gistui/main/install.sh | bash
 ```
 
-On Windows, use the [PowerShell installer](reference/INSTALL.md#windows-powershell) instead of
+On Windows, use the [PowerShell installer](docs/INSTALL.md#windows-powershell) instead of
 piping `install.sh` into `bash`.
 
 Homebrew, Scoop, crates.io, mise, manual download, build-from-source, and self-upgrade
-(`gistui --upgrade`) are documented in **[reference/INSTALL.md](reference/INSTALL.md)**.
+(`gistui --upgrade`) are documented in **[docs/INSTALL.md](docs/INSTALL.md)**.
 
 ## Usage
 
@@ -52,7 +52,7 @@ Homebrew, Scoop, crates.io, mise, manual download, build-from-source, and self-u
 gistui            # launch the TUI in the current directory (needs a TTY)
 gistui ~/dotfiles # launch against a specific working directory
 gistui --check    # print gh readiness, then exit (no TUI)
-gistui --upgrade  # upgrade a pre-built release binary (see reference/INSTALL.md)
+gistui --upgrade  # upgrade a pre-built release binary (see docs/INSTALL.md)
 ```
 
 Run from the directory whose files you want to pair with gists (or pass that path as an
@@ -101,7 +101,7 @@ the `--no-mouse` flag. On startup gistui checks GitHub once a day for a newer re
 a footer hint if one exists (no telemetry; fails silently offline) — disable with
 `check_updates = false` or `--no-update-check`.
 
-Full rules: **[reference/SAFETY.md](reference/SAFETY.md)**.
+Full rules: **[docs/SAFETY.md](docs/SAFETY.md)**.
 
 ## Configuration
 
