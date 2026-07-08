@@ -102,9 +102,9 @@ destructive remote actions
 each get their own confirm. Others' gists (e.g. starred) are read-only for pin/upload/delete
 — fork with `F` in gist detail. No GitHub token is stored; gist content is never written to
 config. Mouse is on by default and can be disabled with `mouse = false` in the config file or
-the `--no-mouse` flag. On startup gistui checks GitHub once a day for a newer release and shows
-a footer hint if one exists (no telemetry; fails silently offline) — disable with
-`check_updates = false` or `--no-update-check`.
+the `--no-mouse` flag. On startup gistui checks GitHub once a day for a newer release and
+surfaces it on the `?` Help → About topic if one exists (no telemetry; fails silently offline)
+— disable with `check_updates = false` or `--no-update-check`.
 
 Full rules: **[docs/SAFETY.md](docs/SAFETY.md)**.
 
@@ -121,7 +121,7 @@ automatically the first time you pin a file. All fields are optional.
 | `diff_show_full` | `bool` | Remembered state of the diff `c` toggle: `true` shows the full file, `false` collapses to `diff_context` lines. Rewritten when you press `c`. Default `false`. |
 | `theme` | `string` | Built-in colour theme: `"dark"` (default) or `"light"` (for light-background terminals). |
 | `mouse` | `bool` | Enable mouse support (wheel scroll, click/double-click, close button). Default `true`; `--no-mouse` forces it off for one session. |
-| `check_updates` | `bool` | Check GitHub once a day on startup for a newer release and show a footer hint. Default `true`; `--no-update-check` forces it off for one session. |
+| `check_updates` | `bool` | Check GitHub once a day on startup for a newer release and surface it on the `?` Help → About topic. Default `true`; `--no-update-check` forces it off for one session. |
 | `ignore_trailing_newline` | `bool` | Treat a difference that is *only* a file-final newline as no change in the diff view and the overwrite-confirm gate. Default `true`; set `false` for strict, byte-exact diffs. |
 | `skip_dirs` | `[string]` | Directory names skipped during recursive discovery (`r` key). Defaults to common build/dependency dirs (`node_modules`, `target`, …). Hidden dirs (`.`-prefix) are always skipped. |
 | `[[pinned]]` | `table array` | Local-file ↔ gist mappings managed by the `p`/`P` keys. Can also be edited by hand. |
