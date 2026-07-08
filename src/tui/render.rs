@@ -50,6 +50,74 @@ fn render_close_button(frame: &mut Frame, outer: Rect, theme: &Theme) -> Rect {
     rect
 }
 
+/// The three cross-screen top-bar shortcuts: bracketed hotkey letter + label. Kept in one
+/// place so the click hit-rect math and the rendered text can never drift apart.
+const TOP_BAR_ITEMS: [(&str, &str); 3] = [("G", "ists"), ("P", "ins"), ("?", "Help")];
+
+/// Height of the persistent top bar rendered on every screen except the transient `Confirm`
+/// y/n modal (which keeps its full-bleed diff/gist-info background — see `render_confirm`).
+const TOP_BAR_HEIGHT: u16 = 1;
+
+/// Renders the cross-screen top bar — ` gistui` on the left, `(G)ists (P)ins (?)Help`
+/// right-aligned — into the top row of `area`, then returns the remaining rect below it for
+/// the caller's existing content/footer layout (otherwise unchanged). The icons render as
+/// plain text even with the mouse disabled, so the shortcuts stay visible; their hit-rects are
+/// only recorded in `layout` when `mouse_enabled`, matching every other clickable region.
+pub(super) fn render_top_bar(
+    frame: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    mouse_enabled: bool,
+    layout: &mut MouseLayout,
+) -> Rect {
+    if area.height == 0 {
+        return area;
+    }
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(TOP_BAR_HEIGHT), Constraint::Min(0)])
+        .split(area);
+    let bar = chunks[0];
+
+    frame.render_widget(Paragraph::new(" gistui").style(theme.base_style()), bar);
+
+    let key_style = Style::default()
+        .fg(theme.accent)
+        .add_modifier(Modifier::BOLD);
+    let label_style = Style::default().fg(theme.fg);
+    let widths: Vec<u16> = TOP_BAR_ITEMS
+        .into_iter()
+        .map(|(k, rest)| (k.chars().count() + rest.chars().count() + 2) as u16) // "(" + key + ")" + rest
+        .collect();
+    const GAP: u16 = 2;
+    let total: u16 = widths.iter().sum::<u16>() + GAP * (TOP_BAR_ITEMS.len() as u16 - 1);
+    let mut x = bar.right().saturating_sub(total + 1); // 1-column right margin
+
+    for (i, (key, rest)) in TOP_BAR_ITEMS.into_iter().enumerate() {
+        let w = widths[i].min(bar.right().saturating_sub(x));
+        let rect = Rect::new(x, bar.y, w, 1);
+        let spans = vec![
+            Span::styled("(", label_style),
+            Span::styled(key.to_string(), key_style),
+            Span::styled(format!("){rest}"), label_style),
+        ];
+        frame.render_widget(
+            Paragraph::new(Line::from(spans)).style(theme.base_style()),
+            rect,
+        );
+        if mouse_enabled {
+            match i {
+                0 => layout.top_bar_gists = Some(rect),
+                1 => layout.top_bar_pins = Some(rect),
+                _ => layout.top_bar_help = Some(rect),
+            }
+        }
+        x += widths[i] + GAP;
+    }
+
+    chunks[1]
+}
+
 /// A count suffix for a list title: `(N)` normally, or `(shown/total)` when a filter has
 /// narrowed the list (`shown < total`). Extends the existing `Files (N)` / `Comments (N)`
 /// convention to the other panes consistently.
@@ -226,6 +294,8 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
 }
 
 pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+    let area = frame.area();
+    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
     if state.help.index_open {
         let items: Vec<ListItem> = HelpTopic::all()
             .iter()
@@ -251,7 +321,7 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut Mous
             .highlight_symbol("▶ ");
         let mut list_state = ListState::default();
         list_state.select(Some(state.help.index_sel));
-        frame.render_stateful_widget(list, frame.area(), &mut list_state);
+        frame.render_stateful_widget(list, area, &mut list_state);
     } else {
         let title = format!(
             "Help · {} — Tab topics · ↑↓ scroll · Esc back",
@@ -269,11 +339,11 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut Mous
                         .style(state.theme.base_style())
                         .padding(Padding::horizontal(1)),
                 ),
-            frame.area(),
+            area,
         );
     }
     if state.mouse_enabled {
-        layout.close_button = Some(render_close_button(frame, frame.area(), &state.theme));
+        layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }
 }
 
@@ -315,6 +385,7 @@ fn preview_line_spans(state: &AppState) -> Vec<Vec<Span<'static>>> {
 
 pub(super) fn render_preview(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
+    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
     // A `R`-refresh fetch error (set via state.status) must surface here, not be swallowed.
     let hints = if state.preview_wrap {
         "↑↓ PgUp/Dn scroll  ·  w wrap [on]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
@@ -372,6 +443,7 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState, layout: &mut M
 
 pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
+    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
     // Sync feedback (e.g. "already in sync", "can't tell which side is newer") is set via
     // state.status while staying on this screen, so the footer must surface it (see #72).
     let (ftitle, footer, colored) = if state.pins.filtering {
@@ -584,6 +656,7 @@ pub(super) fn gist_group_row_label(
 
 pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
+    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
     // Footer: filter input while filtering, else a one-shot status message (e.g. the compaction
     // result) when present, else the command hints. Only the hints get key colouring.
     let (ftitle, footer, colored) = if state.gist_manager.filtering {
@@ -778,6 +851,7 @@ pub(super) fn revision_row_label(
 
 pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
+    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
     let (ftitle, footer, colored) = if let Some(message) = &state.status {
         (String::new(), message.clone(), false)
     } else if state.revision.entries.is_none() {
@@ -1246,6 +1320,7 @@ pub(super) fn detail_focus_tabs_line(focus: DetailFocus, theme: &Theme) -> Line<
 
 pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
+    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
     let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     // Fixed 4-row header (borders + basic-info line + focus tabs); the active tab — the file
@@ -1587,6 +1662,7 @@ pub(super) fn input_line(prefix: &str, input: &TextInput, suffix: &str) -> Line<
 
 pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
+    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
     let footer_body = if state.filtering {
         let (pane, query) = match state.focus {
             FocusPane::Local => ("local", &state.local_filter_query),
@@ -2316,6 +2392,7 @@ pub(super) fn render_diff(frame: &mut Frame, state: &AppState, layout: &mut Mous
     let footer = diff_footer(state);
 
     let area = frame.area();
+    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
