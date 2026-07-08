@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-07-08
+
 - The footer no longer draws a horizontal rule above its text — one fewer row of chrome on every screen that shows a footer hint or status.
 - A unified context menu (`;` or right-click) and command palette (`Ctrl+p`) list action verbs for the current screen — the menu shows only what's valid for your selection; the palette shows everything plus cross-screen shortcuts (`Go to Pins`, `Toggle theme`, `Quit`, …) with fuzzy-filter search. The idle footer now hints `; Menu · Ctrl+p Palette`.
 - Every screen now shows a `(G)ists (P)ins (?)Help` shortcut bar in the top-right corner (click, or use the existing `g`/`P`/`?` keys, from any screen); the footer's long per-screen hotkey list is gone and it now fully collapses when idle (no divider, no blank row — the space goes back to content), since Help discoverability lives in the top bar (press `?` for the full keymap).
@@ -168,7 +170,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.15.2...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/akunzai/gistui/releases/tag/v0.16.0
 [0.15.2]: https://github.com/akunzai/gistui/releases/tag/v0.15.2
 [0.15.1]: https://github.com/akunzai/gistui/releases/tag/v0.15.1
 [0.15.0]: https://github.com/akunzai/gistui/releases/tag/v0.15.0
