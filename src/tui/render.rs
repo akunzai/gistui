@@ -1512,13 +1512,17 @@ pub(super) fn hint_line(text: &str, theme: &Theme) -> Line<'static> {
 }
 
 /// The shared borderless footer block: a single dim top divider that carries the left `title` and
-/// the app version pinned to the bottom-right corner of every screen.
+/// the repo URL pinned to the bottom-right corner of every screen.
+///
+/// Deliberately omits the version number: printing it here would make every version bump a
+/// visible diff in the demo GIF/PNG, forcing a re-recording that the release flow doesn't
+/// otherwise need. The in-app update check already surfaces version freshness.
 pub(super) fn footer_block(title: &str, theme: &Theme) -> Block<'static> {
-    // Repo URL (scheme stripped — the host/path already names the project) plus the version.
+    // Repo URL (scheme stripped — the host/path already names the project).
     let repo = env!("CARGO_PKG_REPOSITORY")
         .trim_start_matches("https://")
         .trim_start_matches("http://");
-    let label = format!(" {} v{} ", repo, env!("CARGO_PKG_VERSION"));
+    let label = format!(" {} ", repo);
     Block::default()
         .title(title.to_string())
         .title_top(

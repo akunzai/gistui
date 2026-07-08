@@ -587,9 +587,7 @@ fn context_gist_id_uses_group_cursor_on_gists_screen() {
 
 #[test]
 fn about_metadata_is_available_for_help() {
-    // The footer renders both the repo URL and the version; guard against dropping
-    // either from Cargo.toml.
-    assert!(!env!("CARGO_PKG_VERSION").is_empty());
+    // The footer renders the repo URL; guard against dropping it from Cargo.toml.
     assert!(env!("CARGO_PKG_REPOSITORY").contains("github.com/akunzai/gistui"));
 }
 
