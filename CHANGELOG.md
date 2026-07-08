@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- The footer no longer shows the app version number (repo URL stays); the in-app update check already surfaces version freshness, and printing the version there forced a demo GIF/PNG re-recording on every release.
+
 ## [0.15.1] — 2026-07-08
 
 - The Homebrew formula (`akunzai/tap/gistui`) now installs a prebuilt binary instead of compiling from source, cutting install time from 1-2 minutes to a few seconds; `brew install --HEAD` still builds from source.
