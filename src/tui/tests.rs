@@ -3440,6 +3440,49 @@ fn entering_pins_screen_resets_hscroll() {
 }
 
 #[test]
+fn top_bar_gists_click_opens_gist_manager_from_any_screen() {
+    let mut state = state_with_gists();
+    state.screen = Screen::Preview; // arbitrary screen that has no 'g' binding of its own
+    let layout = MouseLayout {
+        top_bar_gists: Some(Rect::new(10, 0, 7, 1)),
+        ..Default::default()
+    };
+    let out = state.handle_mouse(MouseInput::Click { col: 12, row: 0 }, &layout);
+    assert_eq!(state.screen, Screen::Gists);
+    assert_eq!(out, KeyOutcome::None);
+}
+
+#[test]
+fn top_bar_pins_click_opens_pins_from_any_screen() {
+    let mut state = pins_state_with_long_home_path();
+    state.handle_key(KeyCode::Right); // dirty the hscroll so the reset is observable
+    assert!(state.pins.hscroll > 0);
+    state.screen = Screen::Preview;
+    let layout = MouseLayout {
+        top_bar_pins: Some(Rect::new(20, 0, 6, 1)),
+        ..Default::default()
+    };
+    let out = state.handle_mouse(MouseInput::Click { col: 22, row: 0 }, &layout);
+    assert_eq!(state.screen, Screen::Pins);
+    assert_eq!(state.pins.hscroll, 0);
+    assert_eq!(out, KeyOutcome::None);
+}
+
+#[test]
+fn top_bar_help_click_opens_help_and_remembers_return_screen_from_any_screen() {
+    let mut state = state_with_gists();
+    state.screen = Screen::Preview;
+    let layout = MouseLayout {
+        top_bar_help: Some(Rect::new(30, 0, 7, 1)),
+        ..Default::default()
+    };
+    let out = state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
+    assert_eq!(state.screen, Screen::Help);
+    assert_eq!(state.help.return_screen, Screen::Preview);
+    assert_eq!(out, KeyOutcome::None);
+}
+
+#[test]
 fn list_screen_capital_s_syncs_selected_pair() {
     let mut state = initial_state();
     state.locals = vec![LocalCandidate {
