@@ -291,6 +291,10 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   Up/Down    scroll this help text
   NO_COLOR   set this env var to disable syntax highlighting (preview + diff)"
         }
+        HelpTopic::About => {
+            "About
+(This section will show version, repository, and update information.)"
+        }
     }
 }
 
@@ -301,12 +305,19 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut Mous
         let items: Vec<ListItem> = HelpTopic::all()
             .iter()
             .enumerate()
-            .map(|(i, t)| ListItem::new(format!("  {}  {}", i + 1, t.title())))
+            .map(|(i, t)| {
+                let key = if i == 9 {
+                    "0".to_string()
+                } else {
+                    (i + 1).to_string()
+                };
+                ListItem::new(format!("  {}  {}", key, t.title()))
+            })
             .collect();
         let list = List::new(items)
             .block(
                 Block::default()
-                    .title("Help — pick a topic (1-9 / ↑↓ Enter · Esc back)")
+                    .title("Help — pick a topic (1-9,0 / ↑↓ Enter · Esc back)")
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .style(state.theme.base_style())

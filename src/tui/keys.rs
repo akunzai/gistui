@@ -316,6 +316,11 @@ impl AppState {
                     self.help.index_open = false;
                     self.help.scroll = 0;
                 }
+                KeyCode::Char('0') if topics.len() > 9 => {
+                    self.help.topic = topics[9];
+                    self.help.index_open = false;
+                    self.help.scroll = 0;
+                }
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
                     self.screen = self.help.return_screen;
                     self.help.index_open = false;
@@ -334,6 +339,10 @@ impl AppState {
                 }
                 KeyCode::Char(c @ '1'..='9') if (c as u8 - b'1') < topics.len() as u8 => {
                     self.help.topic = topics[(c as u8 - b'1') as usize];
+                    self.help.scroll = 0;
+                }
+                KeyCode::Char('0') if topics.len() > 9 => {
+                    self.help.topic = topics[9];
                     self.help.scroll = 0;
                 }
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {

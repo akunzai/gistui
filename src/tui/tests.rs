@@ -3943,11 +3943,13 @@ fn pins_filter_input_behaviors() {
 #[test]
 fn help_topic_all_is_ordered_and_titled() {
     let all = HelpTopic::all();
-    assert_eq!(all.len(), 9);
+    assert_eq!(all.len(), 10);
     assert_eq!(all[0], HelpTopic::List);
     assert_eq!(all[4], HelpTopic::Revisions);
     assert_eq!(all[8], HelpTopic::General);
+    assert_eq!(all[9], HelpTopic::About);
     assert_eq!(HelpTopic::Pins.title(), "Pinned Mappings");
+    assert_eq!(HelpTopic::About.title(), "About");
 }
 
 #[test]
@@ -4319,6 +4321,28 @@ fn help_topic_view_number_switches_topic() {
     assert_eq!(state.help.topic, HelpTopic::Pins);
     assert_eq!(state.help.scroll, 0);
     assert!(!state.help.index_open);
+}
+
+#[test]
+fn help_topic_view_zero_key_switches_to_about() {
+    let mut state = initial_state();
+    state.screen = Screen::Help;
+    state.help.topic = HelpTopic::List;
+    state.help.scroll = 5;
+    state.handle_key(KeyCode::Char('0')); // 0 -> About (index 9, the 10th topic)
+    assert_eq!(state.help.topic, HelpTopic::About);
+    assert_eq!(state.help.scroll, 0);
+    assert!(!state.help.index_open);
+}
+
+#[test]
+fn help_index_zero_key_opens_about_from_the_index_list() {
+    let mut state = initial_state();
+    state.screen = Screen::Help;
+    state.help.index_open = true;
+    state.handle_key(KeyCode::Char('0'));
+    assert!(!state.help.index_open);
+    assert_eq!(state.help.topic, HelpTopic::About);
 }
 
 #[test]
