@@ -1,5 +1,5 @@
 use super::*;
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier};
 use std::path::PathBuf;
@@ -1329,10 +1329,10 @@ fn footer_height_collapses_to_zero_when_empty_else_wraps_plus_divider() {
 }
 
 #[test]
-fn minimal_hint_is_empty_when_idle() {
-    assert_eq!(MINIMAL_HINT, "");
+fn minimal_hint_shows_menu_and_palette_shortcuts() {
+    assert_eq!(MINIMAL_HINT, "; Menu · Ctrl+p Palette");
     let (hint, colored) = footer_with_status(None, MINIMAL_HINT);
-    assert_eq!(hint, "");
+    assert_eq!(hint, "; Menu · Ctrl+p Palette");
     assert!(colored);
     let (status, colored) = footer_with_status(Some("Downloaded file.txt"), MINIMAL_HINT);
     assert_eq!(status, "Downloaded file.txt");
@@ -5473,4 +5473,92 @@ fn m_key_noop_when_at_oldest_page() {
     );
     let out = s.handle_key(KeyCode::Char('m'));
     assert!(matches!(out, KeyOutcome::None));
+}
+
+// ── palette tests ─────────────────────────────────────────────────────────────
+
+#[test]
+fn semicolon_opens_menu_palette() {
+    let mut state = crate::tui::initial_state();
+    state.handle_key(KeyCode::Char(';'));
+    assert_eq!(state.screen, Screen::Palette);
+    assert_eq!(state.palette.mode, crate::tui::palette::PaletteMode::Menu);
+    assert_eq!(state.palette.origin_screen, Screen::List);
+}
+
+#[test]
+fn ctrl_p_opens_command_palette() {
+    let mut state = crate::tui::initial_state();
+    state.handle_key_with(KeyCode::Char('p'), KeyModifiers::CONTROL);
+    assert_eq!(state.screen, Screen::Palette);
+    assert_eq!(
+        state.palette.mode,
+        crate::tui::palette::PaletteMode::Command
+    );
+}
+
+#[test]
+fn palette_esc_returns_to_origin() {
+    let mut state = crate::tui::initial_state();
+    state.screen = Screen::Pins;
+    state.open_palette_menu(None);
+    assert_eq!(state.screen, Screen::Palette);
+    state.handle_key(KeyCode::Esc);
+    assert_eq!(state.screen, Screen::Pins);
+}
+
+#[test]
+fn menu_palette_hides_disabled_actions() {
+    let mut state = crate::tui::initial_state();
+    state.open_palette_menu(None);
+    let labels: Vec<_> = state
+        .palette_visible_items()
+        .iter()
+        .map(|i| i.label.as_str())
+        .collect();
+    assert!(!labels.iter().any(|l| l.contains("Upload")));
+}
+
+#[test]
+fn command_palette_includes_cross_screen_quit() {
+    let mut state = crate::tui::initial_state();
+    state.open_palette_command();
+    assert!(state
+        .palette_visible_items()
+        .iter()
+        .any(|i| i.label == "Quit"));
+}
+
+#[test]
+fn command_palette_fuzzy_filter_narrows_items() {
+    let mut state = crate::tui::initial_state();
+    state.open_palette_command();
+    let before = state.palette_visible_items().len();
+    state.palette.query.set("quit");
+    let after = state.palette_visible_items().len();
+    assert!(after < before);
+    assert!(state
+        .palette_visible_items()
+        .iter()
+        .all(|i| i.label.to_ascii_lowercase().contains("quit")));
+}
+
+#[test]
+fn right_click_opens_menu_palette() {
+    let mut state = crate::tui::initial_state();
+    let out = state.handle_mouse(
+        MouseInput::RightClick { col: 10, row: 5 },
+        &MouseLayout::default(),
+    );
+    assert_eq!(out, KeyOutcome::None);
+    assert_eq!(state.screen, Screen::Palette);
+    assert_eq!(state.palette.anchor, Some((10, 5)));
+}
+
+#[test]
+fn palette_blocked_during_confirm() {
+    let mut state = crate::tui::initial_state();
+    state.screen = Screen::Confirm;
+    state.handle_key(KeyCode::Char(';'));
+    assert_eq!(state.screen, Screen::Confirm);
 }

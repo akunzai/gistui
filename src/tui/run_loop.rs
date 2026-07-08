@@ -103,6 +103,12 @@ pub(super) fn run_loop(
                         last_click = Some((m.column, m.row, std::time::Instant::now()));
                         Some(classified)
                     }
+                    MouseEventKind::Down(MouseButton::Right) => {
+                        Some(super::MouseInput::RightClick {
+                            col: m.column,
+                            row: m.row,
+                        })
+                    }
                     _ => None,
                 };
                 match input {

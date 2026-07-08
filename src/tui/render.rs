@@ -20,6 +20,7 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
         frame.area(),
     );
     match state.screen {
+        Screen::Palette => render_palette(frame, state, layout),
         Screen::List => render_list(frame, state, layout),
         Screen::Diff => render_diff(frame, state, layout),
         Screen::Confirm => render_confirm(frame, state, layout),
@@ -180,7 +181,9 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   Dbl-click  open the clicked row (diff / detail / pin diff / preview)
   Tab click  switch Files / Comments on the Gist details screen
   [✕] btn    close / go back on any pop-up screen
-  Top bar    click (G)ists / (P)ins / (?)Help (top-right, every screen) to jump there"
+  Top bar    click (G)ists / (P)ins / (?)Help (top-right, every screen) to jump there
+  Right-click  open the context menu at the click (same as ;)
+  ; / Ctrl+p   open the menu / command palette from the keyboard (see General)"
         }
         HelpTopic::Pins => {
             "\
@@ -286,6 +289,8 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
             "\
   Esc / q    close an overlay; from the list, press twice to quit the app
   ?          show this help
+  ;          context menu (actions valid for the current screen + selection)
+  Ctrl+p     command palette (all actions + cross-screen navigation; type to filter)
   T          toggle light/dark colour theme (saved to config)
   Up/Down    scroll this help text
   NO_COLOR   set this env var to disable syntax highlighting (preview + diff)"
@@ -1348,11 +1353,8 @@ pub(super) fn render_gist_comments(
     render_text_scrollbar(frame, area, total_lines, state.detail.scroll as usize);
 }
 
-/// The default (idle) footer hint. Empty in Phase 1: the `(?)Help` shortcut in the
-/// top bar (see `render_top_bar`) already covers Help discoverability, so repeating it
-/// here would be a duplicate. Phase 3/4 of the TUI UX redesign will populate this with
-/// `; Menu` and `Ctrl+p Palette` once those features exist.
-pub(super) const MINIMAL_HINT: &str = "";
+/// The default (idle) footer hint on screens that used to show a long per-screen key dump.
+pub(super) const MINIMAL_HINT: &str = "; Menu · Ctrl+p Palette";
 
 /// Footer text + whether to colourise it: a one-shot `state.status` message (shown plain) when
 /// present, else the colourised key `hints`. Shared by every screen so action results/errors
@@ -2592,6 +2594,120 @@ const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "�
 /// frame count.
 pub(super) fn spinner_glyph(frame: usize) -> &'static str {
     SPINNER_FRAMES[frame % SPINNER_FRAMES.len()]
+}
+
+/// The unified context menu / command palette drawn over the screen it was opened from.
+fn render_palette(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+    let mut bg_layout = MouseLayout::default();
+    match state.palette.origin_screen {
+        Screen::List => render_list(frame, state, &mut bg_layout),
+        Screen::Diff => render_diff(frame, state, &mut bg_layout),
+        Screen::Preview => render_preview(frame, state, &mut bg_layout),
+        Screen::Help => render_help(frame, state, &mut bg_layout),
+        Screen::Pins => render_pins(frame, state, &mut bg_layout),
+        Screen::Gists => render_gists(frame, state, &mut bg_layout),
+        Screen::GistDetail => render_gist_detail(frame, state, &mut bg_layout),
+        Screen::Revisions => render_revisions(frame, state, &mut bg_layout),
+        Screen::Confirm | Screen::Palette => {}
+    }
+
+    let area = frame.area();
+    let visible = state.palette_visible_items();
+    let has_query = state.palette.mode == PaletteMode::Command;
+    let title = match state.palette.mode {
+        PaletteMode::Menu => "Menu",
+        PaletteMode::Command => "Command palette",
+    };
+    let row_texts: Vec<String> = if visible.is_empty() {
+        vec!["  (no matches)".to_string()]
+    } else {
+        visible
+            .iter()
+            .map(|item| format!("  {:<3} {}", item.key_hint, item.label))
+            .collect()
+    };
+    let body_lines = row_texts.len() + usize::from(has_query);
+    let width = if has_query {
+        (area.width * 70 / 100).clamp(28, area.width.saturating_sub(2).max(1))
+    } else {
+        (area.width * 45 / 100).clamp(24, area.width.saturating_sub(2).max(1))
+    };
+    let max_h = area.height.saturating_sub(2).max(1) as usize;
+    let height = (body_lines + 2).clamp(3, max_h) as u16;
+    let (x, y) = match (state.palette.mode, state.palette.anchor) {
+        (PaletteMode::Menu, Some((col, row))) => (
+            col.saturating_sub(width / 2)
+                .min(area.width.saturating_sub(width)),
+            row.saturating_sub(1)
+                .min(area.height.saturating_sub(height)),
+        ),
+        _ => (
+            area.width.saturating_sub(width) / 2,
+            area.height.saturating_sub(height).saturating_sub(1),
+        ),
+    };
+    let rect = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, rect);
+
+    layout.palette_rows.clear();
+    let dim = Style::default().fg(state.theme.dim);
+    let active = Style::default()
+        .fg(state.theme.fg_on_accent)
+        .bg(state.theme.accent)
+        .add_modifier(Modifier::BOLD);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if has_query {
+        lines.push(input_line("> ", &state.palette.query, ""));
+    }
+    if visible.is_empty() {
+        lines.push(Line::from(Span::styled("  (no matches)", dim)));
+    } else {
+        for (i, item) in visible.iter().enumerate() {
+            let row_style = if i == state.palette.selected {
+                active
+            } else if item.enabled {
+                state.theme.base_style()
+            } else {
+                Style::default().fg(state.theme.dim)
+            };
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {:<3}", item.key_hint),
+                    Style::default().fg(action_color(&item.label, &state.theme)),
+                ),
+                Span::styled(item.label.clone(), row_style),
+            ]));
+        }
+    }
+    frame.render_widget(
+        Paragraph::new(lines).style(state.theme.base_style()).block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(state.theme.accent))
+                .style(state.theme.base_style()),
+        ),
+        rect,
+    );
+
+    let inner = rect.inner(Margin::new(1, 1));
+    let mut y = inner.y + u16::from(has_query);
+    for item in visible.iter() {
+        if y >= inner.bottom() {
+            break;
+        }
+        if state.mouse_enabled && item.enabled {
+            layout
+                .palette_rows
+                .push(Rect::new(inner.x, y, inner.width, 1));
+        }
+        y = y.saturating_add(1);
+    }
+    if state.mouse_enabled {
+        layout.palette_close = Some(render_close_button(frame, rect, &state.theme));
+    }
 }
 
 /// A centered "Working…" box shown while a blocking `gh` action runs.

@@ -47,6 +47,20 @@ impl AppState {
     }
 
     pub fn handle_key_with(&mut self, code: KeyCode, modifiers: KeyModifiers) -> KeyOutcome {
+        if self.screen == Screen::Palette {
+            return self.handle_key_palette(code, modifiers);
+        }
+        if code == KeyCode::Char(';') && modifiers.is_empty() && !self.palette_blocked() {
+            self.open_palette_menu(None);
+            return KeyOutcome::None;
+        }
+        if code == KeyCode::Char('p')
+            && modifiers.contains(KeyModifiers::CONTROL)
+            && !self.palette_blocked()
+        {
+            self.open_palette_command();
+            return KeyOutcome::None;
+        }
         // Global theme toggle: skip while any inline text input is active so `T` can still
         // be typed into filters and description editors.
         if code == KeyCode::Char('T')
@@ -80,6 +94,7 @@ impl AppState {
             Screen::Gists => self.handle_key_gists(code),
             Screen::GistDetail => self.handle_key_detail(code),
             Screen::Revisions => self.handle_key_revisions(code),
+            Screen::Palette => KeyOutcome::None,
         }
     }
 
@@ -87,7 +102,7 @@ impl AppState {
     /// A no-op while already on Help — otherwise the top bar's `(?)Help` click (reachable from
     /// any screen, including Help itself) would overwrite `return_screen` with `Screen::Help`,
     /// trapping Esc/`?`/the close button in Help with no keyboard way out.
-    fn open_help(&mut self) {
+    pub(crate) fn open_help(&mut self) {
         if self.screen == Screen::Help {
             return;
         }
@@ -113,6 +128,21 @@ impl AppState {
             return false;
         }
         match self.screen {
+            Screen::Palette => {
+                let len = self.palette_visible_items().len();
+                match action {
+                    NavAction::Up => {
+                        self.palette.selected = self.palette.selected.saturating_sub(1);
+                    }
+                    NavAction::Down => {
+                        if len > 0 && self.palette.selected + 1 < len {
+                            self.palette.selected += 1;
+                        }
+                    }
+                    _ => return false,
+                }
+                true
+            }
             Screen::Help => {
                 let topics = HelpTopic::all();
                 if self.help.index_open {
@@ -706,6 +736,7 @@ impl AppState {
             // steps one file at a time.
             Screen::GistDetail if self.detail.focus == DetailFocus::Comments => 3,
             Screen::Help if !self.help.index_open => 3, // help body scrolls; topic index is a list
+            Screen::Palette => 1,
             _ => 1, // List/Pins/Gists/Revisions/Help index/GistDetail Files
         }
     }
@@ -893,7 +924,34 @@ impl AppState {
     /// logic. Pure (no IO, no clock); returns a `KeyOutcome` so `run_loop` can perform any
     /// follow-up IO (e.g. `PreviewDiff` on double-click).
     pub fn handle_mouse(&mut self, input: MouseInput, layout: &MouseLayout) -> KeyOutcome {
+        if self.screen == Screen::Palette {
+            return match input {
+                MouseInput::Click { col, row } | MouseInput::DoubleClick { col, row } => {
+                    self.palette_click(col, row, layout)
+                }
+                MouseInput::RightClick { .. } => KeyOutcome::None,
+                MouseInput::ScrollUp | MouseInput::ScrollDown => {
+                    let action = if matches!(input, MouseInput::ScrollUp) {
+                        NavAction::Up
+                    } else {
+                        NavAction::Down
+                    };
+                    for _ in 0..self.wheel_step() {
+                        self.apply_navigation(action);
+                    }
+                    KeyOutcome::None
+                }
+            };
+        }
         match input {
+            MouseInput::RightClick { col, row } => {
+                if self.palette_blocked() {
+                    return KeyOutcome::None;
+                }
+                self.click_select(col, row, layout);
+                self.open_palette_menu(Some((col, row)));
+                KeyOutcome::None
+            }
             MouseInput::ScrollUp | MouseInput::ScrollDown => {
                 let action = if matches!(input, MouseInput::ScrollUp) {
                     NavAction::Up
@@ -1297,7 +1355,7 @@ impl AppState {
     /// Open the gist-level manager (`Screen::Gists`), landing on the gist that owns the
     /// selected file row. Resets the manager's own filters first so the target is always
     /// visible. No-op (with a status hint) when there are no gists to manage.
-    fn open_gist_manager(&mut self) {
+    pub(crate) fn open_gist_manager(&mut self) {
         if self.gists.is_empty() {
             self.status = Some("no gists to manage".into());
             return;
@@ -1318,7 +1376,7 @@ impl AppState {
 
     /// Open the Pins view (`Screen::Pins`), resetting its selection/scroll so a stale
     /// filtered-in position from a previous visit never lingers.
-    fn open_pins(&mut self) {
+    pub(crate) fn open_pins(&mut self) {
         self.pins.index = 0;
         self.pins.hscroll = 0;
         self.screen = Screen::Pins;
@@ -1575,6 +1633,6 @@ impl AppState {
 }
 
 /// Whether a column/row position lands inside a `Rect`.
-fn point_in(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
+pub(crate) fn point_in(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.right() && row >= rect.y && row < rect.bottom()
 }
