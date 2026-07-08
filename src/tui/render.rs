@@ -2594,6 +2594,32 @@ pub(super) fn spinner_glyph(frame: usize) -> &'static str {
     SPINNER_FRAMES[frame % SPINNER_FRAMES.len()]
 }
 
+/// Column width for palette key hints: at least one char, wide enough for the longest
+/// visible key (`Enter`, `Ctrl+p`, …) so labels never run into the hint.
+pub(super) fn palette_key_width(items: &[&PaletteItem]) -> usize {
+    items
+        .iter()
+        .map(|item| item.key_hint.chars().count())
+        .max()
+        .unwrap_or(1)
+}
+
+/// One palette row: indented key column + gap + label. Pure for unit tests.
+pub(super) fn palette_row_line(
+    item: &PaletteItem,
+    key_width: usize,
+    theme: &Theme,
+    row_style: Style,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {:<key_width$}  ", item.key_hint, key_width = key_width),
+            Style::default().fg(action_color(&item.label, theme)),
+        ),
+        Span::styled(item.label.clone(), row_style),
+    ])
+}
+
 /// The unified context menu / command palette drawn over the screen it was opened from.
 fn render_palette(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let mut bg_layout = MouseLayout::default();
@@ -2616,19 +2642,22 @@ fn render_palette(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout)
         PaletteMode::Menu => "Menu",
         PaletteMode::Command => "Command palette",
     };
-    let row_texts: Vec<String> = if visible.is_empty() {
-        vec!["  (no matches)".to_string()]
-    } else {
-        visible
-            .iter()
-            .map(|item| format!("  {:<3} {}", item.key_hint, item.label))
-            .collect()
-    };
-    let body_lines = row_texts.len() + usize::from(has_query);
+    let key_width = palette_key_width(&visible);
+    let body_lines = visible.len() + usize::from(has_query);
+    let longest_row = visible
+        .iter()
+        .map(|item| 2 + key_width + 2 + item.label.chars().count());
+    let content_width = longest_row.max().unwrap_or(20) as u16;
     let width = if has_query {
-        (area.width * 70 / 100).clamp(28, area.width.saturating_sub(2).max(1))
+        (area.width * 70 / 100).clamp(
+            content_width.saturating_add(4),
+            area.width.saturating_sub(2).max(1),
+        )
     } else {
-        (area.width * 45 / 100).clamp(24, area.width.saturating_sub(2).max(1))
+        (area.width * 45 / 100).clamp(
+            content_width.saturating_add(4),
+            area.width.saturating_sub(2).max(1),
+        )
     };
     let max_h = area.height.saturating_sub(2).max(1) as usize;
     let height = (body_lines + 2).clamp(3, max_h) as u16;
@@ -2669,13 +2698,7 @@ fn render_palette(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout)
             } else {
                 Style::default().fg(state.theme.dim)
             };
-            lines.push(Line::from(vec![
-                Span::styled(
-                    format!("  {:<3}", item.key_hint),
-                    Style::default().fg(action_color(&item.label, &state.theme)),
-                ),
-                Span::styled(item.label.clone(), row_style),
-            ]));
+            lines.push(palette_row_line(item, key_width, &state.theme, row_style));
         }
     }
     frame.render_widget(

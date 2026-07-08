@@ -1,7 +1,7 @@
 use super::*;
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier};
+use ratatui::style::{Color, Modifier, Style};
 use std::path::PathBuf;
 
 fn state_with_gists() -> AppState {
@@ -5554,6 +5554,26 @@ fn right_click_opens_menu_palette() {
     assert_eq!(out, KeyOutcome::None);
     assert_eq!(state.screen, Screen::Palette);
     assert_eq!(state.palette.anchor, Some((10, 5)));
+}
+
+#[test]
+fn palette_row_line_aligns_long_keys() {
+    let item = PaletteItem {
+        key_hint: "Enter".to_string(),
+        label: "Diff local ↔ gist".to_string(),
+        exec: crate::tui::palette::PaletteExec::Key(KeyCode::Enter, KeyModifiers::NONE),
+        enabled: true,
+        search: String::new(),
+    };
+    let line = palette_row_line(
+        &item,
+        palette_key_width(&[&item]),
+        &Theme::DARK,
+        Style::default(),
+    );
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    assert!(text.starts_with("  Enter  Diff"));
+    assert!(!text.contains("EnterDiff"));
 }
 
 #[test]

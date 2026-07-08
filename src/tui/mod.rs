@@ -1849,7 +1849,7 @@ impl AppState {
 /// confirm prompt.
 mod highlight;
 mod palette;
-use palette::{PaletteMode, PaletteState};
+use palette::{PaletteItem, PaletteMode, PaletteState};
 
 mod render;
 use render::*;
