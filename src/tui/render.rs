@@ -111,7 +111,8 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   Click      select the clicked row (List panes also switch focus)
   Dbl-click  open the clicked row (diff / detail / pin diff / preview)
   Tab click  switch Files / Comments on the Gist details screen
-  [✕] btn    close / go back on any pop-up screen"
+  [✕] btn    close / go back on any pop-up screen
+  Repo click open the GitHub repository in the browser"
         }
         HelpTopic::Pins => {
             "\
@@ -363,7 +364,7 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState, layout: &mut M
     if !state.preview_wrap {
         render_text_scrollbar(frame, chunks[0], total_lines, state.diff_scroll as usize);
     }
-    render_footer(frame, chunks[1], "", &footer, colored, &state.theme);
+    render_footer(frame, chunks[1], "", &footer, colored, &state.theme, layout);
     if state.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }
@@ -490,9 +491,18 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
             &ftitle,
             input_line("/", &state.pins.filter_query, ""),
             &state.theme,
+            layout,
         );
     } else {
-        render_footer(frame, chunks[1], &ftitle, &footer, colored, &state.theme);
+        render_footer(
+            frame,
+            chunks[1],
+            &ftitle,
+            &footer,
+            colored,
+            &state.theme,
+            layout,
+        );
     }
     if state.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, area, &state.theme));
@@ -684,9 +694,18 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut Mou
             &ftitle,
             input_line("/", &state.gist_manager.filter_query, ""),
             &state.theme,
+            layout,
         );
     } else {
-        render_footer(frame, chunks[1], &ftitle, &footer, colored, &state.theme);
+        render_footer(
+            frame,
+            chunks[1],
+            &ftitle,
+            &footer,
+            colored,
+            &state.theme,
+            layout,
+        );
     }
     if state.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, area, &state.theme));
@@ -873,7 +892,15 @@ pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut
             offset: list_state.offset(),
         });
     }
-    render_footer(frame, chunks[1], &ftitle, &footer, colored, &state.theme);
+    render_footer(
+        frame,
+        chunks[1],
+        &ftitle,
+        &footer,
+        colored,
+        &state.theme,
+        layout,
+    );
     if state.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }
@@ -1290,7 +1317,7 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &m
             DetailFocus::Comments => render_gist_comments(frame, chunks[1], state, layout),
         }
     }
-    render_footer(frame, chunks[2], "", &footer, colored, &state.theme);
+    render_footer(frame, chunks[2], "", &footer, colored, &state.theme, layout);
 
     let edit_modal = if state.editing_description {
         // The modal covers the file list and tabs; drop their hit regions so a click
@@ -1522,14 +1549,17 @@ pub(super) fn footer_block(title: &str, theme: &Theme) -> Block<'static> {
     let repo = env!("CARGO_PKG_REPOSITORY")
         .trim_start_matches("https://")
         .trim_start_matches("http://");
-    let label = format!(" {} ", repo);
+    let repo_span = Span::styled(
+        repo.to_string(),
+        Style::default()
+            .fg(theme.fg)
+            .add_modifier(ratatui::style::Modifier::UNDERLINED),
+    );
+    let line = Line::from(vec![Span::raw(" "), repo_span, Span::raw(" ")]).right_aligned();
+
     Block::default()
         .title(title.to_string())
-        .title_top(
-            Line::from(label)
-                .right_aligned()
-                .style(Style::default().fg(theme.fg)),
-        )
+        .title_top(line)
         .borders(Borders::TOP)
         .border_style(Style::default().fg(theme.dim))
         .style(theme.base_style())
@@ -1545,7 +1575,18 @@ pub(super) fn render_footer(
     text: &str,
     colored: bool,
     theme: &Theme,
+    layout: &mut MouseLayout,
 ) {
+    let repo = env!("CARGO_PKG_REPOSITORY")
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let label = format!(" {} ", repo);
+    let label_len = label.chars().count() as u16;
+    let repo_x = area.x + area.width.saturating_sub(label_len);
+    let repo_width = label_len.min(area.width);
+    let repo_rect = Rect::new(repo_x, area.y, repo_width, 1);
+    layout.repo_link = Some(repo_rect);
+
     let para = if colored {
         Paragraph::new(hint_line(text, theme))
     } else {
@@ -1567,7 +1608,18 @@ pub(super) fn render_footer_line(
     title: &str,
     line: Line,
     theme: &Theme,
+    layout: &mut MouseLayout,
 ) {
+    let repo = env!("CARGO_PKG_REPOSITORY")
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let label = format!(" {} ", repo);
+    let label_len = label.chars().count() as u16;
+    let repo_x = area.x + area.width.saturating_sub(label_len);
+    let repo_width = label_len.min(area.width);
+    let repo_rect = Rect::new(repo_x, area.y, repo_width, 1);
+    layout.repo_link = Some(repo_rect);
+
     frame.render_widget(
         Paragraph::new(line)
             .style(theme.base_style())
@@ -1765,7 +1817,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
             query,
             "   (Tab next pane · Enter apply · Esc clear)",
         );
-        render_footer_line(frame, chunks[1], "", line, &state.theme);
+        render_footer_line(frame, chunks[1], "", line, &state.theme, layout);
     } else {
         render_footer(
             frame,
@@ -1774,6 +1826,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
             &footer_body,
             footer_is_command,
             &state.theme,
+            layout,
         );
     }
 }
@@ -2345,7 +2398,7 @@ pub(super) fn render_diff(frame: &mut Frame, state: &AppState, layout: &mut Mous
 
     render_diff_pane(frame, chunks[0], state);
 
-    render_footer(frame, chunks[1], "", &footer, true, &state.theme);
+    render_footer(frame, chunks[1], "", &footer, true, &state.theme, layout);
     if state.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }

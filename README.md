@@ -87,6 +87,7 @@ The footer also shows keys for the focused pane.
 | Double-click a row | open it — List diff, gist detail, pin diff, revision diff, or file preview (same as `Enter`) |
 | Click a tab (Gist details) | switch between Files / Comments (newest 30 comments load first; `m` or clicking the top line loads 30 older comments) |
 | Click `[✕]` button (pop-up screens) | close / go back |
+| Click the repository URL | open the GitHub repository in the system's default browser |
 
 ## Safety
 

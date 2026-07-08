@@ -333,6 +333,7 @@ pub enum KeyOutcome {
     ExecuteCompactGist,
     ApplyDescription,
     RefreshLocals,
+    OpenRepoUrl,
     RefreshPreview,
     UnpinAtPin,
     /// Smart-sync the selected Pins-screen pair (direction from mtime).
@@ -410,6 +411,7 @@ pub struct MouseLayout {
     /// GistDetail Comments: max useful vertical scroll (set by render; used by run_loop
     /// to honour a one-shot scroll-to-bottom after the newest page loads).
     pub comments_max_scroll: Option<u16>,
+    pub repo_link: Option<Rect>,
 }
 
 /// A classified mouse intent handed to the pure `handle_mouse`.

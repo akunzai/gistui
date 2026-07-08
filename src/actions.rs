@@ -133,6 +133,27 @@ pub fn open_browser_command(gist_id: &str) -> CommandPlan {
     }
 }
 
+pub fn open_url_command(url: &str) -> CommandPlan {
+    open_url_command_for_os(url, std::env::consts::OS)
+}
+
+fn open_url_command_for_os(url: &str, os: &str) -> CommandPlan {
+    match os {
+        "macos" => CommandPlan {
+            program: "open".into(),
+            args: vec![url.to_string()],
+        },
+        "windows" => CommandPlan {
+            program: "cmd".into(),
+            args: vec!["/c".into(), "start".into(), "".into(), url.to_string()],
+        },
+        _ => CommandPlan {
+            program: "xdg-open".into(),
+            args: vec![url.to_string()],
+        },
+    }
+}
+
 /// The public web URL for a gist id (what `gh gist view --web` opens).
 pub fn gist_web_url(gist_id: &str) -> String {
     format!("https://gist.github.com/{gist_id}")
@@ -658,6 +679,29 @@ mod tests {
         let plan = open_browser_command("abc123");
         assert_eq!(plan.program, "gh");
         assert_eq!(plan.args, vec!["gist", "view", "abc123", "--web"]);
+    }
+
+    #[test]
+    fn open_url_command_picks_platform_opener() {
+        let macos_plan = open_url_command_for_os("https://example.com", "macos");
+        assert_eq!(macos_plan.program, "open");
+        assert_eq!(macos_plan.args, vec!["https://example.com".to_string()]);
+
+        let windows_plan = open_url_command_for_os("https://example.com", "windows");
+        assert_eq!(windows_plan.program, "cmd");
+        assert_eq!(
+            windows_plan.args,
+            vec![
+                "/c".to_string(),
+                "start".to_string(),
+                "".to_string(),
+                "https://example.com".to_string()
+            ]
+        );
+
+        let linux_plan = open_url_command_for_os("https://example.com", "linux");
+        assert_eq!(linux_plan.program, "xdg-open");
+        assert_eq!(linux_plan.args, vec!["https://example.com".to_string()]);
     }
 
     #[test]

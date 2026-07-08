@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Click the repository URL in the footer to open the GitHub repository in the system's default browser.
+
 ## [0.15.2] — 2026-07-08
 
 - The footer no longer shows the app version number (repo URL stays); the in-app update check already surfaces version freshness, and printing the version there forced a demo GIF/PNG re-recording on every release.

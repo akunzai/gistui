@@ -887,6 +887,12 @@ impl AppState {
                         return self.handle_key_with(KeyCode::Esc, KeyModifiers::NONE);
                     }
                 }
+                // GitHub repo link click opens it in the browser.
+                if let Some(rect) = layout.repo_link {
+                    if point_in(rect, col, row) {
+                        return KeyOutcome::OpenRepoUrl;
+                    }
+                }
                 // A GistDetail tab header click switches focus (single-click action).
                 if let Some(outcome) = self.click_detail_tab(col, row, layout) {
                     return outcome;
