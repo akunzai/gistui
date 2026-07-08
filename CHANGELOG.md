@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.15.2] — 2026-07-08
+
 - The footer no longer shows the app version number (repo URL stays); the in-app update check already surfaces version freshness, and printing the version there forced a demo GIF/PNG re-recording on every release.
 
 ## [0.15.1] — 2026-07-08
@@ -159,7 +161,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.15.1...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.15.2...HEAD
+[0.15.2]: https://github.com/akunzai/gistui/releases/tag/v0.15.2
 [0.15.1]: https://github.com/akunzai/gistui/releases/tag/v0.15.1
 [0.15.0]: https://github.com/akunzai/gistui/releases/tag/v0.15.0
 [0.14.2]: https://github.com/akunzai/gistui/releases/tag/v0.14.2
