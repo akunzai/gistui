@@ -1322,10 +1322,10 @@ fn wrap_line_count_is_responsive_to_width() {
 }
 
 #[test]
-fn footer_height_collapses_to_zero_when_empty_else_wraps_plus_divider() {
+fn footer_height_collapses_to_zero_when_empty_else_wraps() {
     assert_eq!(footer_height("", 100), 0);
-    assert_eq!(footer_height("? Help", 100), 2); // 1 wrapped line + 1 divider row
-    assert_eq!(footer_height("aaa bbb ccc", 9), 3); // 2 wrapped lines (width-2=7) + 1 divider row
+    assert_eq!(footer_height("? Help", 100), 1);
+    assert_eq!(footer_height("aaa bbb ccc", 9), 2); // 2 wrapped lines at inner width 7
 }
 
 #[test]

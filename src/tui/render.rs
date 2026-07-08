@@ -477,7 +477,7 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState, layout: &mut M
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 1)])
+        .constraints([Constraint::Min(5), Constraint::Length(footer_lines)])
         .split(area);
 
     // When wrapping, horizontal scroll is meaningless — pin the x offset to 0 so long lines
@@ -950,7 +950,7 @@ pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 1)])
+        .constraints([Constraint::Min(3), Constraint::Length(footer_lines)])
         .split(area);
 
     let gist_id = state.revision.gist_id.as_deref().unwrap_or("");
@@ -1565,15 +1565,14 @@ pub(super) fn wrap_line_count(text: &str, width: u16) -> u16 {
 }
 
 /// Height to reserve for a screen's footer `Layout` row: `0` when `text` is empty (the footer
-/// fully collapses — no divider, no blank row — reclaiming the space for content above it) or
-/// the wrapped line count plus one (for the divider) otherwise. Screens whose footer always has
-/// real content (Diff, Preview) don't need this — only the ones whose idle state can be
-/// genuinely empty (`MINIMAL_HINT`) call it.
+/// fully collapses, reclaiming the space for content above it) or the wrapped line count
+/// otherwise. Screens whose footer always has real content (Diff, Preview) inline the same
+/// `wrap_line_count` math in their layout constraints.
 pub(super) fn footer_height(text: &str, width: u16) -> u16 {
     if text.is_empty() {
         0
     } else {
-        wrap_line_count(text, width.saturating_sub(2)).max(1) + 1
+        wrap_line_count(text, width.saturating_sub(2)).max(1)
     }
 }
 
@@ -1634,22 +1633,14 @@ pub(super) fn hint_line(text: &str, theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The shared footer block: a dim top divider that carries the left `title` (the filter-input
-/// label while filtering; empty otherwise), shown only when there's something to divide from
-/// (`show_divider`) — an idle footer with no status/hint text renders with no border at all,
-/// rather than a stray horizontal rule above nothing. The repo URL, app version, and
-/// update-check status used to live here (via `title` and a right-aligned repo span) but have
-/// moved to the Help → About topic (see `about_topic_lines`).
-pub(super) fn footer_block(title: &str, theme: &Theme, show_divider: bool) -> Block<'static> {
-    let borders = if show_divider {
-        Borders::TOP
-    } else {
-        Borders::NONE
-    };
+/// The shared footer block: plain text with horizontal padding, no border (the old dim top
+/// divider was removed to reclaim a row and keep the chrome minimal). The repo URL, app
+/// version, and update-check status used to live in the footer but have moved to Help → About
+/// (see `about_topic_lines`).
+pub(super) fn footer_block(title: &str, theme: &Theme) -> Block<'static> {
     Block::default()
         .title(title.to_string())
-        .borders(borders)
-        .border_style(Style::default().fg(theme.dim))
+        .borders(Borders::NONE)
         .style(theme.base_style())
         .padding(Padding::horizontal(1))
 }
@@ -1673,14 +1664,13 @@ pub(super) fn render_footer(
     frame.render_widget(
         para.style(theme.base_style())
             .wrap(Wrap { trim: true })
-            .block(footer_block(title, theme, !text.is_empty())),
+            .block(footer_block(title, theme)),
         area,
     );
 }
 
 /// Like [`render_footer`] but draws a prebuilt styled `line`, used for active text inputs
-/// so the cursor can be reverse-highlighted at its real position. Always shows the divider —
-/// unlike `render_footer`'s idle case, an active text input is never blank.
+/// so the cursor can be reverse-highlighted at its real position.
 pub(super) fn render_footer_line(
     frame: &mut Frame,
     area: Rect,
@@ -1693,7 +1683,7 @@ pub(super) fn render_footer_line(
         Paragraph::new(line)
             .style(theme.base_style())
             .wrap(Wrap { trim: true })
-            .block(footer_block(title, theme, true)),
+            .block(footer_block(title, theme)),
         area,
     );
 }
@@ -2460,7 +2450,7 @@ pub(super) fn render_diff(frame: &mut Frame, state: &AppState, layout: &mut Mous
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 1)])
+        .constraints([Constraint::Min(5), Constraint::Length(footer_lines)])
         .split(area);
 
     render_diff_pane(frame, chunks[0], state);
