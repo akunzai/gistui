@@ -84,7 +84,13 @@ impl AppState {
     }
 
     /// Open the Help screen on the topic for the current screen, remembering where to return.
+    /// A no-op while already on Help — otherwise the top bar's `(?)Help` click (reachable from
+    /// any screen, including Help itself) would overwrite `return_screen` with `Screen::Help`,
+    /// trapping Esc/`?`/the close button in Help with no keyboard way out.
     fn open_help(&mut self) {
+        if self.screen == Screen::Help {
+            return;
+        }
         self.help.return_screen = self.screen;
         self.help.topic = HelpTopic::for_screen(self.screen);
         self.help.index_open = false;

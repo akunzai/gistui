@@ -3443,6 +3443,32 @@ fn top_bar_help_click_opens_help_and_remembers_return_screen_from_any_screen() {
 }
 
 #[test]
+fn top_bar_help_click_while_already_on_help_does_not_trap_keyboard_exit() {
+    let mut state = state_with_gists();
+    state.screen = Screen::Preview;
+    let layout = MouseLayout {
+        top_bar_help: Some(Rect::new(30, 0, 7, 1)),
+        ..Default::default()
+    };
+    // First click opens Help from Preview, remembering Preview as the return screen.
+    state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
+    assert_eq!(state.screen, Screen::Help);
+    assert_eq!(state.help.return_screen, Screen::Preview);
+
+    // A second click on the same top-bar Help hotspot, now that Help is already open, must
+    // be a no-op — it must not overwrite return_screen with Screen::Help, which would trap
+    // Esc/`?`/the close button in Help with no keyboard way out.
+    let out = state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
+    assert_eq!(state.screen, Screen::Help);
+    assert_eq!(state.help.return_screen, Screen::Preview);
+    assert_eq!(out, KeyOutcome::None);
+
+    // Esc must still return to the real origin screen, not stay stuck on Help.
+    state.handle_key(KeyCode::Esc);
+    assert_eq!(state.screen, Screen::Preview);
+}
+
+#[test]
 fn list_screen_capital_s_syncs_selected_pair() {
     let mut state = initial_state();
     state.locals = vec![LocalCandidate {
