@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Click the repository URL in the footer to open the GitHub repository in the system's default browser.
+- Every screen now shows a `(G)ists (P)ins (?)Help` shortcut bar in the top-right corner (click, or use the existing `g`/`P`/`?` keys, from any screen); the footer's long per-screen hotkey list has been replaced with a single minimal `? Help` prompt (press `?` for the full keymap).
 
 ## [0.15.2] — 2026-07-08
 

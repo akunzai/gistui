@@ -180,7 +180,8 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   Dbl-click  open the clicked row (diff / detail / pin diff / preview)
   Tab click  switch Files / Comments on the Gist details screen
   [✕] btn    close / go back on any pop-up screen
-  Repo click open the GitHub repository in the browser"
+  Repo click open the GitHub repository in the browser
+  Top bar    click (G)ists / (P)ins / (?)Help (top-right, every screen) to jump there"
         }
         HelpTopic::Pins => {
             "\
