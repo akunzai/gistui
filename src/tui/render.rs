@@ -20,6 +20,7 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
         frame.area(),
     );
     match state.screen {
+        Screen::Palette => render_palette(frame, state, layout),
         Screen::List => render_list(frame, state, layout),
         Screen::Diff => render_diff(frame, state, layout),
         Screen::Confirm => render_confirm(frame, state, layout),
@@ -180,7 +181,9 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   Dbl-click  open the clicked row (diff / detail / pin diff / preview)
   Tab click  switch Files / Comments on the Gist details screen
   [✕] btn    close / go back on any pop-up screen
-  Top bar    click (G)ists / (P)ins / (?)Help (top-right, every screen) to jump there"
+  Top bar    click (G)ists / (P)ins / (?)Help (top-right, every screen) to jump there
+  Right-click  open the context menu at the click (same as ;)
+  ; / Ctrl+p   open the menu / command palette from the keyboard (see General)"
         }
         HelpTopic::Pins => {
             "\
@@ -286,6 +289,8 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
             "\
   Esc / q    close an overlay; from the list, press twice to quit the app
   ?          show this help
+  ;          context menu (actions valid for the current screen + selection)
+  Ctrl+p     command palette (all actions + cross-screen navigation; type to filter)
   T          toggle light/dark colour theme (saved to config)
   Up/Down    scroll this help text
   NO_COLOR   set this env var to disable syntax highlighting (preview + diff)"
@@ -472,7 +477,7 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState, layout: &mut M
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 1)])
+        .constraints([Constraint::Min(5), Constraint::Length(footer_lines)])
         .split(area);
 
     // When wrapping, horizontal scroll is meaningless — pin the x offset to 0 so long lines
@@ -536,7 +541,7 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
-            Constraint::Length(footer_height(&footer, area.width)),
+            Constraint::Length(footer_height(&footer, area.width, &ftitle)),
         ])
         .split(area);
 
@@ -751,7 +756,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut Mou
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
-            Constraint::Length(footer_height(&footer, area.width)),
+            Constraint::Length(footer_height(&footer, area.width, &ftitle)),
         ])
         .split(area);
 
@@ -945,7 +950,7 @@ pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 1)])
+        .constraints([Constraint::Min(3), Constraint::Length(footer_lines)])
         .split(area);
 
     let gist_id = state.revision.gist_id.as_deref().unwrap_or("");
@@ -1348,11 +1353,8 @@ pub(super) fn render_gist_comments(
     render_text_scrollbar(frame, area, total_lines, state.detail.scroll as usize);
 }
 
-/// The default (idle) footer hint. Empty in Phase 1: the `(?)Help` shortcut in the
-/// top bar (see `render_top_bar`) already covers Help discoverability, so repeating it
-/// here would be a duplicate. Phase 3/4 of the TUI UX redesign will populate this with
-/// `; Menu` and `Ctrl+p Palette` once those features exist.
-pub(super) const MINIMAL_HINT: &str = "";
+/// The default (idle) footer hint on screens that used to show a long per-screen key dump.
+pub(super) const MINIMAL_HINT: &str = "; Menu · Ctrl+p Palette";
 
 /// Footer text + whether to colourise it: a one-shot `state.status` message (shown plain) when
 /// present, else the colourised key `hints`. Shared by every screen so action results/errors
@@ -1410,7 +1412,7 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &m
         .constraints([
             Constraint::Length(4),
             Constraint::Min(3),
-            Constraint::Length(footer_height(&footer, area.width)),
+            Constraint::Length(footer_height(&footer, area.width, "")),
         ])
         .split(area);
     if let Some(id) = state.detail.gist_id.as_deref() {
@@ -1562,17 +1564,19 @@ pub(super) fn wrap_line_count(text: &str, width: u16) -> u16 {
     lines
 }
 
-/// Height to reserve for a screen's footer `Layout` row: `0` when `text` is empty (the footer
-/// fully collapses — no divider, no blank row — reclaiming the space for content above it) or
-/// the wrapped line count plus one (for the divider) otherwise. Screens whose footer always has
-/// real content (Diff, Preview) don't need this — only the ones whose idle state can be
-/// genuinely empty (`MINIMAL_HINT`) call it.
-pub(super) fn footer_height(text: &str, width: u16) -> u16 {
-    if text.is_empty() {
+/// Height to reserve for a screen's footer `Layout` row: `0` when both `text` and `title` are
+/// empty (the footer fully collapses), else the wrapped line count for `text` plus one row when
+/// `title` is non-empty (ratatui's [`Block::title`] always consumes a row, even without borders).
+pub(super) fn footer_height(text: &str, width: u16, title: &str) -> u16 {
+    if text.is_empty() && title.is_empty() {
+        return 0;
+    }
+    let content = if text.is_empty() {
         0
     } else {
-        wrap_line_count(text, width.saturating_sub(2)).max(1) + 1
-    }
+        wrap_line_count(text, width.saturating_sub(2)).max(1)
+    };
+    content + u16::from(!title.is_empty())
 }
 
 /// Colour a command key by what its action does, so destructive and mutating keys stand apart
@@ -1632,24 +1636,21 @@ pub(super) fn hint_line(text: &str, theme: &Theme) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The shared footer block: a dim top divider that carries the left `title` (the filter-input
-/// label while filtering; empty otherwise), shown only when there's something to divide from
-/// (`show_divider`) — an idle footer with no status/hint text renders with no border at all,
-/// rather than a stray horizontal rule above nothing. The repo URL, app version, and
-/// update-check status used to live here (via `title` and a right-aligned repo span) but have
-/// moved to the Help → About topic (see `about_topic_lines`).
-pub(super) fn footer_block(title: &str, theme: &Theme, show_divider: bool) -> Block<'static> {
-    let borders = if show_divider {
-        Borders::TOP
-    } else {
-        Borders::NONE
-    };
-    Block::default()
-        .title(title.to_string())
-        .borders(borders)
-        .border_style(Style::default().fg(theme.dim))
+/// The shared footer block: plain text with horizontal padding, no border (the old dim top
+/// divider was removed to reclaim a row and keep the chrome minimal). The repo URL, app
+/// version, and update-check status used to live in the footer but have moved to Help → About
+/// (see `about_topic_lines`).
+pub(super) fn footer_block(title: &str, theme: &Theme) -> Block<'static> {
+    let mut block = Block::default()
+        .borders(Borders::NONE)
         .style(theme.base_style())
-        .padding(Padding::horizontal(1))
+        .padding(Padding::horizontal(1));
+    // ratatui treats even an empty `.title("")` as a top title row, which would leave zero
+    // inner height when the footer chunk is only one row tall — see `Block::inner`.
+    if !title.is_empty() {
+        block = block.title(title.to_string());
+    }
+    block
 }
 
 /// Render a command footer into `area`. `colored` accents the command keys; pass `false` for
@@ -1671,14 +1672,13 @@ pub(super) fn render_footer(
     frame.render_widget(
         para.style(theme.base_style())
             .wrap(Wrap { trim: true })
-            .block(footer_block(title, theme, !text.is_empty())),
+            .block(footer_block(title, theme)),
         area,
     );
 }
 
 /// Like [`render_footer`] but draws a prebuilt styled `line`, used for active text inputs
-/// so the cursor can be reverse-highlighted at its real position. Always shows the divider —
-/// unlike `render_footer`'s idle case, an active text input is never blank.
+/// so the cursor can be reverse-highlighted at its real position.
 pub(super) fn render_footer_line(
     frame: &mut Frame,
     area: Rect,
@@ -1691,7 +1691,7 @@ pub(super) fn render_footer_line(
         Paragraph::new(line)
             .style(theme.base_style())
             .wrap(Wrap { trim: true })
-            .block(footer_block(title, theme, true)),
+            .block(footer_block(title, theme)),
         area,
     );
 }
@@ -1747,7 +1747,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(5),
-            Constraint::Length(footer_height(&footer_body, area.width)),
+            Constraint::Length(footer_height(&footer_body, area.width, "")),
         ])
         .split(area);
     let columns = Layout::default()
@@ -2458,7 +2458,7 @@ pub(super) fn render_diff(frame: &mut Frame, state: &AppState, layout: &mut Mous
     let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 1)])
+        .constraints([Constraint::Min(5), Constraint::Length(footer_lines)])
         .split(area);
 
     render_diff_pane(frame, chunks[0], state);
@@ -2592,6 +2592,143 @@ const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "�
 /// frame count.
 pub(super) fn spinner_glyph(frame: usize) -> &'static str {
     SPINNER_FRAMES[frame % SPINNER_FRAMES.len()]
+}
+
+/// Column width for palette key hints: at least one char, wide enough for the longest
+/// visible key (`Enter`, `Ctrl+p`, …) so labels never run into the hint.
+pub(super) fn palette_key_width(items: &[&PaletteItem]) -> usize {
+    items
+        .iter()
+        .map(|item| item.key_hint.chars().count())
+        .max()
+        .unwrap_or(1)
+}
+
+/// One palette row: indented key column + gap + label. Pure for unit tests.
+pub(super) fn palette_row_line(
+    item: &PaletteItem,
+    key_width: usize,
+    theme: &Theme,
+    row_style: Style,
+) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(
+            format!("  {:<key_width$}  ", item.key_hint, key_width = key_width),
+            Style::default().fg(action_color(&item.label, theme)),
+        ),
+        Span::styled(item.label.clone(), row_style),
+    ])
+}
+
+/// The unified context menu / command palette drawn over the screen it was opened from.
+fn render_palette(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+    let mut bg_layout = MouseLayout::default();
+    match state.palette.origin_screen {
+        Screen::List => render_list(frame, state, &mut bg_layout),
+        Screen::Diff => render_diff(frame, state, &mut bg_layout),
+        Screen::Preview => render_preview(frame, state, &mut bg_layout),
+        Screen::Help => render_help(frame, state, &mut bg_layout),
+        Screen::Pins => render_pins(frame, state, &mut bg_layout),
+        Screen::Gists => render_gists(frame, state, &mut bg_layout),
+        Screen::GistDetail => render_gist_detail(frame, state, &mut bg_layout),
+        Screen::Revisions => render_revisions(frame, state, &mut bg_layout),
+        Screen::Confirm | Screen::Palette => {}
+    }
+
+    let area = frame.area();
+    let visible = state.palette_visible_items();
+    let has_query = state.palette.mode == PaletteMode::Command;
+    let title = match state.palette.mode {
+        PaletteMode::Menu => "Menu",
+        PaletteMode::Command => "Command palette",
+    };
+    let key_width = palette_key_width(&visible);
+    let body_lines = visible.len() + usize::from(has_query);
+    let longest_row = visible
+        .iter()
+        .map(|item| 2 + key_width + 2 + item.label.chars().count());
+    let content_width = longest_row.max().unwrap_or(20) as u16;
+    let width = if has_query {
+        (area.width * 70 / 100).clamp(
+            content_width.saturating_add(4),
+            area.width.saturating_sub(2).max(1),
+        )
+    } else {
+        (area.width * 45 / 100).clamp(
+            content_width.saturating_add(4),
+            area.width.saturating_sub(2).max(1),
+        )
+    };
+    let max_h = area.height.saturating_sub(2).max(1) as usize;
+    let height = (body_lines + 2).clamp(3, max_h) as u16;
+    let (x, y) = match (state.palette.mode, state.palette.anchor) {
+        (PaletteMode::Menu, Some((col, row))) => (
+            col.saturating_sub(width / 2)
+                .min(area.width.saturating_sub(width)),
+            row.saturating_sub(1)
+                .min(area.height.saturating_sub(height)),
+        ),
+        _ => (
+            area.width.saturating_sub(width) / 2,
+            area.height.saturating_sub(height).saturating_sub(1),
+        ),
+    };
+    let rect = Rect::new(x, y, width, height);
+
+    frame.render_widget(Clear, rect);
+
+    layout.palette_rows.clear();
+    let dim = Style::default().fg(state.theme.dim);
+    let active = Style::default()
+        .fg(state.theme.fg_on_accent)
+        .bg(state.theme.accent)
+        .add_modifier(Modifier::BOLD);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if has_query {
+        lines.push(input_line("> ", &state.palette.query, ""));
+    }
+    if visible.is_empty() {
+        lines.push(Line::from(Span::styled("  (no matches)", dim)));
+    } else {
+        for (i, item) in visible.iter().enumerate() {
+            let row_style = if i == state.palette.selected {
+                active
+            } else if item.enabled {
+                state.theme.base_style()
+            } else {
+                Style::default().fg(state.theme.dim)
+            };
+            lines.push(palette_row_line(item, key_width, &state.theme, row_style));
+        }
+    }
+    frame.render_widget(
+        Paragraph::new(lines).style(state.theme.base_style()).block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(state.theme.accent))
+                .style(state.theme.base_style()),
+        ),
+        rect,
+    );
+
+    let inner = rect.inner(Margin::new(1, 1));
+    let mut y = inner.y + u16::from(has_query);
+    for item in visible.iter() {
+        if y >= inner.bottom() {
+            break;
+        }
+        if state.mouse_enabled && item.enabled {
+            layout
+                .palette_rows
+                .push(Rect::new(inner.x, y, inner.width, 1));
+        }
+        y = y.saturating_add(1);
+    }
+    if state.mouse_enabled {
+        layout.palette_close = Some(render_close_button(frame, rect, &state.theme));
+    }
 }
 
 /// A centered "Working…" box shown while a blocking `gh` action runs.

@@ -76,9 +76,12 @@ without resetting order. Pinned pairs show `📌`; same-filename candidates are 
 
 Press **`?`** anytime for the **full, contextual keymap** — it opens the current screen's
 topic; `Tab` browses all topics (List, Pins, Gist manager, Gist detail, Diff, Preview, …).
-The footer stays empty when idle; every screen shows a `(G)ists (P)ins (?)Help`
-shortcut bar in the top-right corner instead (click, or use the underlying key). The
-app version, the GitHub repo link, and update-check status live in `?` Help's
+The idle footer shows `; Menu · Ctrl+p Palette`; every screen also shows a
+`(G)ists (P)ins (?)Help` shortcut bar in the top-right corner (click, or use the
+underlying key). Press `;` (or right-click) for a context menu of actions valid on
+the current screen and selection; press `Ctrl+p` for the full command palette with
+fuzzy-filter search and cross-screen navigation (`Go to Pins`, `Toggle theme`, `Quit`, …).
+The app version, the GitHub repo link, and update-check status live in `?` Help's
 **About** topic (press `0` from the Help index, or `Tab` then scroll to it).
 
 **Mouse** (on by default; disable with `mouse = false` in config or `--no-mouse`):
@@ -91,6 +94,8 @@ app version, the GitHub repo link, and update-check status live in `?` Help's
 | Click a tab (Gist details) | switch between Files / Comments (newest 30 comments load first; `m` or clicking the top line loads 30 older comments) |
 | Click `[✕]` button (pop-up screens) | close / go back |
 | Click `(G)ists` / `(P)ins` / `(?)Help` (top bar) | jump to that screen, from anywhere — same as pressing `g` / `P` / `?` |
+| Right-click | open the context menu at the click (same as `;`) |
+| Click a menu / palette row | run that action (same as selecting it and pressing `Enter`) |
 | Click the repository URL (`?` Help → About) | open the GitHub repository in the system's default browser |
 
 ## Safety

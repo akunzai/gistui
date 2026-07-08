@@ -32,6 +32,8 @@ pub enum Screen {
     GistDetail,
     /// Revision history for one gist (entered with `H` from the list, Gist manager, or Gist detail).
     Revisions,
+    /// Unified context menu / command palette overlay (`;` or right-click / `Ctrl+p`).
+    Palette,
 }
 
 /// A help topic — one per key-dense area, plus `About` (version/repo/update info, not tied
@@ -398,7 +400,7 @@ impl PaneHit {
 }
 
 /// Per-frame mouse hit regions, owned by `run_loop`, filled by `render`.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct MouseLayout {
     pub local: Option<PaneHit>,
     pub gist: Option<PaneHit>,
@@ -421,6 +423,9 @@ pub struct MouseLayout {
     pub top_bar_gists: Option<Rect>,
     pub top_bar_pins: Option<Rect>,
     pub top_bar_help: Option<Rect>,
+    /// Palette overlay: one hit-rect per visible row, plus the `[✕]` close button.
+    pub palette_rows: Vec<Rect>,
+    pub palette_close: Option<Rect>,
 }
 
 /// A classified mouse intent handed to the pure `handle_mouse`.
@@ -430,6 +435,7 @@ pub enum MouseInput {
     ScrollDown,
     Click { col: u16, row: u16 },
     DoubleClick { col: u16, row: u16 },
+    RightClick { col: u16, row: u16 },
 }
 
 /// Max gap between two left-clicks on the same cell to count as a double-click.
@@ -670,6 +676,7 @@ pub struct AppState {
     /// Resolved colour palette for the current theme choice (from config).
     pub theme: Theme,
     pub revision: RevisionState,
+    pub palette: PaletteState,
 }
 
 fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
@@ -1590,6 +1597,7 @@ pub fn initial_state() -> AppState {
             return_screen: Screen::GistDetail,
             ..Default::default()
         },
+        palette: PaletteState::default(),
     }
 }
 
@@ -1840,6 +1848,9 @@ impl AppState {
 /// This is the shared "centered window" primitive behind both the loading overlay and the
 /// confirm prompt.
 mod highlight;
+mod palette;
+use palette::{PaletteItem, PaletteMode, PaletteState};
+
 mod render;
 use render::*;
 mod text;
