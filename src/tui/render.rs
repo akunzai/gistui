@@ -532,10 +532,12 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
         let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
         (String::new(), footer, colored)
     };
-    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 1)])
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(footer_height(&footer, area.width)),
+        ])
         .split(area);
 
     let visible = state.visible_pin_indices();
@@ -745,10 +747,12 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut Mou
         let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
         (String::new(), footer, colored)
     };
-    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(footer_lines + 1)])
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(footer_height(&footer, area.width)),
+        ])
         .split(area);
 
     let groups = state.visible_gist_groups();
@@ -1399,7 +1403,6 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &m
     let area = frame.area();
     let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
     let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
-    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
     // Fixed 4-row header (borders + basic-info line + focus tabs); the active tab — the file
     // list or the comments, never both — fills the rest above the footer.
     let chunks = Layout::default()
@@ -1407,7 +1410,7 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &m
         .constraints([
             Constraint::Length(4),
             Constraint::Min(3),
-            Constraint::Length(footer_lines + 1),
+            Constraint::Length(footer_height(&footer, area.width)),
         ])
         .split(area);
     if let Some(id) = state.detail.gist_id.as_deref() {
@@ -1557,6 +1560,19 @@ pub(super) fn wrap_line_count(text: &str, width: u16) -> u16 {
         }
     }
     lines
+}
+
+/// Height to reserve for a screen's footer `Layout` row: `0` when `text` is empty (the footer
+/// fully collapses — no divider, no blank row — reclaiming the space for content above it) or
+/// the wrapped line count plus one (for the divider) otherwise. Screens whose footer always has
+/// real content (Diff, Preview) don't need this — only the ones whose idle state can be
+/// genuinely empty (`MINIMAL_HINT`) call it.
+pub(super) fn footer_height(text: &str, width: u16) -> u16 {
+    if text.is_empty() {
+        0
+    } else {
+        wrap_line_count(text, width.saturating_sub(2)).max(1) + 1
+    }
 }
 
 /// Colour a command key by what its action does, so destructive and mutating keys stand apart
@@ -1727,11 +1743,12 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
     };
     // Only the command-hint variant gets key colouring; filter input and status stay plain.
     let footer_is_command = !state.filtering && state.status.is_none();
-    // Width inside the footer block: minus the 2 horizontal padding columns (no side borders).
-    let footer_lines = wrap_line_count(&footer_body, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(footer_lines + 1)])
+        .constraints([
+            Constraint::Min(5),
+            Constraint::Length(footer_height(&footer_body, area.width)),
+        ])
         .split(area);
     let columns = Layout::default()
         .direction(Direction::Horizontal)

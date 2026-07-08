@@ -1322,6 +1322,13 @@ fn wrap_line_count_is_responsive_to_width() {
 }
 
 #[test]
+fn footer_height_collapses_to_zero_when_empty_else_wraps_plus_divider() {
+    assert_eq!(footer_height("", 100), 0);
+    assert_eq!(footer_height("? Help", 100), 2); // 1 wrapped line + 1 divider row
+    assert_eq!(footer_height("aaa bbb ccc", 9), 3); // 2 wrapped lines (width-2=7) + 1 divider row
+}
+
+#[test]
 fn minimal_hint_is_empty_when_idle() {
     assert_eq!(MINIMAL_HINT, "");
     let (hint, colored) = footer_with_status(None, MINIMAL_HINT);
