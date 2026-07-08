@@ -84,7 +84,13 @@ impl AppState {
     }
 
     /// Open the Help screen on the topic for the current screen, remembering where to return.
+    /// A no-op while already on Help — otherwise the top bar's `(?)Help` click (reachable from
+    /// any screen, including Help itself) would overwrite `return_screen` with `Screen::Help`,
+    /// trapping Esc/`?`/the close button in Help with no keyboard way out.
     fn open_help(&mut self) {
+        if self.screen == Screen::Help {
+            return;
+        }
         self.help.return_screen = self.screen;
         self.help.topic = HelpTopic::for_screen(self.screen);
         self.help.index_open = false;
@@ -893,6 +899,26 @@ impl AppState {
                         return KeyOutcome::OpenRepoUrl;
                     }
                 }
+                // Top-bar (G)ists / (P)ins / (?)Help — same effect as pressing the key,
+                // from any screen (not just wherever that key happens to be bound).
+                if let Some(rect) = layout.top_bar_gists {
+                    if point_in(rect, col, row) {
+                        self.open_gist_manager();
+                        return KeyOutcome::None;
+                    }
+                }
+                if let Some(rect) = layout.top_bar_pins {
+                    if point_in(rect, col, row) {
+                        self.open_pins();
+                        return KeyOutcome::None;
+                    }
+                }
+                if let Some(rect) = layout.top_bar_help {
+                    if point_in(rect, col, row) {
+                        self.open_help();
+                        return KeyOutcome::None;
+                    }
+                }
                 // A GistDetail tab header click switches focus (single-click action).
                 if let Some(outcome) = self.click_detail_tab(col, row, layout) {
                     return outcome;
@@ -1072,11 +1098,7 @@ impl AppState {
             KeyCode::Char('/') => self.filtering = true,
             KeyCode::Char('y') => return KeyOutcome::CopyGistUrl,
             KeyCode::Char('?') => self.open_help(),
-            KeyCode::Char('P') => {
-                self.pins.index = 0;
-                self.pins.hscroll = 0;
-                self.screen = Screen::Pins;
-            }
+            KeyCode::Char('P') => self.open_pins(),
             KeyCode::Char('S') => return KeyOutcome::SyncSelectedPair,
             KeyCode::Char('g') => self.open_gist_manager(),
             KeyCode::Char('H') if self.gist_index < self.ranked_gists().len() => {
@@ -1270,6 +1292,14 @@ impl AppState {
             .and_then(|id| groups.iter().position(|g| g.id == id))
             .unwrap_or(0);
         self.screen = Screen::Gists;
+    }
+
+    /// Open the Pins view (`Screen::Pins`), resetting its selection/scroll so a stale
+    /// filtered-in position from a previous visit never lingers.
+    fn open_pins(&mut self) {
+        self.pins.index = 0;
+        self.pins.hscroll = 0;
+        self.screen = Screen::Pins;
     }
 
     /// Pin/unpin the selected local↔gist pair: returns [`KeyOutcome::Unpin`] when the exact
