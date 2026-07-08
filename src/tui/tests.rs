@@ -4346,6 +4346,17 @@ fn help_index_zero_key_opens_about_from_the_index_list() {
 }
 
 #[test]
+fn repo_link_click_opens_repo_url_regardless_of_which_screen_set_the_rect() {
+    let mut state = initial_state();
+    let layout = MouseLayout {
+        repo_link: Some(Rect::new(5, 10, 20, 1)),
+        ..Default::default()
+    };
+    let out = state.handle_mouse(MouseInput::Click { col: 10, row: 10 }, &layout);
+    assert_eq!(out, KeyOutcome::OpenRepoUrl);
+}
+
+#[test]
 fn help_topic_view_esc_returns_to_origin() {
     let mut state = initial_state();
     state.screen = Screen::Help;

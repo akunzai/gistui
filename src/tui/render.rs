@@ -292,10 +292,45 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   NO_COLOR   set this env var to disable syntax highlighting (preview + diff)"
         }
         HelpTopic::About => {
-            "About
-(This section will show version, repository, and update information.)"
+            unreachable!(
+                "About has its own dynamic body in about_topic_lines, rendered before help_topic_body is ever called"
+            )
         }
     }
+}
+
+/// Fixed row (0-indexed, within the topic body) of the clickable repo-URL line — used to
+/// place `MouseLayout::repo_link`'s hit-rect. Kept stable regardless of update-check state
+/// (see `about_topic_lines`) so this constant never has to change.
+const ABOUT_REPO_LINE: u16 = 3;
+
+/// The `About` topic's body: version, the clickable repo link (relocated from the old
+/// per-screen footer — see `render_footer`), and the update-check status if a newer release
+/// is available. Unlike every other topic's `&'static str` (`help_topic_body`), this one
+/// needs `state`, so it returns owned `Line`s instead.
+fn about_topic_lines(state: &AppState) -> Vec<Line<'static>> {
+    let repo = env!("CARGO_PKG_REPOSITORY")
+        .trim_start_matches("https://")
+        .trim_start_matches("http://");
+    let mut lines = vec![
+        Line::from(format!("gistui v{}", env!("CARGO_PKG_VERSION"))),
+        Line::from(""),
+        Line::from("Repository (click to open in the browser)"),
+        Line::from(Span::styled(
+            format!("  {repo}"),
+            Style::default()
+                .fg(state.theme.fg)
+                .add_modifier(Modifier::UNDERLINED),
+        )),
+        Line::from(""),
+    ];
+    if let Some(latest) = &state.update_available {
+        lines.push(Line::from(crate::update_check::update_hint(
+            latest,
+            &state.install_method,
+        )));
+    }
+    lines
 }
 
 pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
@@ -339,8 +374,13 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut Mous
             "Help · {} — Tab topics · ↑↓ scroll · Esc back",
             state.help.topic.title()
         );
+        let body: Text = if state.help.topic == HelpTopic::About {
+            Text::from(about_topic_lines(state))
+        } else {
+            Text::from(help_topic_body(state.help.topic))
+        };
         frame.render_widget(
-            Paragraph::new(help_topic_body(state.help.topic))
+            Paragraph::new(body)
                 .style(state.theme.base_style())
                 .scroll((state.help.scroll, 0))
                 .block(
@@ -353,6 +393,21 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut Mous
                 ),
             area,
         );
+        // The repo-link line only gets a click target while it's actually the About topic and
+        // currently scrolled into view — if the user has scrolled it off-screen, the hit-rect
+        // is simply omitted this frame rather than tracked at a stale position.
+        if state.help.topic == HelpTopic::About && state.mouse_enabled {
+            let visible_row = ABOUT_REPO_LINE as i32 - state.help.scroll as i32;
+            let inner_height = area.height.saturating_sub(2);
+            if visible_row >= 0 && (visible_row as u16) < inner_height {
+                layout.repo_link = Some(Rect::new(
+                    area.x + 1,
+                    area.y + 1 + visible_row as u16,
+                    area.width.saturating_sub(2),
+                    1,
+                ));
+            }
+        }
     }
     if state.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, area, &state.theme));
