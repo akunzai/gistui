@@ -541,7 +541,7 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
-            Constraint::Length(footer_height(&footer, area.width)),
+            Constraint::Length(footer_height(&footer, area.width, &ftitle)),
         ])
         .split(area);
 
@@ -756,7 +756,7 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut Mou
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
-            Constraint::Length(footer_height(&footer, area.width)),
+            Constraint::Length(footer_height(&footer, area.width, &ftitle)),
         ])
         .split(area);
 
@@ -1412,7 +1412,7 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &m
         .constraints([
             Constraint::Length(4),
             Constraint::Min(3),
-            Constraint::Length(footer_height(&footer, area.width)),
+            Constraint::Length(footer_height(&footer, area.width, "")),
         ])
         .split(area);
     if let Some(id) = state.detail.gist_id.as_deref() {
@@ -1564,16 +1564,19 @@ pub(super) fn wrap_line_count(text: &str, width: u16) -> u16 {
     lines
 }
 
-/// Height to reserve for a screen's footer `Layout` row: `0` when `text` is empty (the footer
-/// fully collapses, reclaiming the space for content above it) or the wrapped line count
-/// otherwise. Screens whose footer always has real content (Diff, Preview) inline the same
-/// `wrap_line_count` math in their layout constraints.
-pub(super) fn footer_height(text: &str, width: u16) -> u16 {
-    if text.is_empty() {
+/// Height to reserve for a screen's footer `Layout` row: `0` when both `text` and `title` are
+/// empty (the footer fully collapses), else the wrapped line count for `text` plus one row when
+/// `title` is non-empty (ratatui's [`Block::title`] always consumes a row, even without borders).
+pub(super) fn footer_height(text: &str, width: u16, title: &str) -> u16 {
+    if text.is_empty() && title.is_empty() {
+        return 0;
+    }
+    let content = if text.is_empty() {
         0
     } else {
         wrap_line_count(text, width.saturating_sub(2)).max(1)
-    }
+    };
+    content + u16::from(!title.is_empty())
 }
 
 /// Colour a command key by what its action does, so destructive and mutating keys stand apart
@@ -1638,11 +1641,16 @@ pub(super) fn hint_line(text: &str, theme: &Theme) -> Line<'static> {
 /// version, and update-check status used to live in the footer but have moved to Help → About
 /// (see `about_topic_lines`).
 pub(super) fn footer_block(title: &str, theme: &Theme) -> Block<'static> {
-    Block::default()
-        .title(title.to_string())
+    let mut block = Block::default()
         .borders(Borders::NONE)
         .style(theme.base_style())
-        .padding(Padding::horizontal(1))
+        .padding(Padding::horizontal(1));
+    // ratatui treats even an empty `.title("")` as a top title row, which would leave zero
+    // inner height when the footer chunk is only one row tall — see `Block::inner`.
+    if !title.is_empty() {
+        block = block.title(title.to_string());
+    }
+    block
 }
 
 /// Render a command footer into `area`. `colored` accents the command keys; pass `false` for
@@ -1739,7 +1747,7 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(5),
-            Constraint::Length(footer_height(&footer_body, area.width)),
+            Constraint::Length(footer_height(&footer_body, area.width, "")),
         ])
         .split(area);
     let columns = Layout::default()
