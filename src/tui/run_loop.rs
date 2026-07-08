@@ -685,6 +685,15 @@ fn open_browser(state: &mut AppState) {
     state.set_status(format!("Opening gist {gist_id} in the browser…"));
 }
 
+fn open_repo_url(state: &mut AppState) {
+    let url = env!("CARGO_PKG_REPOSITORY");
+    let plan = crate::actions::open_url_command(url);
+    std::thread::spawn(move || {
+        let _ = crate::actions::execute_command(&plan);
+    });
+    state.set_status("Opening GitHub repository in the browser…");
+}
+
 /// Copies the context gist's web URL to the system clipboard. On the Preview screen the
 /// URL comes from the previewed file's gist; elsewhere from the current selection.
 fn copy_gist_url(state: &mut AppState) {
@@ -2171,6 +2180,7 @@ fn dispatch_outcome(
             }
         }
         KeyOutcome::OpenBrowser => open_browser(state),
+        KeyOutcome::OpenRepoUrl => open_repo_url(state),
         KeyOutcome::CopyGistUrl => copy_gist_url(state),
         KeyOutcome::CopyPreviewContent => copy_preview_content(state),
         KeyOutcome::EditLocal => edit_local(terminal, state)?,
