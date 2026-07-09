@@ -1757,7 +1757,9 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
 
     // Show each candidate's path relative to cwd; in flat mode this is just the filename,
     // in recursive mode it includes the subdirectory (e.g. src/utils/helpers.rs).
-    let visible_locals = state.visible_locals();
+    // Dual snapshot once for both panes (issue #224) — avoids a second full recompute
+    // when building the gist pane from `ranked_gists()` below.
+    let (visible_locals, ranked) = state.list_pane_snapshots();
     let local_items: Vec<ListItem> = if state.local_scanning && state.locals.is_empty() {
         vec![ListItem::new(format!(
             "  {} Scanning files…",
@@ -1815,7 +1817,6 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
         });
     }
 
-    let ranked = state.ranked_gists();
     let gist_items: Vec<ListItem> = if state.loading && ranked.is_empty() {
         vec![ListItem::new(format!(
             "  {} Loading gists…",

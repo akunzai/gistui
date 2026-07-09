@@ -300,18 +300,20 @@ fn build_palette_items(state: &AppState, screen: Screen, mode: PaletteMode) -> V
 }
 
 fn list_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let has_gist = state.gist_index < state.ranked_gists().len();
-    let has_local = state.selected_local().is_some();
-    let gist_id = state.selected_gist().map(|g| g.file.gist_id.clone());
+    // One dual-pane snapshot for all enablement checks (issue #224).
+    let (visible_locals, ranked) = state.list_pane_snapshots();
+    let has_gist = ranked.get(state.gist_index).is_some();
+    let has_local = visible_locals.get(state.local_index).is_some();
+    let gist = ranked.get(state.gist_index);
+    let gist_id = gist.map(|g| g.file.gist_id.clone());
     let owned = gist_id
         .as_deref()
         .map(|id| state.gist_is_owned(id))
         .unwrap_or(false);
-    let gist_file = state.selected_gist().map(|g| g.file.clone());
+    let gist_file = gist.map(|g| g.file.clone());
     let previewable = gist_file
         .as_ref()
         .is_some_and(|f| state.gist_file_is_text_previewable(&f.gist_id, &f.filename));
-    let visible_locals = state.visible_locals();
     let diffable = gist_file.as_ref().is_some_and(|f| {
         let local_path = visible_locals
             .get(state.local_index)
@@ -322,16 +324,17 @@ fn list_palette_items(state: &AppState) -> Vec<PaletteItem> {
         .as_deref()
         .map(|id| state.gist_file_count(id) > 1)
         .unwrap_or(false);
-    let pinned_pair = state
-        .selected_local()
-        .zip(state.selected_gist())
-        .is_some_and(|(local, gist)| {
-            state.pinned.iter().any(|m| {
-                m.local_path == local.path
-                    && m.gist_id == gist.file.gist_id
-                    && m.gist_filename == gist.file.filename
-            })
-        });
+    let pinned_pair =
+        visible_locals
+            .get(state.local_index)
+            .zip(gist)
+            .is_some_and(|(local, gist)| {
+                state.pinned.iter().any(|m| {
+                    m.local_path == local.candidate.path
+                        && m.gist_id == gist.file.gist_id
+                        && m.gist_filename == gist.file.filename
+                })
+            });
 
     vec![
         key_item("Enter", "Diff local ↔ gist", KeyCode::Enter, diffable),

@@ -1181,19 +1181,28 @@ impl AppState {
             KeyCode::Char('P') => self.open_pins(),
             KeyCode::Char('S') => return KeyOutcome::SyncSelectedPair,
             KeyCode::Char('g') => self.open_gist_manager(),
-            KeyCode::Char('H') if self.gist_index < self.ranked_gists().len() => {
-                if self.open_revisions(Screen::List) {
+            KeyCode::Char('H') => {
+                let (_, ranked) = self.list_pane_snapshots();
+                if ranked.get(self.gist_index).is_none() {
+                    self.status = Some("select a gist file to view revision history".into());
+                } else if self.open_revisions(Screen::List) {
                     return KeyOutcome::FetchRevisions;
+                } else {
+                    self.status = Some("select a gist file to view revision history".into());
                 }
-                self.status = Some("select a gist file to view revision history".into());
             }
             KeyCode::Char('e') => {
-                if self.selected_local().is_some() {
+                let (locals, _) = self.list_pane_snapshots();
+                if locals.get(self.local_index).is_some() {
                     return KeyOutcome::EditLocal;
                 }
                 self.status = Some("select a local file to edit".into());
             }
-            KeyCode::Char(' ') if let Some(gist) = self.selected_gist() => {
+            KeyCode::Char(' ') => {
+                let (_, ranked) = self.list_pane_snapshots();
+                let Some(gist) = ranked.get(self.gist_index) else {
+                    return KeyOutcome::None;
+                };
                 if self.block_if_non_previewable_gist_file(&gist.file.gist_id, &gist.file.filename)
                 {
                     return KeyOutcome::None;
@@ -1201,22 +1210,21 @@ impl AppState {
                 self.preview_return = Screen::List;
                 return KeyOutcome::PreviewContent;
             }
-            KeyCode::Char('d')
-                if self.focus == FocusPane::Gist && self.gist_index < self.ranked_gists().len() =>
-            {
-                return KeyOutcome::DownloadGist;
+            KeyCode::Char('d') if self.focus == FocusPane::Gist => {
+                let (_, ranked) = self.list_pane_snapshots();
+                if ranked.get(self.gist_index).is_some() {
+                    return KeyOutcome::DownloadGist;
+                }
             }
             // Enter works from either pane: it diffs the selected local file against the
             // selected gist (the top match when focus is on the local pane). Snapshot both
-            // ranked lists once here instead of recomputing them through the bounds guard plus
-            // `selected_gist`/`selected_local` (perf-1, #154).
+            // ranked lists once (issue #224 / #154 shape #1).
             KeyCode::Enter => {
-                let ranked = self.ranked_gists();
+                let (locals, ranked) = self.list_pane_snapshots();
                 let Some(gist) = ranked.get(self.gist_index) else {
                     return KeyOutcome::None;
                 };
-                let local_path = self
-                    .visible_locals()
+                let local_path = locals
                     .get(self.local_index)
                     .map(|r| r.candidate.path.clone());
                 if self.block_if_non_previewable_diff(
@@ -1255,9 +1263,12 @@ impl AppState {
     /// Page the focused list-pane selection by [`PAGE_SCROLL`] rows (clamped at bounds).
     fn list_page_focused(&mut self, forward: bool) {
         let step = PAGE_SCROLL as usize;
+        // One snapshot for the focused pane length (issue #224) — selection-index
+        // changes do not alter list length, so this is safe.
+        let (locals, ranked) = self.list_pane_snapshots();
         match self.focus {
             FocusPane::Local => {
-                let len = self.visible_locals().len();
+                let len = locals.len();
                 if len == 0 {
                     return;
                 }
@@ -1273,7 +1284,7 @@ impl AppState {
                 }
             }
             FocusPane::Gist => {
-                let len = self.ranked_gists().len();
+                let len = ranked.len();
                 if len == 0 {
                     return;
                 }
@@ -1296,9 +1307,11 @@ impl AppState {
     /// reset the horizontal scroll, and re-rank the opposite pane when the focused pane is the
     /// ranking anchor.
     fn list_move_focused(&mut self, forward: bool) {
+        // Length-only snapshot once per move (issue #224).
+        let (locals, ranked) = self.list_pane_snapshots();
         match self.focus {
             FocusPane::Local => {
-                let len = self.visible_locals().len();
+                let len = locals.len();
                 if forward {
                     if self.local_index + 1 >= len {
                         return;
@@ -1316,8 +1329,9 @@ impl AppState {
                 }
             }
             FocusPane::Gist => {
+                let len = ranked.len();
                 if forward {
-                    if self.gist_index + 1 >= self.ranked_gists().len() {
+                    if self.gist_index + 1 >= len {
                         return;
                     }
                     self.gist_index += 1;
@@ -1386,7 +1400,11 @@ impl AppState {
     /// pair is already pinned, otherwise [`KeyOutcome::Pin`]. Requires a selection in both
     /// panes; otherwise it just sets a status hint.
     fn pin_toggle_intent(&mut self) -> KeyOutcome {
-        let (Some(local), Some(gist)) = (self.selected_local(), self.selected_gist()) else {
+        let (locals, ranked) = self.list_pane_snapshots();
+        let (Some(local), Some(gist)) = (
+            locals.get(self.local_index).map(|r| &r.candidate),
+            ranked.get(self.gist_index),
+        ) else {
             self.status = Some("select a local file and a gist to pin".into());
             return KeyOutcome::None;
         };
