@@ -1975,6 +1975,8 @@ mod render;
 use render::*;
 mod text;
 use text::{comment_lines_count, local_row_label};
+mod bg;
+mod dispatch;
 mod keys;
 mod run_loop;
 use run_loop::run_loop;
