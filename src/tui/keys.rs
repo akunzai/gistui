@@ -94,6 +94,7 @@ impl AppState {
             Screen::Gists => self.handle_key_gists(code),
             Screen::GistDetail => self.handle_key_detail(code),
             Screen::Revisions => self.handle_key_revisions(code),
+            Screen::Config => self.handle_key_config(code),
             Screen::Palette => KeyOutcome::None,
         }
     }
@@ -111,6 +112,141 @@ impl AppState {
         self.help.index_open = false;
         self.help.scroll = 0;
         self.screen = Screen::Help;
+    }
+
+    /// Open the flat Settings screen (`C` or palette). Opening alone does not write config.
+    pub(crate) fn open_config(&mut self) {
+        if self.screen == Screen::Config {
+            return;
+        }
+        self.config.return_screen = self.screen;
+        self.config.index = 0;
+        self.screen = Screen::Config;
+    }
+
+    /// Value string shown for a Config field row.
+    pub(crate) fn config_field_value(&self, field: ConfigField) -> String {
+        match field {
+            ConfigField::Theme => match self.theme_choice {
+                crate::config::ThemeChoice::Dark => "dark".into(),
+                crate::config::ThemeChoice::Light => "light".into(),
+            },
+            ConfigField::Mouse => {
+                if self.config_mouse {
+                    "on".into()
+                } else {
+                    "off".into()
+                }
+            }
+            ConfigField::CheckUpdates => {
+                if self.config_check_updates {
+                    "on".into()
+                } else {
+                    "off".into()
+                }
+            }
+            ConfigField::IgnoreTrailingNewline => {
+                if self.ignore_trailing_newline {
+                    "on".into()
+                } else {
+                    "off".into()
+                }
+            }
+            ConfigField::ScanDepth => self.scan_depth.to_string(),
+            ConfigField::DiffContext => self.diff_context.to_string(),
+        }
+    }
+
+    /// Toggle or nudge the selected Config field. Returns true when a value changed
+    /// (caller should persist). Pure aside from mutating `self`.
+    pub(crate) fn adjust_config_field(&mut self, forward: bool) -> bool {
+        let field = ConfigField::ALL
+            .get(self.config.index)
+            .copied()
+            .unwrap_or(ConfigField::Theme);
+        match field {
+            ConfigField::Theme => {
+                self.theme_choice = match self.theme_choice {
+                    crate::config::ThemeChoice::Dark => crate::config::ThemeChoice::Light,
+                    crate::config::ThemeChoice::Light => crate::config::ThemeChoice::Dark,
+                };
+                self.theme = Theme::for_choice(self.theme_choice);
+                true
+            }
+            ConfigField::Mouse => {
+                self.config_mouse = !self.config_mouse;
+                self.mouse_enabled =
+                    crate::config::resolve_mouse_enabled(self.config_mouse, self.no_mouse_cli);
+                true
+            }
+            ConfigField::CheckUpdates => {
+                self.config_check_updates = !self.config_check_updates;
+                self.update_check_enabled = crate::config::resolve_update_check(
+                    self.config_check_updates,
+                    self.no_update_check_cli,
+                );
+                true
+            }
+            ConfigField::IgnoreTrailingNewline => {
+                self.ignore_trailing_newline = !self.ignore_trailing_newline;
+                true
+            }
+            ConfigField::ScanDepth => {
+                let next = if forward {
+                    self.scan_depth.saturating_add(1).min(20)
+                } else {
+                    self.scan_depth.saturating_sub(1)
+                };
+                if next == self.scan_depth {
+                    return false;
+                }
+                self.scan_depth = next;
+                true
+            }
+            ConfigField::DiffContext => {
+                let next = if forward {
+                    self.diff_context.saturating_add(1).min(50)
+                } else {
+                    self.diff_context.saturating_sub(1)
+                };
+                if next == self.diff_context {
+                    return false;
+                }
+                self.diff_context = next;
+                true
+            }
+        }
+    }
+
+    fn handle_key_config(&mut self, code: KeyCode) -> KeyOutcome {
+        let n = ConfigField::ALL.len();
+        match code {
+            KeyCode::Char('q') | KeyCode::Esc => {
+                self.screen = self.config.return_screen;
+                self.config.return_screen = Screen::List;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.config.index = self.config.index.saturating_sub(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.config.index + 1 < n {
+                    self.config.index += 1;
+                }
+            }
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right | KeyCode::Char('l') => {
+                if self.adjust_config_field(true) {
+                    return KeyOutcome::PersistSettings;
+                }
+            }
+            KeyCode::Left | KeyCode::Char('h') => {
+                if self.adjust_config_field(false) {
+                    return KeyOutcome::PersistSettings;
+                }
+            }
+            KeyCode::Char('?') => self.open_help(),
+            _ => {}
+        }
+        KeyOutcome::None
     }
 
     /// Arrow / hjkl / Ctrl+b/f navigation. Returns true when the key was consumed.
@@ -300,6 +436,25 @@ impl AppState {
                 }
                 true
             }
+            Screen::Config => {
+                let n = ConfigField::ALL.len();
+                match action {
+                    NavAction::Up => {
+                        self.config.index = self.config.index.saturating_sub(1);
+                    }
+                    NavAction::Down => {
+                        if self.config.index + 1 < n {
+                            self.config.index += 1;
+                        }
+                    }
+                    NavAction::Left | NavAction::Right => {
+                        // Adjust is handled in handle_key_config (needs PersistSettings).
+                        return false;
+                    }
+                    _ => return false,
+                }
+                true
+            }
             // Diff, Preview and Confirm all scroll the same diff/preview buffer identically.
             Screen::Diff | Screen::Preview | Screen::Confirm => {
                 match action {
@@ -346,8 +501,9 @@ impl AppState {
                     self.help.index_open = false;
                     self.help.scroll = 0;
                 }
-                KeyCode::Char('0') if topics.len() > 9 => {
-                    self.help.topic = topics[9];
+                // `0` always jumps to About (last topic), independent of total count.
+                KeyCode::Char('0') if topics.contains(&HelpTopic::About) => {
+                    self.help.topic = HelpTopic::About;
                     self.help.index_open = false;
                     self.help.scroll = 0;
                 }
@@ -371,8 +527,8 @@ impl AppState {
                     self.help.topic = topics[(c as u8 - b'1') as usize];
                     self.help.scroll = 0;
                 }
-                KeyCode::Char('0') if topics.len() > 9 => {
-                    self.help.topic = topics[9];
+                KeyCode::Char('0') if topics.contains(&HelpTopic::About) => {
+                    self.help.topic = HelpTopic::About;
                     self.help.scroll = 0;
                 }
                 KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
@@ -830,6 +986,17 @@ impl AppState {
                 }
                 false
             }
+            Screen::Config => {
+                if let Some(hit) = layout.list {
+                    if point_in(hit.rect, col, row) {
+                        if let Some(idx) = hit.index_at(row, ConfigField::ALL.len()) {
+                            self.config.index = idx;
+                            return true;
+                        }
+                    }
+                }
+                false
+            }
             Screen::GistDetail => {
                 if let Some(hit) = layout.detail_files {
                     if point_in(hit.rect, col, row) {
@@ -1179,6 +1346,7 @@ impl AppState {
             KeyCode::Char('y') => return KeyOutcome::CopyGistUrl,
             KeyCode::Char('?') => self.open_help(),
             KeyCode::Char('P') => self.open_pins(),
+            KeyCode::Char('C') => self.open_config(),
             KeyCode::Char('S') => return KeyOutcome::SyncSelectedPair,
             KeyCode::Char('g') => self.open_gist_manager(),
             KeyCode::Char('H') => {

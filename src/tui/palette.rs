@@ -21,6 +21,7 @@ pub enum CrossAction {
     GoToGists,
     GoToPins,
     OpenHelp,
+    OpenConfig,
     ToggleTheme,
     Quit,
 }
@@ -203,6 +204,10 @@ impl AppState {
                 self.open_help();
                 KeyOutcome::None
             }
+            PaletteExec::Cross(CrossAction::OpenConfig) => {
+                self.open_config();
+                KeyOutcome::None
+            }
             PaletteExec::Cross(CrossAction::ToggleTheme) => {
                 self.theme_choice = match self.theme_choice {
                     crate::config::ThemeChoice::Dark => crate::config::ThemeChoice::Light,
@@ -252,6 +257,7 @@ fn key_item(key: &str, label: &str, code: KeyCode, enabled: bool) -> PaletteItem
 }
 
 fn cross_items() -> Vec<PaletteItem> {
+    // includes Open settings
     vec![
         palette_item(
             "g",
@@ -269,6 +275,12 @@ fn cross_items() -> Vec<PaletteItem> {
             "?",
             "Go to Help",
             PaletteExec::Cross(CrossAction::OpenHelp),
+            true,
+        ),
+        palette_item(
+            "C",
+            "Open settings",
+            PaletteExec::Cross(CrossAction::OpenConfig),
             true,
         ),
         palette_item(
@@ -291,6 +303,7 @@ fn build_palette_items(state: &AppState, screen: Screen, mode: PaletteMode) -> V
         Screen::Diff => diff_palette_items(state),
         Screen::Preview => preview_palette_items(state),
         Screen::Help => help_palette_items(),
+        Screen::Config => config_palette_items(),
         Screen::Confirm | Screen::Palette => Vec::new(),
     };
     if mode == PaletteMode::Command {
@@ -566,6 +579,14 @@ fn preview_palette_items(_state: &AppState) -> Vec<PaletteItem> {
         key_item("y", "Copy gist URL", KeyCode::Char('y'), true),
         key_item("Y", "Copy file content", KeyCode::Char('Y'), true),
         key_item("q", "Back", KeyCode::Char('q'), true),
+    ]
+}
+
+fn config_palette_items() -> Vec<PaletteItem> {
+    vec![
+        key_item("Enter", "Toggle / increase value", KeyCode::Enter, true),
+        key_item("h/l", "Decrease / increase value", KeyCode::Char('l'), true),
+        key_item("Esc", "Close settings", KeyCode::Esc, true),
     ]
 }
 

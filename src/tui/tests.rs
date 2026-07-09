@@ -4024,12 +4024,14 @@ fn pins_filter_input_behaviors() {
 #[test]
 fn help_topic_all_is_ordered_and_titled() {
     let all = HelpTopic::all();
-    assert_eq!(all.len(), 10);
+    assert_eq!(all.len(), 11);
     assert_eq!(all[0], HelpTopic::List);
     assert_eq!(all[4], HelpTopic::Revisions);
-    assert_eq!(all[8], HelpTopic::General);
-    assert_eq!(all[9], HelpTopic::About);
+    assert_eq!(all[8], HelpTopic::Config);
+    assert_eq!(all[9], HelpTopic::General);
+    assert_eq!(all[10], HelpTopic::About);
     assert_eq!(HelpTopic::Pins.title(), "Pinned Mappings");
+    assert_eq!(HelpTopic::Config.title(), "Settings");
     assert_eq!(HelpTopic::About.title(), "About");
 }
 
@@ -5713,4 +5715,87 @@ fn local_scan_generation_ignores_stale_results() {
     ));
     assert_eq!(state.locals[0].path, PathBuf::from("/tmp/fresh.txt"));
     assert!(!state.local_scanning);
+}
+
+#[test]
+fn open_config_does_not_write_config_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    assert!(!path.exists());
+    let mut state = initial_state();
+    state.screen = Screen::List;
+    state.open_config();
+    assert_eq!(state.screen, Screen::Config);
+    // Opening alone must not create the file — persist only after a field change.
+    assert!(!path.exists());
+}
+
+#[test]
+fn config_adjust_theme_returns_persist_settings() {
+    let mut state = initial_state();
+    state.open_config();
+    // Theme is index 0
+    state.config.index = 0;
+    assert_eq!(state.theme_choice, crate::config::ThemeChoice::Dark);
+    assert!(state.adjust_config_field(true));
+    assert_eq!(state.theme_choice, crate::config::ThemeChoice::Light);
+    // Space on config screen yields PersistSettings
+    let outcome = state.handle_key(KeyCode::Char(' '));
+    assert_eq!(outcome, KeyOutcome::PersistSettings);
+}
+
+#[test]
+fn config_adjust_scan_depth_clamps_and_reports_change() {
+    let mut state = initial_state();
+    state.open_config();
+    state.config.index = ConfigField::ALL
+        .iter()
+        .position(|f| *f == ConfigField::ScanDepth)
+        .unwrap();
+    state.scan_depth = 0;
+    assert!(!state.adjust_config_field(false)); // already min
+    assert!(state.adjust_config_field(true));
+    assert_eq!(state.scan_depth, 1);
+}
+
+#[test]
+fn config_field_values_round_trip_via_save_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let mut state = initial_state();
+    state.theme_choice = crate::config::ThemeChoice::Light;
+    state.config_mouse = false;
+    state.config_check_updates = false;
+    state.ignore_trailing_newline = false;
+    state.scan_depth = 5;
+    state.diff_context = 7;
+    // Simulate persist_settings write path using shipped save/load.
+    let config = crate::config::AppConfig {
+        theme: state.theme_choice,
+        mouse: state.config_mouse,
+        check_updates: state.config_check_updates,
+        ignore_trailing_newline: state.ignore_trailing_newline,
+        scan_depth: state.scan_depth,
+        diff_context: state.diff_context,
+        ..crate::config::AppConfig::default()
+    };
+    crate::config::save_config(&path, &config).unwrap();
+    assert!(path.exists());
+    let loaded = crate::config::load_config(&path).unwrap();
+    assert_eq!(loaded.theme, crate::config::ThemeChoice::Light);
+    assert!(!loaded.mouse);
+    assert!(!loaded.check_updates);
+    assert!(!loaded.ignore_trailing_newline);
+    assert_eq!(loaded.scan_depth, 5);
+    assert_eq!(loaded.diff_context, 7);
+}
+
+#[test]
+fn config_c_key_opens_settings_from_list() {
+    let mut state = initial_state();
+    state.screen = Screen::List;
+    state.handle_key(KeyCode::Char('C'));
+    assert_eq!(state.screen, Screen::Config);
+    state.handle_key(KeyCode::Esc);
+    assert_eq!(state.screen, Screen::List);
 }

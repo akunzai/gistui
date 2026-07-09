@@ -998,6 +998,36 @@ pub(super) fn persist_diff_context(state: &mut AppState) {
     }
 }
 
+/// Persist Settings-screen fields after a user change (issue #227). Creates config.toml
+/// only when a value actually changed (opening Config never calls this).
+pub(super) fn persist_settings(state: &mut AppState) {
+    let result = crate::config::config_path().and_then(|path| {
+        let mut config = crate::config::load_config(&path)?;
+        config.theme = state.theme_choice;
+        config.mouse = state.config_mouse;
+        config.check_updates = state.config_check_updates;
+        config.ignore_trailing_newline = state.ignore_trailing_newline;
+        config.scan_depth = state.scan_depth;
+        config.diff_context = state.diff_context;
+        crate::config::save_config(&path, &config)?;
+        Ok(())
+    });
+    match result {
+        Ok(()) => {
+            let field = ConfigField::ALL
+                .get(state.config.index)
+                .copied()
+                .unwrap_or(ConfigField::Theme);
+            state.set_status(format!(
+                "{}: {}",
+                field.label(),
+                state.config_field_value(field)
+            ));
+        }
+        Err(error) => state.set_status(format!("save config failed: {error}")),
+    }
+}
+
 pub(super) fn pin_selected(state: &mut AppState) {
     let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist()) else {
         return;

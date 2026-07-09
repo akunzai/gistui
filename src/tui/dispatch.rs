@@ -560,6 +560,7 @@ pub(super) fn dispatch_outcome(
             }
         }
         KeyOutcome::PersistDiffContext => persist_diff_context(state),
+        KeyOutcome::PersistSettings => persist_settings(state),
         KeyOutcome::ThemeToggle => persist_theme(state),
         KeyOutcome::FetchRevisions => {
             let Some(gist_id) = state.revision.gist_id.clone() else {
