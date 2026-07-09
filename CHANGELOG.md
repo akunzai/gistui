@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-07-09
+
 - The top-right shortcut bar now includes `(C)onfig` immediately left of `(?)Help` (click or press `C`, same as duodiff).
 - Settings screen (`C`, or Ctrl+p → Open settings): toggle theme, mouse, update checks, trailing-newline ignore, and adjust scan depth / diff context without hand-editing `config.toml` (saved only after a change).
 - List navigation, palette enablement, and the dual-pane render build each ranked file list at most once per action (smoother with large gist/local sets).
@@ -177,7 +179,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.16.0...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/akunzai/gistui/releases/tag/v0.17.0
 [0.16.0]: https://github.com/akunzai/gistui/releases/tag/v0.16.0
 [0.15.2]: https://github.com/akunzai/gistui/releases/tag/v0.15.2
 [0.15.1]: https://github.com/akunzai/gistui/releases/tag/v0.15.1
