@@ -469,10 +469,11 @@ pub struct MouseLayout {
     /// to honour a one-shot scroll-to-bottom after the newest page loads).
     pub comments_max_scroll: Option<u16>,
     pub repo_link: Option<Rect>,
-    /// Cross-screen top-bar shortcut hit-rects — `(G)ists`, `(P)ins`, `(?)Help`. Set by
-    /// `render_top_bar` on every screen except the transient `Confirm` y/n modal.
+    /// Cross-screen top-bar shortcut hit-rects — `(G)ists`, `(P)ins`, `(C)onfig`, `(?)Help`.
+    /// Set by `render_top_bar` on every screen except the transient `Confirm` y/n modal.
     pub top_bar_gists: Option<Rect>,
     pub top_bar_pins: Option<Rect>,
+    pub top_bar_config: Option<Rect>,
     pub top_bar_help: Option<Rect>,
     /// Palette overlay: one hit-rect per visible row, plus the `[✕]` close button.
     pub palette_rows: Vec<Rect>,

@@ -1146,8 +1146,8 @@ impl AppState {
                         return KeyOutcome::OpenRepoUrl;
                     }
                 }
-                // Top-bar (G)ists / (P)ins / (?)Help — same effect as pressing the key,
-                // from any screen (not just wherever that key happens to be bound).
+                // Top-bar (G)ists / (P)ins / (C)onfig / (?)Help — same effect as pressing
+                // the key, from any screen (not just wherever that key happens to be bound).
                 if let Some(rect) = layout.top_bar_gists {
                     if point_in(rect, col, row) {
                         self.open_gist_manager();
@@ -1157,6 +1157,12 @@ impl AppState {
                 if let Some(rect) = layout.top_bar_pins {
                     if point_in(rect, col, row) {
                         self.open_pins();
+                        return KeyOutcome::None;
+                    }
+                }
+                if let Some(rect) = layout.top_bar_config {
+                    if point_in(rect, col, row) {
+                        self.open_config();
                         return KeyOutcome::None;
                     }
                 }

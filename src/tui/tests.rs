@@ -3510,6 +3510,42 @@ fn top_bar_pins_click_opens_pins_from_any_screen() {
 }
 
 #[test]
+fn top_bar_config_click_opens_settings_from_any_screen() {
+    let mut state = state_with_gists();
+    state.screen = Screen::Preview;
+    let layout = MouseLayout {
+        top_bar_config: Some(Rect::new(28, 0, 8, 1)),
+        ..Default::default()
+    };
+    let out = state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
+    assert_eq!(state.screen, Screen::Config);
+    assert_eq!(state.config.return_screen, Screen::Preview);
+    assert_eq!(out, KeyOutcome::None);
+}
+
+#[test]
+fn top_bar_config_click_while_already_on_config_does_not_trap_keyboard_exit() {
+    let mut state = state_with_gists();
+    state.screen = Screen::Preview;
+    let layout = MouseLayout {
+        top_bar_config: Some(Rect::new(28, 0, 8, 1)),
+        ..Default::default()
+    };
+    state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
+    assert_eq!(state.screen, Screen::Config);
+    assert_eq!(state.config.return_screen, Screen::Preview);
+
+    // Second click on Config while already there must not overwrite return_screen.
+    let out = state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
+    assert_eq!(state.screen, Screen::Config);
+    assert_eq!(state.config.return_screen, Screen::Preview);
+    assert_eq!(out, KeyOutcome::None);
+
+    state.handle_key(KeyCode::Esc);
+    assert_eq!(state.screen, Screen::Preview);
+}
+
+#[test]
 fn top_bar_help_click_opens_help_and_remembers_return_screen_from_any_screen() {
     let mut state = state_with_gists();
     state.screen = Screen::Preview;
