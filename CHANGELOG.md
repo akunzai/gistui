@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Settings screen (`C`, or Ctrl+p → Open settings): toggle theme, mouse, update checks, trailing-newline ignore, and adjust scan depth / diff context without hand-editing `config.toml` (saved only after a change).
 - List navigation, palette enablement, and the dual-pane render build each ranked file list at most once per action (smoother with large gist/local sets).
 - Cancelled or superseded background tasks (and overlapping local file scans) no longer apply their results if they finish late.
 - Preview, diff, and upload refuse text larger than 10 MiB with a status message instead of loading the whole buffer into memory.

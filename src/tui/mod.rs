@@ -34,6 +34,51 @@ pub enum Screen {
     Revisions,
     /// Unified context menu / command palette overlay (`;` or right-click / `Ctrl+p`).
     Palette,
+    /// Flat settings list (issue #227); opened with `C` or the command palette.
+    Config,
+}
+
+/// Fields shown on [`Screen::Config`] in order (issue #227).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfigField {
+    Theme,
+    Mouse,
+    CheckUpdates,
+    IgnoreTrailingNewline,
+    ScanDepth,
+    DiffContext,
+}
+
+impl ConfigField {
+    pub const ALL: [ConfigField; 6] = [
+        ConfigField::Theme,
+        ConfigField::Mouse,
+        ConfigField::CheckUpdates,
+        ConfigField::IgnoreTrailingNewline,
+        ConfigField::ScanDepth,
+        ConfigField::DiffContext,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ConfigField::Theme => "Theme",
+            ConfigField::Mouse => "Mouse support",
+            ConfigField::CheckUpdates => "Check for updates",
+            ConfigField::IgnoreTrailingNewline => "Ignore trailing newline",
+            ConfigField::ScanDepth => "Recursive scan depth",
+            ConfigField::DiffContext => "Diff context lines",
+        }
+    }
+
+    pub fn is_numeric(self) -> bool {
+        matches!(self, ConfigField::ScanDepth | ConfigField::DiffContext)
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ConfigState {
+    pub index: usize,
+    pub return_screen: Screen,
 }
 
 /// A help topic — one per key-dense area, plus `About` (version/repo/update info, not tied
@@ -51,11 +96,12 @@ pub enum HelpTopic {
     Revisions,
     General,
     About,
+    Config,
 }
 
 impl HelpTopic {
     /// All topics in index / quick-jump order.
-    pub fn all() -> [HelpTopic; 10] {
+    pub fn all() -> [HelpTopic; 11] {
         use HelpTopic::*;
         [
             List,
@@ -66,6 +112,7 @@ impl HelpTopic {
             Diff,
             Preview,
             Upload,
+            Config,
             General,
             About,
         ]
@@ -82,6 +129,7 @@ impl HelpTopic {
             HelpTopic::Diff => "Diff view",
             HelpTopic::Preview => "Preview",
             HelpTopic::Upload => "Upload confirmation",
+            HelpTopic::Config => "Settings",
             HelpTopic::General => "General",
             HelpTopic::About => "About",
         }
@@ -95,6 +143,7 @@ impl HelpTopic {
             Screen::Gists => HelpTopic::GistManager,
             Screen::GistDetail => HelpTopic::GistDetail,
             Screen::Revisions => HelpTopic::Revisions,
+            Screen::Config => HelpTopic::Config,
             _ => HelpTopic::List,
         }
     }
@@ -360,6 +409,8 @@ pub enum KeyOutcome {
     CopyPreviewContent,
     /// Toggle the colour theme between dark and light and persist to config (`T`, global).
     ThemeToggle,
+    /// Persist settings changed on [`Screen::Config`] (creates config.toml only after a change).
+    PersistSettings,
     /// Fetch the revision list for the gist opened on `Screen::Revisions`.
     FetchRevisions,
     /// Diff the target file: parent revision → selected revision (incremental).
@@ -619,12 +670,22 @@ pub struct AppState {
     /// Syntax-highlight file content in the preview and diff-context lines (issue #69).
     /// Defaults on; `load_startup_state` turns it off when `NO_COLOR` is set in the environment.
     pub syntax_highlight: bool,
+    /// Config preference for mouse (before CLI force-off). Edited on [`Screen::Config`].
+    pub config_mouse: bool,
     /// Whether mouse capture is active this session (config `mouse` AND-NOT `--no-mouse`).
     /// Gates the `Event::Mouse` branch and the close-button rendering.
     pub mouse_enabled: bool,
+    /// CLI `--no-mouse` for the process (re-applied when config mouse toggles).
+    pub no_mouse_cli: bool,
+    /// Config preference for daily update checks. Edited on [`Screen::Config`].
+    pub config_check_updates: bool,
     /// Whether the startup update check runs this session (config `check_updates` AND-NOT
     /// `--no-update-check`).
     pub update_check_enabled: bool,
+    /// CLI `--no-update-check` for the process.
+    pub no_update_check_cli: bool,
+    /// Config screen navigation state.
+    pub config: ConfigState,
     /// Newer release version found by the background check, if any (footer hint on the List).
     pub update_available: Option<String>,
     /// How this binary was installed — resolved once at startup so the update hint can show
@@ -1676,8 +1737,13 @@ pub fn initial_state() -> AppState {
         preview_title: String::new(),
         preview_wrap: false,
         syntax_highlight: true,
+        config_mouse: true,
         mouse_enabled: true,
+        no_mouse_cli: false,
+        config_check_updates: true,
         update_check_enabled: true,
+        no_update_check_cli: false,
+        config: ConfigState::default(),
         update_available: None,
         install_method: crate::upgrade::InstallMethod::Standalone,
         preview_gist_key: None,
@@ -1737,7 +1803,11 @@ pub fn load_startup_state(no_mouse: bool, no_update_check: bool) -> Result<AppSt
     state.theme = Theme::for_choice(config.theme);
     // Honour NO_COLOR for the syntax-highlight feature only (existing semantic colours stay).
     state.syntax_highlight = std::env::var_os("NO_COLOR").is_none();
+    state.config_mouse = config.mouse;
+    state.no_mouse_cli = no_mouse;
     state.mouse_enabled = crate::config::resolve_mouse_enabled(config.mouse, no_mouse);
+    state.config_check_updates = config.check_updates;
+    state.no_update_check_cli = no_update_check;
     state.update_check_enabled =
         crate::config::resolve_update_check(config.check_updates, no_update_check);
     // Surface a previously-seen newer release immediately (even when the daily check is

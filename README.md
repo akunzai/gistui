@@ -73,14 +73,15 @@ without resetting order. Pinned pairs show `📌`; same-filename candidates are 
 | `p` / `P` | pin pair / open Pins view |
 | `g` | gist manager (per-gist view; `Enter` for detail, `v` visibility, `*` star) |
 | `a` | flip anchor pane · `/` filter focused pane · `?` help |
+| `C` | open Settings (theme, mouse, update check, scan depth, …) |
 
 Press **`?`** anytime for the **full, contextual keymap** — it opens the current screen's
-topic; `Tab` browses all topics (List, Pins, Gist manager, Gist detail, Diff, Preview, …).
+topic; `Tab` browses all topics (List, Pins, Gist manager, Settings, …).
 The idle footer shows `; Menu · Ctrl+p Palette`; every screen also shows a
 `(G)ists (P)ins (?)Help` shortcut bar in the top-right corner (click, or use the
 underlying key). Press `;` (or right-click) for a context menu of actions valid on
 the current screen and selection; press `Ctrl+p` for the full command palette with
-fuzzy-filter search and cross-screen navigation (`Go to Pins`, `Toggle theme`, `Quit`, …).
+fuzzy-filter search and cross-screen navigation (`Go to Pins`, `Open settings`, `Toggle theme`, `Quit`, …).
 The app version, the GitHub repo link, and update-check status live in `?` Help's
 **About** topic (press `0` from the Help index, or `Tab` then scroll to it).
 
@@ -115,9 +116,11 @@ Full rules: **[docs/SAFETY.md](docs/SAFETY.md)**.
 
 ## Configuration
 
-The config file lives at `~/.config/gistui/config.toml` (or
-`$XDG_CONFIG_HOME/gistui/config.toml` if that variable is set). It is created
-automatically the first time you pin a file. All fields are optional.
+Most preferences can be changed in-app with **`C`** (Settings) or **Ctrl+p → Open settings**
+— values are written only after you change a field (opening Settings alone does not create
+the file). The config file lives at `~/.config/gistui/config.toml` (or
+`$XDG_CONFIG_HOME/gistui/config.toml` if that variable is set). It is also created when you
+pin a file or toggle the theme with `T`. All fields are optional.
 
 | Field | Type | Description |
 |-------|------|-------------|

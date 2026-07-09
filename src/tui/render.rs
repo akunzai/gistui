@@ -30,6 +30,7 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
         Screen::Gists => render_gists(frame, state, layout),
         Screen::GistDetail => render_gist_detail(frame, state, layout),
         Screen::Revisions => render_revisions(frame, state, layout),
+        Screen::Config => render_config(frame, state, layout),
     }
     if let Some(ref msg) = state.bg_task_msg {
         render_loading_overlay(frame, msg, state.spinner_frame, &state.theme);
@@ -285,10 +286,28 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   p          (JSON only) toggle pretty-print formatting
   s          (JSON only) toggle recursive key sorting"
         }
+        HelpTopic::Config => {
+            "\
+Settings (C from List, or Ctrl+p → Open settings)
+  Up/Down    move between fields (also j / k)
+  Enter/Space  toggle a boolean, or increase a number
+  h / l      decrease / increase (also ← / →)
+  Esc / q    close (opening Settings never writes config by itself —
+             values are saved only after you change a field)
+
+Fields
+  Theme                  dark / light (also global T)
+  Mouse support          on / off (session still respects --no-mouse)
+  Check for updates      on / off (session still respects --no-update-check)
+  Ignore trailing newline  on / off (diff + overwrite confirm)
+  Recursive scan depth   0–20 (r recursive discovery)
+  Diff context lines     0–50 (c in Diff still toggles full vs this radius)"
+        }
         HelpTopic::General => {
             "\
   Esc / q    close an overlay; from the list, press twice to quit the app
   ?          show this help
+  C          open Settings (flat list of preferences; also Ctrl+p)
   ;          context menu (actions valid for the current screen + selection)
   Ctrl+p     command palette (all actions + cross-screen navigation; type to filter)
   T          toggle light/dark colour theme (saved to config)
@@ -341,6 +360,61 @@ fn about_topic_lines(state: &AppState) -> Vec<Line<'static>> {
     lines
 }
 
+pub(super) fn render_config(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+    let area = frame.area();
+    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(area);
+    let items: Vec<ListItem> = ConfigField::ALL
+        .iter()
+        .map(|field| {
+            let label = field.label();
+            let value = state.config_field_value(*field);
+            let hint = if field.is_numeric() {
+                "←/→"
+            } else {
+                "Enter"
+            };
+            ListItem::new(format!("  {label:<28} {value:<8}  ({hint})"))
+        })
+        .collect();
+    let mut list_state = ListState::default().with_selected(Some(state.config.index));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .title(" Settings ")
+        .title_bottom(Line::from(
+            " Esc close · Enter/←/→ change · saved on change ",
+        ))
+        .style(state.theme.base_style())
+        .border_style(Style::default().fg(state.theme.accent));
+    let list = List::new(items)
+        .block(block)
+        .highlight_style(
+            Style::default()
+                .bg(state.theme.accent)
+                .fg(state.theme.fg_on_accent)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▸ ");
+    frame.render_stateful_widget(list, chunks[0], &mut list_state);
+    if state.mouse_enabled {
+        layout.close_button = Some(render_close_button(frame, chunks[0], &state.theme));
+        layout.list = Some(PaneHit {
+            rect: chunks[0],
+            offset: 0,
+        });
+    }
+    if let Some(ref status) = state.status {
+        frame.render_widget(
+            Paragraph::new(status.as_str()).style(Style::default().fg(state.theme.accent)),
+            chunks[1],
+        );
+    }
+}
+
 pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let area = frame.area();
     let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
@@ -349,7 +423,8 @@ pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut Mous
             .iter()
             .enumerate()
             .map(|(i, t)| {
-                let key = if i == 9 {
+                // `0` marks About; otherwise 1-based index (1–9, then 10+).
+                let key = if *t == HelpTopic::About {
                     "0".to_string()
                 } else {
                     (i + 1).to_string()
@@ -2633,6 +2708,7 @@ fn render_palette(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout)
         Screen::Gists => render_gists(frame, state, &mut bg_layout),
         Screen::GistDetail => render_gist_detail(frame, state, &mut bg_layout),
         Screen::Revisions => render_revisions(frame, state, &mut bg_layout),
+        Screen::Config => render_config(frame, state, &mut bg_layout),
         Screen::Confirm | Screen::Palette => {}
     }
 
