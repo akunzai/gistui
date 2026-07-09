@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Cancelled or superseded background tasks (and overlapping local file scans) no longer apply their results if they finish late.
+- Preview, diff, and upload refuse text larger than 10 MiB with a status message instead of loading the whole buffer into memory.
+- Startup fetches for owned gists, starred gists, and the current user run in parallel, so cold start is faster on large accounts.
+
 ## [0.16.0] — 2026-07-08
 
 - The footer no longer draws a horizontal rule above its text — one fewer row of chrome on every screen that shows a footer hint or status.

@@ -11,6 +11,7 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  # Full gate (fmt + clippy + test + release build) stays on Ubuntu via mise.
   test:
     name: Test & Lint
     runs-on: ubuntu-latest
@@ -36,3 +37,26 @@ jobs:
 
       - name: Build
         run: cargo build --locked --release
+
+  # Cross-platform unit/integration tests for Windows/macOS-specific paths
+  # (key Press/Release filtering, upgrade helpers, path handling). Uses
+  # rust-toolchain (not full mise) so demo-only tools are not required on
+  # these runners. Lint/fmt remain Ubuntu-only.
+  test-platforms:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Test
+        run: cargo test --locked

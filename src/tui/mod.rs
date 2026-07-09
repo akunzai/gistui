@@ -643,11 +643,18 @@ pub struct AppState {
     pub skip_dirs: Vec<String>,
     pub scan_depth: u32,
     pub local_scanning: bool,
+    /// Generation token for the in-flight local scan. Bumped on each
+    /// [`Self::begin_local_scan`]; absorb ignores results with a mismatched id so a
+    /// slow older scan cannot clobber a newer one (issue #221).
+    pub local_scan_generation: u64,
     pub pins: PinsState,
     pub gist_manager: GistsManagerState,
     pub editing_description: bool,
     pub description_input: TextInput,
     pub bg_task_msg: Option<String>,
+    /// Generation token for the in-flight `spawn_bg` task. Bumped on spawn and on
+    /// cancel; absorb ignores outcomes stamped with an older id (issue #221).
+    pub bg_task_generation: u64,
     /// Set after the first `q`/`Esc` on the main list; a second press confirms the quit. Any
     /// other key clears it. Prevents an accidental single-key exit.
     pub quit_armed: bool,
@@ -762,7 +769,13 @@ impl AppState {
         local_label: String,
         gist_label: String,
     ) -> std::io::Result<()> {
-        self.upload.original_content = std::fs::read_to_string(local_path)?;
+        // Cap before buffering: multi-GB locals must not be read into the upload redact buffer.
+        if let Some(remote) = remote_content.as_ref() {
+            crate::domain::ensure_text_size(remote.len() as u64)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        }
+        self.upload.original_content = crate::domain::read_text_file_capped(local_path)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
         self.upload.edited_content = None;
         self.upload.json_pretty = false;
         self.upload.json_sort = false;
@@ -771,6 +784,58 @@ impl AppState {
         self.upload.gist_label = Some(gist_label);
         self.update_upload_diff();
         Ok(())
+    }
+
+    /// Mark a new background task as in-flight and return its generation id.
+    pub fn begin_bg_task(&mut self) -> u64 {
+        self.bg_task_generation = self.bg_task_generation.wrapping_add(1);
+        self.bg_task_generation
+    }
+
+    /// Invalidate any in-flight background task (Esc cancel). Clears the status overlay
+    /// and bumps the generation so a late completion cannot mutate state.
+    pub fn invalidate_bg_task(&mut self) {
+        self.bg_task_generation = self.bg_task_generation.wrapping_add(1);
+        self.bg_task_msg = None;
+    }
+
+    /// Whether `generation` is still the current background-task id.
+    pub fn is_current_bg_generation(&self, generation: u64) -> bool {
+        generation == self.bg_task_generation
+    }
+
+    /// Mark a new local scan as in-flight and return its generation id.
+    pub fn begin_local_scan(&mut self) -> u64 {
+        self.local_scan_generation = self.local_scan_generation.wrapping_add(1);
+        self.local_scan_generation
+    }
+
+    /// Whether `generation` is still the current local-scan id.
+    pub fn is_current_local_scan_generation(&self, generation: u64) -> bool {
+        generation == self.local_scan_generation
+    }
+
+    /// Apply a completed local scan when `generation` matches. Returns `false` (and leaves
+    /// state unchanged) for a stale/superseded result.
+    pub fn apply_local_scan_if_current(
+        &mut self,
+        generation: u64,
+        locals: Vec<LocalCandidate>,
+    ) -> bool {
+        if !self.is_current_local_scan_generation(generation) {
+            return false;
+        }
+        let selected = self.selected_local().map(|c| c.path.clone());
+        self.locals = locals;
+        self.local_index = selected
+            .and_then(|path| self.locals.iter().position(|c| c.path == path))
+            .unwrap_or(0)
+            .min(self.locals.len().saturating_sub(1));
+        if self.gist_index >= self.ranked_gists().len() {
+            self.gist_index = 0;
+        }
+        self.local_scanning = false;
+        true
     }
 
     /// Applies a background upload-edit-watch event (see `run_loop::UploadEditWatchEvent`) to
@@ -1572,11 +1637,13 @@ pub fn initial_state() -> AppState {
         skip_dirs: crate::config::AppConfig::default().skip_dirs,
         scan_depth: crate::config::AppConfig::default().scan_depth,
         local_scanning: false,
+        local_scan_generation: 0,
         pins: PinsState::default(),
         gist_manager: GistsManagerState::default(),
         editing_description: false,
         description_input: TextInput::default(),
         bg_task_msg: None,
+        bg_task_generation: 0,
         quit_armed: false,
         help: HelpState::default(),
         upload: UploadState::default(),

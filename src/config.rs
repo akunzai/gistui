@@ -347,7 +347,9 @@ mod tests {
 
     #[test]
     fn normalize_path_preserves_absolute_path() {
-        let absolute = PathBuf::from("/tmp/settings.json");
+        // Host-absolute path (Windows rejects bare "/tmp/..." as absolute).
+        let absolute = env::temp_dir().join("gistui-normalize-absolute-settings.json");
+        assert!(absolute.is_absolute());
         assert_eq!(normalize_path(&absolute).unwrap(), absolute);
     }
 

@@ -154,6 +154,43 @@ fn mime_is_text(mime: &str) -> bool {
     )
 }
 
+/// Maximum size of a single text buffer accepted by preview, diff, and upload
+/// paths. Larger payloads are refused with a status toast rather than risking
+/// OOM or multi-second freezes in the TUI. Matches the built-in-diff limit used
+/// by sibling tools (10 MiB).
+pub const MAX_TEXT_FILE_BYTES: u64 = 10 * 1024 * 1024;
+
+/// Error message when a payload exceeds [`MAX_TEXT_FILE_BYTES`].
+pub fn oversized_text_message(len: u64) -> String {
+    format!(
+        "file too large for preview/diff ({} bytes > {} MiB limit)",
+        len,
+        MAX_TEXT_FILE_BYTES / (1024 * 1024)
+    )
+}
+
+/// `Ok(())` when `len` is within the preview/diff budget; otherwise an error
+/// string suitable for a status toast.
+pub fn ensure_text_size(len: u64) -> Result<(), String> {
+    if len > MAX_TEXT_FILE_BYTES {
+        Err(oversized_text_message(len))
+    } else {
+        Ok(())
+    }
+}
+
+/// Read a local text file only when its size is under [`MAX_TEXT_FILE_BYTES`].
+/// Checks metadata first so multi-GB files are never fully buffered; re-checks
+/// the string length after read as a belt-and-braces guard.
+pub fn read_text_file_capped(path: &std::path::Path) -> Result<String, String> {
+    let meta = std::fs::metadata(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    ensure_text_size(meta.len())?;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
+    ensure_text_size(content.len() as u64)?;
+    Ok(content)
+}
+
 /// True when the filename extension is a known binary/image type.
 pub fn extension_looks_binary(filename: &str) -> bool {
     std::path::Path::new(filename)
@@ -456,6 +493,35 @@ mod tests {
             sha256_hex(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         );
+    }
+
+    #[test]
+    fn ensure_text_size_rejects_over_limit() {
+        assert!(ensure_text_size(0).is_ok());
+        assert!(ensure_text_size(MAX_TEXT_FILE_BYTES).is_ok());
+        let err = ensure_text_size(MAX_TEXT_FILE_BYTES + 1).unwrap_err();
+        assert!(err.contains("too large"), "{err}");
+        assert!(err.contains("MiB"), "{err}");
+    }
+
+    #[test]
+    fn read_text_file_capped_rejects_oversized_by_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("big.txt");
+        // set_len avoids writing 10MiB+ of real bytes.
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_TEXT_FILE_BYTES + 1).unwrap();
+        drop(file);
+        let err = read_text_file_capped(&path).unwrap_err();
+        assert!(err.contains("too large"), "{err}");
+    }
+
+    #[test]
+    fn read_text_file_capped_reads_small_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ok.txt");
+        std::fs::write(&path, "hello").unwrap();
+        assert_eq!(read_text_file_capped(&path).unwrap(), "hello");
     }
 
     fn file(gist_id: &str, filename: &str, desc: &str, public: bool) -> GistFile {
