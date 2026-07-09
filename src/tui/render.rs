@@ -52,19 +52,23 @@ fn render_close_button(frame: &mut Frame, outer: Rect, theme: &Theme) -> Rect {
     rect
 }
 
-/// The three cross-screen top-bar shortcuts: bracketed hotkey letter + label. Kept in one
-/// place so the click hit-rect math and the rendered text can never drift apart.
-const TOP_BAR_ITEMS: [(&str, &str); 3] = [("G", "ists"), ("P", "ins"), ("?", "Help")];
+/// Cross-screen top-bar shortcuts: bracketed hotkey letter + label. Kept in one place so the
+/// click hit-rect math and the rendered text can never drift apart. Order matches the
+/// right-aligned strip: Gists · Pins · Config · Help (Config sits immediately left of Help,
+/// same as duodiff).
+const TOP_BAR_ITEMS: [(&str, &str); 4] =
+    [("G", "ists"), ("P", "ins"), ("C", "onfig"), ("?", "Help")];
 
 /// Height of the persistent top bar rendered on every screen except the transient `Confirm`
 /// y/n modal (which keeps its full-bleed diff/gist-info background — see `render_confirm`).
 const TOP_BAR_HEIGHT: u16 = 1;
 
-/// Renders the cross-screen top bar — ` gistui` on the left, `(G)ists (P)ins (?)Help`
-/// right-aligned — into the top row of `area`, then returns the remaining rect below it for
-/// the caller's existing content/footer layout (otherwise unchanged). The icons render as
-/// plain text even with the mouse disabled, so the shortcuts stay visible; their hit-rects are
-/// only recorded in `layout` when `mouse_enabled`, matching every other clickable region.
+/// Renders the cross-screen top bar — ` gistui` on the left,
+/// `(G)ists (P)ins (C)onfig (?)Help` right-aligned — into the top row of `area`, then returns
+/// the remaining rect below it for the caller's existing content/footer layout (otherwise
+/// unchanged). The icons render as plain text even with the mouse disabled, so the shortcuts
+/// stay visible; their hit-rects are only recorded in `layout` when `mouse_enabled`, matching
+/// every other clickable region.
 pub(super) fn render_top_bar(
     frame: &mut Frame,
     area: Rect,
@@ -111,6 +115,7 @@ pub(super) fn render_top_bar(
             match i {
                 0 => layout.top_bar_gists = Some(rect),
                 1 => layout.top_bar_pins = Some(rect),
+                2 => layout.top_bar_config = Some(rect),
                 _ => layout.top_bar_help = Some(rect),
             }
         }
@@ -182,7 +187,7 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   Dbl-click  open the clicked row (diff / detail / pin diff / preview)
   Tab click  switch Files / Comments on the Gist details screen
   [✕] btn    close / go back on any pop-up screen
-  Top bar    click (G)ists / (P)ins / (?)Help (top-right, every screen) to jump there
+  Top bar    click (G)ists / (P)ins / (C)onfig / (?)Help (top-right, every screen)
   Right-click  open the context menu at the click (same as ;)
   ; / Ctrl+p   open the menu / command palette from the keyboard (see General)"
         }
@@ -288,7 +293,7 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
         }
         HelpTopic::Config => {
             "\
-Settings (C from List, or Ctrl+p → Open settings)
+Settings (C, top-bar (C)onfig, or Ctrl+p → Open settings)
   Up/Down    move between fields (also j / k)
   Enter/Space  toggle a boolean, or increase a number
   h / l      decrease / increase (also ← / →)
