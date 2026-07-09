@@ -1689,12 +1689,11 @@ fn local_selection_changes_ranked_gists() {
     assert_eq!(state.ranked_gists()[0].file.filename, "statusline.sh");
 }
 
-/// `ranked_gists` / `visible_locals` are recomputed from current state on every call —
-/// there is intentionally NO cache for them (see #154, closed by-design: a content-hash /
-/// epoch memo could silently render a stale ordering the unit suite would not catch).
-/// `selected_gist` / `selected_local` are defined as `list[index]`, so they must stay
-/// identical to a fresh recompute even after an earlier read and an input mutation. This
-/// test pins that invariant: a future stale cache would break it loudly here.
+/// Public `ranked_gists` / `visible_locals` / `selected_*` stay pure recomputes (no
+/// content-hash / epoch memo — #154 closed that approach). Hot paths use
+/// `list_pane_snapshots()` (#224 shape #1) which builds each list once without caching
+/// across mutations. `selected_gist` / `selected_local` must still equal `list[index]`
+/// after an earlier read and an input mutation — a future silent cache would break here.
 #[test]
 fn selected_accessors_track_recomputed_lists_with_no_cache() {
     let mut state = initial_state();
@@ -1781,6 +1780,80 @@ fn selected_accessors_track_recomputed_lists_with_no_cache() {
             .nth(state.local_index)
             .map(|r| r.candidate.path),
     );
+}
+
+#[test]
+fn list_pane_snapshots_match_public_accessors() {
+    let mut state = initial_state();
+    state.locals = vec![
+        LocalCandidate {
+            path: PathBuf::from("/tmp/settings.json"),
+            pinned: false,
+            modified: None,
+        },
+        LocalCandidate {
+            path: PathBuf::from("/tmp/statusline.sh"),
+            pinned: false,
+            modified: None,
+        },
+    ];
+    state.gists = vec![
+        GistFile {
+            gist_id: "a".into(),
+            description: "settings".into(),
+            filename: "settings.json".into(),
+            public: false,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            owner_login: String::new(),
+            fork_of_id: None,
+            raw_url: None,
+            content_type: None,
+            node_id: None,
+        },
+        GistFile {
+            gist_id: "b".into(),
+            description: "status".into(),
+            filename: "statusline.sh".into(),
+            public: false,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            owner_login: String::new(),
+            fork_of_id: None,
+            raw_url: None,
+            content_type: None,
+            node_id: None,
+        },
+    ];
+
+    for anchor in [FocusPane::Local, FocusPane::Gist] {
+        state.anchor = anchor;
+        let (locals, gists) = state.list_pane_snapshots();
+        assert_eq!(
+            locals
+                .iter()
+                .map(|r| r.candidate.path.clone())
+                .collect::<Vec<_>>(),
+            state
+                .visible_locals()
+                .into_iter()
+                .map(|r| r.candidate.path)
+                .collect::<Vec<_>>(),
+            "locals mismatch for {anchor:?}"
+        );
+        assert_eq!(
+            gists
+                .iter()
+                .map(|g| g.file.filename.clone())
+                .collect::<Vec<_>>(),
+            state
+                .ranked_gists()
+                .into_iter()
+                .map(|g| g.file.filename)
+                .collect::<Vec<_>>(),
+            "gists mismatch for {anchor:?}"
+        );
+    }
 }
 
 #[test]
