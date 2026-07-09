@@ -2570,7 +2570,7 @@ fn confirm_upload_json_toggles() {
 #[test]
 fn editor_command_injects_wait_for_gui_editors() {
     for ed in ["zed", "code", "code-insiders", "cursor", "windsurf", "subl"] {
-        let (program, args) = super::run_loop::editor_command(ed).unwrap();
+        let (program, args) = super::bg::editor_command(ed).unwrap();
         assert_eq!(program, ed);
         assert!(
             args.iter().any(|a| a == "--wait" || a == "-w"),
@@ -2582,7 +2582,7 @@ fn editor_command_injects_wait_for_gui_editors() {
 #[test]
 fn editor_command_matches_gui_editor_by_basename() {
     // A full path or a `.exe` suffix must still be recognised as a GUI editor.
-    let (program, args) = super::run_loop::editor_command("/usr/local/bin/zed -n").unwrap();
+    let (program, args) = super::bg::editor_command("/usr/local/bin/zed -n").unwrap();
     assert_eq!(program, "/usr/local/bin/zed");
     assert_eq!(args, vec!["-n", "--wait"]);
 }
@@ -2590,7 +2590,7 @@ fn editor_command_matches_gui_editor_by_basename() {
 #[test]
 fn editor_command_leaves_terminal_editors_untouched() {
     for ed in ["vi", "vim", "nvim", "nano", "emacs", "hx"] {
-        let (program, args) = super::run_loop::editor_command(ed).unwrap();
+        let (program, args) = super::bg::editor_command(ed).unwrap();
         assert_eq!(program, ed);
         assert!(
             args.is_empty(),
@@ -2602,16 +2602,16 @@ fn editor_command_leaves_terminal_editors_untouched() {
 #[test]
 fn editor_command_keeps_an_existing_wait_flag() {
     // Don't duplicate a wait flag the user already configured (either spelling).
-    let (_, args) = super::run_loop::editor_command("code --wait").unwrap();
+    let (_, args) = super::bg::editor_command("code --wait").unwrap();
     assert_eq!(args, vec!["--wait"]);
-    let (_, args) = super::run_loop::editor_command("subl -w").unwrap();
+    let (_, args) = super::bg::editor_command("subl -w").unwrap();
     assert_eq!(args, vec!["-w"]);
 }
 
 #[test]
 fn editor_command_blank_is_none() {
-    assert!(super::run_loop::editor_command("").is_none());
-    assert!(super::run_loop::editor_command("   ").is_none());
+    assert!(super::bg::editor_command("").is_none());
+    assert!(super::bg::editor_command("   ").is_none());
 }
 
 #[test]
@@ -2628,7 +2628,7 @@ fn editor_is_gui_matches_known_gui_editors() {
         "sublime_text",
     ] {
         assert!(
-            super::run_loop::editor_is_gui(ed),
+            super::bg::editor_is_gui(ed),
             "{ed} should be recognised as a GUI editor"
         );
     }
@@ -2638,7 +2638,7 @@ fn editor_is_gui_matches_known_gui_editors() {
 fn editor_is_gui_rejects_terminal_editors() {
     for ed in ["vi", "vim", "nvim", "nano", "emacs", "hx"] {
         assert!(
-            !super::run_loop::editor_is_gui(ed),
+            !super::bg::editor_is_gui(ed),
             "{ed} should not be recognised as a GUI editor"
         );
     }
@@ -2646,8 +2646,8 @@ fn editor_is_gui_rejects_terminal_editors() {
 
 #[test]
 fn editor_is_gui_matches_by_basename_from_full_path() {
-    assert!(super::run_loop::editor_is_gui("/usr/local/bin/zed"));
-    assert!(super::run_loop::editor_is_gui("C:\\Tools\\code.exe"));
+    assert!(super::bg::editor_is_gui("/usr/local/bin/zed"));
+    assert!(super::bg::editor_is_gui("C:\\Tools\\code.exe"));
 }
 
 // Whichever editor is used, the confirmed upload must send the edited (redacted) buffer, not
@@ -2697,7 +2697,7 @@ fn apply_upload_edit_event_content_changed_updates_diff_live() {
     state.upload.local_label = Some("local".into());
     state.upload.gist_label = Some("gist".into());
 
-    state.apply_upload_edit_event(super::run_loop::UploadEditWatchEvent::ContentChanged {
+    state.apply_upload_edit_event(super::bg::UploadEditWatchEvent::ContentChanged {
         gist_id: "a".into(),
         filename: "notes.txt".into(),
         content: "new\n".into(),
@@ -2718,7 +2718,7 @@ fn apply_upload_edit_event_editor_closed_stops_watching() {
     state.pending_action = Some(upload_pending("a", "notes.txt"));
     state.upload.watching = true;
 
-    state.apply_upload_edit_event(super::run_loop::UploadEditWatchEvent::EditorClosed {
+    state.apply_upload_edit_event(super::bg::UploadEditWatchEvent::EditorClosed {
         gist_id: "a".into(),
         filename: "notes.txt".into(),
         content: "final\n".into(),
@@ -2735,7 +2735,7 @@ fn apply_upload_edit_event_read_error_stops_watching_and_sets_status() {
     state.pending_action = Some(upload_pending("a", "notes.txt"));
     state.upload.watching = true;
 
-    state.apply_upload_edit_event(super::run_loop::UploadEditWatchEvent::ReadError {
+    state.apply_upload_edit_event(super::bg::UploadEditWatchEvent::ReadError {
         gist_id: "a".into(),
         filename: "notes.txt".into(),
         message: "permission denied".into(),
@@ -2757,7 +2757,7 @@ fn apply_upload_edit_event_discards_when_context_is_stale() {
     state.upload.watching = false;
     state.upload.edited_content = None;
 
-    state.apply_upload_edit_event(super::run_loop::UploadEditWatchEvent::ContentChanged {
+    state.apply_upload_edit_event(super::bg::UploadEditWatchEvent::ContentChanged {
         gist_id: "a".into(),
         filename: "notes.txt".into(),
         content: "should be ignored".into(),
@@ -2775,7 +2775,7 @@ fn apply_upload_edit_event_discards_when_a_different_upload_is_now_pending() {
     state.upload.watching = true;
     state.upload.edited_content = Some("current session content".into());
 
-    state.apply_upload_edit_event(super::run_loop::UploadEditWatchEvent::EditorClosed {
+    state.apply_upload_edit_event(super::bg::UploadEditWatchEvent::EditorClosed {
         gist_id: "a".into(),
         filename: "notes.txt".into(), // stale session's filename, not "other.txt"
         content: "stale content".into(),
@@ -2803,7 +2803,7 @@ fn apply_upload_edit_event_discards_stale_event_after_cancel_reentry_same_identi
     state.upload.watching = false; // never re-entered edit mode this session
     state.upload.edited_content = None;
 
-    state.apply_upload_edit_event(super::run_loop::UploadEditWatchEvent::ContentChanged {
+    state.apply_upload_edit_event(super::bg::UploadEditWatchEvent::ContentChanged {
         gist_id: "a".into(),
         filename: "notes.txt".into(),
         content: "leaked from abandoned session".into(),

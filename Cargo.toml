@@ -34,6 +34,7 @@ pkg-url = "{ repo }/releases/download/v{ version }/gistui-v{ version }-{ target 
 bin-dir = "gistui-v{ version }-{ target }/{ bin }{ binary-ext }"
 
 [dependencies]
+# Direct deps audited (issue #226 / cargo-machete): all are referenced under src/.
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crossterm = "0.29"

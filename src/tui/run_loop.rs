@@ -10,10 +10,6 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseButton, MouseEve
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 
-// Re-exports for unit tests and `AppState` upload-edit wiring.
-#[allow(unused_imports)] // re-exported for tests / AppState
-pub(super) use super::bg::{editor_command, editor_is_gui, UploadEditWatchEvent};
-
 pub(super) fn run_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     no_mouse: bool,

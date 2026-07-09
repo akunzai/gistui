@@ -899,7 +899,7 @@ impl AppState {
         true
     }
 
-    /// Applies a background upload-edit-watch event (see `run_loop::UploadEditWatchEvent`) to
+    /// Applies a background upload-edit-watch event (see `bg::UploadEditWatchEvent`) to
     /// upload state. Discarded (no-op) if the Confirm/Upload context has since moved on — the
     /// user left Confirm, a different upload edit session is now in progress, or the current
     /// session isn't actively watching (e.g. the user cancelled with `n`, which stops the
@@ -907,8 +907,8 @@ impl AppState {
     /// leak into a later, unrelated Confirm session for the same gist/file) — identified by
     /// comparing the event's `gist_id`/`filename` against the current `PendingAction::Upload`
     /// and requiring `self.upload.watching`.
-    fn apply_upload_edit_event(&mut self, event: run_loop::UploadEditWatchEvent) {
-        use run_loop::UploadEditWatchEvent as Ev;
+    fn apply_upload_edit_event(&mut self, event: bg::UploadEditWatchEvent) {
+        use bg::UploadEditWatchEvent as Ev;
         let (event_gist_id, event_filename) = match &event {
             Ev::ContentChanged {
                 gist_id, filename, ..
