@@ -560,7 +560,12 @@ pub(super) fn dispatch_outcome(
             }
         }
         KeyOutcome::PersistDiffContext => persist_diff_context(state),
-        KeyOutcome::PersistSettings => persist_settings(state),
+        KeyOutcome::PersistSettings => {
+            // `adjust_config_field` already updated `mouse_enabled`; sync the terminal
+            // capture so toggling mouse on/off works without restart.
+            persist_settings(state);
+            sync_mouse_capture(terminal, state.mouse_enabled)?;
+        }
         KeyOutcome::ThemeToggle => persist_theme(state),
         KeyOutcome::FetchRevisions => {
             let Some(gist_id) = state.revision.gist_id.clone() else {
