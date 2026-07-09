@@ -5583,3 +5583,61 @@ fn palette_blocked_during_confirm() {
     state.handle_key(KeyCode::Char(';'));
     assert_eq!(state.screen, Screen::Confirm);
 }
+
+#[test]
+fn bg_task_generation_bumps_on_begin_and_invalidate() {
+    let mut state = crate::tui::initial_state();
+    assert_eq!(state.bg_task_generation, 0);
+    assert_eq!(state.begin_bg_task(), 1);
+    state.bg_task_msg = Some("working…".into());
+    assert!(state.is_current_bg_generation(1));
+    assert!(!state.is_current_bg_generation(0));
+
+    state.invalidate_bg_task();
+    assert_eq!(state.bg_task_generation, 2);
+    assert!(state.bg_task_msg.is_none());
+    assert!(
+        !state.is_current_bg_generation(1),
+        "cancelled gen must be stale"
+    );
+    assert!(state.is_current_bg_generation(2));
+}
+
+#[test]
+fn local_scan_generation_ignores_stale_results() {
+    let mut state = crate::tui::initial_state();
+    state.locals = vec![LocalCandidate {
+        path: PathBuf::from("/tmp/old.txt"),
+        pinned: false,
+        modified: None,
+    }];
+    state.local_scanning = true;
+
+    let gen1 = state.begin_local_scan();
+    let gen2 = state.begin_local_scan();
+    assert_ne!(gen1, gen2);
+
+    // Stale gen1 must not replace the list.
+    assert!(!state.apply_local_scan_if_current(
+        gen1,
+        vec![LocalCandidate {
+            path: PathBuf::from("/tmp/stale.txt"),
+            pinned: false,
+            modified: None,
+        }]
+    ));
+    assert_eq!(state.locals[0].path, PathBuf::from("/tmp/old.txt"));
+    assert!(state.local_scanning);
+
+    // Current gen2 applies.
+    assert!(state.apply_local_scan_if_current(
+        gen2,
+        vec![LocalCandidate {
+            path: PathBuf::from("/tmp/fresh.txt"),
+            pinned: false,
+            modified: None,
+        }]
+    ));
+    assert_eq!(state.locals[0].path, PathBuf::from("/tmp/fresh.txt"));
+    assert!(!state.local_scanning);
+}

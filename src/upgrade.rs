@@ -734,16 +734,16 @@ mod tests {
             builder.into_inner().unwrap().finish().unwrap();
         }
         let bytes = fs::read(&archive_path).unwrap();
-        let asset = release_asset(
-            "0.11.0",
-            &Platform {
-                target: "x86_64-apple-darwin".to_string(),
-                archive_ext: "tar.gz",
-                bin_name: "gistui".to_string(),
-            },
-        );
+        // Use the fixture platform (tar.gz), not `detect_platform()` — on Windows
+        // the host platform expects a zip and would reject this archive.
+        let platform = Platform {
+            target: "x86_64-apple-darwin".to_string(),
+            archive_ext: "tar.gz",
+            bin_name: "gistui".to_string(),
+        };
+        let asset = release_asset("0.11.0", &platform);
         assert_eq!(
-            extract_binary(&bytes, &asset, &detect_platform().unwrap()).unwrap(),
+            extract_binary(&bytes, &asset, &platform).unwrap(),
             b"BINARY"
         );
     }
