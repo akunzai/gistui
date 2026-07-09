@@ -1028,6 +1028,29 @@ pub(super) fn persist_settings(state: &mut AppState) {
     }
 }
 
+/// Whether [`sync_mouse_capture`] should call crossterm (false in unit tests / non-TTY).
+pub(super) fn mouse_capture_applies_to_stdout() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
+}
+
+/// Apply crossterm mouse capture to match `enabled` (Settings toggle must take effect
+/// without restart). No-ops when stdout is not a TTY so unit tests never hang.
+pub(super) fn sync_mouse_capture(
+    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    enabled: bool,
+) -> Result<()> {
+    if !mouse_capture_applies_to_stdout() {
+        return Ok(());
+    }
+    if enabled {
+        execute!(terminal.backend_mut(), EnableMouseCapture)?;
+    } else {
+        execute!(terminal.backend_mut(), DisableMouseCapture)?;
+    }
+    Ok(())
+}
+
 pub(super) fn pin_selected(state: &mut AppState) {
     let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist()) else {
         return;

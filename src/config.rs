@@ -209,14 +209,15 @@ pub fn resolve_update_check(config_check: bool, no_update_check: bool) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::domain::{PinnedMapping, SyncDirection};
     use std::env;
     use std::ffi::OsString;
     use std::sync::Mutex;
 
-    static ENV_MUTEX: Mutex<()> = Mutex::new(());
+    /// Shared with other modules' tests that mutate `XDG_CONFIG_HOME` (e.g. tui config open).
+    pub(crate) static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     struct EnvVarRestore {
         name: &'static str,

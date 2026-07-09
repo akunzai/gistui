@@ -5719,15 +5719,64 @@ fn local_scan_generation_ignores_stale_results() {
 
 #[test]
 fn open_config_does_not_write_config_file() {
+    // Point config_path() at a throwaway XDG dir and assert the *real* path stays absent
+    // after open_config() — not an unrelated tempfile the app never uses.
+    let _guard = crate::config::tests::ENV_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
+    let prev = std::env::var_os("XDG_CONFIG_HOME");
+    std::env::set_var("XDG_CONFIG_HOME", dir.path());
+    let path = crate::config::config_path().unwrap();
+    assert_eq!(path, dir.path().join("gistui").join("config.toml"));
     assert!(!path.exists());
+
     let mut state = initial_state();
     state.screen = Screen::List;
     state.open_config();
     assert_eq!(state.screen, Screen::Config);
     // Opening alone must not create the file — persist only after a field change.
-    assert!(!path.exists());
+    assert!(
+        !path.exists(),
+        "open_config must not create {}",
+        path.display()
+    );
+
+    match prev {
+        Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+        None => std::env::remove_var("XDG_CONFIG_HOME"),
+    }
+}
+
+#[test]
+fn adjust_config_mouse_updates_mouse_enabled_respecting_cli() {
+    let mut state = initial_state();
+    state.open_config();
+    state.config.index = ConfigField::ALL
+        .iter()
+        .position(|f| *f == ConfigField::Mouse)
+        .unwrap();
+    state.no_mouse_cli = false;
+    state.config_mouse = false;
+    state.mouse_enabled = false;
+
+    assert!(state.adjust_config_field(true));
+    assert!(state.config_mouse);
+    assert!(
+        state.mouse_enabled,
+        "toggling mouse on must enable session mouse when CLI does not force off"
+    );
+
+    // CLI --no-mouse still wins for the effective session flag.
+    state.no_mouse_cli = true;
+    state.config_mouse = false;
+    state.mouse_enabled = false;
+    assert!(state.adjust_config_field(true));
+    assert!(state.config_mouse);
+    assert!(
+        !state.mouse_enabled,
+        "--no-mouse must keep mouse_enabled false even when config prefers on"
+    );
 }
 
 #[test]
@@ -5798,4 +5847,34 @@ fn config_c_key_opens_settings_from_list() {
     assert_eq!(state.screen, Screen::Config);
     state.handle_key(KeyCode::Esc);
     assert_eq!(state.screen, Screen::List);
+}
+
+#[test]
+fn mouse_capture_applies_to_stdout_matches_is_terminal() {
+    // Guard used by sync_mouse_capture: must agree with std's TTY check so CI
+    // (non-TTY) skips execute! and real sessions still apply capture.
+    use std::io::IsTerminal;
+    assert_eq!(
+        super::bg::mouse_capture_applies_to_stdout(),
+        std::io::stdout().is_terminal()
+    );
+}
+
+#[test]
+fn persist_settings_dispatch_path_syncs_mouse_capture() {
+    // Structural: PersistSettings arm must call sync_mouse_capture after save so a
+    // Settings mouse toggle takes effect without restart (skeptic fix).
+    let src = include_str!("dispatch.rs");
+    let persist_idx = src
+        .find("KeyOutcome::PersistSettings")
+        .expect("PersistSettings arm");
+    let arm = &src[persist_idx..persist_idx + 280];
+    assert!(
+        arm.contains("sync_mouse_capture"),
+        "PersistSettings must sync terminal mouse capture: {arm}"
+    );
+    assert!(
+        arm.contains("mouse_enabled"),
+        "must pass current mouse_enabled into sync: {arm}"
+    );
 }
