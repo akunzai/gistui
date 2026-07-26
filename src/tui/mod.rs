@@ -19,8 +19,8 @@ pub enum FocusPane {
 }
 
 /// Active TUI screen. Unit tags for some screens; **Help** / **Config** / **Revisions** /
-/// **Pins** / **Gists** carry payloads so screen-local UI cannot go stale on the root state
-/// (issue #242). Not `Copy`.
+/// **Pins** / **Gists** / **GistDetail** carry payloads so screen-local UI cannot go stale on
+/// the root state (issue #242). Not `Copy`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Screen {
     #[default]
@@ -35,8 +35,9 @@ pub enum Screen {
     Pins(Box<PinsState>),
     /// Gist manager list cursor/filter/sort; may sit on detail/revision return paths.
     Gists(Box<GistsManagerState>),
-    /// Single-gist detail: basic info + file list + comments (entered from Gists with Enter).
-    GistDetail,
+    /// Single-gist detail (files + comments); may sit on `preview_return` / compact restore.
+    /// Boxed so `DetailState::{return,compact_return}_screen: Screen` stay finite-sized.
+    GistDetail(Box<DetailState>),
     /// Revision history for one gist; payload owns list/cursor/return (and may sit in
     /// `diff_return` while a revision diff is open).
     Revisions(Box<RevisionState>),
@@ -66,6 +67,10 @@ impl Screen {
 
     pub fn is_gists(&self) -> bool {
         matches!(self, Screen::Gists(_))
+    }
+
+    pub fn is_gist_detail(&self) -> bool {
+        matches!(self, Screen::GistDetail(_))
     }
 
     /// Borrow help payload when this is [`Screen::Help`].
@@ -136,6 +141,20 @@ impl Screen {
     pub fn gists_state_mut(&mut self) -> Option<&mut GistsManagerState> {
         match self {
             Screen::Gists(g) => Some(g.as_mut()),
+            _ => None,
+        }
+    }
+
+    pub fn detail_state(&self) -> Option<&DetailState> {
+        match self {
+            Screen::GistDetail(d) => Some(d.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn detail_state_mut(&mut self) -> Option<&mut DetailState> {
+        match self {
+            Screen::GistDetail(d) => Some(d.as_mut()),
             _ => None,
         }
     }
@@ -245,7 +264,7 @@ impl HelpTopic {
         match screen {
             Screen::Pins(_) => HelpTopic::Pins,
             Screen::Gists(_) => HelpTopic::GistManager,
-            Screen::GistDetail => HelpTopic::GistDetail,
+            Screen::GistDetail(_) => HelpTopic::GistDetail,
             Screen::Revisions(_) => HelpTopic::Revisions,
             Screen::Config(_) => HelpTopic::Config,
             Screen::Help(_) => HelpTopic::List,
@@ -686,10 +705,10 @@ pub struct GistsManagerState {
     pub filter_query: TextInput,
 }
 
-/// Gist-detail screen state (`Screen::GistDetail`), including its Comments tab. Data only —
+/// Gist-detail screen state — carried on [`Screen::GistDetail`] (issue #242). Data only —
 /// the detail/comment methods stay on `AppState`. The `comments_*` count/paging fields keep
 /// their prefix so they don't collide with the `comments` Vec.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DetailState {
     /// The gist currently shown; also guards stale comment responses.
     pub gist_id: Option<String>,
@@ -717,6 +736,26 @@ pub struct DetailState {
     pub return_screen: Screen,
     /// Screen to return to after a compaction confirm is cancelled/finished (Gists or GistDetail).
     pub compact_return_screen: Screen,
+}
+
+impl Default for DetailState {
+    fn default() -> Self {
+        Self {
+            gist_id: None,
+            comments: None,
+            comments_loading: false,
+            comments_error: None,
+            comments_total: None,
+            comments_loaded_oldest_page: 0,
+            comments_loading_more: false,
+            comments_scroll_to_bottom: false,
+            scroll: 0,
+            focus: DetailFocus::default(),
+            file_cursor: 0,
+            return_screen: Screen::Gists(Box::default()),
+            compact_return_screen: Screen::Gists(Box::default()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -830,8 +869,9 @@ pub struct AppState {
     /// filename of the active download (set when entering the diff Confirm for a pull).
     pub download_gist_filename: Option<String>,
     /// Screen to return to when leaving the diff (default: List; set to Pins for pin diffs).
+    /// Also used to park compact restore target (`GistDetail`/`Gists` payload) while Confirm
+    /// is open for revision compaction (issue #242).
     pub diff_return: Screen,
-    pub detail: DetailState,
     /// Monotonic tick advanced once per event-loop iteration (~150ms); drives the in-progress
     /// spinner animation. Wraps freely — only its value modulo the frame count is observed.
     pub spinner_frame: usize,
@@ -978,15 +1018,32 @@ impl AppState {
     pub fn gist_manager(&self) -> Option<&GistsManagerState> {
         match &self.screen {
             Screen::Gists(g) => Some(g.as_ref()),
-            Screen::GistDetail => self.detail.return_screen.gists_state(),
+            Screen::GistDetail(d) => d.return_screen.gists_state(),
             Screen::Revisions(r) => r.return_screen.gists_state(),
-            Screen::Palette => self.palette.origin_screen.gists_state(),
-            Screen::Help(h) => h.return_screen.gists_state(),
-            Screen::Config(c) => c.return_screen.gists_state(),
+            Screen::Palette => match &self.palette.origin_screen {
+                Screen::Gists(g) => Some(g.as_ref()),
+                Screen::GistDetail(d) => d.return_screen.gists_state(),
+                Screen::Revisions(r) => r.return_screen.gists_state(),
+                _ => None,
+            },
+            Screen::Help(h) => h.return_screen.gists_state().or_else(|| {
+                h.return_screen
+                    .detail_state()
+                    .and_then(|d| d.return_screen.gists_state())
+            }),
+            Screen::Config(c) => c.return_screen.gists_state().or_else(|| {
+                c.return_screen
+                    .detail_state()
+                    .and_then(|d| d.return_screen.gists_state())
+            }),
             Screen::Diff | Screen::Confirm | Screen::Preview => match &self.diff_return {
                 Screen::Gists(g) => Some(g.as_ref()),
+                Screen::GistDetail(d) => d.return_screen.gists_state(),
                 Screen::Revisions(r) => r.return_screen.gists_state(),
-                _ => self.detail.return_screen.gists_state(),
+                _ => self
+                    .preview_return
+                    .detail_state()
+                    .and_then(|d| d.return_screen.gists_state()),
             },
             _ => None,
         }
@@ -995,21 +1052,75 @@ impl AppState {
     pub fn gist_manager_mut(&mut self) -> Option<&mut GistsManagerState> {
         match &mut self.screen {
             Screen::Gists(g) => Some(g.as_mut()),
-            Screen::GistDetail => self.detail.return_screen.gists_state_mut(),
+            Screen::GistDetail(d) => d.return_screen.gists_state_mut(),
             Screen::Revisions(r) => r.return_screen.gists_state_mut(),
-            Screen::Palette => self.palette.origin_screen.gists_state_mut(),
-            Screen::Diff | Screen::Confirm | Screen::Preview => {
-                if matches!(&self.diff_return, Screen::Gists(_)) {
-                    return self.diff_return.gists_state_mut();
+            Screen::Palette => match &mut self.palette.origin_screen {
+                Screen::Gists(g) => Some(g.as_mut()),
+                Screen::GistDetail(d) => d.return_screen.gists_state_mut(),
+                Screen::Revisions(r) => r.return_screen.gists_state_mut(),
+                _ => None,
+            },
+            Screen::Diff | Screen::Confirm | Screen::Preview => match &mut self.diff_return {
+                Screen::Gists(g) => Some(g.as_mut()),
+                Screen::GistDetail(d) => d.return_screen.gists_state_mut(),
+                Screen::Revisions(r) => r.return_screen.gists_state_mut(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Detail payload when GistDetail is active, parked on `preview_return`, revision return,
+    /// palette origin, compact restore (`diff_return`), or help/config return (issue #242).
+    pub fn detail(&self) -> Option<&DetailState> {
+        match &self.screen {
+            Screen::GistDetail(d) => Some(d.as_ref()),
+            Screen::Preview => self.preview_return.detail_state(),
+            Screen::Revisions(r) => r.return_screen.detail_state(),
+            Screen::Palette => self.palette.origin_screen.detail_state(),
+            Screen::Help(h) => h.return_screen.detail_state(),
+            Screen::Config(c) => c.return_screen.detail_state(),
+            Screen::Diff | Screen::Confirm => self
+                .diff_return
+                .detail_state()
+                .or_else(|| self.preview_return.detail_state()),
+            _ => None,
+        }
+    }
+
+    pub fn detail_mut(&mut self) -> Option<&mut DetailState> {
+        match &mut self.screen {
+            Screen::GistDetail(d) => Some(d.as_mut()),
+            Screen::Preview => self.preview_return.detail_state_mut(),
+            Screen::Revisions(r) => r.return_screen.detail_state_mut(),
+            Screen::Palette => self.palette.origin_screen.detail_state_mut(),
+            Screen::Diff | Screen::Confirm => {
+                if self.diff_return.detail_state().is_some() {
+                    return self.diff_return.detail_state_mut();
                 }
-                if matches!(&self.diff_return, Screen::Revisions(_)) {
-                    if let Screen::Revisions(r) = &mut self.diff_return {
-                        return r.return_screen.gists_state_mut();
-                    }
-                }
-                self.detail.return_screen.gists_state_mut()
+                self.preview_return.detail_state_mut()
             }
             _ => None,
+        }
+    }
+
+    /// Snapshot the current detail payload as a restore `Screen` (for preview/compact/etc.).
+    fn park_gist_detail_screen(&self) -> Screen {
+        match &self.screen {
+            Screen::GistDetail(d) => {
+                let mut parked = d.as_ref().clone();
+                // Avoid deep nested compact-return clones when re-parking.
+                parked.compact_return_screen = Screen::Gists(Box::default());
+                Screen::GistDetail(Box::new(parked))
+            }
+            _ => self
+                .detail()
+                .map(|d| {
+                    let mut parked = d.clone();
+                    parked.compact_return_screen = Screen::Gists(Box::default());
+                    Screen::GistDetail(Box::new(parked))
+                })
+                .unwrap_or_else(|| Screen::GistDetail(Box::default())),
         }
     }
 
@@ -1616,7 +1727,7 @@ impl AppState {
         };
         let gist_id = match &return_screen {
             Screen::List => selected_list_gist.as_ref().map(|g| g.file.gist_id.clone()),
-            Screen::GistDetail => self.detail.gist_id.clone(),
+            Screen::GistDetail(d) => d.gist_id.clone(),
             Screen::Gists(_) => self.selected_group().map(|g| g.id.clone()),
             _ => None,
         };
@@ -1629,9 +1740,9 @@ impl AppState {
                 .as_ref()
                 .map(|g| g.file.filename.clone())
                 .filter(|f| filenames.iter().any(|name| name == f)),
-            Screen::GistDetail => filenames
+            Screen::GistDetail(d) => filenames
                 .into_iter()
-                .nth(self.detail.file_cursor)
+                .nth(d.file_cursor)
                 .or_else(|| self.gist_filenames(&gist_id).first().cloned()),
             Screen::Gists(_) => filenames.first().cloned(),
             _ => None,
@@ -1719,8 +1830,11 @@ impl AppState {
     pub fn context_gist_id(&self) -> Option<String> {
         match &self.screen {
             Screen::Gists(_) => self.selected_group().map(|g| g.id),
-            Screen::GistDetail => self.detail.gist_id.clone(),
-            _ => self.selected_gist().map(|g| g.file.gist_id),
+            Screen::GistDetail(d) => d.gist_id.clone(),
+            _ => self
+                .detail()
+                .and_then(|d| d.gist_id.clone())
+                .or_else(|| self.selected_gist().map(|g| g.file.gist_id)),
         }
     }
 
@@ -2010,11 +2124,6 @@ pub fn initial_state() -> AppState {
         download_gist_id: None,
         download_gist_filename: None,
         diff_return: Screen::List,
-        detail: DetailState {
-            return_screen: Screen::Gists(Box::default()),
-            compact_return_screen: Screen::Gists(Box::default()),
-            ..Default::default()
-        },
         spinner_frame: 0,
         gist_comment_counts: std::collections::HashMap::new(),
         gist_fork_counts: std::collections::HashMap::new(),
@@ -2231,13 +2340,16 @@ impl AppState {
     /// Reset comment-pagination state (called when (re)opening a gist detail or switching
     /// the loaded gist), so a fresh Tab re-fetches from the newest page.
     pub fn reset_comment_pagination(&mut self) {
-        self.detail.comments = None;
-        self.detail.comments_loading = false;
-        self.detail.comments_error = None;
-        self.detail.comments_total = None;
-        self.detail.comments_loaded_oldest_page = 0;
-        self.detail.comments_loading_more = false;
-        self.detail.comments_scroll_to_bottom = false;
+        let Some(d) = self.detail_mut() else {
+            return;
+        };
+        d.comments = None;
+        d.comments_loading = false;
+        d.comments_error = None;
+        d.comments_total = None;
+        d.comments_loaded_oldest_page = 0;
+        d.comments_loading_more = false;
+        d.comments_scroll_to_bottom = false;
     }
 
     /// Apply the initial newest-page load. Ignored if the user navigated to another gist
@@ -2248,19 +2360,22 @@ impl AppState {
         gist_id: &str,
         result: Result<InitialComments, String>,
     ) {
-        if self.detail.gist_id.as_deref() != Some(gist_id) {
+        let Some(d) = self.detail_mut() else {
+            return;
+        };
+        if d.gist_id.as_deref() != Some(gist_id) {
             return;
         }
-        self.detail.comments_loading = false;
+        d.comments_loading = false;
         match result {
             Ok(init) => {
-                self.detail.comments_total = Some(init.total);
-                self.detail.comments_loaded_oldest_page = init.oldest_page;
-                self.detail.comments = Some(init.comments);
-                self.detail.comments_scroll_to_bottom = true;
+                d.comments_total = Some(init.total);
+                d.comments_loaded_oldest_page = init.oldest_page;
+                d.comments = Some(init.comments);
+                d.comments_scroll_to_bottom = true;
             }
             Err(error) => {
-                self.detail.comments_error = Some(error);
+                d.comments_error = Some(error);
             }
         }
     }
@@ -2273,28 +2388,28 @@ impl AppState {
         gist_id: &str,
         result: Result<Vec<GistComment>, String>,
     ) {
-        if self.detail.gist_id.as_deref() != Some(gist_id) {
+        let Some(d) = self.detail_mut() else {
+            return;
+        };
+        if d.gist_id.as_deref() != Some(gist_id) {
             return;
         }
-        self.detail.comments_loading_more = false;
+        d.comments_loading_more = false;
         match result {
             Ok(mut older) => {
                 let added = comment_lines_count(&older);
-                if let Some(existing) = self.detail.comments.as_mut() {
+                if let Some(existing) = d.comments.as_mut() {
                     older.append(existing);
                     *existing = older;
                 } else {
-                    self.detail.comments = Some(older);
+                    d.comments = Some(older);
                 }
-                self.detail.comments_loaded_oldest_page = self
-                    .detail
-                    .comments_loaded_oldest_page
-                    .saturating_sub(1)
-                    .max(1);
-                self.detail.scroll = self.detail.scroll.saturating_add(added);
+                d.comments_loaded_oldest_page =
+                    d.comments_loaded_oldest_page.saturating_sub(1).max(1);
+                d.scroll = d.scroll.saturating_add(added);
             }
             Err(error) => {
-                self.detail.comments_error = Some(error);
+                d.comments_error = Some(error);
             }
         }
     }
@@ -2302,10 +2417,13 @@ impl AppState {
     /// Whether a "load older" action should be offered: comments are loaded, an older page
     /// exists, and no load is already in flight.
     pub fn can_load_older_comments(&self) -> bool {
-        self.detail.comments.is_some()
-            && self.detail.comments_loaded_oldest_page > 1
-            && !self.detail.comments_loading_more
-            && !self.detail.comments_loading
+        let Some(d) = self.detail() else {
+            return false;
+        };
+        d.comments.is_some()
+            && d.comments_loaded_oldest_page > 1
+            && !d.comments_loading_more
+            && !d.comments_loading
     }
 }
 

@@ -1629,6 +1629,12 @@ pub(super) fn absorb_background_results(
                                 label,
                                 count,
                             });
+                            // Park compact restore target (GistDetail/Gists payload) on
+                            // diff_return so Confirm cancel/execute can restore it.
+                            state.diff_return = state
+                                .detail()
+                                .map(|d| d.compact_return_screen.clone())
+                                .unwrap_or_else(|| state.park_gist_detail_screen());
                             state.screen = Screen::Confirm;
                         }
                         Err(error) => state.set_status(format!("revision check failed: {error}")),

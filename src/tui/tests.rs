@@ -49,6 +49,15 @@ fn gists_mut(state: &mut AppState) -> &mut GistsManagerState {
 fn gists_ref(state: &AppState) -> &GistsManagerState {
     state.gist_manager().expect("expected Screen::Gists")
 }
+fn detail_mut(state: &mut AppState) -> &mut DetailState {
+    if !state.screen.is_gist_detail() {
+        state.screen = Screen::GistDetail(Box::default());
+    }
+    state.detail_mut().expect("expected Screen::GistDetail")
+}
+fn detail_ref(state: &AppState) -> &DetailState {
+    state.detail().expect("expected Screen::GistDetail")
+}
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
@@ -306,86 +315,87 @@ fn enter_on_gist_opens_detail() {
 
 #[test]
 fn detail_focus_and_cursor_default_to_files_and_zero() {
-    let state = initial_state();
-    assert_eq!(state.detail.focus, DetailFocus::Files);
-    assert_eq!(state.detail.file_cursor, 0);
+    let mut state = initial_state();
+    state.screen = Screen::GistDetail(Box::default());
+    assert_eq!(detail_ref(&state).focus, DetailFocus::Files);
+    assert_eq!(detail_ref(&state).file_cursor, 0);
 }
 
 #[test]
 fn detail_tab_toggles_focus() {
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
-    assert_eq!(state.detail.focus, DetailFocus::Files);
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
+    assert_eq!(detail_ref(&state).focus, DetailFocus::Files);
     let outcome = state.handle_key(KeyCode::Tab);
     assert!(matches!(outcome, KeyOutcome::FetchComments));
-    assert_eq!(state.detail.focus, DetailFocus::Comments);
+    assert_eq!(detail_ref(&state).focus, DetailFocus::Comments);
     let outcome = state.handle_key(KeyCode::Tab);
     assert!(matches!(outcome, KeyOutcome::None));
-    assert_eq!(state.detail.focus, DetailFocus::Files);
+    assert_eq!(detail_ref(&state).focus, DetailFocus::Files);
 }
 
 #[test]
 fn detail_tab_to_comments_skips_fetch_when_already_loaded() {
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
-    state.detail.comments = Some(Vec::new());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
+    detail_mut(&mut state).comments = Some(Vec::new());
     let outcome = state.handle_key(KeyCode::Tab);
     assert!(matches!(outcome, KeyOutcome::None));
-    assert_eq!(state.detail.focus, DetailFocus::Comments);
+    assert_eq!(detail_ref(&state).focus, DetailFocus::Comments);
 }
 
 #[test]
 fn detail_files_focus_arrows_move_cursor_and_clamp() {
     let mut state = state_with_gists(); // g1 has 2 files: a.txt, b.txt
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
-    state.detail.focus = DetailFocus::Files;
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
+    detail_mut(&mut state).focus = DetailFocus::Files;
 
     state.handle_key(KeyCode::Up); // already at 0, clamps
-    assert_eq!(state.detail.file_cursor, 0);
+    assert_eq!(detail_ref(&state).file_cursor, 0);
     state.handle_key(KeyCode::Down);
-    assert_eq!(state.detail.file_cursor, 1);
+    assert_eq!(detail_ref(&state).file_cursor, 1);
     state.handle_key(KeyCode::Down); // only 2 files, clamps at index 1
-    assert_eq!(state.detail.file_cursor, 1);
+    assert_eq!(detail_ref(&state).file_cursor, 1);
     state.handle_key(KeyCode::PageUp); // jumps to 0
-    assert_eq!(state.detail.file_cursor, 0);
+    assert_eq!(detail_ref(&state).file_cursor, 0);
     state.handle_key(KeyCode::PageDown); // +10 clamps to last (1)
-    assert_eq!(state.detail.file_cursor, 1);
+    assert_eq!(detail_ref(&state).file_cursor, 1);
     // Comment scroll is untouched while files-focused.
-    assert_eq!(state.detail.scroll, 0);
+    assert_eq!(detail_ref(&state).scroll, 0);
 }
 
 #[test]
 fn detail_comments_focus_arrows_still_scroll_comments() {
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.focus = DetailFocus::Comments;
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).focus = DetailFocus::Comments;
     state.handle_key(KeyCode::Down);
-    assert_eq!(state.detail.scroll, 1);
-    assert_eq!(state.detail.file_cursor, 0); // cursor untouched
+    assert_eq!(detail_ref(&state).scroll, 1);
+    assert_eq!(detail_ref(&state).file_cursor, 0); // cursor untouched
 }
 
 #[test]
 fn detail_enter_previews_cursor_file_including_tenth() {
     let mut state = state_with_many_files(12);
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
-    state.detail.focus = DetailFocus::Files;
-    state.detail.file_cursor = 9; // the 10th file — unreachable via 1-9
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
+    detail_mut(&mut state).focus = DetailFocus::Files;
+    detail_mut(&mut state).file_cursor = 9; // the 10th file — unreachable via 1-9
     let outcome = state.handle_key(KeyCode::Enter);
     assert!(matches!(outcome, KeyOutcome::PreviewContent));
     assert_eq!(state.preview_request, Some(("g1".into(), "f9.txt".into())));
-    assert_eq!(state.preview_return, Screen::GistDetail);
+    assert!(state.preview_return.is_gist_detail());
 }
 
 #[test]
 fn detail_enter_in_comments_focus_is_noop() {
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
-    state.detail.focus = DetailFocus::Comments;
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
+    detail_mut(&mut state).focus = DetailFocus::Comments;
     let outcome = state.handle_key(KeyCode::Enter);
     assert!(matches!(outcome, KeyOutcome::None));
     assert_eq!(state.preview_request, None);
@@ -394,7 +404,7 @@ fn detail_enter_in_comments_focus_is_noop() {
 #[test]
 fn detail_q_returns_to_gists() {
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
+    state.screen = Screen::GistDetail(Box::default());
     state.handle_key(KeyCode::Char('q'));
     assert!(state.screen.is_gists());
 }
@@ -402,41 +412,41 @@ fn detail_q_returns_to_gists() {
 #[test]
 fn detail_scroll_saturates_at_zero() {
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.focus = DetailFocus::Comments;
-    state.detail.scroll = 0;
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).focus = DetailFocus::Comments;
+    detail_mut(&mut state).scroll = 0;
     state.handle_key(KeyCode::Up);
-    assert_eq!(state.detail.scroll, 0);
+    assert_eq!(detail_ref(&state).scroll, 0);
     state.handle_key(KeyCode::Down);
-    assert_eq!(state.detail.scroll, 1);
+    assert_eq!(detail_ref(&state).scroll, 1);
 }
 
 #[test]
 fn detail_c_triggers_compaction_and_records_origin() {
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
     let outcome = state.handle_key(KeyCode::Char('c'));
     assert!(matches!(outcome, KeyOutcome::CompactGist));
-    assert_eq!(state.detail.compact_return_screen, Screen::GistDetail);
+    assert!(detail_ref(&state).compact_return_screen.is_gist_detail());
 }
 
 #[test]
 fn detail_number_key_requests_file_preview() {
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
     let outcome = state.handle_key(KeyCode::Char('1'));
     assert!(matches!(outcome, KeyOutcome::PreviewContent));
     assert_eq!(state.preview_request, Some(("g1".into(), "a.txt".into())));
-    assert_eq!(state.preview_return, Screen::GistDetail);
+    assert!(state.preview_return.is_gist_detail());
 }
 
 #[test]
 fn detail_number_key_out_of_range_is_ignored() {
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
     // Only two files exist; pressing 5 must do nothing (no fetch requested).
     let outcome = state.handle_key(KeyCode::Char('5'));
     assert!(matches!(outcome, KeyOutcome::None));
@@ -483,8 +493,8 @@ fn diff_footer_reflects_wrap_toggle() {
 #[test]
 fn detail_x_requests_gist_delete_confirm() {
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
     let outcome = state.handle_key(KeyCode::Char('X'));
     assert!(matches!(outcome, KeyOutcome::None));
     assert_eq!(state.screen, Screen::Confirm);
@@ -498,9 +508,9 @@ fn detail_x_requests_gist_delete_confirm() {
 fn preview_q_returns_to_launch_screen() {
     let mut state = state_with_gists();
     state.screen = Screen::Preview;
-    state.preview_return = Screen::GistDetail;
+    state.preview_return = Screen::GistDetail(Box::default());
     state.handle_key(KeyCode::Char('q'));
-    assert_eq!(state.screen, Screen::GistDetail);
+    assert!(state.screen.is_gist_detail());
     // Reset so a later list-launched preview returns to the list.
     assert_eq!(state.preview_return, Screen::List);
 }
@@ -553,8 +563,8 @@ fn footer_with_status_prefers_status_else_colourised_hints() {
 #[test]
 fn star_key_in_detail_returns_toggle_intent() {
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
     assert_eq!(
         state.handle_key(KeyCode::Char('*')),
         KeyOutcome::ToggleGistStar
@@ -589,8 +599,8 @@ fn spinner_glyph_cycles_through_frames_and_wraps() {
 #[test]
 fn context_gist_id_uses_detail_id_on_detail_screen() {
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
     assert_eq!(state.context_gist_id().as_deref(), Some("g1"));
 }
 
@@ -2442,8 +2452,8 @@ fn y_copies_gist_url_on_list_gists_and_detail() {
     );
 
     let mut detail = state_with_gists();
-    detail.screen = Screen::GistDetail;
-    detail.detail.gist_id = Some("g1".into());
+    detail.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut detail).gist_id = Some("g1".into());
     assert_eq!(
         detail.handle_key(KeyCode::Char('y')),
         KeyOutcome::CopyGistUrl
@@ -2469,8 +2479,8 @@ fn c_in_detail_requests_compaction_not_gist_manager() {
     let mut state = state_with_two_gists();
     state.screen = Screen::Gists(Box::default());
     assert_eq!(state.handle_key(KeyCode::Char('c')), KeyOutcome::None);
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("a".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("a".into());
     assert_eq!(
         state.handle_key(KeyCode::Char('c')),
         KeyOutcome::CompactGist
@@ -2484,6 +2494,8 @@ fn c_in_detail_requests_compaction_not_gist_manager() {
 fn compact_confirm_y_executes_and_n_returns_to_gist_manager() {
     let mut state = state_with_two_gists();
     state.screen = Screen::Confirm;
+    // CompactAnalyze parks the restore target on diff_return before Confirm opens.
+    state.diff_return = Screen::Gists(Box::default());
     state.pending_action = Some(PendingAction::CompactGist {
         gist_id: "a".into(),
         label: "My Ghostty config".into(),
@@ -2494,7 +2506,7 @@ fn compact_confirm_y_executes_and_n_returns_to_gist_manager() {
         KeyOutcome::ExecuteCompactGist
     );
 
-    // Cancelling drops the pending action and lands back in the gist manager.
+    // Cancelling drops the pending action and lands back on the parked restore target.
     state.handle_key(KeyCode::Char('n'));
     assert!(state.screen.is_gists());
     assert!(state.pending_action.is_none());
@@ -3097,8 +3109,8 @@ fn g_with_no_gists_is_blocked() {
 #[test]
 fn detail_e_edits_description_with_prefill_and_enter_applies() {
     let mut state = state_with_two_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("a".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("a".into());
     state.handle_key(KeyCode::Char('e'));
     assert!(state.editing_description);
     // Prefilled with the current description.
@@ -3144,8 +3156,8 @@ fn input_line_cursor_at_end_reverses_trailing_space() {
 #[test]
 fn detail_description_edits_mid_string_with_cursor_keys() {
     let mut state = state_with_two_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("a".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("a".into());
     state.handle_key(KeyCode::Char('e'));
     assert_eq!(state.description_input, "My Ghostty config");
     // Jump to the start, step right past "My", and insert without retyping the rest.
@@ -3186,8 +3198,8 @@ fn create_description_edits_mid_string_with_cursor_keys() {
 #[test]
 fn detail_esc_cancels_description_edit() {
     let mut state = state_with_two_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("a".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("a".into());
     state.handle_key(KeyCode::Char('e'));
     assert!(state.editing_description);
     state.handle_key(KeyCode::Esc);
@@ -3198,8 +3210,8 @@ fn detail_esc_cancels_description_edit() {
 #[test]
 fn detail_x_stages_whole_gist_delete() {
     let mut state = state_with_two_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("b".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("b".into());
     assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
     assert_eq!(state.screen, Screen::Confirm);
     assert_eq!(
@@ -4203,7 +4215,7 @@ fn help_topic_for_screen_maps_key_dense_screens() {
         HelpTopic::GistManager
     );
     assert_eq!(
-        HelpTopic::for_screen(&Screen::GistDetail),
+        HelpTopic::for_screen(&Screen::GistDetail(Box::default())),
         HelpTopic::GistDetail
     );
     assert_eq!(
@@ -4229,15 +4241,15 @@ fn capital_h_from_list_opens_revisions_for_selected_gist_file() {
 #[test]
 fn capital_h_from_gist_detail_opens_revisions_and_fetches() {
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
-    state.detail.file_cursor = 1;
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
+    detail_mut(&mut state).file_cursor = 1;
     let outcome = state.handle_key(KeyCode::Char('H'));
     assert_eq!(outcome, KeyOutcome::FetchRevisions);
     assert!(state.screen.is_revisions());
     assert_eq!(revision_ref(&state).gist_id.as_deref(), Some("g1"));
     assert_eq!(revision_ref(&state).target_file, "b.txt");
-    assert_eq!(revision_ref(&state).return_screen, Screen::GistDetail);
+    assert!(revision_ref(&state).return_screen.is_gist_detail());
     assert!(revision_ref(&state).entries.is_none());
 }
 
@@ -4414,11 +4426,11 @@ fn vim_h_scrolls_focused_row_left() {
 fn ctrl_f_pages_gist_detail_files() {
     use crossterm::event::KeyModifiers;
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
-    state.detail.file_cursor = 0;
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
+    detail_mut(&mut state).file_cursor = 0;
     state.handle_key_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
-    assert_eq!(state.detail.file_cursor, 1);
+    assert_eq!(detail_ref(&state).file_cursor, 1);
 }
 
 #[test]
@@ -4949,8 +4961,8 @@ fn starred_filter_lists_only_starred_gists() {
 fn fork_key_returns_fork_intent_for_foreign_gist_in_detail() {
     let mut state = initial_state();
     state.current_user_login = Some("me".into());
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("foreign".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("foreign".into());
     state.starred_gists = vec![GistFile {
         gist_id: "foreign".into(),
         description: "x".into(),
@@ -4974,8 +4986,8 @@ fn fork_key_returns_fork_intent_for_foreign_gist_in_detail() {
 fn fork_key_blocked_for_owned_gist_in_detail() {
     let mut state = initial_state();
     state.current_user_login = Some("me".into());
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("mine".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("mine".into());
     state.gists = vec![GistFile {
         gist_id: "mine".into(),
         description: "x".into(),
@@ -5000,8 +5012,8 @@ fn fork_key_blocked_for_owned_gist_in_detail() {
 fn foreign_detail_mutate_keys_are_silent_noop() {
     let mut state = initial_state();
     state.current_user_login = Some("me".into());
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("foreign".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("foreign".into());
     state.starred_gists = vec![GistFile {
         gist_id: "foreign".into(),
         description: "x".into(),
@@ -5375,14 +5387,14 @@ fn close_button_click_create_description_cancels_not_types() {
 fn wheel_step_gist_detail_moves_three() {
     // GistDetail content pane: one scroll-down tick must advance detail_scroll by 3.
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
     // Use Comments focus so detail_nav moves detail_scroll (not the file cursor).
-    state.detail.focus = DetailFocus::Comments;
-    state.detail.comments = Some(Vec::new());
-    assert_eq!(state.detail.scroll, 0);
+    detail_mut(&mut state).focus = DetailFocus::Comments;
+    detail_mut(&mut state).comments = Some(Vec::new());
+    assert_eq!(detail_ref(&state).scroll, 0);
     state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
-    assert_eq!(state.detail.scroll, 3);
+    assert_eq!(detail_ref(&state).scroll, 3);
 }
 
 #[test]
@@ -5524,9 +5536,9 @@ fn help_index_click_selects_and_double_click_opens_topic() {
 #[test]
 fn gist_detail_file_click_selects_and_double_previews() {
     let mut state = state_with_gists(); // g1: a.txt (0), b.txt (1)
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
-    state.detail.focus = DetailFocus::Comments; // start elsewhere to prove the focus switch
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
+    detail_mut(&mut state).focus = DetailFocus::Comments; // start elsewhere to prove the focus switch
     let hit = PaneHit {
         rect: Rect::new(0, 0, 40, 10),
         offset: 0,
@@ -5538,8 +5550,8 @@ fn gist_detail_file_click_selects_and_double_previews() {
     // Click the 2nd file row -> Files focus + cursor 1, but no open yet.
     let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
     assert_eq!(out, KeyOutcome::None);
-    assert_eq!(state.detail.focus, DetailFocus::Files);
-    assert_eq!(state.detail.file_cursor, 1);
+    assert_eq!(detail_ref(&state).focus, DetailFocus::Files);
+    assert_eq!(detail_ref(&state).file_cursor, 1);
     // Double-click previews that file (there is no Enter for files).
     let out = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
     assert_eq!(out, KeyOutcome::PreviewContent);
@@ -5549,9 +5561,9 @@ fn gist_detail_file_click_selects_and_double_previews() {
 #[test]
 fn gist_detail_tab_click_switches_focus() {
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
-    state.detail.focus = DetailFocus::Files;
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
+    detail_mut(&mut state).focus = DetailFocus::Files;
     // Header at chunks[0] y=0: content_x = 2, tabs_y = 2; " Files " (7), " Comments " (10 @ +10).
     let layout = MouseLayout {
         detail_tab_files: Some(Rect::new(2, 2, 7, 1)),
@@ -5560,11 +5572,11 @@ fn gist_detail_tab_click_switches_focus() {
     };
     // Click the Comments tab: switches focus and (comments unloaded) requests a fetch.
     let out = state.handle_mouse(MouseInput::Click { col: 14, row: 2 }, &layout);
-    assert_eq!(state.detail.focus, DetailFocus::Comments);
+    assert_eq!(detail_ref(&state).focus, DetailFocus::Comments);
     assert_eq!(out, KeyOutcome::FetchComments);
     // Click the Files tab back.
     let out = state.handle_mouse(MouseInput::Click { col: 4, row: 2 }, &layout);
-    assert_eq!(state.detail.focus, DetailFocus::Files);
+    assert_eq!(detail_ref(&state).focus, DetailFocus::Files);
     assert_eq!(out, KeyOutcome::None);
 }
 
@@ -5572,12 +5584,12 @@ fn gist_detail_tab_click_switches_focus() {
 fn wheel_step_gist_detail_files_moves_one() {
     // The file list (Files tab) steps one file per wheel tick, not 3.
     let mut state = state_with_gists();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
-    state.detail.focus = DetailFocus::Files;
-    state.detail.file_cursor = 0;
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
+    detail_mut(&mut state).focus = DetailFocus::Files;
+    detail_mut(&mut state).file_cursor = 0;
     state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
-    assert_eq!(state.detail.file_cursor, 1);
+    assert_eq!(detail_ref(&state).file_cursor, 1);
 }
 
 #[test]
@@ -5602,11 +5614,11 @@ fn comment_lines_count_matches_view_model_thread_lines() {
     assert_eq!(comment_lines_count(&comments), 7);
 
     let mut state = initial_state();
-    state.screen = Screen::GistDetail;
-    state.detail.gist_id = Some("g1".into());
+    state.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut state).gist_id = Some("g1".into());
     state.gists = vec![GistFile::for_sync("g1".into(), "a.txt".into(), None)];
-    state.detail.comments = Some(comments);
-    state.detail.comments_loaded_oldest_page = 1;
+    detail_mut(&mut state).comments = Some(comments);
+    detail_mut(&mut state).comments_loaded_oldest_page = 1;
     let detail = build_gist_detail_vm(&state);
     match detail.comments {
         CommentsPaneVm::Thread { lines, .. } => {
@@ -5629,7 +5641,7 @@ fn sample_comment(author: &str, body: &str) -> crate::domain::GistComment {
 fn apply_initial_comments_sets_window_and_requests_bottom_scroll() {
     use crate::tui::InitialComments;
     let mut s = crate::tui::initial_state();
-    s.detail.gist_id = Some("g1".into());
+    detail_mut(&mut s).gist_id = Some("g1".into());
     s.apply_initial_comments(
         "g1",
         Ok(InitialComments {
@@ -5638,18 +5650,18 @@ fn apply_initial_comments_sets_window_and_requests_bottom_scroll() {
             oldest_page: 31,
         }),
     );
-    assert_eq!(s.detail.comments_total, Some(910));
-    assert_eq!(s.detail.comments_loaded_oldest_page, 31);
-    assert!(s.detail.comments_scroll_to_bottom);
+    assert_eq!(detail_ref(&s).comments_total, Some(910));
+    assert_eq!(detail_ref(&s).comments_loaded_oldest_page, 31);
+    assert!(detail_ref(&s).comments_scroll_to_bottom);
     assert!(s.can_load_older_comments()); // page 31 > 1
-    assert_eq!(s.detail.comments.as_ref().unwrap().len(), 1);
+    assert_eq!(detail_ref(&s).comments.as_ref().unwrap().len(), 1);
 }
 
 #[test]
 fn apply_initial_comments_ignored_when_gist_changed() {
     use crate::tui::InitialComments;
     let mut s = crate::tui::initial_state();
-    s.detail.gist_id = Some("g2".into());
+    detail_mut(&mut s).gist_id = Some("g2".into());
     s.apply_initial_comments(
         "g1",
         Ok(InitialComments {
@@ -5658,14 +5670,14 @@ fn apply_initial_comments_ignored_when_gist_changed() {
             oldest_page: 1,
         }),
     );
-    assert!(s.detail.comments.is_none()); // stale response dropped
+    assert!(detail_ref(&s).comments.is_none()); // stale response dropped
 }
 
 #[test]
 fn apply_older_comments_prepends_and_compensates_scroll() {
     use crate::tui::InitialComments;
     let mut s = crate::tui::initial_state();
-    s.detail.gist_id = Some("g1".into());
+    detail_mut(&mut s).gist_id = Some("g1".into());
     s.apply_initial_comments(
         "g1",
         Ok(InitialComments {
@@ -5674,21 +5686,21 @@ fn apply_older_comments_prepends_and_compensates_scroll() {
             oldest_page: 2,
         }),
     );
-    s.detail.scroll = 5;
+    detail_mut(&mut s).scroll = 5;
     // One older comment = 1 header + 1 body + 1 blank = 3 lines prepended.
     s.apply_older_comments("g1", Ok(vec![sample_comment("older", "o")]));
-    assert_eq!(s.detail.comments_loaded_oldest_page, 1);
+    assert_eq!(detail_ref(&s).comments_loaded_oldest_page, 1);
     assert!(!s.can_load_older_comments()); // reached page 1
-    assert_eq!(s.detail.comments.as_ref().unwrap()[0].author, "older"); // prepended
-    assert_eq!(s.detail.scroll, 5 + 3); // viewport held in place
-    assert!(!s.detail.comments_loading_more);
+    assert_eq!(detail_ref(&s).comments.as_ref().unwrap()[0].author, "older"); // prepended
+    assert_eq!(detail_ref(&s).scroll, 5 + 3); // viewport held in place
+    assert!(!detail_ref(&s).comments_loading_more);
 }
 
 #[test]
 fn can_load_older_false_while_loading_more() {
     use crate::tui::InitialComments;
     let mut s = crate::tui::initial_state();
-    s.detail.gist_id = Some("g1".into());
+    detail_mut(&mut s).gist_id = Some("g1".into());
     s.apply_initial_comments(
         "g1",
         Ok(InitialComments {
@@ -5697,7 +5709,7 @@ fn can_load_older_false_while_loading_more() {
             oldest_page: 3,
         }),
     );
-    s.detail.comments_loading_more = true;
+    detail_mut(&mut s).comments_loading_more = true;
     assert!(!s.can_load_older_comments());
 }
 
@@ -5705,9 +5717,9 @@ fn can_load_older_false_while_loading_more() {
 fn m_key_loads_older_when_available() {
     use crate::tui::InitialComments;
     let mut s = crate::tui::initial_state();
-    s.screen = Screen::GistDetail;
-    s.detail.focus = DetailFocus::Comments;
-    s.detail.gist_id = Some("g1".into());
+    s.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut s).focus = DetailFocus::Comments;
+    detail_mut(&mut s).gist_id = Some("g1".into());
     s.apply_initial_comments(
         "g1",
         Ok(InitialComments {
@@ -5724,9 +5736,9 @@ fn m_key_loads_older_when_available() {
 fn m_key_noop_when_at_oldest_page() {
     use crate::tui::InitialComments;
     let mut s = crate::tui::initial_state();
-    s.screen = Screen::GistDetail;
-    s.detail.focus = DetailFocus::Comments;
-    s.detail.gist_id = Some("g1".into());
+    s.screen = Screen::GistDetail(Box::default());
+    detail_mut(&mut s).focus = DetailFocus::Comments;
+    detail_mut(&mut s).gist_id = Some("g1".into());
     s.apply_initial_comments(
         "g1",
         Ok(InitialComments {

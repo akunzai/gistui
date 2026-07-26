@@ -76,22 +76,30 @@ pub(super) fn dispatch_outcome(
                 Screen::Gists(g) => Screen::Gists(g.clone()),
                 _ => Screen::Gists(Box::default()),
             };
-            state.detail.return_screen = gists_return;
-            state.screen = Screen::GistDetail;
-            state.detail.gist_id = Some(gist_id);
+            state.screen = Screen::GistDetail(Box::new(DetailState {
+                gist_id: Some(gist_id),
+                return_screen: gists_return,
+                compact_return_screen: Screen::Gists(Box::default()),
+                focus: DetailFocus::Files,
+                file_cursor: 0,
+                scroll: 0,
+                ..DetailState::default()
+            }));
             state.reset_comment_pagination();
-            state.detail.scroll = 0;
-            state.detail.focus = DetailFocus::Files;
-            state.detail.file_cursor = 0;
         }
         KeyOutcome::FetchComments => {
-            let Some(gist_id) = state.detail.gist_id.clone() else {
+            let Some(gist_id) = state.detail().and_then(|d| d.gist_id.clone()) else {
                 return Ok(LoopFlow::Proceed);
             };
-            if state.detail.comments.is_some() || state.detail.comments_loading {
+            if state
+                .detail()
+                .is_some_and(|d| d.comments.is_some() || d.comments_loading)
+            {
                 return Ok(LoopFlow::Proceed);
             }
-            state.detail.comments_loading = true;
+            if let Some(d) = state.detail_mut() {
+                d.comments_loading = true;
+            }
             let fetch_id = gist_id.clone();
             spawn_bg(state, &mut channels.bg, "Loading comments…", move || {
                 let result = load_initial_comments(&fetch_id);
@@ -102,17 +110,22 @@ pub(super) fn dispatch_outcome(
             });
         }
         KeyOutcome::LoadOlderComments => {
-            let Some(gist_id) = state.detail.gist_id.clone() else {
+            let Some(gist_id) = state.detail().and_then(|d| d.gist_id.clone()) else {
                 return Ok(LoopFlow::Proceed);
             };
             if !state.can_load_older_comments() {
                 return Ok(LoopFlow::Proceed);
             }
-            let page = state.detail.comments_loaded_oldest_page.saturating_sub(1);
+            let page = state
+                .detail()
+                .map(|d| d.comments_loaded_oldest_page.saturating_sub(1))
+                .unwrap_or(0);
             if page == 0 {
                 return Ok(LoopFlow::Proceed);
             }
-            state.detail.comments_loading_more = true;
+            if let Some(d) = state.detail_mut() {
+                d.comments_loading_more = true;
+            }
             let fetch_id = gist_id.clone();
             spawn_bg(
                 state,
@@ -442,7 +455,8 @@ pub(super) fn dispatch_outcome(
                 return Ok(LoopFlow::Proceed);
             };
             state.pending_action = None;
-            state.screen = state.detail.compact_return_screen.clone();
+            // Compact restore target was parked on diff_return when Confirm opened.
+            state.screen = state.diff_return.clone();
 
             spawn_bg(
                 state,
@@ -461,9 +475,8 @@ pub(super) fn dispatch_outcome(
         }
         KeyOutcome::ApplyDescription => {
             let gist_id = state
-                .detail
-                .gist_id
-                .clone()
+                .detail()
+                .and_then(|d| d.gist_id.clone())
                 .or_else(|| state.selected_group().map(|g| g.id.clone()));
             let Some(gist_id) = gist_id else {
                 state.editing_description = false;
