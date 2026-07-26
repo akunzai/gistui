@@ -19,10 +19,11 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
         Block::default().style(state.theme.base_style()),
         frame.area(),
     );
-    // Pure presentation seam (issue #241): first-batch screens paint from the view model;
+    // Pure presentation seam (issues #241 / #250): migrated screens paint from the view model;
     // Legacy bodies still read `AppState`. Pin sync IO is never done here — only cache reads.
     let vm = super::build_view_model(state);
     match &vm.screen {
+        super::ScreenVm::List(list) => render_list_vm(frame, state, list, &vm.chrome, layout),
         super::ScreenVm::Pins(pins) => render_pins_vm(frame, state, pins, &vm.chrome, layout),
         super::ScreenVm::Confirm(confirm) => {
             render_confirm_vm(frame, state, confirm, &vm.chrome, layout)
@@ -30,14 +31,14 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
         super::ScreenVm::Help(help) => render_help_vm(frame, state, help, &vm.chrome, layout),
         super::ScreenVm::Legacy => match state.screen {
             Screen::Palette => render_palette(frame, state, layout),
-            Screen::List => render_list(frame, state, layout),
             Screen::Diff => render_diff(frame, state, layout),
             Screen::Preview => render_preview(frame, state, layout),
             Screen::Gists => render_gists(frame, state, layout),
             Screen::GistDetail => render_gist_detail(frame, state, layout),
             Screen::Revisions => render_revisions(frame, state, layout),
             Screen::Config => render_config(frame, state, layout),
-            // First-batch screens should not land in Legacy; fall back safely.
+            // Migrated screens should not land in Legacy; fall back safely.
+            Screen::List => render_list(frame, state, layout),
             Screen::Confirm => render_confirm(frame, state, layout),
             Screen::Help => render_help(frame, state, layout),
             Screen::Pins => render_pins(frame, state, layout),
@@ -420,10 +421,10 @@ pub(super) fn render_config(frame: &mut Frame, state: &AppState, layout: &mut Mo
 }
 
 pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    let vm = super::build_view_model(state);
-    if let super::ScreenVm::Help(help) = &vm.screen {
-        render_help_vm(frame, state, help, &vm.chrome, layout);
-    }
+    // Build Help body directly so Palette-over-Help still paints (screen is Palette).
+    let chrome = super::view_model::build_chrome(state);
+    let help = super::view_model::build_help_vm(state);
+    render_help_vm(frame, state, &help, &chrome, layout);
 }
 
 fn render_help_vm(
@@ -624,10 +625,10 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState, layout: &mut M
 }
 
 pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    let vm = super::build_view_model(state);
-    if let super::ScreenVm::Pins(pins) = &vm.screen {
-        render_pins_vm(frame, state, pins, &vm.chrome, layout);
-    }
+    // Build Pins body directly so Palette-over-Pins still paints (screen is Palette).
+    let chrome = super::view_model::build_chrome(state);
+    let pins = super::view_model::build_pins_vm(state);
+    render_pins_vm(frame, state, &pins, &chrome, layout);
 }
 
 fn render_pins_vm(
@@ -1548,7 +1549,7 @@ pub(super) fn pin_row_label(
 
 /// How a file-list row should be flagged: 📌 = an existing pinned pair; same-name = bold; else none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum RowMark {
+pub(crate) enum RowMark {
     Pinned,
     SameName,
     None,
@@ -1569,17 +1570,6 @@ pub(super) fn marked_row_text(base: String, mark: RowMark) -> String {
     match mark {
         RowMark::Pinned => format!("📌 {base}"),
         RowMark::SameName | RowMark::None => base,
-    }
-}
-
-/// Build a file-list row from its base text and match mark: 📌 prefix for a pinned pair,
-/// bold for a same-name match, plain otherwise. Shared by both panes in `render_list`.
-pub(super) fn marked_item(base: String, mark: RowMark, hscroll: u16) -> ListItem<'static> {
-    let text = marked_row_text(base, mark);
-    let item = ListItem::new(hscroll_str(&text, hscroll));
-    match mark {
-        RowMark::SameName => item.style(Style::default().add_modifier(Modifier::BOLD)),
-        RowMark::Pinned | RowMark::None => item,
     }
 }
 
@@ -1796,22 +1786,58 @@ pub(super) fn input_line(prefix: &str, input: &TextInput, suffix: &str) -> Line<
 }
 
 pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+    // Build List body directly so Palette-over-List still paints (screen is Palette).
+    let chrome = super::view_model::build_chrome(state);
+    let list = super::view_model::build_list_vm(state);
+    render_list_vm(frame, state, &list, &chrome, layout);
+}
+
+fn list_pane_items(
+    pane: &super::view_model::ListPaneVm,
+    hscroll: u16,
+    theme: &Theme,
+) -> Vec<ListItem<'static>> {
+    match pane.empty {
+        super::view_model::ListPaneEmpty::HasRows => pane
+            .rows
+            .iter()
+            .map(|row| {
+                let item = ListItem::new(hscroll_str(&row.label, hscroll));
+                match row.mark {
+                    RowMark::SameName => item.style(Style::default().add_modifier(Modifier::BOLD)),
+                    RowMark::Pinned | RowMark::None => item,
+                }
+            })
+            .collect(),
+        _ => {
+            let msg = pane.empty_message.clone().unwrap_or_else(|| "  ".into());
+            vec![ListItem::new(msg).style(Style::default().fg(theme.dim))]
+        }
+    }
+}
+
+fn render_list_vm(
+    frame: &mut Frame,
+    state: &AppState,
+    list: &super::view_model::ListVm,
+    chrome: &super::view_model::ChromeVm,
+    layout: &mut MouseLayout,
+) {
     let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
-    let footer_body = if state.filtering {
-        let (pane, query) = match state.focus {
-            FocusPane::Local => ("local", &state.local_filter_query),
-            FocusPane::Gist => ("gist", &state.filter_query),
-        };
-        format!("filter {pane}: {query}_   (Tab next pane · Enter apply · Esc clear)")
-    } else {
-        match &state.status {
-            Some(message) => message.clone(),
-            None => MINIMAL_HINT.to_string(),
+    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
+    let footer_body = match &list.footer {
+        super::view_model::ListFooterVm::Hints { text }
+        | super::view_model::ListFooterVm::Status { text } => text.clone(),
+        super::view_model::ListFooterVm::Filtering { focus } => {
+            let (pane, query) = match focus {
+                FocusPane::Local => ("local", &state.local_filter_query),
+                FocusPane::Gist => ("gist", &state.filter_query),
+            };
+            // Height sizing uses a plain-text approximation; the painted footer uses `input_line`.
+            format!("filter {pane}: {query}_   (Tab next pane · Enter apply · Esc clear)")
         }
     };
-    // Only the command-hint variant gets key colouring; filter input and status stay plain.
-    let footer_is_command = !state.filtering && state.status.is_none();
+    let footer_is_command = matches!(list.footer, super::view_model::ListFooterVm::Hints { .. });
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -1824,144 +1850,64 @@ pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut Mous
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(chunks[0]);
 
-    // Show each candidate's path relative to cwd; in flat mode this is just the filename,
-    // in recursive mode it includes the subdirectory (e.g. src/utils/helpers.rs).
-    // Dual snapshot once for both panes (issue #224) — avoids a second full recompute
-    // when building the gist pane from `ranked_gists()` below.
-    let (visible_locals, ranked) = state.list_pane_snapshots();
-    let local_items: Vec<ListItem> = if state.local_scanning && state.locals.is_empty() {
-        vec![ListItem::new(format!(
-            "  {} Scanning files…",
-            spinner_glyph(state.spinner_frame)
-        ))
-        .style(Style::default().fg(state.theme.dim))]
-    } else if state.locals.is_empty() {
-        vec![ListItem::new("  📭 No local files found").style(Style::default().fg(state.theme.dim))]
-    } else if visible_locals.is_empty() {
-        vec![ListItem::new("  🔍 No files match the filter")
-            .style(Style::default().fg(state.theme.dim))]
-    } else {
-        visible_locals
-            .iter()
-            .map(|r| {
-                let base = super::text::local_row_label(&r.candidate.path, &state.cwd);
-                marked_item(base, row_mark(&r.reasons), state.local_hscroll)
-            })
-            .collect()
-    };
-    let local_focused = state.focus == FocusPane::Local;
-    let local_selected = (!visible_locals.is_empty()).then_some(state.local_index);
-    let recursive_marker = if state.local_recursive { " [↓]" } else { "" };
-    let scanning_marker = if state.local_scanning { " …" } else { "" };
-    let mut local_title = format!(
-        "[1] Local {} · {}{}{} · sort:{}",
-        count_label(visible_locals.len(), state.locals.len()),
-        crate::config::display_path(&state.cwd),
-        recursive_marker,
-        scanning_marker,
-        state.local_sort.label()
-    );
-    if !state.local_filter_query.is_empty() {
-        local_title.push_str(&format!(" · /{}", state.local_filter_query));
-    }
-    // Mark the pane that currently drives the match ranking (the anchor).
-    let local_title = if state.anchor == FocusPane::Local {
-        format!("{local_title} · ⚓")
-    } else {
-        local_title
-    };
+    let local_items = list_pane_items(&list.local, list.local_hscroll, &state.theme);
     let local_offset = render_pane(
         frame,
         columns[0],
-        &local_title,
+        &list.local.title,
         local_items,
-        local_focused,
-        local_selected,
+        list.local.focused,
+        list.local.selected,
         &state.theme,
     );
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         layout.local = Some(PaneHit {
             rect: columns[0],
             offset: local_offset,
         });
     }
 
-    let gist_items: Vec<ListItem> = if state.loading && ranked.is_empty() {
-        vec![ListItem::new(format!(
-            "  {} Loading gists…",
-            spinner_glyph(state.spinner_frame)
-        ))
-        .style(Style::default().fg(state.theme.dim))]
-    } else if ranked.is_empty() {
-        let message = if !state.filter_query.is_empty() {
-            ListItem::new("  🔍 No gists match the filter")
-                .style(Style::default().fg(state.theme.dim))
-        } else {
-            ListItem::new("  📭 No gists found").style(Style::default().fg(state.theme.dim))
-        };
-        vec![message]
-    } else {
-        ranked
-            .iter()
-            .map(|g| {
-                let base = gist_row_display(g, state.gist_view, state);
-                marked_item(base, row_mark(&g.reasons), state.gist_hscroll)
-            })
-            .collect()
-    };
-    let gist_focused = state.focus == FocusPane::Gist;
-    let gist_selected = (!ranked.is_empty()).then_some(state.gist_index);
-    let mut gist_title = format!(
-        "[2] Gists {} · {} · {}",
-        count_label(ranked.len(), state.gists.len()),
-        state.gist_type_filter.label(),
-        state.gist_sort.label()
-    );
-    if !state.filter_query.is_empty() {
-        gist_title.push_str(&format!(" · /{}", state.filter_query));
-    }
-    let gist_title = if state.anchor == FocusPane::Gist {
-        format!("{gist_title} · ⚓")
-    } else {
-        gist_title
-    };
+    let gist_items = list_pane_items(&list.gist, list.gist_hscroll, &state.theme);
     let gist_offset = render_pane(
         frame,
         columns[1],
-        &gist_title,
+        &list.gist.title,
         gist_items,
-        gist_focused,
-        gist_selected,
+        list.gist.focused,
+        list.gist.selected,
         &state.theme,
     );
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         layout.gist = Some(PaneHit {
             rect: columns[1],
             offset: gist_offset,
         });
     }
 
-    if state.filtering {
-        let (pane, query) = match state.focus {
-            FocusPane::Local => ("local", &state.local_filter_query),
-            FocusPane::Gist => ("gist", &state.filter_query),
-        };
-        let line = input_line(
-            &format!("filter {pane}: "),
-            query,
-            "   (Tab next pane · Enter apply · Esc clear)",
-        );
-        render_footer_line(frame, chunks[1], "", line, &state.theme, layout);
-    } else {
-        render_footer(
-            frame,
-            chunks[1],
-            "",
-            &footer_body,
-            footer_is_command,
-            &state.theme,
-            layout,
-        );
+    match &list.footer {
+        super::view_model::ListFooterVm::Filtering { focus } => {
+            let (pane, query) = match focus {
+                FocusPane::Local => ("local", &state.local_filter_query),
+                FocusPane::Gist => ("gist", &state.filter_query),
+            };
+            let line = input_line(
+                &format!("filter {pane}: "),
+                query,
+                "   (Tab next pane · Enter apply · Esc clear)",
+            );
+            render_footer_line(frame, chunks[1], "", line, &state.theme, layout);
+        }
+        _ => {
+            render_footer(
+                frame,
+                chunks[1],
+                "",
+                &footer_body,
+                footer_is_command,
+                &state.theme,
+                layout,
+            );
+        }
     }
 }
 
@@ -2546,10 +2492,9 @@ pub(super) fn render_diff(frame: &mut Frame, state: &AppState, layout: &mut Mous
 /// status is shown; cancelling returns to the launching screen without setting a status here.
 /// Modal chrome comes from the pure view model; background still reads `AppState` (#241).
 pub(super) fn render_confirm(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    let vm = super::build_view_model(state);
-    if let super::ScreenVm::Confirm(confirm) = &vm.screen {
-        render_confirm_vm(frame, state, confirm, &vm.chrome, layout);
-    }
+    let chrome = super::view_model::build_chrome(state);
+    let confirm = super::view_model::build_confirm_vm(state);
+    render_confirm_vm(frame, state, &confirm, &chrome, layout);
 }
 
 fn render_confirm_vm(

@@ -1,14 +1,16 @@
 //! Pure presentation seam: `AppState` (+ pin-sync cache) → immutable view models.
 //!
-//! The draw path builds a [`ViewModel`] once per frame and paints from it for the first-batch
-//! screens (Pins, Confirm modal, Help). Other screens use [`ScreenVm::Legacy`] and may still
-//! read `AppState` for their body. Builders never touch the filesystem or network (issue #241).
+//! The draw path builds a [`ViewModel`] once per frame and paints from it for migrated
+//! screens (Pins, Confirm modal, Help, List, …). Other screens use [`ScreenVm::Legacy`] and
+//! may still read `AppState` for their body. Builders never touch the filesystem or network
+//! (issues #241 / #250).
 
 use super::render::{
     about_topic_lines_plain, confirm_modal_style, confirm_prompt, count_label, footer_with_status,
-    help_topic_body, pin_row_label, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX, MINIMAL_HINT,
+    gist_row_display, help_topic_body, marked_row_text, pin_row_label, row_mark, spinner_glyph,
+    RowMark, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX, MINIMAL_HINT,
 };
-use super::{AppState, HelpTopic, PendingAction, Screen};
+use super::{AppState, FocusPane, HelpTopic, PendingAction, Screen};
 use crate::domain::SyncStatus;
 use ratatui::style::Color;
 
@@ -29,14 +31,62 @@ pub struct ChromeVm {
     pub spinner_frame: usize,
 }
 
-/// Per-screen body. First-batch screens carry structured data; the rest are [`Legacy`].
+/// Per-screen body. Migrated screens carry structured data; the rest are [`Legacy`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScreenVm {
+    List(ListVm),
     Pins(PinsVm),
     Confirm(ConfirmVm),
     Help(HelpVm),
-    /// Body still painted from `AppState` directly (transition).
+    /// Body still painted from `AppState` directly (transition toward #250).
     Legacy,
+}
+
+/// Main dual-pane List screen presentation (#250).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListVm {
+    pub local: ListPaneVm,
+    pub gist: ListPaneVm,
+    pub local_hscroll: u16,
+    pub gist_hscroll: u16,
+    pub footer: ListFooterVm,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListPaneVm {
+    pub title: String,
+    pub focused: bool,
+    pub selected: Option<usize>,
+    pub empty: ListPaneEmpty,
+    /// Prebuilt empty/loading/filter-miss message when [`Self::empty`] is not [`HasRows`].
+    pub empty_message: Option<String>,
+    pub rows: Vec<ListRowVm>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListPaneEmpty {
+    HasRows,
+    /// Local scan or gist fetch in progress with no rows yet.
+    Loading,
+    NoItems,
+    NoFilterMatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListRowVm {
+    /// Full row text including pin mark prefix, before horizontal scroll.
+    pub label: String,
+    pub mark: RowMark,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ListFooterVm {
+    /// Idle command hints (colourised keys).
+    Hints { text: String },
+    /// One-shot status message (plain).
+    Status { text: String },
+    /// Inline filter on the focused pane; paint still uses live `TextInput` for the caret.
+    Filtering { focus: FocusPane },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,14 +167,20 @@ pub struct HelpIndexItemVm {
     pub title: String,
 }
 
-/// Pure: map app state (+ pin sync cache) into a view model. No FS / network / mutation.
-pub fn build_view_model(state: &AppState) -> ViewModel {
-    let chrome = ChromeVm {
+/// Pure chrome facts shared across screens (and palette backgrounds).
+pub(crate) fn build_chrome(state: &AppState) -> ChromeVm {
+    ChromeVm {
         mouse_enabled: state.mouse_enabled,
         bg_task_msg: state.bg_task_msg.clone(),
         spinner_frame: state.spinner_frame,
-    };
+    }
+}
+
+/// Pure: map app state (+ pin sync cache) into a view model. No FS / network / mutation.
+pub fn build_view_model(state: &AppState) -> ViewModel {
+    let chrome = build_chrome(state);
     let screen = match state.screen {
+        Screen::List => ScreenVm::List(build_list_vm(state)),
         Screen::Pins => ScreenVm::Pins(build_pins_vm(state)),
         Screen::Confirm => ScreenVm::Confirm(build_confirm_vm(state)),
         Screen::Help => ScreenVm::Help(build_help_vm(state)),
@@ -133,7 +189,146 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
     ViewModel { chrome, screen }
 }
 
-fn build_pins_vm(state: &AppState) -> PinsVm {
+/// List body only — usable while `state.screen` is List **or** Palette-over-List (#250).
+pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
+    let (visible_locals, ranked) = state.list_pane_snapshots();
+
+    let local_empty;
+    let local_empty_message;
+    let local_rows;
+    if state.local_scanning && state.locals.is_empty() {
+        local_empty = ListPaneEmpty::Loading;
+        local_empty_message = Some(format!(
+            "  {} Scanning files…",
+            spinner_glyph(state.spinner_frame)
+        ));
+        local_rows = Vec::new();
+    } else if state.locals.is_empty() {
+        local_empty = ListPaneEmpty::NoItems;
+        local_empty_message = Some("  📭 No local files found".into());
+        local_rows = Vec::new();
+    } else if visible_locals.is_empty() {
+        local_empty = ListPaneEmpty::NoFilterMatch;
+        local_empty_message = Some("  🔍 No files match the filter".into());
+        local_rows = Vec::new();
+    } else {
+        local_empty = ListPaneEmpty::HasRows;
+        local_empty_message = None;
+        local_rows = visible_locals
+            .iter()
+            .map(|r| {
+                let mark = row_mark(&r.reasons);
+                let base = super::text::local_row_label(&r.candidate.path, &state.cwd);
+                ListRowVm {
+                    label: marked_row_text(base, mark),
+                    mark,
+                }
+            })
+            .collect();
+    }
+
+    let recursive_marker = if state.local_recursive { " [↓]" } else { "" };
+    let scanning_marker = if state.local_scanning { " …" } else { "" };
+    let mut local_title = format!(
+        "[1] Local {} · {}{}{} · sort:{}",
+        count_label(visible_locals.len(), state.locals.len()),
+        crate::config::display_path(&state.cwd),
+        recursive_marker,
+        scanning_marker,
+        state.local_sort.label()
+    );
+    if !state.local_filter_query.is_empty() {
+        local_title.push_str(&format!(" · /{}", state.local_filter_query));
+    }
+    if state.anchor == FocusPane::Local {
+        local_title.push_str(" · ⚓");
+    }
+
+    let gist_empty;
+    let gist_empty_message;
+    let gist_rows;
+    if state.loading && ranked.is_empty() {
+        gist_empty = ListPaneEmpty::Loading;
+        gist_empty_message = Some(format!(
+            "  {} Loading gists…",
+            spinner_glyph(state.spinner_frame)
+        ));
+        gist_rows = Vec::new();
+    } else if ranked.is_empty() {
+        if !state.filter_query.is_empty() {
+            gist_empty = ListPaneEmpty::NoFilterMatch;
+            gist_empty_message = Some("  🔍 No gists match the filter".into());
+        } else {
+            gist_empty = ListPaneEmpty::NoItems;
+            gist_empty_message = Some("  📭 No gists found".into());
+        }
+        gist_rows = Vec::new();
+    } else {
+        gist_empty = ListPaneEmpty::HasRows;
+        gist_empty_message = None;
+        gist_rows = ranked
+            .iter()
+            .map(|g| {
+                let mark = row_mark(&g.reasons);
+                let base = gist_row_display(g, state.gist_view, state);
+                ListRowVm {
+                    label: marked_row_text(base, mark),
+                    mark,
+                }
+            })
+            .collect();
+    }
+
+    let mut gist_title = format!(
+        "[2] Gists {} · {} · {}",
+        count_label(ranked.len(), state.gists.len()),
+        state.gist_type_filter.label(),
+        state.gist_sort.label()
+    );
+    if !state.filter_query.is_empty() {
+        gist_title.push_str(&format!(" · /{}", state.filter_query));
+    }
+    if state.anchor == FocusPane::Gist {
+        gist_title.push_str(" · ⚓");
+    }
+
+    let footer = if state.filtering {
+        ListFooterVm::Filtering { focus: state.focus }
+    } else if let Some(message) = &state.status {
+        ListFooterVm::Status {
+            text: message.clone(),
+        }
+    } else {
+        ListFooterVm::Hints {
+            text: MINIMAL_HINT.to_string(),
+        }
+    };
+
+    ListVm {
+        local: ListPaneVm {
+            title: local_title,
+            focused: state.focus == FocusPane::Local,
+            selected: (local_empty == ListPaneEmpty::HasRows).then_some(state.local_index),
+            empty: local_empty,
+            empty_message: local_empty_message,
+            rows: local_rows,
+        },
+        gist: ListPaneVm {
+            title: gist_title,
+            focused: state.focus == FocusPane::Gist,
+            selected: (gist_empty == ListPaneEmpty::HasRows).then_some(state.gist_index),
+            empty: gist_empty,
+            empty_message: gist_empty_message,
+            rows: gist_rows,
+        },
+        local_hscroll: state.local_hscroll,
+        gist_hscroll: state.gist_hscroll,
+        footer,
+    }
+}
+
+/// Pins body only — usable under Palette-over-Pins as well.
+pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
     let (footer_title, footer, footer_colored) = if state.pins.filtering {
         (
             "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
@@ -214,7 +409,7 @@ fn build_pins_vm(state: &AppState) -> PinsVm {
     }
 }
 
-fn build_confirm_vm(state: &AppState) -> ConfirmVm {
+pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
     let (title, border) = confirm_modal_style(state);
     let kind = if matches!(state.pending_action, Some(PendingAction::Create { .. }))
         && state.editing_description
@@ -236,7 +431,8 @@ fn build_confirm_vm(state: &AppState) -> ConfirmVm {
     }
 }
 
-fn build_help_vm(state: &AppState) -> HelpVm {
+/// Help body only — usable under Palette-over-Help as well.
+pub(crate) fn build_help_vm(state: &AppState) -> HelpVm {
     let mode = if state.help.index_open {
         let items = HelpTopic::all()
             .iter()
@@ -438,8 +634,127 @@ mod tests {
     }
 
     #[test]
-    fn legacy_for_list_screen() {
+    fn list_vm_empty_local_and_gist_messages() {
         let state = initial_state();
+        let vm = build_view_model(&state);
+        match vm.screen {
+            ScreenVm::List(list) => {
+                assert_eq!(list.local.empty, ListPaneEmpty::NoItems);
+                assert!(list
+                    .local
+                    .empty_message
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("No local files"));
+                assert_eq!(list.gist.empty, ListPaneEmpty::NoItems);
+                assert!(list
+                    .gist
+                    .empty_message
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("No gists found"));
+                assert!(matches!(list.footer, ListFooterVm::Hints { .. }));
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn list_vm_rows_include_pin_mark_and_star() {
+        use crate::domain::{GistFile, LocalCandidate, PinnedMapping};
+
+        let mut state = initial_state();
+        state.cwd = PathBuf::from("/tmp/proj");
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("notes.txt"),
+            pinned: true,
+            modified: None,
+        }];
+        state.gists = vec![GistFile {
+            description: "demo notes".into(),
+            ..GistFile::for_sync("g1".into(), "notes.txt".into(), None)
+        }];
+        state.starred_gist_ids.insert("g1".into());
+        state.pinned = vec![PinnedMapping {
+            local_path: PathBuf::from("notes.txt"),
+            gist_id: "g1".into(),
+            gist_filename: "notes.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+        state.focus = FocusPane::Local;
+        state.anchor = FocusPane::Local;
+        state.local_index = 0;
+        state.gist_index = 0;
+
+        let vm = build_view_model(&state);
+        match vm.screen {
+            ScreenVm::List(list) => {
+                assert_eq!(list.local.empty, ListPaneEmpty::HasRows);
+                assert_eq!(list.gist.empty, ListPaneEmpty::HasRows);
+                assert!(!list.local.rows.is_empty());
+                assert!(!list.gist.rows.is_empty());
+                assert!(
+                    list.gist.rows[0].label.contains('★'),
+                    "starred gist row: {}",
+                    list.gist.rows[0].label
+                );
+                assert!(
+                    list.local
+                        .rows
+                        .iter()
+                        .any(|r| r.label.contains("notes.txt")),
+                    "local rows: {:?}",
+                    list.local.rows
+                );
+                // Pin or exact-filename mark when both sides share the pair.
+                let marked = list
+                    .local
+                    .rows
+                    .iter()
+                    .chain(list.gist.rows.iter())
+                    .any(|r| {
+                        matches!(r.mark, RowMark::Pinned | RowMark::SameName)
+                            || r.label.contains('📌')
+                    });
+                assert!(
+                    marked,
+                    "local={:?} gist={:?}",
+                    list.local.rows, list.gist.rows
+                );
+            }
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn list_vm_status_footer_and_filter_mode() {
+        let mut state = initial_state();
+        state.status = Some("Downloaded a.txt".into());
+        match build_view_model(&state).screen {
+            ScreenVm::List(list) => match list.footer {
+                ListFooterVm::Status { text } => assert!(text.contains("Downloaded")),
+                other => panic!("expected Status footer, got {other:?}"),
+            },
+            other => panic!("expected List, got {other:?}"),
+        }
+
+        state.status = None;
+        state.filtering = true;
+        state.focus = FocusPane::Gist;
+        match build_view_model(&state).screen {
+            ScreenVm::List(list) => match list.footer {
+                ListFooterVm::Filtering { focus } => assert_eq!(focus, FocusPane::Gist),
+                other => panic!("expected Filtering footer, got {other:?}"),
+            },
+            other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_for_diff_screen() {
+        let mut state = initial_state();
+        state.screen = Screen::Diff;
         assert!(matches!(build_view_model(&state).screen, ScreenVm::Legacy));
     }
 
