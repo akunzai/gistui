@@ -63,6 +63,20 @@ Pure, testable domain logic is kept separate from impure shell/filesystem adapte
 - Versioning (SemVer): stay on `0.x` while the keymap/feature surface is still evolving; only cut `1.0.0` once it has gone several releases without a breaking UX change. A release is a `vX.Y.Z` tag matching `Cargo.toml`, which triggers `.github/workflows/release.yml` to build and attach the platform binaries the README `install.sh` expects.
 - Release flow: bump `Cargo.toml` to the next version **when starting** the first new feature after a release — this keeps the in-development build distinct from the published one. Land changelog entries under `## [Unreleased]` during development (do **not** stamp a version or date on them yet). Only at the actual release does the `## [Unreleased]` heading get renamed to `## [X.Y.Z] — YYYY-MM-DD`; that is also when the `vX.Y.Z` tag is cut. So a version bump alone (no changelog version/date) is the normal mid-cycle state, not an oversight.
 
+## Agent skills
+
+### Issue tracker
+
+Issues live in this repo's GitHub Issues (`akunzai/gistui`), driven via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles, each label string equal to its name. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context — `CONTEXT.md` + `docs/adr/` at the repo root, created lazily. See `docs/agents/domain.md`.
+
 ## Claude Code compatibility
 
 `CLAUDE.md` is a symbolic link to this `AGENTS.md`, so Claude Code and any AGENTS.md-aware assistant read the same project memory. Edit `AGENTS.md`; never edit `CLAUDE.md` directly.
