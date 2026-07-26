@@ -24,6 +24,7 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
     let vm = super::build_view_model(state);
     match &vm.screen {
         super::ScreenVm::List(list) => render_list_vm(frame, state, list, &vm.chrome, layout),
+        super::ScreenVm::Gists(gists) => render_gists_vm(frame, state, gists, &vm.chrome, layout),
         super::ScreenVm::Pins(pins) => render_pins_vm(frame, state, pins, &vm.chrome, layout),
         super::ScreenVm::Confirm(confirm) => {
             render_confirm_vm(frame, state, confirm, &vm.chrome, layout)
@@ -33,12 +34,12 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
             Screen::Palette => render_palette(frame, state, layout),
             Screen::Diff => render_diff(frame, state, layout),
             Screen::Preview => render_preview(frame, state, layout),
-            Screen::Gists => render_gists(frame, state, layout),
             Screen::GistDetail => render_gist_detail(frame, state, layout),
             Screen::Revisions => render_revisions(frame, state, layout),
             Screen::Config => render_config(frame, state, layout),
             // Migrated screens should not land in Legacy; fall back safely.
             Screen::List => render_list(frame, state, layout),
+            Screen::Gists => render_gists(frame, state, layout),
             Screen::Confirm => render_confirm(frame, state, layout),
             Screen::Help => render_help(frame, state, layout),
             Screen::Pins => render_pins(frame, state, layout),
@@ -807,77 +808,50 @@ pub(super) fn gist_group_row_label(
 }
 
 pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+    // Build body directly so Palette-over-Gists still paints (screen is Palette).
+    let chrome = super::view_model::build_chrome(state);
+    let gists = super::view_model::build_gists_vm(state);
+    render_gists_vm(frame, state, &gists, &chrome, layout);
+}
+
+fn render_gists_vm(
+    frame: &mut Frame,
+    state: &AppState,
+    gists: &super::view_model::GistsVm,
+    chrome: &super::view_model::ChromeVm,
+    layout: &mut MouseLayout,
+) {
     let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
-    // Footer: filter input while filtering, else a one-shot status message (e.g. the compaction
-    // result) when present, else the command hints. Only the hints get key colouring.
-    let (ftitle, footer, colored) = if state.gist_manager.filtering {
-        (
-            "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
-            format!("/{}_", state.gist_manager.filter_query),
-            false,
-        )
-    } else {
-        let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
-        (String::new(), footer, colored)
-    };
+    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
+    // Footer: filter input while filtering, else status or hints (see #72 / #250).
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
-            Constraint::Length(footer_height(&footer, area.width, &ftitle)),
+            Constraint::Length(footer_height(
+                &gists.footer,
+                area.width,
+                &gists.footer_title,
+            )),
         ])
         .split(area);
 
-    let groups = state.visible_gist_groups();
-    let now = unix_now();
-    let items: Vec<ListItem> = if groups.is_empty() {
-        let msg = if state.gist_groups().is_empty() {
-            ListItem::new("  📭 No gists found").style(Style::default().fg(state.theme.dim))
-        } else {
-            ListItem::new("  🔍 No gists match the filter")
-                .style(Style::default().fg(state.theme.dim))
-        };
-        vec![msg]
-    } else {
-        groups
+    let items: Vec<ListItem> = match gists.empty {
+        super::view_model::GistsEmptyKind::HasRows => gists
+            .rows
             .iter()
-            .map(|g| {
-                ListItem::new(hscroll_str(
-                    &gist_group_row_label(
-                        g,
-                        now,
-                        state.gist_manager.sort,
-                        (
-                            state.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
-                            state.gist_star_counts.get(&g.id).copied().unwrap_or(0),
-                            state.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
-                        ),
-                        state.gist_is_starred(&g.id),
-                        state.current_user_login.as_deref(),
-                    ),
-                    state.gist_manager.hscroll,
-                ))
-            })
-            .collect()
+            .map(|row| ListItem::new(hscroll_str(&row.label, gists.hscroll)))
+            .collect(),
+        _ => {
+            let msg = gists.empty_message.clone().unwrap_or_else(|| "  ".into());
+            vec![ListItem::new(msg).style(Style::default().fg(state.theme.dim))]
+        }
     };
 
-    let selected = (!groups.is_empty()).then_some(state.gist_manager.index);
-    let mut title = format!(
-        "Gists {}  ·  sort:{}  ·  type:{}  ·  ★ {}  ·  ⑂ {}",
-        count_label(groups.len(), state.gist_groups().len()),
-        state.gist_manager.sort.label(),
-        state.gist_manager.type_filter.label(),
-        state.starred_gist_count(),
-        state.owned_fork_gist_count()
-    );
-    if !state.gist_manager.filter_query.is_empty() {
-        title.push_str(&format!("  ·  /{}", state.gist_manager.filter_query));
-    }
     let list = List::new(items)
         .block(
             Block::default()
-                .title(title)
+                .title(gists.title.clone())
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(state.theme.accent))
@@ -894,20 +868,20 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut Mou
         .highlight_symbol("▶ ");
 
     let mut list_state = ListState::default();
-    list_state.select(selected);
+    list_state.select(gists.selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         layout.list = Some(PaneHit {
             rect: chunks[0],
             offset: list_state.offset(),
         });
     }
 
-    if state.gist_manager.filtering {
+    if gists.filtering {
         render_footer_line(
             frame,
             chunks[1],
-            &ftitle,
+            &gists.footer_title,
             input_line("/", &state.gist_manager.filter_query, ""),
             &state.theme,
             layout,
@@ -916,14 +890,14 @@ pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut Mou
         render_footer(
             frame,
             chunks[1],
-            &ftitle,
-            &footer,
-            colored,
+            &gists.footer_title,
+            &gists.footer,
+            gists.footer_colored,
             &state.theme,
             layout,
         );
     }
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }
 }
