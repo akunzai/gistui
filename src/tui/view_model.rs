@@ -6,10 +6,10 @@
 //! (issues #241 / #250).
 
 use super::render::{
-    about_topic_lines_plain, confirm_modal_style, confirm_prompt, count_label, footer_with_status,
-    gist_group_row_label, gist_info_line, gist_row_display, help_topic_body, marked_row_text,
-    pin_row_label, revision_row_label, row_mark, spinner_glyph, unix_now, RowMark,
-    CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX, MINIMAL_HINT,
+    about_topic_lines_plain, confirm_modal_style, confirm_prompt, count_label, diff_footer,
+    diff_title, footer_with_status, gist_group_row_label, gist_info_line, gist_row_display,
+    help_topic_body, marked_row_text, pin_row_label, revision_row_label, row_mark, spinner_glyph,
+    unix_now, RowMark, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX, MINIMAL_HINT,
 };
 use super::{AppState, ConfigField, DetailFocus, FocusPane, HelpTopic, PendingAction, Screen};
 use crate::domain::SyncStatus;
@@ -40,11 +40,43 @@ pub enum ScreenVm {
     GistDetail(GistDetailVm),
     Revisions(RevisionsVm),
     Config(ConfigVm),
+    Diff(DiffVm),
+    Preview(PreviewVm),
     Pins(PinsVm),
     Confirm(ConfirmVm),
     Help(HelpVm),
     /// Body still painted from `AppState` directly (transition toward #250).
     Legacy,
+}
+
+/// Diff screen / confirm background pane facts (#250). Highlighting still applied at paint time
+/// with the live theme (body text + ext are pure).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiffVm {
+    pub title: String,
+    /// Diff body after optional context collapse.
+    pub body: String,
+    pub footer: String,
+    pub wrap: bool,
+    pub scroll: u16,
+    pub hscroll: u16,
+    pub syntax_highlight: bool,
+    pub ext: Option<String>,
+}
+
+/// Full-screen file preview (#250).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PreviewVm {
+    pub title: String,
+    /// Raw file content (one logical source; paint may highlight/wrap).
+    pub body: String,
+    pub footer: String,
+    pub footer_colored: bool,
+    pub wrap: bool,
+    pub scroll: u16,
+    pub hscroll: u16,
+    pub syntax_highlight: bool,
+    pub ext: Option<String>,
 }
 
 /// Revision history list (#250).
@@ -294,12 +326,70 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::GistDetail => ScreenVm::GistDetail(build_gist_detail_vm(state)),
         Screen::Revisions => ScreenVm::Revisions(build_revisions_vm(state)),
         Screen::Config => ScreenVm::Config(build_config_vm(state)),
+        Screen::Diff => ScreenVm::Diff(build_diff_vm(state)),
+        Screen::Preview => ScreenVm::Preview(build_preview_vm(state)),
         Screen::Pins => ScreenVm::Pins(build_pins_vm(state)),
         Screen::Confirm => ScreenVm::Confirm(build_confirm_vm(state)),
         Screen::Help => ScreenVm::Help(build_help_vm(state)),
         _ => ScreenVm::Legacy,
     };
     ViewModel { chrome, screen }
+}
+
+fn file_ext(name: &str) -> Option<String> {
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+}
+
+/// Diff pane facts — also used as Confirm overwrite background (non-compact).
+pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
+    let body = match state.effective_diff_context() {
+        Some(radius) => crate::diff::collapse_context(&state.diff_text, radius),
+        None => state.diff_text.clone(),
+    };
+    let ext = state
+        .download_target
+        .file_name()
+        .or_else(|| state.preview_local.file_name())
+        .and_then(|n| n.to_str())
+        .and_then(file_ext);
+    DiffVm {
+        title: diff_title(state),
+        body,
+        footer: diff_footer(state),
+        wrap: state.diff_wrap,
+        scroll: state.diff_scroll,
+        hscroll: state.diff_hscroll,
+        syntax_highlight: state.syntax_highlight,
+        ext,
+    }
+}
+
+/// Preview body — usable under Palette-over-Preview as well.
+pub(crate) fn build_preview_vm(state: &AppState) -> PreviewVm {
+    let hints = if state.preview_wrap {
+        "↑↓ PgUp/Dn scroll  ·  w wrap [on]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
+    } else {
+        "↑↓←→ PgUp/Dn scroll  ·  w wrap [off]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
+    };
+    let (footer, footer_colored) = footer_with_status(state.status.as_deref(), hints);
+    let ext = state
+        .preview_gist_key
+        .as_ref()
+        .and_then(|(_, filename)| file_ext(filename));
+    PreviewVm {
+        title: state.preview_title.clone(),
+        body: state.diff_text.clone(),
+        footer,
+        footer_colored,
+        wrap: state.preview_wrap,
+        scroll: state.diff_scroll,
+        hscroll: state.diff_hscroll,
+        syntax_highlight: state.syntax_highlight,
+        ext,
+    }
 }
 
 /// Revisions body — usable under Palette-over-Revisions as well.
@@ -1375,9 +1465,47 @@ mod tests {
     }
 
     #[test]
-    fn legacy_for_diff_screen() {
+    fn diff_vm_title_footer_and_body() {
         let mut state = initial_state();
         state.screen = Screen::Diff;
+        state.diff_text = "--- a\n+++ b\n-old\n+new\n".into();
+        state.diff_identical = false;
+        state.download_target = PathBuf::from("notes.txt");
+        match build_view_model(&state).screen {
+            ScreenVm::Diff(d) => {
+                assert!(d.title.contains("Diff") || d.title.contains("notes"));
+                assert!(d.body.contains("+new") || d.body.contains("old"));
+                assert!(d.footer.contains("scroll") || d.footer.contains("back"));
+                assert_eq!(d.ext.as_deref(), Some("txt"));
+            }
+            other => panic!("expected Diff, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn preview_vm_title_and_status_footer() {
+        let mut state = initial_state();
+        state.screen = Screen::Preview;
+        state.preview_title = "gist: notes.txt".into();
+        state.diff_text = "hello preview\n".into();
+        state.preview_gist_key = Some(("g1".into(), "notes.rs".into()));
+        state.status = Some("refresh failed".into());
+        match build_view_model(&state).screen {
+            ScreenVm::Preview(p) => {
+                assert_eq!(p.title, "gist: notes.txt");
+                assert!(p.body.contains("hello preview"));
+                assert!(!p.footer_colored);
+                assert!(p.footer.contains("refresh failed"));
+                assert_eq!(p.ext.as_deref(), Some("rs"));
+            }
+            other => panic!("expected Preview, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn legacy_for_palette_screen() {
+        let mut state = initial_state();
+        state.screen = Screen::Palette;
         assert!(matches!(build_view_model(&state).screen, ScreenVm::Legacy));
     }
 
