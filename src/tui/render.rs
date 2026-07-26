@@ -19,8 +19,8 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
         Block::default().style(state.theme.base_style()),
         frame.area(),
     );
-    // Pure presentation seam (issues #241 / #250): migrated screens paint from the view model;
-    // Legacy bodies still read `AppState`. Pin sync IO is never done here — only cache reads.
+    // Pure presentation seam (issues #241 / #250): every screen paints from the view model.
+    // Pin sync IO is never done here — only cache reads.
     let vm = super::build_view_model(state);
     match &vm.screen {
         super::ScreenVm::List(list) => render_list_vm(frame, state, list, &vm.chrome, layout),
@@ -43,20 +43,9 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
             render_confirm_vm(frame, state, confirm, &vm.chrome, layout)
         }
         super::ScreenVm::Help(help) => render_help_vm(frame, state, help, &vm.chrome, layout),
-        super::ScreenVm::Legacy => match state.screen {
-            Screen::Palette => render_palette(frame, state, layout),
-            // Migrated screens should not land in Legacy; fall back safely.
-            Screen::List => render_list(frame, state, layout),
-            Screen::Gists => render_gists(frame, state, layout),
-            Screen::GistDetail => render_gist_detail(frame, state, layout),
-            Screen::Revisions => render_revisions(frame, state, layout),
-            Screen::Config => render_config(frame, state, layout),
-            Screen::Diff => render_diff(frame, state, layout),
-            Screen::Preview => render_preview(frame, state, layout),
-            Screen::Confirm => render_confirm(frame, state, layout),
-            Screen::Help => render_help(frame, state, layout),
-            Screen::Pins => render_pins(frame, state, layout),
-        },
+        super::ScreenVm::Palette(palette) => {
+            render_palette_vm(frame, state, palette, &vm.chrome, layout)
+        }
     }
     if let Some(ref msg) = vm.chrome.bg_task_msg {
         render_loading_overlay(frame, msg, vm.chrome.spinner_frame, &state.theme);
@@ -1123,62 +1112,41 @@ fn file_rows(
     rows
 }
 
-/// The gist's title, derived from its description (falling back to the id).
-fn gist_block_title(group: &GistGroup) -> String {
-    if group.description.trim().is_empty() {
-        format!("Gist {}", group.id)
-    } else {
-        format!("Gist: {}", group.description)
-    }
-}
-
-/// Info + file-list block for a gist, used as the compaction-confirm background. (The gist
-/// detail screen renders the info header and the file list as separate blocks so it can tab
-/// between the file list and the comments.)
-pub(super) fn render_gist_info_and_files(
+/// Compaction-confirm background from a pure compact-gist view model.
+fn render_compact_gist_bg_vm(
     frame: &mut Frame,
     area: Rect,
-    state: &AppState,
-    gist_id: &str,
+    bg: &super::view_model::CompactGistBgVm,
+    theme: &Theme,
 ) {
-    let Some(group) = state.group_by_id(gist_id) else {
-        return;
-    };
-    let files = state.gist_file_display_names(gist_id);
     let mut lines: Vec<Line> = vec![
-        Line::from(gist_info_line(
-            &group,
-            unix_now(),
-            state.current_user_login.as_deref(),
-            state.gist_is_starred(gist_id),
-            state.gist_counts(gist_id),
-        )),
+        Line::from(bg.info_line.clone()),
         Line::from(""),
         Line::from(Span::styled(
-            format!("Files ({})", files.len()),
+            format!("Files ({})", bg.files.len()),
             Style::default().add_modifier(Modifier::BOLD),
         )),
     ];
-    let cursor = state.detail.file_cursor.min(files.len().saturating_sub(1));
+    let cursor = bg.file_cursor.min(bg.files.len().saturating_sub(1));
     // Visible file rows = area height minus borders(2), info line, blank, "Files (n)" header (3).
     let visible_rows = (area.height as usize).saturating_sub(5);
-    let offset = file_list_scroll(cursor, visible_rows, files.len());
+    let offset = file_list_scroll(cursor, visible_rows, bg.files.len());
     lines.extend(file_rows(
-        &files,
+        &bg.files,
         cursor,
         offset,
         visible_rows,
         false,
-        &state.theme,
+        theme,
     ));
     frame.render_widget(
-        Paragraph::new(lines).style(state.theme.base_style()).block(
+        Paragraph::new(lines).style(theme.base_style()).block(
             Block::default()
-                .title(gist_block_title(&group))
+                .title(bg.block_title.clone())
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(state.theme.accent))
-                .style(state.theme.base_style())
+                .border_style(Style::default().fg(theme.accent))
+                .style(theme.base_style())
                 .padding(Padding::horizontal(1)),
         ),
         area,
@@ -2459,14 +2427,6 @@ fn render_diff_vm(
 /// #72 audit: this modal intentionally does not surface `state.status`. It is a transient y/n
 /// gate — confirming executes the action and transitions to `List`/`Gists`, where the result
 /// status is shown; cancelling returns to the launching screen without setting a status here.
-/// Modal chrome comes from the pure view model; overwrite background uses `DiffVm`,
-/// compact-gist background still reads `AppState` for gist info (#241 / #250).
-pub(super) fn render_confirm(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    let chrome = super::view_model::build_chrome(state);
-    let confirm = super::view_model::build_confirm_vm(state);
-    render_confirm_vm(frame, state, &confirm, &chrome, layout);
-}
-
 fn render_confirm_vm(
     frame: &mut Frame,
     state: &AppState,
@@ -2474,14 +2434,15 @@ fn render_confirm_vm(
     chrome: &super::view_model::ChromeVm,
     layout: &mut MouseLayout,
 ) {
-    match &state.pending_action {
-        Some(PendingAction::CompactGist { gist_id, .. }) => {
-            render_gist_info_and_files(frame, frame.area(), state, gist_id);
+    match &confirm.background {
+        super::view_model::ConfirmBackgroundVm::CompactGist(bg) => {
+            render_compact_gist_bg_vm(frame, frame.area(), bg, &state.theme);
         }
-        _ => {
+        super::view_model::ConfirmBackgroundVm::Diff => {
             let diff = super::view_model::build_diff_vm(state);
             render_diff_pane_vm(frame, frame.area(), &diff, &state.theme);
         }
+        super::view_model::ConfirmBackgroundVm::Empty => {}
     }
     let modal = match &confirm.kind {
         super::view_model::ConfirmModalKind::DescriptionInput {
@@ -2602,34 +2563,53 @@ pub(super) fn spinner_glyph(frame: usize) -> &'static str {
 
 /// Column width for palette key hints: at least one char, wide enough for the longest
 /// visible key (`Enter`, `Ctrl+p`, …) so labels never run into the hint.
+#[cfg(test)]
 pub(super) fn palette_key_width(items: &[&PaletteItem]) -> usize {
     items
         .iter()
         .map(|item| item.key_hint.chars().count())
         .max()
         .unwrap_or(1)
+        .max(1)
 }
 
-/// One palette row: indented key column + gap + label. Pure for unit tests.
+/// One palette row from a full [`PaletteItem`] (unit tests).
+#[cfg(test)]
 pub(super) fn palette_row_line(
     item: &PaletteItem,
     key_width: usize,
     theme: &Theme,
     row_style: Style,
 ) -> Line<'static> {
+    palette_row_spans(&item.key_hint, &item.label, key_width, theme, row_style)
+}
+
+/// Shared by palette paint (`PaletteVm` rows) and test helpers.
+fn palette_row_spans(
+    key_hint: &str,
+    label: &str,
+    key_width: usize,
+    theme: &Theme,
+    row_style: Style,
+) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            format!("  {:<key_width$}  ", item.key_hint, key_width = key_width),
-            Style::default().fg(action_color(&item.label, theme)),
+            format!("  {:<key_width$}  ", key_hint, key_width = key_width),
+            Style::default().fg(action_color(label, theme)),
         ),
-        Span::styled(item.label.clone(), row_style),
+        Span::styled(label.to_string(), row_style),
     ])
 }
 
-/// The unified context menu / command palette drawn over the screen it was opened from.
-fn render_palette(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+fn render_palette_vm(
+    frame: &mut Frame,
+    state: &AppState,
+    palette: &super::view_model::PaletteVm,
+    chrome: &super::view_model::ChromeVm,
+    layout: &mut MouseLayout,
+) {
     let mut bg_layout = MouseLayout::default();
-    match state.palette.origin_screen {
+    match palette.origin_screen {
         Screen::List => render_list(frame, state, &mut bg_layout),
         Screen::Diff => render_diff(frame, state, &mut bg_layout),
         Screen::Preview => render_preview(frame, state, &mut bg_layout),
@@ -2643,19 +2623,13 @@ fn render_palette(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout)
     }
 
     let area = frame.area();
-    let visible = state.palette_visible_items();
-    let has_query = state.palette.mode == PaletteMode::Command;
-    let title = match state.palette.mode {
-        PaletteMode::Menu => "Menu",
-        PaletteMode::Command => "Command palette",
-    };
-    let key_width = palette_key_width(&visible);
-    let body_lines = visible.len() + usize::from(has_query);
-    let longest_row = visible
+    let body_lines = palette.items.len() + usize::from(palette.has_query);
+    let longest_row = palette
+        .items
         .iter()
-        .map(|item| 2 + key_width + 2 + item.label.chars().count());
+        .map(|item| 2 + palette.key_width + 2 + item.label.chars().count());
     let content_width = longest_row.max().unwrap_or(20) as u16;
-    let width = if has_query {
+    let width = if palette.has_query {
         (area.width * 70 / 100).clamp(
             content_width.saturating_add(4),
             area.width.saturating_sub(2).max(1),
@@ -2668,7 +2642,7 @@ fn render_palette(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout)
     };
     let max_h = area.height.saturating_sub(2).max(1) as usize;
     let height = (body_lines + 2).clamp(3, max_h) as u16;
-    let (x, y) = match (state.palette.mode, state.palette.anchor) {
+    let (x, y) = match (palette.mode, palette.anchor) {
         (PaletteMode::Menu, Some((col, row))) => (
             col.saturating_sub(width / 2)
                 .min(area.width.saturating_sub(width)),
@@ -2691,27 +2665,33 @@ fn render_palette(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout)
         .bg(state.theme.accent)
         .add_modifier(Modifier::BOLD);
     let mut lines: Vec<Line<'static>> = Vec::new();
-    if has_query {
+    if palette.has_query {
         lines.push(input_line("> ", &state.palette.query, ""));
     }
-    if visible.is_empty() {
+    if palette.items.is_empty() {
         lines.push(Line::from(Span::styled("  (no matches)", dim)));
     } else {
-        for (i, item) in visible.iter().enumerate() {
-            let row_style = if i == state.palette.selected {
+        for (i, item) in palette.items.iter().enumerate() {
+            let row_style = if i == palette.selected {
                 active
             } else if item.enabled {
                 state.theme.base_style()
             } else {
                 Style::default().fg(state.theme.dim)
             };
-            lines.push(palette_row_line(item, key_width, &state.theme, row_style));
+            lines.push(palette_row_spans(
+                &item.key_hint,
+                &item.label,
+                palette.key_width,
+                &state.theme,
+                row_style,
+            ));
         }
     }
     frame.render_widget(
         Paragraph::new(lines).style(state.theme.base_style()).block(
             Block::default()
-                .title(title)
+                .title(palette.title)
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(state.theme.accent))
@@ -2721,19 +2701,19 @@ fn render_palette(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout)
     );
 
     let inner = rect.inner(Margin::new(1, 1));
-    let mut y = inner.y + u16::from(has_query);
-    for item in visible.iter() {
+    let mut y = inner.y + u16::from(palette.has_query);
+    for item in palette.items.iter() {
         if y >= inner.bottom() {
             break;
         }
-        if state.mouse_enabled && item.enabled {
+        if chrome.mouse_enabled && item.enabled {
             layout
                 .palette_rows
                 .push(Rect::new(inner.x, y, inner.width, 1));
         }
         y = y.saturating_add(1);
     }
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         layout.palette_close = Some(render_close_button(frame, rect, &state.theme));
     }
 }

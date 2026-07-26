@@ -1,9 +1,7 @@
 //! Pure presentation seam: `AppState` (+ pin-sync cache) → immutable view models.
 //!
-//! The draw path builds a [`ViewModel`] once per frame and paints from it for migrated
-//! screens (Pins, Confirm modal, Help, List, …). Other screens use [`ScreenVm::Legacy`] and
-//! may still read `AppState` for their body. Builders never touch the filesystem or network
-//! (issues #241 / #250).
+//! The draw path builds a [`ViewModel`] once per frame and paints from it for every screen.
+//! Builders never touch the filesystem or network (issues #241 / #250).
 
 use super::render::{
     about_topic_lines_plain, confirm_modal_style, confirm_prompt, count_label, diff_footer,
@@ -11,7 +9,9 @@ use super::render::{
     help_topic_body, marked_row_text, pin_row_label, revision_row_label, row_mark, spinner_glyph,
     unix_now, RowMark, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX, MINIMAL_HINT,
 };
-use super::{AppState, ConfigField, DetailFocus, FocusPane, HelpTopic, PendingAction, Screen};
+use super::{
+    AppState, ConfigField, DetailFocus, FocusPane, HelpTopic, PaletteMode, PendingAction, Screen,
+};
 use crate::domain::SyncStatus;
 use ratatui::style::Color;
 
@@ -32,7 +32,7 @@ pub struct ChromeVm {
     pub spinner_frame: usize,
 }
 
-/// Per-screen body. Migrated screens carry structured data; the rest are [`Legacy`].
+/// Per-screen body presentation contract (#250).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScreenVm {
     List(ListVm),
@@ -45,8 +45,36 @@ pub enum ScreenVm {
     Pins(PinsVm),
     Confirm(ConfirmVm),
     Help(HelpVm),
-    /// Body still painted from `AppState` directly (transition toward #250).
-    Legacy,
+    Palette(PaletteVm),
+}
+
+/// Command palette / context menu overlay (#250). Background is painted from `origin_screen`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaletteVm {
+    pub origin_screen: Screen,
+    pub title: &'static str,
+    pub has_query: bool,
+    pub selected: usize,
+    pub items: Vec<PaletteRowVm>,
+    pub key_width: usize,
+    pub mode: PaletteMode,
+    pub anchor: Option<(u16, u16)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PaletteRowVm {
+    pub key_hint: String,
+    pub label: String,
+    pub enabled: bool,
+}
+
+/// Compact-gist confirm background (info + file list).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompactGistBgVm {
+    pub block_title: String,
+    pub info_line: String,
+    pub files: Vec<String>,
+    pub file_cursor: usize,
 }
 
 /// Diff screen / confirm background pane facts (#250). Highlighting still applied at paint time
@@ -261,12 +289,23 @@ pub struct PinRowVm {
     pub label: String,
 }
 
-/// Confirm **modal** contract only — background diff/gist still reads `AppState`.
+/// Confirm modal + which background to paint under it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ConfirmVm {
     pub title: &'static str,
     pub border: Color,
     pub kind: ConfirmModalKind,
+    pub background: ConfirmBackgroundVm,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfirmBackgroundVm {
+    /// Standard overwrite/upload/create backdrop: use [`build_diff_vm`].
+    Diff,
+    /// Compaction confirm: gist info + file list.
+    CompactGist(CompactGistBgVm),
+    /// Missing group or nothing to show.
+    Empty,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -331,9 +370,66 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::Pins => ScreenVm::Pins(build_pins_vm(state)),
         Screen::Confirm => ScreenVm::Confirm(build_confirm_vm(state)),
         Screen::Help => ScreenVm::Help(build_help_vm(state)),
-        _ => ScreenVm::Legacy,
+        Screen::Palette => ScreenVm::Palette(build_palette_vm(state)),
     };
     ViewModel { chrome, screen }
+}
+
+/// Palette overlay body — origin background is painted separately from `origin_screen`.
+pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
+    let has_query = state.palette.mode == PaletteMode::Command;
+    let title = match state.palette.mode {
+        PaletteMode::Menu => "Menu",
+        PaletteMode::Command => "Command palette",
+    };
+    let items: Vec<PaletteRowVm> = state
+        .palette_visible_items()
+        .into_iter()
+        .map(|item| PaletteRowVm {
+            key_hint: item.key_hint.clone(),
+            label: item.label.clone(),
+            enabled: item.enabled,
+        })
+        .collect();
+    let key_width = items
+        .iter()
+        .map(|item| item.key_hint.chars().count())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    PaletteVm {
+        origin_screen: state.palette.origin_screen,
+        title,
+        has_query,
+        selected: state.palette.selected,
+        items,
+        key_width,
+        mode: state.palette.mode,
+        anchor: state.palette.anchor,
+    }
+}
+
+pub(crate) fn build_compact_gist_bg_vm(state: &AppState, gist_id: &str) -> Option<CompactGistBgVm> {
+    let group = state.group_by_id(gist_id)?;
+    let block_title = if group.description.trim().is_empty() {
+        format!("Gist {}", group.id)
+    } else {
+        format!("Gist: {}", group.description)
+    };
+    let files = state.gist_file_display_names(gist_id);
+    let file_cursor = state.detail.file_cursor.min(files.len().saturating_sub(1));
+    Some(CompactGistBgVm {
+        block_title,
+        info_line: gist_info_line(
+            &group,
+            unix_now(),
+            state.current_user_login.as_deref(),
+            state.gist_is_starred(gist_id),
+            state.gist_counts(gist_id),
+        ),
+        files,
+        file_cursor,
+    })
 }
 
 fn file_ext(name: &str) -> Option<String> {
@@ -917,10 +1013,20 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
             text: confirm_prompt(state),
         }
     };
+    let background = match &state.pending_action {
+        Some(PendingAction::CompactGist { gist_id, .. }) => {
+            match build_compact_gist_bg_vm(state, gist_id) {
+                Some(bg) => ConfirmBackgroundVm::CompactGist(bg),
+                None => ConfirmBackgroundVm::Empty,
+            }
+        }
+        _ => ConfirmBackgroundVm::Diff,
+    };
     ConfirmVm {
         title,
         border,
         kind,
+        background,
     }
 }
 
@@ -1503,10 +1609,64 @@ mod tests {
     }
 
     #[test]
-    fn legacy_for_palette_screen() {
+    fn palette_vm_items_and_title() {
+        use crate::tui::palette::{PaletteExec, PaletteItem, PaletteMode, PaletteState};
+        use crossterm::event::KeyCode;
+
         let mut state = initial_state();
         state.screen = Screen::Palette;
-        assert!(matches!(build_view_model(&state).screen, ScreenVm::Legacy));
+        state.palette = PaletteState {
+            mode: PaletteMode::Menu,
+            items: vec![PaletteItem {
+                key_hint: "d".into(),
+                label: "download".into(),
+                exec: PaletteExec::Key(KeyCode::Char('d'), crossterm::event::KeyModifiers::empty()),
+                enabled: true,
+                search: "d download".into(),
+            }],
+            selected: 0,
+            origin_screen: Screen::List,
+            anchor: Some((10, 5)),
+            ..PaletteState::default()
+        };
+        match build_view_model(&state).screen {
+            ScreenVm::Palette(p) => {
+                assert_eq!(p.title, "Menu");
+                assert_eq!(p.origin_screen, Screen::List);
+                assert_eq!(p.items.len(), 1);
+                assert_eq!(p.items[0].label, "download");
+                assert!(p.items[0].enabled);
+                assert_eq!(p.anchor, Some((10, 5)));
+            }
+            other => panic!("expected Palette, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn confirm_vm_compact_background() {
+        use crate::domain::GistFile;
+
+        let mut state = initial_state();
+        state.screen = Screen::Confirm;
+        state.gists = vec![GistFile {
+            description: "pack".into(),
+            ..GistFile::for_sync("g1".into(), "a.txt".into(), None)
+        }];
+        state.pending_action = Some(PendingAction::CompactGist {
+            gist_id: "g1".into(),
+            label: "pack".into(),
+            count: 3,
+        });
+        match build_view_model(&state).screen {
+            ScreenVm::Confirm(c) => match c.background {
+                ConfirmBackgroundVm::CompactGist(bg) => {
+                    assert!(bg.block_title.contains("pack") || bg.block_title.contains("g1"));
+                    assert!(!bg.files.is_empty());
+                }
+                other => panic!("expected CompactGist bg, got {other:?}"),
+            },
+            other => panic!("expected Confirm, got {other:?}"),
+        }
     }
 
     #[test]
