@@ -19,15 +19,16 @@ pub enum FocusPane {
 }
 
 /// Active TUI screen. Unit tags for some screens; **Help** / **Config** / **Revisions** /
-/// **Pins** / **Gists** / **GistDetail** / **Palette** carry payloads so screen-local UI
-/// cannot go stale on the root state (issue #242). Not `Copy`.
+/// **Pins** / **Gists** / **GistDetail** / **Palette** / **Preview** carry payloads so
+/// screen-local UI cannot go stale on the root state (issue #242). Not `Copy`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Screen {
     #[default]
     List,
     Diff,
     Confirm,
-    Preview,
+    /// Full-screen file content preview; payload owns title/body/scroll/return.
+    Preview(Box<PreviewState>),
     /// Help topic/index state lives on the variant (not a parallel `AppState` field).
     /// Boxed so `HelpState::return_screen: Screen` does not make `Screen` infinite-sized.
     Help(Box<HelpState>),
@@ -76,6 +77,10 @@ impl Screen {
 
     pub fn is_palette(&self) -> bool {
         matches!(self, Screen::Palette(_))
+    }
+
+    pub fn is_preview(&self) -> bool {
+        matches!(self, Screen::Preview(_))
     }
 
     /// Borrow help payload when this is [`Screen::Help`].
@@ -174,6 +179,20 @@ impl Screen {
     pub fn palette_state_mut(&mut self) -> Option<&mut PaletteState> {
         match self {
             Screen::Palette(p) => Some(p.as_mut()),
+            _ => None,
+        }
+    }
+
+    pub fn preview_state(&self) -> Option<&PreviewState> {
+        match self {
+            Screen::Preview(p) => Some(p.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn preview_state_mut(&mut self) -> Option<&mut PreviewState> {
+        match self {
+            Screen::Preview(p) => Some(p.as_mut()),
             _ => None,
         }
     }
@@ -711,6 +730,21 @@ pub struct PinsState {
     pub sort: PinSort,
 }
 
+/// Full-screen content preview — carried on [`Screen::Preview`] (issue #242).
+/// Owns body text and scroll so Diff/Confirm can keep using the root diff buffer.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PreviewState {
+    pub title: String,
+    /// Body text shown in the preview pane.
+    pub text: String,
+    pub scroll: u16,
+    pub hscroll: u16,
+    /// `(gist_id, filename)` for refresh / copy-url context.
+    pub gist_key: Option<(String, String)>,
+    /// Where `q`/`Esc` returns (List, GistDetail payload, etc.).
+    pub return_screen: Screen,
+}
+
 /// Gist-manager screen state — carried on [`Screen::Gists`] (issue #242). Named
 /// `gist_manager` in accessors because the `gists` field name is taken by the gist list
 /// `Vec`. Data only — methods stay on `AppState`.
@@ -829,7 +863,6 @@ pub struct AppState {
     pub cwd: PathBuf,
     pub status: Option<String>,
     pub loading: bool,
-    pub preview_title: String,
     /// Soft line-wrapping in the full-screen preview, toggled with `w` (remembered for the
     /// session). When on, long lines wrap instead of needing horizontal scroll.
     pub preview_wrap: bool,
@@ -855,14 +888,13 @@ pub struct AppState {
     /// How this binary was installed — resolved once at startup so the update hint can show
     /// the right upgrade command without per-frame IO.
     pub install_method: crate::upgrade::InstallMethod,
-    pub preview_gist_key: Option<(String, String)>,
-    /// Screen to return to when leaving the full-screen preview (default: List; set to
-    /// GistDetail when a detail-view file preview is launched).
-    pub preview_return: Screen,
     /// A `(gist_id, filename)` explicitly chosen for preview (e.g. a number key in the detail
     /// view), taken by the `PreviewContent` IO step; when `None` it falls back to the selected
     /// gist file on the list. Keeps `handle_key` pure: it records the intent, `run_loop` fetches.
     pub preview_request: Option<(String, String)>,
+    /// Staged return path for the next preview open (copied into [`PreviewState::return_screen`]
+    /// when Preview is entered). Live Esc path while Preview is open lives on the payload.
+    pub preview_return: Screen,
     pub gist_content_cache: crate::lru::LruCache<(String, String), String>,
     pub local_recursive: bool,
     pub skip_dirs: Vec<String>,
@@ -989,10 +1021,12 @@ impl AppState {
     pub fn revision(&self) -> Option<&RevisionState> {
         match &self.screen {
             Screen::Revisions(r) => Some(r.as_ref()),
-            Screen::Diff | Screen::Confirm | Screen::Preview => self.diff_return.revision_state(),
+            Screen::Diff | Screen::Confirm | Screen::Preview(_) => {
+                self.diff_return.revision_state()
+            }
             Screen::Palette(p) => match &p.origin_screen {
                 Screen::Revisions(r) => Some(r.as_ref()),
-                Screen::Diff | Screen::Confirm | Screen::Preview => {
+                Screen::Diff | Screen::Confirm | Screen::Preview(_) => {
                     // Palette over diff that returned from revisions is rare; check origin only.
                     None
                 }
@@ -1005,7 +1039,7 @@ impl AppState {
     pub fn revision_mut(&mut self) -> Option<&mut RevisionState> {
         match &mut self.screen {
             Screen::Revisions(r) => Some(r.as_mut()),
-            Screen::Diff | Screen::Confirm | Screen::Preview => {
+            Screen::Diff | Screen::Confirm | Screen::Preview(_) => {
                 self.diff_return.revision_state_mut()
             }
             _ => None,
@@ -1017,7 +1051,7 @@ impl AppState {
     pub fn pins(&self) -> Option<&PinsState> {
         match &self.screen {
             Screen::Pins(p) => Some(p.as_ref()),
-            Screen::Diff | Screen::Confirm | Screen::Preview => self.diff_return.pins_state(),
+            Screen::Diff | Screen::Confirm | Screen::Preview(_) => self.diff_return.pins_state(),
             Screen::Palette(p) => p.origin_screen.pins_state(),
             _ => None,
         }
@@ -1026,7 +1060,9 @@ impl AppState {
     pub fn pins_mut(&mut self) -> Option<&mut PinsState> {
         match &mut self.screen {
             Screen::Pins(p) => Some(p.as_mut()),
-            Screen::Diff | Screen::Confirm | Screen::Preview => self.diff_return.pins_state_mut(),
+            Screen::Diff | Screen::Confirm | Screen::Preview(_) => {
+                self.diff_return.pins_state_mut()
+            }
             _ => None,
         }
     }
@@ -1054,7 +1090,12 @@ impl AppState {
                     .detail_state()
                     .and_then(|d| d.return_screen.gists_state())
             }),
-            Screen::Diff | Screen::Confirm | Screen::Preview => match &self.diff_return {
+            Screen::Preview(p) => p
+                .return_screen
+                .detail_state()
+                .and_then(|d| d.return_screen.gists_state())
+                .or_else(|| p.return_screen.gists_state()),
+            Screen::Diff | Screen::Confirm => match &self.diff_return {
                 Screen::Gists(g) => Some(g.as_ref()),
                 Screen::GistDetail(d) => d.return_screen.gists_state(),
                 Screen::Revisions(r) => r.return_screen.gists_state(),
@@ -1078,7 +1119,12 @@ impl AppState {
                 Screen::Revisions(r) => r.return_screen.gists_state_mut(),
                 _ => None,
             },
-            Screen::Diff | Screen::Confirm | Screen::Preview => match &mut self.diff_return {
+            Screen::Preview(p) => match &mut p.return_screen {
+                Screen::Gists(g) => Some(g.as_mut()),
+                Screen::GistDetail(d) => d.return_screen.gists_state_mut(),
+                _ => None,
+            },
+            Screen::Diff | Screen::Confirm => match &mut self.diff_return {
                 Screen::Gists(g) => Some(g.as_mut()),
                 Screen::GistDetail(d) => d.return_screen.gists_state_mut(),
                 Screen::Revisions(r) => r.return_screen.gists_state_mut(),
@@ -1088,12 +1134,12 @@ impl AppState {
         }
     }
 
-    /// Detail payload when GistDetail is active, parked on `preview_return`, revision return,
-    /// palette origin, compact restore (`diff_return`), or help/config return (issue #242).
+    /// Detail payload when GistDetail is active, parked on preview/revision return, palette
+    /// origin, compact restore (`diff_return`), or help/config return (issue #242).
     pub fn detail(&self) -> Option<&DetailState> {
         match &self.screen {
             Screen::GistDetail(d) => Some(d.as_ref()),
-            Screen::Preview => self.preview_return.detail_state(),
+            Screen::Preview(p) => p.return_screen.detail_state(),
             Screen::Revisions(r) => r.return_screen.detail_state(),
             Screen::Palette(p) => p.origin_screen.detail_state(),
             Screen::Help(h) => h.return_screen.detail_state(),
@@ -1109,7 +1155,7 @@ impl AppState {
     pub fn detail_mut(&mut self) -> Option<&mut DetailState> {
         match &mut self.screen {
             Screen::GistDetail(d) => Some(d.as_mut()),
-            Screen::Preview => self.preview_return.detail_state_mut(),
+            Screen::Preview(p) => p.return_screen.detail_state_mut(),
             Screen::Revisions(r) => r.return_screen.detail_state_mut(),
             Screen::Palette(p) => p.origin_screen.detail_state_mut(),
             Screen::Diff | Screen::Confirm => {
@@ -1129,6 +1175,44 @@ impl AppState {
 
     pub fn palette_mut(&mut self) -> Option<&mut PaletteState> {
         self.screen.palette_state_mut()
+    }
+
+    /// Preview payload when Preview is active, or under palette origin (issue #242).
+    pub fn preview(&self) -> Option<&PreviewState> {
+        match &self.screen {
+            Screen::Preview(p) => Some(p.as_ref()),
+            Screen::Palette(p) => p.origin_screen.preview_state(),
+            Screen::Help(h) => h.return_screen.preview_state(),
+            Screen::Config(c) => c.return_screen.preview_state(),
+            _ => None,
+        }
+    }
+
+    pub fn preview_mut(&mut self) -> Option<&mut PreviewState> {
+        match &mut self.screen {
+            Screen::Preview(p) => Some(p.as_mut()),
+            Screen::Palette(p) => p.origin_screen.preview_state_mut(),
+            _ => None,
+        }
+    }
+
+    /// Enter full-screen content preview with the given body and gist identity.
+    pub fn enter_preview(
+        &mut self,
+        title: String,
+        text: String,
+        gist_key: Option<(String, String)>,
+    ) {
+        let return_screen = std::mem::replace(&mut self.preview_return, Screen::List);
+        self.status = None;
+        self.screen = Screen::Preview(Box::new(PreviewState {
+            title,
+            text,
+            scroll: 0,
+            hscroll: 0,
+            gist_key,
+            return_screen,
+        }));
     }
 
     /// Snapshot the current detail payload as a restore `Screen` (for preview/compact/etc.).
@@ -2030,6 +2114,12 @@ impl AppState {
 
     pub fn scroll_diff_down(&mut self) {
         let max = self.diff_vscroll_max();
+        if let Some(p) = self.preview_mut() {
+            if p.scroll < max {
+                p.scroll += 1;
+            }
+            return;
+        }
         if self.diff_scroll < max {
             self.diff_scroll += 1;
         }
@@ -2037,29 +2127,51 @@ impl AppState {
 
     /// Bottom clamp for the diff/preview vertical scroll: the last addressable line index.
     fn diff_vscroll_max(&self) -> u16 {
-        self.diff_text
-            .lines()
+        let text = self
+            .preview()
+            .map(|p| p.text.as_str())
+            .unwrap_or(self.diff_text.as_str());
+        text.lines()
             .count()
             .saturating_sub(1)
             .min(u16::MAX as usize) as u16
     }
 
     pub fn scroll_diff_up(&mut self) {
+        if let Some(p) = self.preview_mut() {
+            p.scroll = p.scroll.saturating_sub(1);
+            return;
+        }
         self.diff_scroll = self.diff_scroll.saturating_sub(1);
     }
 
     /// Page the diff/preview down by `lines`, clamped to the same bottom as `scroll_diff_down`.
     pub fn scroll_diff_page_down(&mut self, lines: u16) {
         let max = self.diff_vscroll_max();
+        if let Some(p) = self.preview_mut() {
+            p.scroll = p.scroll.saturating_add(lines).min(max);
+            return;
+        }
         self.diff_scroll = self.diff_scroll.saturating_add(lines).min(max);
     }
 
     /// Page the diff/preview up by `lines`, saturating at the top.
     pub fn scroll_diff_page_up(&mut self, lines: u16) {
+        if let Some(p) = self.preview_mut() {
+            p.scroll = p.scroll.saturating_sub(lines);
+            return;
+        }
         self.diff_scroll = self.diff_scroll.saturating_sub(lines);
     }
 
     pub fn scroll_diff_right(&mut self) {
+        if let Some(p) = self.preview_mut() {
+            let max = hscroll_max_among(p.text.lines());
+            if p.hscroll < max {
+                p.hscroll += 1;
+            }
+            return;
+        }
         let max = hscroll_max_among(self.diff_text.lines());
         if self.diff_hscroll < max {
             self.diff_hscroll += 1;
@@ -2067,6 +2179,10 @@ impl AppState {
     }
 
     pub fn scroll_diff_left(&mut self) {
+        if let Some(p) = self.preview_mut() {
+            p.hscroll = p.hscroll.saturating_sub(1);
+            return;
+        }
         self.diff_hscroll = self.diff_hscroll.saturating_sub(1);
     }
 
@@ -2119,7 +2235,6 @@ pub fn initial_state() -> AppState {
         cwd: PathBuf::from("."),
         status: None,
         loading: false,
-        preview_title: String::new(),
         preview_wrap: false,
         syntax_highlight: true,
         config_mouse: true,
@@ -2130,7 +2245,6 @@ pub fn initial_state() -> AppState {
         no_update_check_cli: false,
         update_available: None,
         install_method: crate::upgrade::InstallMethod::Standalone,
-        preview_gist_key: None,
         preview_return: Screen::List,
         preview_request: None,
         // Bound the in-memory preview cache so browsing many/large gists can't grow unbounded;

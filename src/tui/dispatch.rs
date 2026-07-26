@@ -365,14 +365,9 @@ pub(super) fn dispatch_outcome(
                     None => return Ok(LoopFlow::Proceed),
                 },
             };
-            if let Some(cached) = state.gist_content_cache.get(&key) {
-                state.preview_title = format!("Preview: {} / {}", key.0, key.1);
-                state.preview_gist_key = Some(key);
-                state.diff_text = cached.clone();
-                state.diff_scroll = 0;
-                state.diff_hscroll = 0;
-                state.status = None;
-                state.screen = Screen::Preview;
+            if let Some(cached) = state.gist_content_cache.get(&key).cloned() {
+                let title = format!("Preview: {} / {}", key.0, key.1);
+                state.enter_preview(title, cached, Some(key));
             } else {
                 let gist_id = key.0.clone();
                 let filename = key.1.clone();
@@ -389,7 +384,11 @@ pub(super) fn dispatch_outcome(
             }
         }
         KeyOutcome::RefreshPreview => {
-            if let Some(key) = state.preview_gist_key.clone() {
+            if let Some(key) = state.preview().and_then(|p| p.gist_key.clone()) {
+                // Keep the current return path when reloading.
+                if let Some(p) = state.preview() {
+                    state.preview_return = p.return_screen.clone();
+                }
                 state.gist_content_cache.remove(&key);
                 let gist_id = key.0.clone();
                 let filename = key.1.clone();
