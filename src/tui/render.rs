@@ -888,11 +888,15 @@ fn render_gists_vm(
     }
 
     if gists.filtering {
+        let filter_query = state
+            .gist_manager()
+            .map(|g| g.filter_query.clone())
+            .unwrap_or_default();
         render_footer_line(
             frame,
             chunks[1],
             &gists.footer_title,
-            input_line("/", &state.gist_manager.filter_query, ""),
+            input_line("/", &filter_query, ""),
             &state.theme,
             layout,
         );
@@ -2622,7 +2626,7 @@ fn render_palette_vm(
         Screen::Preview => render_preview(frame, state, &mut bg_layout),
         Screen::Help(_) => render_help(frame, state, &mut bg_layout),
         Screen::Pins(_) => render_pins(frame, state, &mut bg_layout),
-        Screen::Gists => render_gists(frame, state, &mut bg_layout),
+        Screen::Gists(_) => render_gists(frame, state, &mut bg_layout),
         Screen::GistDetail => render_gist_detail(frame, state, &mut bg_layout),
         Screen::Revisions(_) => render_revisions(frame, state, &mut bg_layout),
         Screen::Config(_) => render_config(frame, state, &mut bg_layout),

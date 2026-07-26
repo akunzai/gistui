@@ -361,7 +361,7 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
     let chrome = build_chrome(state);
     let screen = match &state.screen {
         Screen::List => ScreenVm::List(build_list_vm(state)),
-        Screen::Gists => ScreenVm::Gists(build_gists_vm(state)),
+        Screen::Gists(_) => ScreenVm::Gists(build_gists_vm(state)),
         Screen::GistDetail => ScreenVm::GistDetail(build_gist_detail_vm(state)),
         Screen::Revisions(_) => ScreenVm::Revisions(build_revisions_vm(state)),
         Screen::Config(_) => ScreenVm::Config(build_config_vm(state)),
@@ -697,10 +697,11 @@ fn comments_title_text(state: &AppState) -> String {
 
 /// Gists manager body — usable under Palette-over-Gists as well.
 pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
-    let (footer_title, footer, footer_colored) = if state.gist_manager.filtering {
+    let gm = state.gist_manager().cloned().unwrap_or_default();
+    let (footer_title, footer, footer_colored) = if gm.filtering {
         (
             "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
-            format!("/{}_", state.gist_manager.filter_query),
+            format!("/{}_", gm.filter_query),
             false,
         )
     } else {
@@ -734,7 +735,7 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
                 label: gist_group_row_label(
                     g,
                     now,
-                    state.gist_manager.sort,
+                    gm.sort,
                     (
                         state.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
                         state.gist_star_counts.get(&g.id).copied().unwrap_or(0),
@@ -751,13 +752,13 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
     let mut title = format!(
         "Gists {}  ·  sort:{}  ·  type:{}  ·  ★ {}  ·  ⑂ {}",
         count_label(groups.len(), total_groups),
-        state.gist_manager.sort.label(),
-        state.gist_manager.type_filter.label(),
+        gm.sort.label(),
+        gm.type_filter.label(),
         state.starred_gist_count(),
         state.owned_fork_gist_count()
     );
-    if !state.gist_manager.filter_query.is_empty() {
-        title.push_str(&format!("  ·  /{}", state.gist_manager.filter_query));
+    if !gm.filter_query.is_empty() {
+        title.push_str(&format!("  ·  /{}", gm.filter_query));
     }
 
     GistsVm {
@@ -765,12 +766,12 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
         empty,
         empty_message,
         rows,
-        selected: (!groups.is_empty()).then_some(state.gist_manager.index),
-        filtering: state.gist_manager.filtering,
+        selected: (!groups.is_empty()).then_some(gm.index),
+        filtering: gm.filtering,
         footer_title,
         footer,
         footer_colored,
-        hscroll: state.gist_manager.hscroll,
+        hscroll: gm.hscroll,
     }
 }
 
@@ -1357,7 +1358,7 @@ mod tests {
         use crate::domain::GistFile;
 
         let mut state = initial_state();
-        state.screen = Screen::Gists;
+        state.screen = Screen::Gists(Box::default());
         match build_view_model(&state).screen {
             ScreenVm::Gists(g) => {
                 assert_eq!(g.empty, GistsEmptyKind::NoGists);
@@ -1405,15 +1406,19 @@ mod tests {
         use crate::domain::GistFile;
 
         let mut state = initial_state();
-        state.screen = Screen::Gists;
+        state.screen = Screen::Gists(Box::default());
         state.gists = vec![GistFile::for_sync("g1".into(), "a.txt".into(), None)];
-        state.gist_manager.filter_query = crate::tui::TextInput::from("zzz-nope");
+        if let Some(gm) = state.gist_manager_mut() {
+            gm.filter_query = crate::tui::TextInput::from("zzz-nope");
+        }
         match build_view_model(&state).screen {
             ScreenVm::Gists(g) => assert_eq!(g.empty, GistsEmptyKind::NoFilterMatch),
             other => panic!("expected Gists, got {other:?}"),
         }
 
-        state.gist_manager.filter_query = crate::tui::TextInput::default();
+        if let Some(gm) = state.gist_manager_mut() {
+            gm.filter_query = crate::tui::TextInput::default();
+        }
         state.status = Some("Compacted g1".into());
         match build_view_model(&state).screen {
             ScreenVm::Gists(g) => {

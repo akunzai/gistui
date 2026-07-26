@@ -71,6 +71,12 @@ pub(super) fn dispatch_outcome(
                 return Ok(LoopFlow::Proceed);
             };
             let gist_id = group.id.clone();
+            // Park Gists payload so Esc restores list cursor/filter/sort (issue #242).
+            let gists_return = match &state.screen {
+                Screen::Gists(g) => Screen::Gists(g.clone()),
+                _ => Screen::Gists(Box::default()),
+            };
+            state.detail.return_screen = gists_return;
             state.screen = Screen::GistDetail;
             state.detail.gist_id = Some(gist_id);
             state.reset_comment_pagination();
