@@ -7,8 +7,9 @@
 
 use super::render::{
     about_topic_lines_plain, confirm_modal_style, confirm_prompt, count_label, footer_with_status,
-    gist_row_display, help_topic_body, marked_row_text, pin_row_label, row_mark, spinner_glyph,
-    RowMark, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX, MINIMAL_HINT,
+    gist_group_row_label, gist_row_display, help_topic_body, marked_row_text, pin_row_label,
+    row_mark, spinner_glyph, unix_now, RowMark, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX,
+    MINIMAL_HINT,
 };
 use super::{AppState, FocusPane, HelpTopic, PendingAction, Screen};
 use crate::domain::SyncStatus;
@@ -35,11 +36,41 @@ pub struct ChromeVm {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ScreenVm {
     List(ListVm),
+    Gists(GistsVm),
     Pins(PinsVm),
     Confirm(ConfirmVm),
     Help(HelpVm),
     /// Body still painted from `AppState` directly (transition toward #250).
     Legacy,
+}
+
+/// Gist-manager list presentation (#250).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GistsVm {
+    pub title: String,
+    pub empty: GistsEmptyKind,
+    pub empty_message: Option<String>,
+    pub rows: Vec<GistGroupRowVm>,
+    pub selected: Option<usize>,
+    pub filtering: bool,
+    pub footer_title: String,
+    pub footer: String,
+    pub footer_colored: bool,
+    pub hscroll: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GistsEmptyKind {
+    HasRows,
+    NoGists,
+    NoFilterMatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GistGroupRowVm {
+    pub gist_id: String,
+    /// Full row label before horizontal scroll.
+    pub label: String,
 }
 
 /// Main dual-pane List screen presentation (#250).
@@ -181,12 +212,92 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
     let chrome = build_chrome(state);
     let screen = match state.screen {
         Screen::List => ScreenVm::List(build_list_vm(state)),
+        Screen::Gists => ScreenVm::Gists(build_gists_vm(state)),
         Screen::Pins => ScreenVm::Pins(build_pins_vm(state)),
         Screen::Confirm => ScreenVm::Confirm(build_confirm_vm(state)),
         Screen::Help => ScreenVm::Help(build_help_vm(state)),
         _ => ScreenVm::Legacy,
     };
     ViewModel { chrome, screen }
+}
+
+/// Gists manager body — usable under Palette-over-Gists as well.
+pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
+    let (footer_title, footer, footer_colored) = if state.gist_manager.filtering {
+        (
+            "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
+            format!("/{}_", state.gist_manager.filter_query),
+            false,
+        )
+    } else {
+        let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
+        (String::new(), footer, colored)
+    };
+
+    let groups = state.visible_gist_groups();
+    let total_groups = state.gist_groups().len();
+    let now = unix_now();
+
+    let (empty, empty_message, rows) = if groups.is_empty() {
+        if total_groups == 0 {
+            (
+                GistsEmptyKind::NoGists,
+                Some("  📭 No gists found".into()),
+                Vec::new(),
+            )
+        } else {
+            (
+                GistsEmptyKind::NoFilterMatch,
+                Some("  🔍 No gists match the filter".into()),
+                Vec::new(),
+            )
+        }
+    } else {
+        let rows = groups
+            .iter()
+            .map(|g| GistGroupRowVm {
+                gist_id: g.id.clone(),
+                label: gist_group_row_label(
+                    g,
+                    now,
+                    state.gist_manager.sort,
+                    (
+                        state.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
+                        state.gist_star_counts.get(&g.id).copied().unwrap_or(0),
+                        state.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
+                    ),
+                    state.gist_is_starred(&g.id),
+                    state.current_user_login.as_deref(),
+                ),
+            })
+            .collect();
+        (GistsEmptyKind::HasRows, None, rows)
+    };
+
+    let mut title = format!(
+        "Gists {}  ·  sort:{}  ·  type:{}  ·  ★ {}  ·  ⑂ {}",
+        count_label(groups.len(), total_groups),
+        state.gist_manager.sort.label(),
+        state.gist_manager.type_filter.label(),
+        state.starred_gist_count(),
+        state.owned_fork_gist_count()
+    );
+    if !state.gist_manager.filter_query.is_empty() {
+        title.push_str(&format!("  ·  /{}", state.gist_manager.filter_query));
+    }
+
+    GistsVm {
+        title,
+        empty,
+        empty_message,
+        rows,
+        selected: (!groups.is_empty()).then_some(state.gist_manager.index),
+        filtering: state.gist_manager.filtering,
+        footer_title,
+        footer,
+        footer_colored,
+        hscroll: state.gist_manager.hscroll,
+    }
 }
 
 /// List body only — usable while `state.screen` is List **or** Palette-over-List (#250).
@@ -748,6 +859,78 @@ mod tests {
                 other => panic!("expected Filtering footer, got {other:?}"),
             },
             other => panic!("expected List, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gists_vm_empty_and_rows() {
+        use crate::domain::GistFile;
+
+        let mut state = initial_state();
+        state.screen = Screen::Gists;
+        match build_view_model(&state).screen {
+            ScreenVm::Gists(g) => {
+                assert_eq!(g.empty, GistsEmptyKind::NoGists);
+                assert!(g
+                    .empty_message
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("No gists found"));
+                assert!(g.title.contains("Gists"));
+            }
+            other => panic!("expected Gists, got {other:?}"),
+        }
+
+        state.gists = vec![
+            GistFile {
+                description: "alpha".into(),
+                ..GistFile::for_sync("g1".into(), "a.txt".into(), None)
+            },
+            GistFile {
+                description: "beta".into(),
+                ..GistFile::for_sync("g2".into(), "b.txt".into(), None)
+            },
+        ];
+        state.starred_gist_ids.insert("g1".into());
+        state.gist_comment_counts.insert("g1".into(), 2);
+        match build_view_model(&state).screen {
+            ScreenVm::Gists(g) => {
+                assert_eq!(g.empty, GistsEmptyKind::HasRows);
+                assert_eq!(g.rows.len(), 2);
+                assert!(g.rows.iter().any(|r| r.gist_id == "g1"));
+                let starred = g.rows.iter().find(|r| r.gist_id == "g1").unwrap();
+                assert!(
+                    starred.label.contains('★') || starred.label.contains("g1"),
+                    "row: {}",
+                    starred.label
+                );
+                assert!(starred.label.contains("💬") || starred.label.contains("g1"));
+            }
+            other => panic!("expected Gists, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gists_vm_filter_miss_and_status_footer() {
+        use crate::domain::GistFile;
+
+        let mut state = initial_state();
+        state.screen = Screen::Gists;
+        state.gists = vec![GistFile::for_sync("g1".into(), "a.txt".into(), None)];
+        state.gist_manager.filter_query = crate::tui::TextInput::from("zzz-nope");
+        match build_view_model(&state).screen {
+            ScreenVm::Gists(g) => assert_eq!(g.empty, GistsEmptyKind::NoFilterMatch),
+            other => panic!("expected Gists, got {other:?}"),
+        }
+
+        state.gist_manager.filter_query = crate::tui::TextInput::default();
+        state.status = Some("Compacted g1".into());
+        match build_view_model(&state).screen {
+            ScreenVm::Gists(g) => {
+                assert!(!g.footer_colored);
+                assert!(g.footer.contains("Compacted"));
+            }
+            other => panic!("expected Gists, got {other:?}"),
         }
     }
 
