@@ -5511,11 +5511,10 @@ fn wheel_step_gist_detail_files_moves_one() {
 }
 
 #[test]
-fn comment_lines_count_matches_built_lines() {
+fn comment_lines_count_matches_view_model_thread_lines() {
     use crate::domain::GistComment;
-    use crate::tui::render::comment_lines;
     use crate::tui::text::comment_lines_count;
-    let theme = crate::tui::theme::Theme::for_choice(crate::config::ThemeChoice::Dark);
+    use crate::tui::view_model::{build_gist_detail_vm, CommentLineVm, CommentsPaneVm};
     let comments = vec![
         GistComment {
             author: "alice".into(),
@@ -5531,7 +5530,21 @@ fn comment_lines_count_matches_built_lines() {
     // Each comment: 1 header + body.lines() + 1 blank.
     // alice: 1 + 1 + 1 = 3 ; bob: 1 + 2 + 1 = 4 ; total 7.
     assert_eq!(comment_lines_count(&comments), 7);
-    assert_eq!(comment_lines(&comments, &theme, 0).len(), 7);
+
+    let mut state = initial_state();
+    state.screen = Screen::GistDetail;
+    state.detail.gist_id = Some("g1".into());
+    state.gists = vec![GistFile::for_sync("g1".into(), "a.txt".into(), None)];
+    state.detail.comments = Some(comments);
+    state.detail.comments_loaded_oldest_page = 1;
+    let detail = build_gist_detail_vm(&state);
+    match detail.comments {
+        CommentsPaneVm::Thread { lines, .. } => {
+            assert_eq!(lines.len(), 7);
+            assert!(matches!(lines[0], CommentLineVm::Author { .. }));
+        }
+        other => panic!("expected Thread, got {other:?}"),
+    }
 }
 
 fn sample_comment(author: &str, body: &str) -> crate::domain::GistComment {
