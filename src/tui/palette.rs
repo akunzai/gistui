@@ -58,8 +58,8 @@ impl AppState {
     }
 
     pub(crate) fn open_palette_menu(&mut self, anchor: Option<(u16, u16)>) {
-        let origin = self.screen;
-        let items = build_palette_items(self, origin, PaletteMode::Menu);
+        let origin = self.screen.clone();
+        let items = build_palette_items(self, &origin, PaletteMode::Menu);
         if items.is_empty() {
             self.set_status("no actions available");
             return;
@@ -75,8 +75,8 @@ impl AppState {
     }
 
     pub(crate) fn open_palette_command(&mut self) {
-        let origin = self.screen;
-        let items = build_palette_items(self, origin, PaletteMode::Command);
+        let origin = self.screen.clone();
+        let items = build_palette_items(self, &origin, PaletteMode::Command);
         self.palette = PaletteState {
             mode: PaletteMode::Command,
             items,
@@ -87,7 +87,7 @@ impl AppState {
     }
 
     pub(crate) fn close_palette(&mut self) {
-        self.screen = self.palette.origin_screen;
+        self.screen = self.palette.origin_screen.clone();
         self.palette = PaletteState::default();
     }
 
@@ -187,7 +187,7 @@ impl AppState {
             return KeyOutcome::None;
         }
         let exec = item.exec;
-        let origin = self.palette.origin_screen;
+        let origin = self.palette.origin_screen.clone();
         self.close_palette();
         self.screen = origin;
         match exec {
@@ -293,7 +293,7 @@ fn cross_items() -> Vec<PaletteItem> {
     ]
 }
 
-fn build_palette_items(state: &AppState, screen: Screen, mode: PaletteMode) -> Vec<PaletteItem> {
+fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> Vec<PaletteItem> {
     let mut items = match screen {
         Screen::List => list_palette_items(state),
         Screen::Pins => pins_palette_items(state),
@@ -302,7 +302,7 @@ fn build_palette_items(state: &AppState, screen: Screen, mode: PaletteMode) -> V
         Screen::Revisions => revisions_palette_items(state),
         Screen::Diff => diff_palette_items(state),
         Screen::Preview => preview_palette_items(state),
-        Screen::Help => help_palette_items(),
+        Screen::Help(_) => help_palette_items(),
         Screen::Config => config_palette_items(),
         Screen::Confirm | Screen::Palette => Vec::new(),
     };

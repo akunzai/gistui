@@ -359,7 +359,7 @@ pub(crate) fn build_chrome(state: &AppState) -> ChromeVm {
 /// Pure: map app state (+ pin sync cache) into a view model. No FS / network / mutation.
 pub fn build_view_model(state: &AppState) -> ViewModel {
     let chrome = build_chrome(state);
-    let screen = match state.screen {
+    let screen = match &state.screen {
         Screen::List => ScreenVm::List(build_list_vm(state)),
         Screen::Gists => ScreenVm::Gists(build_gists_vm(state)),
         Screen::GistDetail => ScreenVm::GistDetail(build_gist_detail_vm(state)),
@@ -369,7 +369,7 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::Preview => ScreenVm::Preview(build_preview_vm(state)),
         Screen::Pins => ScreenVm::Pins(build_pins_vm(state)),
         Screen::Confirm => ScreenVm::Confirm(build_confirm_vm(state)),
-        Screen::Help => ScreenVm::Help(build_help_vm(state)),
+        Screen::Help(_) => ScreenVm::Help(build_help_vm(state)),
         Screen::Palette => ScreenVm::Palette(build_palette_vm(state)),
     };
     ViewModel { chrome, screen }
@@ -398,7 +398,7 @@ pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
         .unwrap_or(1)
         .max(1);
     PaletteVm {
-        origin_screen: state.palette.origin_screen,
+        origin_screen: state.palette.origin_screen.clone(),
         title,
         has_query,
         selected: state.palette.selected,
@@ -1032,7 +1032,8 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
 
 /// Help body only — usable under Palette-over-Help as well.
 pub(crate) fn build_help_vm(state: &AppState) -> HelpVm {
-    let mode = if state.help.index_open {
+    let help = state.help().cloned().unwrap_or_default();
+    let mode = if help.index_open {
         let items = HelpTopic::all()
             .iter()
             .enumerate()
@@ -1050,21 +1051,21 @@ pub(crate) fn build_help_vm(state: &AppState) -> HelpVm {
             .collect();
         HelpModeVm::Index {
             items,
-            selected: state.help.index_sel,
+            selected: help.index_sel,
         }
     } else {
         let title = format!(
             "Help · {} — Tab topics · ↑↓ scroll · Esc back",
-            state.help.topic.title()
+            help.topic.title()
         );
-        let (lines, about_repo_line) = if state.help.topic == HelpTopic::About {
+        let (lines, about_repo_line) = if help.topic == HelpTopic::About {
             (
                 about_topic_lines_plain(state),
                 Some(super::render::ABOUT_REPO_LINE),
             )
         } else {
             (
-                help_topic_body(state.help.topic)
+                help_topic_body(help.topic)
                     .lines()
                     .map(str::to_string)
                     .collect(),
@@ -1074,7 +1075,7 @@ pub(crate) fn build_help_vm(state: &AppState) -> HelpVm {
         HelpModeVm::Topic {
             title,
             lines,
-            scroll: state.help.scroll,
+            scroll: help.scroll,
             about_repo_line,
         }
     };
@@ -1085,7 +1086,7 @@ pub(crate) fn build_help_vm(state: &AppState) -> HelpVm {
 mod tests {
     use super::*;
     use crate::domain::{PinnedMapping, SyncStatus};
-    use crate::tui::initial_state;
+    use crate::tui::{initial_state, HelpState};
     use std::path::PathBuf;
 
     #[test]
@@ -1216,8 +1217,10 @@ mod tests {
     #[test]
     fn help_vm_index_lists_topics() {
         let mut state = initial_state();
-        state.screen = Screen::Help;
-        state.help.index_open = true;
+        state.screen = Screen::Help(Box::new(HelpState {
+            index_open: true,
+            ..HelpState::default()
+        }));
         let vm = build_view_model(&state);
         match vm.screen {
             ScreenVm::Help(h) => match h.mode {
