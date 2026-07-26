@@ -18,14 +18,19 @@ pub enum FocusPane {
     Gist,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Active TUI screen. Most variants are tags; **Help** carries its own payload so help
+/// scroll/topic/return path cannot go stale on the root state while another screen is active
+/// (issue #242 first slice). Not `Copy` — payloads require `Clone`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Screen {
     #[default]
     List,
     Diff,
     Confirm,
     Preview,
-    Help,
+    /// Help topic/index state lives on the variant (not a parallel `AppState` field).
+    /// Boxed so `HelpState::return_screen: Screen` does not make `Screen` infinite-sized.
+    Help(Box<HelpState>),
     Pins,
     Gists,
     /// Single-gist detail: basic info + file list + comments (entered from Gists with Enter).
@@ -36,6 +41,29 @@ pub enum Screen {
     Palette,
     /// Flat settings list (issue #227); opened with `C` or the command palette.
     Config,
+}
+
+impl Screen {
+    /// Tag equality ignoring payloads (e.g. "are we on Help?" regardless of topic).
+    pub fn is_help(&self) -> bool {
+        matches!(self, Screen::Help(_))
+    }
+
+    /// Borrow help payload when this is [`Screen::Help`].
+    pub fn help_state(&self) -> Option<&HelpState> {
+        match self {
+            Screen::Help(h) => Some(h),
+            _ => None,
+        }
+    }
+
+    /// Mutable help payload when this is [`Screen::Help`].
+    pub fn help_state_mut(&mut self) -> Option<&mut HelpState> {
+        match self {
+            Screen::Help(h) => Some(h),
+            _ => None,
+        }
+    }
 }
 
 /// Fields shown on [`Screen::Config`] in order (issue #227).
@@ -137,13 +165,14 @@ impl HelpTopic {
 
     /// The topic to open when `?` is pressed on a given screen. Non-key-dense screens
     /// fall back to the List topic.
-    pub fn for_screen(screen: Screen) -> HelpTopic {
+    pub fn for_screen(screen: &Screen) -> HelpTopic {
         match screen {
             Screen::Pins => HelpTopic::Pins,
             Screen::Gists => HelpTopic::GistManager,
             Screen::GistDetail => HelpTopic::GistDetail,
             Screen::Revisions => HelpTopic::Revisions,
             Screen::Config => HelpTopic::Config,
+            Screen::Help(_) => HelpTopic::List,
             _ => HelpTopic::List,
         }
     }
@@ -545,8 +574,8 @@ pub struct RevisionState {
     pub fetch_error: Option<String>,
 }
 
-/// Per-screen Help-view state (`Screen::Help`). Data only — the help methods stay on `AppState`.
-#[derive(Debug, Clone, Default)]
+/// Per-screen Help-view state — carried on [`Screen::Help`] (issue #242).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HelpState {
     pub scroll: u16,
     /// Screen to return to when leaving Help (mirrors `preview_return` / `diff_return`).
@@ -720,7 +749,6 @@ pub struct AppState {
     /// Set after the first `q`/`Esc` on the main list; a second press confirms the quit. Any
     /// other key clears it. Prevents an accidental single-key exit.
     pub quit_armed: bool,
-    pub help: HelpState,
     pub upload: UploadState,
     /// gist_id of the active download (set when entering the diff Confirm for a pull).
     pub download_gist_id: Option<String>,
@@ -796,6 +824,20 @@ fn unranked_locals(locals: &[LocalCandidate]) -> Vec<RankedLocal> {
 }
 
 impl AppState {
+    /// Help payload when Help is active, or when the palette is open over Help (issue #242).
+    pub fn help(&self) -> Option<&HelpState> {
+        match &self.screen {
+            Screen::Help(h) => Some(h.as_ref()),
+            Screen::Palette => self.palette.origin_screen.help_state(),
+            _ => None,
+        }
+    }
+
+    /// Mutable help payload when Help is the active screen (not via palette origin).
+    pub fn help_mut(&mut self) -> Option<&mut HelpState> {
+        self.screen.help_state_mut()
+    }
+
     pub fn upload_local_path(&self) -> Option<std::path::PathBuf> {
         match &self.pending_action {
             Some(PendingAction::Upload { local_path, .. }) => Some(local_path.clone()),
@@ -1484,7 +1526,7 @@ impl AppState {
     /// viewed gist on `GistDetail`, otherwise the gist owning the selected file row.
     /// Screen-aware so IO actions (open-in-browser, compact) target what the user sees.
     pub fn context_gist_id(&self) -> Option<String> {
-        match self.screen {
+        match &self.screen {
             Screen::Gists => self.selected_group().map(|g| g.id),
             Screen::GistDetail => self.detail.gist_id.clone(),
             _ => self.selected_gist().map(|g| g.file.gist_id),
@@ -1775,7 +1817,6 @@ pub fn initial_state() -> AppState {
         bg_task_msg: None,
         bg_task_generation: 0,
         quit_armed: false,
-        help: HelpState::default(),
         upload: UploadState::default(),
         download_gist_id: None,
         download_gist_filename: None,

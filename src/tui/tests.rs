@@ -1,4 +1,19 @@
 use super::*;
+
+/// Test helper: mutable HelpState when on Help (creates empty Help if needed).
+fn help_mut(state: &mut AppState) -> &mut HelpState {
+    if !state.screen.is_help() {
+        state.screen = Screen::Help(Box::default());
+    }
+    match &mut state.screen {
+        Screen::Help(h) => h.as_mut(),
+        _ => unreachable!(),
+    }
+}
+fn help_ref(state: &AppState) -> &HelpState {
+    state.help().expect("expected Screen::Help")
+}
+
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -1140,28 +1155,28 @@ fn page_up_saturates_at_top_in_diff() {
 fn question_opens_contextual_help_from_list() {
     let mut state = initial_state();
     state.handle_key(KeyCode::Char('?'));
-    assert_eq!(state.screen, Screen::Help);
-    assert_eq!(state.help.topic, HelpTopic::List);
-    assert_eq!(state.help.return_screen, Screen::List);
-    assert!(!state.help.index_open);
+    assert!(state.screen.is_help());
+    assert_eq!(help_ref(&state).topic, HelpTopic::List);
+    assert_eq!(help_ref(&state).return_screen, Screen::List);
+    assert!(!help_ref(&state).index_open);
     // Arrow keys scroll help
     state.handle_key(KeyCode::Down);
-    assert_eq!(state.screen, Screen::Help);
-    assert_eq!(state.help.scroll, 1);
+    assert!(state.screen.is_help());
+    assert_eq!(help_ref(&state).scroll, 1);
     state.handle_key(KeyCode::Up);
-    assert_eq!(state.screen, Screen::Help);
-    assert_eq!(state.help.scroll, 0);
-    // Esc closes help and resets scroll
-    state.help.scroll = 5;
+    assert!(state.screen.is_help());
+    assert_eq!(help_ref(&state).scroll, 0);
+    // Esc closes help (payload is dropped with the screen — no stale help on AppState).
+    help_mut(&mut state).scroll = 5;
     state.handle_key(KeyCode::Esc);
     assert_eq!(state.screen, Screen::List);
-    assert_eq!(state.help.scroll, 0);
+    assert!(state.help().is_none());
 }
 
 #[test]
 fn q_in_help_closes_to_list() {
     let mut state = initial_state();
-    state.screen = Screen::Help;
+    state.screen = Screen::Help(Box::default());
     assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
     assert_eq!(state.screen, Screen::List);
 }
@@ -3610,8 +3625,8 @@ fn top_bar_help_click_opens_help_and_remembers_return_screen_from_any_screen() {
         ..Default::default()
     };
     let out = state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
-    assert_eq!(state.screen, Screen::Help);
-    assert_eq!(state.help.return_screen, Screen::Preview);
+    assert!(state.screen.is_help());
+    assert_eq!(help_ref(&state).return_screen, Screen::Preview);
     assert_eq!(out, KeyOutcome::None);
 }
 
@@ -3625,15 +3640,15 @@ fn top_bar_help_click_while_already_on_help_does_not_trap_keyboard_exit() {
     };
     // First click opens Help from Preview, remembering Preview as the return screen.
     state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
-    assert_eq!(state.screen, Screen::Help);
-    assert_eq!(state.help.return_screen, Screen::Preview);
+    assert!(state.screen.is_help());
+    assert_eq!(help_ref(&state).return_screen, Screen::Preview);
 
     // A second click on the same top-bar Help hotspot, now that Help is already open, must
     // be a no-op — it must not overwrite return_screen with Screen::Help, which would trap
     // Esc/`?`/the close button in Help with no keyboard way out.
     let out = state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
-    assert_eq!(state.screen, Screen::Help);
-    assert_eq!(state.help.return_screen, Screen::Preview);
+    assert!(state.screen.is_help());
+    assert_eq!(help_ref(&state).return_screen, Screen::Preview);
     assert_eq!(out, KeyOutcome::None);
 
     // Esc must still return to the real origin screen, not stay stuck on Help.
@@ -4129,18 +4144,21 @@ fn help_topic_all_is_ordered_and_titled() {
 
 #[test]
 fn help_topic_for_screen_maps_key_dense_screens() {
-    assert_eq!(HelpTopic::for_screen(Screen::List), HelpTopic::List);
-    assert_eq!(HelpTopic::for_screen(Screen::Pins), HelpTopic::Pins);
-    assert_eq!(HelpTopic::for_screen(Screen::Gists), HelpTopic::GistManager);
+    assert_eq!(HelpTopic::for_screen(&Screen::List), HelpTopic::List);
+    assert_eq!(HelpTopic::for_screen(&Screen::Pins), HelpTopic::Pins);
     assert_eq!(
-        HelpTopic::for_screen(Screen::GistDetail),
+        HelpTopic::for_screen(&Screen::Gists),
+        HelpTopic::GistManager
+    );
+    assert_eq!(
+        HelpTopic::for_screen(&Screen::GistDetail),
         HelpTopic::GistDetail
     );
     assert_eq!(
-        HelpTopic::for_screen(Screen::Revisions),
+        HelpTopic::for_screen(&Screen::Revisions),
         HelpTopic::Revisions
     );
-    assert_eq!(HelpTopic::for_screen(Screen::Diff), HelpTopic::List);
+    assert_eq!(HelpTopic::for_screen(&Screen::Diff), HelpTopic::List);
 }
 
 #[test]
@@ -4470,54 +4488,54 @@ fn question_mark_opens_contextual_help_from_pins() {
     let mut state = initial_state();
     state.screen = Screen::Pins;
     state.handle_key(KeyCode::Char('?'));
-    assert_eq!(state.screen, Screen::Help);
-    assert_eq!(state.help.topic, HelpTopic::Pins);
-    assert_eq!(state.help.return_screen, Screen::Pins);
-    assert!(!state.help.index_open);
+    assert!(state.screen.is_help());
+    assert_eq!(help_ref(&state).topic, HelpTopic::Pins);
+    assert_eq!(help_ref(&state).return_screen, Screen::Pins);
+    assert!(!help_ref(&state).index_open);
 }
 
 #[test]
 fn help_topic_view_tab_opens_index_at_current_topic() {
     let mut state = initial_state();
-    state.screen = Screen::Help;
-    state.help.topic = HelpTopic::GistManager; // index 2
+    state.screen = Screen::Help(Box::default());
+    help_mut(&mut state).topic = HelpTopic::GistManager; // index 2
     state.handle_key(KeyCode::Tab);
-    assert!(state.help.index_open);
-    assert_eq!(state.help.index_sel, 2);
+    assert!(help_ref(&state).index_open);
+    assert_eq!(help_ref(&state).index_sel, 2);
 }
 
 #[test]
 fn help_topic_view_number_switches_topic() {
     let mut state = initial_state();
-    state.screen = Screen::Help;
-    state.help.topic = HelpTopic::List;
-    state.help.scroll = 5;
+    state.screen = Screen::Help(Box::default());
+    help_mut(&mut state).topic = HelpTopic::List;
+    help_mut(&mut state).scroll = 5;
     state.handle_key(KeyCode::Char('2')); // 2 -> Pins (index 1)
-    assert_eq!(state.help.topic, HelpTopic::Pins);
-    assert_eq!(state.help.scroll, 0);
-    assert!(!state.help.index_open);
+    assert_eq!(help_ref(&state).topic, HelpTopic::Pins);
+    assert_eq!(help_ref(&state).scroll, 0);
+    assert!(!help_ref(&state).index_open);
 }
 
 #[test]
 fn help_topic_view_zero_key_switches_to_about() {
     let mut state = initial_state();
-    state.screen = Screen::Help;
-    state.help.topic = HelpTopic::List;
-    state.help.scroll = 5;
+    state.screen = Screen::Help(Box::default());
+    help_mut(&mut state).topic = HelpTopic::List;
+    help_mut(&mut state).scroll = 5;
     state.handle_key(KeyCode::Char('0')); // 0 -> About (index 9, the 10th topic)
-    assert_eq!(state.help.topic, HelpTopic::About);
-    assert_eq!(state.help.scroll, 0);
-    assert!(!state.help.index_open);
+    assert_eq!(help_ref(&state).topic, HelpTopic::About);
+    assert_eq!(help_ref(&state).scroll, 0);
+    assert!(!help_ref(&state).index_open);
 }
 
 #[test]
 fn help_index_zero_key_opens_about_from_the_index_list() {
     let mut state = initial_state();
-    state.screen = Screen::Help;
-    state.help.index_open = true;
+    state.screen = Screen::Help(Box::default());
+    help_mut(&mut state).index_open = true;
     state.handle_key(KeyCode::Char('0'));
-    assert!(!state.help.index_open);
-    assert_eq!(state.help.topic, HelpTopic::About);
+    assert!(!help_ref(&state).index_open);
+    assert_eq!(help_ref(&state).topic, HelpTopic::About);
 }
 
 #[test]
@@ -4534,8 +4552,8 @@ fn repo_link_click_opens_repo_url_regardless_of_which_screen_set_the_rect() {
 #[test]
 fn help_topic_view_esc_returns_to_origin() {
     let mut state = initial_state();
-    state.screen = Screen::Help;
-    state.help.return_screen = Screen::Gists;
+    state.screen = Screen::Help(Box::default());
+    help_mut(&mut state).return_screen = Screen::Gists;
     state.handle_key(KeyCode::Esc);
     assert_eq!(state.screen, Screen::Gists);
 }
@@ -4543,37 +4561,37 @@ fn help_topic_view_esc_returns_to_origin() {
 #[test]
 fn help_index_navigates_and_enter_opens_topic() {
     let mut state = initial_state();
-    state.screen = Screen::Help;
-    state.help.index_open = true;
-    state.help.index_sel = 0;
+    state.screen = Screen::Help(Box::default());
+    help_mut(&mut state).index_open = true;
+    help_mut(&mut state).index_sel = 0;
     state.handle_key(KeyCode::Down); // -> 1
     state.handle_key(KeyCode::Down); // -> 2 (GistManager)
-    assert_eq!(state.help.index_sel, 2);
+    assert_eq!(help_ref(&state).index_sel, 2);
     state.handle_key(KeyCode::Enter);
-    assert!(!state.help.index_open);
-    assert_eq!(state.help.topic, HelpTopic::GistManager);
+    assert!(!help_ref(&state).index_open);
+    assert_eq!(help_ref(&state).topic, HelpTopic::GistManager);
 }
 
 #[test]
 fn help_index_esc_returns_to_origin() {
     let mut state = initial_state();
-    state.screen = Screen::Help;
-    state.help.index_open = true;
-    state.help.return_screen = Screen::List;
+    state.screen = Screen::Help(Box::default());
+    help_mut(&mut state).index_open = true;
+    help_mut(&mut state).return_screen = Screen::List;
     state.handle_key(KeyCode::Esc);
     assert_eq!(state.screen, Screen::List);
-    assert!(!state.help.index_open);
+    assert!(state.help().is_none());
 }
 
 #[test]
 fn help_index_question_mark_exits_help() {
     let mut state = initial_state();
-    state.screen = Screen::Help;
-    state.help.index_open = true;
-    state.help.return_screen = Screen::Pins;
+    state.screen = Screen::Help(Box::default());
+    help_mut(&mut state).index_open = true;
+    help_mut(&mut state).return_screen = Screen::Pins;
     state.handle_key(KeyCode::Char('?'));
     assert_eq!(state.screen, Screen::Pins);
-    assert!(!state.help.index_open);
+    assert!(state.help().is_none());
 }
 
 #[test]
@@ -5110,8 +5128,8 @@ fn scroll_up_moves_content_three_lines() {
 fn close_button_click_returns_from_help() {
     let mut state = state_with_gists();
     // Simulate entering Help (mirrors what open_help() does).
-    state.help.return_screen = Screen::List;
-    state.screen = Screen::Help;
+    help_mut(&mut state).return_screen = Screen::List;
+    state.screen = Screen::Help(Box::default());
     let layout = MouseLayout {
         close_button: Some(Rect::new(36, 0, 5, 1)),
         ..Default::default()
@@ -5124,8 +5142,8 @@ fn close_button_click_returns_from_help() {
 #[test]
 fn close_button_click_outside_is_noop() {
     let mut state = state_with_gists();
-    state.help.return_screen = Screen::List;
-    state.screen = Screen::Help;
+    help_mut(&mut state).return_screen = Screen::List;
+    state.screen = Screen::Help(Box::default());
     let layout = MouseLayout {
         close_button: Some(Rect::new(36, 0, 5, 1)),
         ..Default::default()
@@ -5133,7 +5151,7 @@ fn close_button_click_outside_is_noop() {
     // col 35 is just outside the left edge of the close button
     let out = state.handle_mouse(MouseInput::Click { col: 35, row: 0 }, &layout);
     assert_eq!(out, KeyOutcome::None);
-    assert_eq!(state.screen, Screen::Help);
+    assert!(state.screen.is_help());
 }
 
 #[test]
@@ -5225,8 +5243,8 @@ fn click_in_pane_blank_focuses_without_selecting() {
 #[test]
 fn click_off_list_screen_is_noop() {
     let mut state = state_with_gists();
-    state.help.return_screen = Screen::List;
-    state.screen = Screen::Help;
+    help_mut(&mut state).return_screen = Screen::List;
+    state.screen = Screen::Help(Box::default());
     let hit = PaneHit {
         rect: Rect::new(20, 0, 20, 10),
         offset: 0,
@@ -5235,7 +5253,7 @@ fn click_off_list_screen_is_noop() {
         gist: Some(hit),
         ..Default::default()
     };
-    let before_screen = state.screen;
+    let before_screen = state.screen.clone();
     let out = state.handle_mouse(MouseInput::Click { col: 25, row: 1 }, &layout);
     assert_eq!(out, KeyOutcome::None);
     assert_eq!(state.screen, before_screen);
@@ -5319,22 +5337,22 @@ fn wheel_step_gist_detail_moves_three() {
 fn wheel_step_help_body_moves_three() {
     // Help body (help_index_open = false): one scroll-down tick must advance help_scroll by 3.
     let mut state = initial_state();
-    state.screen = Screen::Help;
-    state.help.index_open = false;
-    state.help.scroll = 0;
+    state.screen = Screen::Help(Box::default());
+    help_mut(&mut state).index_open = false;
+    help_mut(&mut state).scroll = 0;
     state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
-    assert_eq!(state.help.scroll, 3);
+    assert_eq!(help_ref(&state).scroll, 3);
 }
 
 #[test]
 fn wheel_step_help_index_moves_one() {
     // Help topic index (help_index_open = true): one scroll-down tick must move index by 1.
     let mut state = initial_state();
-    state.screen = Screen::Help;
-    state.help.index_open = true;
-    state.help.index_sel = 0;
+    state.screen = Screen::Help(Box::default());
+    help_mut(&mut state).index_open = true;
+    help_mut(&mut state).index_sel = 0;
     state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
-    assert_eq!(state.help.index_sel, 1);
+    assert_eq!(help_ref(&state).index_sel, 1);
 }
 
 #[test]
@@ -5429,8 +5447,8 @@ fn revisions_click_selects_and_double_click_matches_enter() {
 #[test]
 fn help_index_click_selects_and_double_click_opens_topic() {
     let mut state = initial_state();
-    state.screen = Screen::Help;
-    state.help.index_open = true;
+    state.screen = Screen::Help(Box::default());
+    help_mut(&mut state).index_open = true;
     let hit = PaneHit {
         rect: Rect::new(0, 0, 40, 15),
         offset: 0,
@@ -5442,13 +5460,13 @@ fn help_index_click_selects_and_double_click_opens_topic() {
     // Row 2 is the 2nd content row (border at row 0) -> idx 1 (Pins).
     let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
     assert_eq!(out, KeyOutcome::None);
-    assert_eq!(state.help.index_sel, 1);
-    assert!(state.help.index_open); // a single click only selects, it doesn't open yet
+    assert_eq!(help_ref(&state).index_sel, 1);
+    assert!(help_ref(&state).index_open); // a single click only selects, it doesn't open yet
 
     let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
     assert_eq!(by_mouse, KeyOutcome::None);
-    assert!(!state.help.index_open);
-    assert_eq!(state.help.topic, HelpTopic::Pins);
+    assert!(!help_ref(&state).index_open);
+    assert_eq!(help_ref(&state).topic, HelpTopic::Pins);
 }
 
 #[test]

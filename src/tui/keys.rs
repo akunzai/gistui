@@ -83,13 +83,13 @@ impl AppState {
                 return KeyOutcome::None;
             }
         }
-        match self.screen {
+        match &self.screen {
             Screen::List if self.filtering => self.handle_key_filter(code),
             Screen::List => self.handle_key_list(code),
             Screen::Diff => self.handle_key_diff(code),
             Screen::Confirm => self.handle_key_confirm(code),
             Screen::Preview => self.handle_key_preview(code),
-            Screen::Help => self.handle_key_help(code),
+            Screen::Help(_) => self.handle_key_help(code),
             Screen::Pins => self.handle_key_pins(code),
             Screen::Gists => self.handle_key_gists(code),
             Screen::GistDetail => self.handle_key_detail(code),
@@ -104,14 +104,18 @@ impl AppState {
     /// any screen, including Help itself) would overwrite `return_screen` with `Screen::Help`,
     /// trapping Esc/`?`/the close button in Help with no keyboard way out.
     pub(crate) fn open_help(&mut self) {
-        if self.screen == Screen::Help {
+        if self.screen.is_help() {
             return;
         }
-        self.help.return_screen = self.screen;
-        self.help.topic = HelpTopic::for_screen(self.screen);
-        self.help.index_open = false;
-        self.help.scroll = 0;
-        self.screen = Screen::Help;
+        let return_screen = self.screen.clone();
+        let topic = HelpTopic::for_screen(&return_screen);
+        self.screen = Screen::Help(Box::new(HelpState {
+            return_screen,
+            topic,
+            index_open: false,
+            scroll: 0,
+            index_sel: 0,
+        }));
     }
 
     /// Open the flat Settings screen (`C` or palette). Opening alone does not write config.
@@ -119,7 +123,7 @@ impl AppState {
         if self.screen == Screen::Config {
             return;
         }
-        self.config.return_screen = self.screen;
+        self.config.return_screen = self.screen.clone();
         self.config.index = 0;
         self.screen = Screen::Config;
     }
@@ -222,7 +226,7 @@ impl AppState {
         let n = ConfigField::ALL.len();
         match code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                self.screen = self.config.return_screen;
+                self.screen = self.config.return_screen.clone();
                 self.config.return_screen = Screen::List;
             }
             KeyCode::Up | KeyCode::Char('k') => {
@@ -263,7 +267,7 @@ impl AppState {
         {
             return false;
         }
-        match self.screen {
+        match &mut self.screen {
             Screen::Palette => {
                 let len = self.palette_visible_items().len();
                 match action {
@@ -279,16 +283,14 @@ impl AppState {
                 }
                 true
             }
-            Screen::Help => {
+            Screen::Help(help) => {
                 let topics = HelpTopic::all();
-                if self.help.index_open {
+                if help.index_open {
                     match action {
-                        NavAction::Up => {
-                            self.help.index_sel = self.help.index_sel.saturating_sub(1)
-                        }
+                        NavAction::Up => help.index_sel = help.index_sel.saturating_sub(1),
                         NavAction::Down => {
-                            if self.help.index_sel + 1 < topics.len() {
-                                self.help.index_sel += 1;
+                            if help.index_sel + 1 < topics.len() {
+                                help.index_sel += 1;
                             }
                         }
                         _ => return false,
@@ -296,16 +298,16 @@ impl AppState {
                 } else {
                     match action {
                         NavAction::Up => {
-                            self.help.scroll = self.help.scroll.saturating_sub(1);
+                            help.scroll = help.scroll.saturating_sub(1);
                         }
                         NavAction::Down => {
-                            self.help.scroll = self.help.scroll.saturating_add(1);
+                            help.scroll = help.scroll.saturating_add(1);
                         }
                         NavAction::PageUp => {
-                            self.help.scroll = self.help.scroll.saturating_sub(PAGE_SCROLL);
+                            help.scroll = help.scroll.saturating_sub(PAGE_SCROLL);
                         }
                         NavAction::PageDown => {
-                            self.help.scroll = self.help.scroll.saturating_add(PAGE_SCROLL);
+                            help.scroll = help.scroll.saturating_add(PAGE_SCROLL);
                         }
                         _ => return false,
                     }
@@ -473,7 +475,7 @@ impl AppState {
     /// Screens that clear a one-shot status (and the list quit arm) on any key — including
     /// navigation keys handled before the per-screen handler runs.
     fn dismiss_ephemeral_screen_state(&mut self) {
-        match self.screen {
+        match &mut self.screen {
             Screen::List => {
                 self.status = None;
                 self.quit_armed = false;
@@ -489,54 +491,57 @@ impl AppState {
 
     fn handle_key_help(&mut self, code: KeyCode) -> KeyOutcome {
         let topics = HelpTopic::all();
-        if self.help.index_open {
-            match code {
-                KeyCode::Enter => {
-                    self.help.topic = topics[self.help.index_sel];
-                    self.help.index_open = false;
-                    self.help.scroll = 0;
+        let leave = matches!(code, KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?'));
+        {
+            let Some(help) = self.help_mut() else {
+                return KeyOutcome::None;
+            };
+            if help.index_open {
+                match code {
+                    KeyCode::Enter => {
+                        help.topic = topics[help.index_sel];
+                        help.index_open = false;
+                        help.scroll = 0;
+                    }
+                    KeyCode::Char(c @ '1'..='9') if (c as u8 - b'1') < topics.len() as u8 => {
+                        help.topic = topics[(c as u8 - b'1') as usize];
+                        help.index_open = false;
+                        help.scroll = 0;
+                    }
+                    // `0` always jumps to About (last topic), independent of total count.
+                    KeyCode::Char('0') if topics.contains(&HelpTopic::About) => {
+                        help.topic = HelpTopic::About;
+                        help.index_open = false;
+                        help.scroll = 0;
+                    }
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {}
+                    _ => {}
                 }
-                KeyCode::Char(c @ '1'..='9') if (c as u8 - b'1') < topics.len() as u8 => {
-                    self.help.topic = topics[(c as u8 - b'1') as usize];
-                    self.help.index_open = false;
-                    self.help.scroll = 0;
+            } else {
+                match code {
+                    KeyCode::Tab => {
+                        help.index_sel = topics.iter().position(|&t| t == help.topic).unwrap_or(0);
+                        help.index_open = true;
+                    }
+                    KeyCode::Char(c @ '1'..='9') if (c as u8 - b'1') < topics.len() as u8 => {
+                        help.topic = topics[(c as u8 - b'1') as usize];
+                        help.scroll = 0;
+                    }
+                    KeyCode::Char('0') if topics.contains(&HelpTopic::About) => {
+                        help.topic = HelpTopic::About;
+                        help.scroll = 0;
+                    }
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {}
+                    _ => {}
                 }
-                // `0` always jumps to About (last topic), independent of total count.
-                KeyCode::Char('0') if topics.contains(&HelpTopic::About) => {
-                    self.help.topic = HelpTopic::About;
-                    self.help.index_open = false;
-                    self.help.scroll = 0;
-                }
-                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
-                    self.screen = self.help.return_screen;
-                    self.help.index_open = false;
-                    self.help.scroll = 0;
-                }
-                _ => {}
             }
-        } else {
-            match code {
-                KeyCode::Tab => {
-                    self.help.index_sel = topics
-                        .iter()
-                        .position(|&t| t == self.help.topic)
-                        .unwrap_or(0);
-                    self.help.index_open = true;
-                }
-                KeyCode::Char(c @ '1'..='9') if (c as u8 - b'1') < topics.len() as u8 => {
-                    self.help.topic = topics[(c as u8 - b'1') as usize];
-                    self.help.scroll = 0;
-                }
-                KeyCode::Char('0') if topics.contains(&HelpTopic::About) => {
-                    self.help.topic = HelpTopic::About;
-                    self.help.scroll = 0;
-                }
-                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {
-                    self.screen = self.help.return_screen;
-                    self.help.scroll = 0;
-                }
-                _ => {}
-            }
+        }
+        if leave {
+            let ret = match &self.screen {
+                Screen::Help(h) => h.return_screen.clone(),
+                _ => Screen::List,
+            };
+            self.screen = ret;
         }
         KeyOutcome::None
     }
@@ -804,7 +809,7 @@ impl AppState {
         let entries_len = self.revision.entries.as_ref().map(|e| e.len()).unwrap_or(0);
         match code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                self.screen = self.revision.return_screen;
+                self.screen = self.revision.return_screen.clone();
             }
             KeyCode::Enter if entries_len > 0 => {
                 if let (Some(id), file) = (
@@ -886,12 +891,12 @@ impl AppState {
     /// content panes (Diff, Preview, Confirm, GistDetail) scroll three lines for faster
     /// panning. Help body also scrolls three; the Help topic index is a list (one row).
     fn wheel_step(&self) -> usize {
-        match self.screen {
+        match &self.screen {
             Screen::Diff | Screen::Preview | Screen::Confirm => 3,
             // GistDetail: the comments body scrolls like content (3 lines); the file list
             // steps one file at a time.
             Screen::GistDetail if self.detail.focus == DetailFocus::Comments => 3,
-            Screen::Help if !self.help.index_open => 3, // help body scrolls; topic index is a list
+            Screen::Help(h) if !h.index_open => 3, // help body scrolls; topic index is a list
             Screen::Palette => 1,
             _ => 1, // List/Pins/Gists/Revisions/Help index/GistDetail Files
         }
@@ -902,7 +907,7 @@ impl AppState {
     /// blank area or border focuses it but selects nothing (returns `false`); a click off
     /// every list returns `false`.
     fn click_select(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
-        match self.screen {
+        match &mut self.screen {
             Screen::List => {
                 if let Some(hit) = layout.local {
                     if point_in(hit.rect, col, row) {
@@ -975,11 +980,11 @@ impl AppState {
             }
             // Only set when the topic index is open (render_help), so this is a no-op while
             // viewing a topic's body.
-            Screen::Help => {
+            Screen::Help(help) => {
                 if let Some(hit) = layout.list {
                     if point_in(hit.rect, col, row) {
                         if let Some(idx) = hit.index_at(row, HelpTopic::all().len()) {
-                            self.help.index_sel = idx;
+                            help.index_sel = idx;
                             return true;
                         }
                     }
@@ -1022,7 +1027,7 @@ impl AppState {
     /// Open/activate the currently selected row on the current screen (the double-click
     /// action), reusing each screen's `Enter` behaviour where one exists.
     fn activate_selected(&mut self) -> KeyOutcome {
-        match self.screen {
+        match &self.screen {
             // GistDetail files have no `Enter`; they preview via number keys, so a
             // double-click previews the file under the cursor.
             Screen::GistDetail => self.preview_detail_file(self.detail.file_cursor),
@@ -1204,7 +1209,7 @@ impl AppState {
             // In the preview, q and Esc return to wherever it was launched from (the list, or
             // the gist detail view) — never an accidental app exit. Reset to List afterwards.
             KeyCode::Char('q') | KeyCode::Esc => {
-                self.screen = self.preview_return;
+                self.screen = self.preview_return.clone();
                 self.preview_return = Screen::List;
                 self.diff_text.clear();
                 self.preview_title.clear();
@@ -1681,7 +1686,7 @@ impl AppState {
         match code {
             // In the diff, q and Esc return to diff_return (normally List; Pins for pin diffs).
             KeyCode::Char('q') | KeyCode::Esc => {
-                let ret = self.diff_return;
+                let ret = self.diff_return.clone();
                 self.back_to_list();
                 self.screen = ret;
                 self.diff_return = Screen::List;
@@ -1738,7 +1743,7 @@ impl AppState {
                     self.pending_action = None;
                     // Return to wherever the upload was initiated from (List, or Pins for
                     // a pin push) instead of always snapping back to List.
-                    self.screen = self.diff_return;
+                    self.screen = self.diff_return.clone();
                     // The background watch thread (if any) is not force-killed — it cleans
                     // itself up once the editor closes. Reset the flag now so a stale
                     // late-arriving event (see AppState::apply_upload_edit_event) doesn't
@@ -1801,7 +1806,7 @@ impl AppState {
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     // Return to whichever screen launched the compaction (Gists or GistDetail).
                     self.pending_action = None;
-                    self.screen = self.detail.compact_return_screen;
+                    self.screen = self.detail.compact_return_screen.clone();
                 }
                 _ => {}
             },

@@ -298,7 +298,7 @@ pub(super) fn dispatch_outcome(
 
             // Return to wherever this upload was initiated from (List, or Pins for a pin
             // push) instead of always snapping to List (mirrors download()).
-            let return_screen = state.diff_return;
+            let return_screen = state.diff_return.clone();
             state.back_to_list();
             state.screen = return_screen;
             spawn_bg(state, &mut channels.bg, "Uploading…", move || {
@@ -436,7 +436,7 @@ pub(super) fn dispatch_outcome(
                 return Ok(LoopFlow::Proceed);
             };
             state.pending_action = None;
-            state.screen = state.detail.compact_return_screen;
+            state.screen = state.detail.compact_return_screen.clone();
 
             spawn_bg(
                 state,

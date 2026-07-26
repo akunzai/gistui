@@ -2613,7 +2613,7 @@ fn render_palette_vm(
         Screen::List => render_list(frame, state, &mut bg_layout),
         Screen::Diff => render_diff(frame, state, &mut bg_layout),
         Screen::Preview => render_preview(frame, state, &mut bg_layout),
-        Screen::Help => render_help(frame, state, &mut bg_layout),
+        Screen::Help(_) => render_help(frame, state, &mut bg_layout),
         Screen::Pins => render_pins(frame, state, &mut bg_layout),
         Screen::Gists => render_gists(frame, state, &mut bg_layout),
         Screen::GistDetail => render_gist_detail(frame, state, &mut bg_layout),

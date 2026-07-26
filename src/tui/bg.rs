@@ -625,7 +625,7 @@ pub(super) fn open_repo_url(state: &mut AppState) {
 /// Copies the context gist's web URL to the system clipboard. On the Preview screen the
 /// URL comes from the previewed file's gist; elsewhere from the current selection.
 pub(super) fn copy_gist_url(state: &mut AppState) {
-    let gist_id = match state.screen {
+    let gist_id = match &state.screen {
         Screen::Preview => state.preview_gist_key.as_ref().map(|(id, _)| id.clone()),
         _ => state.context_gist_id(),
     };
@@ -910,7 +910,7 @@ pub(super) fn edit_upload_buffer(
 pub(super) fn download(state: &mut AppState) {
     let target = state.download_target.clone();
     let content = state.preview_remote.clone();
-    let return_screen = state.diff_return;
+    let return_screen = state.diff_return.clone();
     match crate::actions::execute_download(&target, &content, true) {
         Ok(()) => {
             state.set_status(format!(
@@ -1507,7 +1507,7 @@ pub(super) fn absorb_background_results(
                             }
                             // Return to wherever this upload was initiated from (List, or Pins
                             // for a pin push) instead of always snapping to List.
-                            let return_screen = state.diff_return;
+                            let return_screen = state.diff_return.clone();
                             state.back_to_list();
                             state.screen = return_screen;
                             state.loading = true;
