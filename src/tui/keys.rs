@@ -67,7 +67,7 @@ impl AppState {
             && theme_toggle_modifiers_ok(modifiers)
             && !self.filtering
             && !self.pins().is_some_and(|p| p.filtering)
-            && !self.gist_manager.filtering
+            && !self.gist_manager().is_some_and(|g| g.filtering)
             && !self.editing_description
         {
             self.theme_choice = match self.theme_choice {
@@ -91,7 +91,7 @@ impl AppState {
             Screen::Preview => self.handle_key_preview(code),
             Screen::Help(_) => self.handle_key_help(code),
             Screen::Pins(_) => self.handle_key_pins(code),
-            Screen::Gists => self.handle_key_gists(code),
+            Screen::Gists(_) => self.handle_key_gists(code),
             Screen::GistDetail => self.handle_key_detail(code),
             Screen::Revisions(_) => self.handle_key_revisions(code),
             Screen::Config(_) => self.handle_key_config(code),
@@ -274,7 +274,7 @@ impl AppState {
         // still jump the live selection by PAGE_SCROLL.
         if (self.filtering
             || self.pins().is_some_and(|p| p.filtering)
-            || self.gist_manager.filtering)
+            || self.gist_manager().is_some_and(|g| g.filtering))
             && !matches!(action, NavAction::PageUp | NavAction::PageDown)
         {
             return false;
@@ -316,6 +316,46 @@ impl AppState {
                 NavAction::PageUp => {
                     pins.index = pins.index.saturating_sub(PAGE_SCROLL as usize);
                     pins.hscroll = 0;
+                }
+            }
+            return true;
+        }
+        // Gists: same borrow pattern as Pins (visible groups / hscroll max need &self).
+        if matches!(self.screen, Screen::Gists(_)) {
+            let len = self.visible_gist_groups().len();
+            let hmax = self.gists_hscroll_max();
+            let Some(gm) = self.gist_manager_mut() else {
+                return false;
+            };
+            match action {
+                NavAction::Down => {
+                    if gm.index + 1 < len {
+                        gm.index += 1;
+                        gm.hscroll = 0;
+                    }
+                }
+                NavAction::Up => {
+                    if gm.index > 0 {
+                        gm.index -= 1;
+                        gm.hscroll = 0;
+                    }
+                }
+                NavAction::Right => {
+                    gm.hscroll = (gm.hscroll + 1).min(hmax);
+                }
+                NavAction::Left => {
+                    gm.hscroll = gm.hscroll.saturating_sub(1);
+                }
+                NavAction::PageDown => {
+                    if len > 0 {
+                        let max = len - 1;
+                        gm.index = (gm.index + PAGE_SCROLL as usize).min(max);
+                        gm.hscroll = 0;
+                    }
+                }
+                NavAction::PageUp => {
+                    gm.index = gm.index.saturating_sub(PAGE_SCROLL as usize);
+                    gm.hscroll = 0;
                 }
             }
             return true;
@@ -363,45 +403,6 @@ impl AppState {
                             help.scroll = help.scroll.saturating_add(PAGE_SCROLL);
                         }
                         _ => return false,
-                    }
-                }
-                true
-            }
-            Screen::Gists => {
-                let groups = self.visible_gist_groups();
-                match action {
-                    NavAction::Down => {
-                        if self.gist_manager.index + 1 < groups.len() {
-                            self.gist_manager.index += 1;
-                            self.gist_manager.hscroll = 0;
-                        }
-                    }
-                    NavAction::Up => {
-                        if self.gist_manager.index > 0 {
-                            self.gist_manager.index -= 1;
-                            self.gist_manager.hscroll = 0;
-                        }
-                    }
-                    NavAction::Right => {
-                        self.gist_manager.hscroll =
-                            (self.gist_manager.hscroll + 1).min(self.gists_hscroll_max());
-                    }
-                    NavAction::Left => {
-                        self.gist_manager.hscroll = self.gist_manager.hscroll.saturating_sub(1);
-                    }
-                    NavAction::PageDown => {
-                        let len = groups.len();
-                        if len > 0 {
-                            let max = len - 1;
-                            self.gist_manager.index =
-                                (self.gist_manager.index + PAGE_SCROLL as usize).min(max);
-                            self.gist_manager.hscroll = 0;
-                        }
-                    }
-                    NavAction::PageUp => {
-                        self.gist_manager.index =
-                            self.gist_manager.index.saturating_sub(PAGE_SCROLL as usize);
-                        self.gist_manager.hscroll = 0;
                     }
                 }
                 true
@@ -485,8 +486,10 @@ impl AppState {
                 }
                 true
             }
-            // Exhaustiveness only — Pins returns above before this match.
-            Screen::Pins(_) => unreachable!("Pins navigation is handled before the match"),
+            // Exhaustiveness only — Pins/Gists return above before this match.
+            Screen::Pins(_) | Screen::Gists(_) => {
+                unreachable!("Pins/Gists navigation is handled before the match")
+            }
         }
     }
 
@@ -499,7 +502,7 @@ impl AppState {
                 self.quit_armed = false;
             }
             Screen::Pins(_)
-            | Screen::Gists
+            | Screen::Gists(_)
             | Screen::GistDetail
             | Screen::Revisions(_)
             | Screen::Preview => self.status = None,
@@ -654,61 +657,79 @@ impl AppState {
     fn handle_key_gists(&mut self, code: KeyCode) -> KeyOutcome {
         self.status = None;
         // Inline text filter: live-navigate with arrows; Tab is a no-op (single pane).
-        if self.gist_manager.filtering {
+        if self.gist_manager().is_some_and(|g| g.filtering) {
+            let Some(gm) = self.gist_manager_mut() else {
+                return KeyOutcome::None;
+            };
             match code {
-                KeyCode::Up if self.gist_manager.index > 0 => {
-                    self.gist_manager.index -= 1;
-                    self.gist_manager.hscroll = 0;
+                KeyCode::Up if gm.index > 0 => {
+                    gm.index -= 1;
+                    gm.hscroll = 0;
                 }
                 KeyCode::Up => {}
                 KeyCode::Down => {
-                    if self.gist_manager.index + 1 < self.visible_gist_groups().len() {
-                        self.gist_manager.index += 1;
-                        self.gist_manager.hscroll = 0;
-                    }
+                    // visible length needs self; re-fetch after borrow ends
                 }
-                _ => match apply_filter_edit(code, &mut self.gist_manager.filter_query) {
+                _ => match apply_filter_edit(code, &mut gm.filter_query) {
                     FilterKey::Edited => {
-                        self.gist_manager.index = 0;
-                        self.gist_manager.hscroll = 0;
+                        gm.index = 0;
+                        gm.hscroll = 0;
                     }
                     FilterKey::Cleared => {
-                        self.gist_manager.filtering = false;
-                        self.gist_manager.index = 0;
-                        self.gist_manager.hscroll = 0;
+                        gm.filtering = false;
+                        gm.index = 0;
+                        gm.hscroll = 0;
                     }
-                    FilterKey::Exited => self.gist_manager.filtering = false,
+                    FilterKey::Exited => gm.filtering = false,
                     FilterKey::Moved | FilterKey::Pass => {}
                 },
             }
+            if code == KeyCode::Down {
+                let len = self.visible_gist_groups().len();
+                if let Some(gm) = self.gist_manager_mut() {
+                    if gm.index + 1 < len {
+                        gm.index += 1;
+                        gm.hscroll = 0;
+                    }
+                }
+            }
             return KeyOutcome::None;
         }
-        let groups = self.visible_gist_groups();
+        let groups_len = self.visible_gist_groups().len();
+        let index = self.gist_manager().map(|g| g.index).unwrap_or(0);
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
-            KeyCode::Char('/') => self.gist_manager.filtering = true,
+            KeyCode::Char('/') => {
+                if let Some(gm) = self.gist_manager_mut() {
+                    gm.filtering = true;
+                }
+            }
             KeyCode::Char('s') => {
-                self.gist_manager.sort = self.gist_manager.sort.next();
-                self.gist_manager.index = 0;
-                self.gist_manager.hscroll = 0;
+                if let Some(gm) = self.gist_manager_mut() {
+                    gm.sort = gm.sort.next();
+                    gm.index = 0;
+                    gm.hscroll = 0;
+                }
             }
             KeyCode::Char('v') => {
-                self.gist_manager.type_filter = self.gist_manager.type_filter.next();
-                self.gist_manager.index = 0;
-                self.gist_manager.hscroll = 0;
+                if let Some(gm) = self.gist_manager_mut() {
+                    gm.type_filter = gm.type_filter.next();
+                    gm.index = 0;
+                    gm.hscroll = 0;
+                }
             }
             KeyCode::Char('*') => return self.star_toggle_intent(),
-            KeyCode::Enter if self.gist_manager.index < groups.len() => {
+            KeyCode::Enter if index < groups_len => {
                 return KeyOutcome::OpenGistDetail;
             }
-            KeyCode::Char('o') if self.gist_manager.index < groups.len() => {
-                return KeyOutcome::OpenBrowser
-            }
-            KeyCode::Char('y') if self.gist_manager.index < groups.len() => {
-                return KeyOutcome::CopyGistUrl
-            }
-            KeyCode::Char('H') if self.gist_manager.index < groups.len() => {
-                if self.open_revisions(Screen::Gists) {
+            KeyCode::Char('o') if index < groups_len => return KeyOutcome::OpenBrowser,
+            KeyCode::Char('y') if index < groups_len => return KeyOutcome::CopyGistUrl,
+            KeyCode::Char('H') if index < groups_len => {
+                let ret = match &self.screen {
+                    Screen::Gists(g) => Screen::Gists(g.clone()),
+                    _ => Screen::Gists(Box::default()),
+                };
+                if self.open_revisions(ret) {
                     return KeyOutcome::FetchRevisions;
                 }
             }
@@ -736,7 +757,7 @@ impl AppState {
         }
         match code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                self.screen = Screen::Gists;
+                self.screen = self.detail.return_screen.clone();
             }
             KeyCode::Char('o') => return KeyOutcome::OpenBrowser,
             KeyCode::Char('y') => return KeyOutcome::CopyGistUrl,
@@ -983,13 +1004,16 @@ impl AppState {
                 }
                 false
             }
-            Screen::Gists => {
+            Screen::Gists(_) => {
                 if let Some(hit) = layout.list {
                     if point_in(hit.rect, col, row) {
-                        if let Some(idx) = hit.index_at(row, self.visible_gist_groups().len()) {
-                            self.gist_manager.index = idx;
-                            self.gist_manager.hscroll = 0;
-                            return true;
+                        let count = self.visible_gist_groups().len();
+                        if let Some(idx) = hit.index_at(row, count) {
+                            if let Some(gm) = self.gist_manager_mut() {
+                                gm.index = idx;
+                                gm.hscroll = 0;
+                                return true;
+                            }
                         }
                     }
                 }
@@ -1598,18 +1622,17 @@ impl AppState {
             self.status = Some("no gists to manage".into());
             return;
         }
-        self.gist_manager.filtering = false;
-        self.gist_manager.filter_query.clear();
-        self.gist_manager.type_filter = GistTypeFilter::All;
-        self.gist_manager.hscroll = 0;
         self.editing_description = false;
         self.description_input.clear();
         let target = self.selected_gist().map(|g| g.file.gist_id);
+        // Clean payload (default filters) so the target is always visible.
+        self.screen = Screen::Gists(Box::default());
         let groups = self.visible_gist_groups();
-        self.gist_manager.index = target
-            .and_then(|id| groups.iter().position(|g| g.id == id))
-            .unwrap_or(0);
-        self.screen = Screen::Gists;
+        if let Some(gm) = self.gist_manager_mut() {
+            gm.index = target
+                .and_then(|id| groups.iter().position(|g| g.id == id))
+                .unwrap_or(0);
+        }
     }
 
     /// Open the Pins view (`Screen::Pins`), resetting its selection/scroll so a stale

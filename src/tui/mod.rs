@@ -19,8 +19,8 @@ pub enum FocusPane {
 }
 
 /// Active TUI screen. Unit tags for some screens; **Help** / **Config** / **Revisions** /
-/// **Pins** carry payloads so screen-local UI cannot go stale on the root state (issue #242).
-/// Not `Copy`.
+/// **Pins** / **Gists** carry payloads so screen-local UI cannot go stale on the root state
+/// (issue #242). Not `Copy`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Screen {
     #[default]
@@ -33,7 +33,8 @@ pub enum Screen {
     Help(Box<HelpState>),
     /// Pins list cursor/filter/sort; may also sit on `diff_return` during a pin diff.
     Pins(Box<PinsState>),
-    Gists,
+    /// Gist manager list cursor/filter/sort; may sit on detail/revision return paths.
+    Gists(Box<GistsManagerState>),
     /// Single-gist detail: basic info + file list + comments (entered from Gists with Enter).
     GistDetail,
     /// Revision history for one gist; payload owns list/cursor/return (and may sit in
@@ -61,6 +62,10 @@ impl Screen {
 
     pub fn is_pins(&self) -> bool {
         matches!(self, Screen::Pins(_))
+    }
+
+    pub fn is_gists(&self) -> bool {
+        matches!(self, Screen::Gists(_))
     }
 
     /// Borrow help payload when this is [`Screen::Help`].
@@ -117,6 +122,20 @@ impl Screen {
     pub fn pins_state_mut(&mut self) -> Option<&mut PinsState> {
         match self {
             Screen::Pins(p) => Some(p.as_mut()),
+            _ => None,
+        }
+    }
+
+    pub fn gists_state(&self) -> Option<&GistsManagerState> {
+        match self {
+            Screen::Gists(g) => Some(g.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn gists_state_mut(&mut self) -> Option<&mut GistsManagerState> {
+        match self {
+            Screen::Gists(g) => Some(g.as_mut()),
             _ => None,
         }
     }
@@ -225,7 +244,7 @@ impl HelpTopic {
     pub fn for_screen(screen: &Screen) -> HelpTopic {
         match screen {
             Screen::Pins(_) => HelpTopic::Pins,
-            Screen::Gists => HelpTopic::GistManager,
+            Screen::Gists(_) => HelpTopic::GistManager,
             Screen::GistDetail => HelpTopic::GistDetail,
             Screen::Revisions(_) => HelpTopic::Revisions,
             Screen::Config(_) => HelpTopic::Config,
@@ -654,9 +673,10 @@ pub struct PinsState {
     pub sort: PinSort,
 }
 
-/// Gist-manager screen state (`Screen::Gists`). Named `gist_manager` on `AppState` because
-/// the `gists` field name is taken by the gist list `Vec`. Data only — methods stay on `AppState`.
-#[derive(Debug, Clone, Default)]
+/// Gist-manager screen state — carried on [`Screen::Gists`] (issue #242). Named
+/// `gist_manager` in accessors because the `gists` field name is taken by the gist list
+/// `Vec`. Data only — methods stay on `AppState`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GistsManagerState {
     pub index: usize,
     pub hscroll: u16,
@@ -693,6 +713,8 @@ pub struct DetailState {
     pub focus: DetailFocus,
     /// Cursor index into the detail gist's files when `focus == Files`.
     pub file_cursor: usize,
+    /// Where `q`/`Esc` returns from detail (usually [`Screen::Gists`] with its payload).
+    pub return_screen: Screen,
     /// Screen to return to after a compaction confirm is cancelled/finished (Gists or GistDetail).
     pub compact_return_screen: Screen,
 }
@@ -793,7 +815,6 @@ pub struct AppState {
     /// slow older scan cannot clobber a newer one (issue #221).
     pub local_scan_generation: u64,
 
-    pub gist_manager: GistsManagerState,
     pub editing_description: bool,
     pub description_input: TextInput,
     pub bg_task_msg: Option<String>,
@@ -948,6 +969,46 @@ impl AppState {
         match &mut self.screen {
             Screen::Pins(p) => Some(p.as_mut()),
             Screen::Diff | Screen::Confirm | Screen::Preview => self.diff_return.pins_state_mut(),
+            _ => None,
+        }
+    }
+
+    /// Gist-manager payload when Gists is active, parked on detail/revision return paths, or
+    /// under palette origin (issue #242).
+    pub fn gist_manager(&self) -> Option<&GistsManagerState> {
+        match &self.screen {
+            Screen::Gists(g) => Some(g.as_ref()),
+            Screen::GistDetail => self.detail.return_screen.gists_state(),
+            Screen::Revisions(r) => r.return_screen.gists_state(),
+            Screen::Palette => self.palette.origin_screen.gists_state(),
+            Screen::Help(h) => h.return_screen.gists_state(),
+            Screen::Config(c) => c.return_screen.gists_state(),
+            Screen::Diff | Screen::Confirm | Screen::Preview => match &self.diff_return {
+                Screen::Gists(g) => Some(g.as_ref()),
+                Screen::Revisions(r) => r.return_screen.gists_state(),
+                _ => self.detail.return_screen.gists_state(),
+            },
+            _ => None,
+        }
+    }
+
+    pub fn gist_manager_mut(&mut self) -> Option<&mut GistsManagerState> {
+        match &mut self.screen {
+            Screen::Gists(g) => Some(g.as_mut()),
+            Screen::GistDetail => self.detail.return_screen.gists_state_mut(),
+            Screen::Revisions(r) => r.return_screen.gists_state_mut(),
+            Screen::Palette => self.palette.origin_screen.gists_state_mut(),
+            Screen::Diff | Screen::Confirm | Screen::Preview => {
+                if matches!(&self.diff_return, Screen::Gists(_)) {
+                    return self.diff_return.gists_state_mut();
+                }
+                if matches!(&self.diff_return, Screen::Revisions(_)) {
+                    if let Screen::Revisions(r) = &mut self.diff_return {
+                        return r.return_screen.gists_state_mut();
+                    }
+                }
+                self.detail.return_screen.gists_state_mut()
+            }
             _ => None,
         }
     }
@@ -1139,7 +1200,10 @@ impl AppState {
     }
 
     fn manager_gist_source(&self) -> &[GistFile] {
-        if self.gist_manager.type_filter.uses_starred_source() {
+        let starred = self
+            .gist_manager()
+            .is_some_and(|g| g.type_filter.uses_starred_source());
+        if starred {
             &self.starred_gists
         } else {
             &self.gists
@@ -1360,17 +1424,18 @@ impl AppState {
     /// are applied. This is the single source of truth for navigation, selection, and
     /// rendering in `Screen::Gists`.
     pub fn visible_gist_groups(&self) -> Vec<GistGroup> {
-        let query = self.gist_manager.filter_query.to_lowercase();
+        let gm = self.gist_manager().cloned().unwrap_or_default();
+        let query = gm.filter_query.to_lowercase();
         let mut groups: Vec<GistGroup> = group_gists(self.manager_gist_source())
             .into_iter()
-            .filter(|g| self.gist_manager.type_filter.matches_group(g))
+            .filter(|g| gm.type_filter.matches_group(g))
             .filter(|g| {
                 query.is_empty()
                     || g.description.to_lowercase().contains(&query)
                     || g.id.to_lowercase().contains(&query)
             })
             .collect();
-        match self.gist_manager.sort {
+        match gm.sort {
             GistGroupSort::Updated => groups.sort_by(|a, b| b.updated_at.cmp(&a.updated_at)),
             GistGroupSort::Created => groups.sort_by(|a, b| b.created_at.cmp(&a.created_at)),
         }
@@ -1379,19 +1444,19 @@ impl AppState {
 
     /// The gist highlighted in the gist-level view.
     pub fn selected_group(&self) -> Option<GistGroup> {
-        self.visible_gist_groups()
-            .into_iter()
-            .nth(self.gist_manager.index)
+        let idx = self.gist_manager().map(|g| g.index).unwrap_or(0);
+        self.visible_gist_groups().into_iter().nth(idx)
     }
 
     /// Highest horizontal-scroll offset for the gist-level view, based on its longest
     /// visible row (mirrors `focused_hscroll_max` for the main panes).
     fn gists_hscroll_max(&self) -> u16 {
+        let sort = self.gist_manager().map(|g| g.sort).unwrap_or_default();
         hscroll_max_among(self.visible_gist_groups().iter().map(|g| {
             gist_group_row_label(
                 g,
                 unix_now(),
-                self.gist_manager.sort,
+                sort,
                 (
                     self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
                     self.gist_star_counts.get(&g.id).copied().unwrap_or(0),
@@ -1549,17 +1614,17 @@ impl AppState {
             Screen::List => self.selected_gist(),
             _ => None,
         };
-        let gist_id = match return_screen {
+        let gist_id = match &return_screen {
             Screen::List => selected_list_gist.as_ref().map(|g| g.file.gist_id.clone()),
             Screen::GistDetail => self.detail.gist_id.clone(),
-            Screen::Gists => self.selected_group().map(|g| g.id.clone()),
+            Screen::Gists(_) => self.selected_group().map(|g| g.id.clone()),
             _ => None,
         };
         let Some(gist_id) = gist_id else {
             return false;
         };
         let filenames = self.gist_filenames(&gist_id);
-        let target_file = match return_screen {
+        let target_file = match &return_screen {
             Screen::List => selected_list_gist
                 .as_ref()
                 .map(|g| g.file.filename.clone())
@@ -1568,7 +1633,7 @@ impl AppState {
                 .into_iter()
                 .nth(self.detail.file_cursor)
                 .or_else(|| self.gist_filenames(&gist_id).first().cloned()),
-            Screen::Gists => filenames.first().cloned(),
+            Screen::Gists(_) => filenames.first().cloned(),
             _ => None,
         };
         let Some(target_file) = target_file else {
@@ -1653,7 +1718,7 @@ impl AppState {
     /// Screen-aware so IO actions (open-in-browser, compact) target what the user sees.
     pub fn context_gist_id(&self) -> Option<String> {
         match &self.screen {
-            Screen::Gists => self.selected_group().map(|g| g.id),
+            Screen::Gists(_) => self.selected_group().map(|g| g.id),
             Screen::GistDetail => self.detail.gist_id.clone(),
             _ => self.selected_gist().map(|g| g.file.gist_id),
         }
@@ -1936,7 +2001,6 @@ pub fn initial_state() -> AppState {
         local_scanning: false,
         local_scan_generation: 0,
 
-        gist_manager: GistsManagerState::default(),
         editing_description: false,
         description_input: TextInput::default(),
         bg_task_msg: None,
@@ -1947,7 +2011,8 @@ pub fn initial_state() -> AppState {
         download_gist_filename: None,
         diff_return: Screen::List,
         detail: DetailState {
-            compact_return_screen: Screen::Gists,
+            return_screen: Screen::Gists(Box::default()),
+            compact_return_screen: Screen::Gists(Box::default()),
             ..Default::default()
         },
         spinner_frame: 0,

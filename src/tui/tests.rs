@@ -40,6 +40,15 @@ fn pins_mut(state: &mut AppState) -> &mut PinsState {
 fn pins_ref(state: &AppState) -> &PinsState {
     state.pins().expect("expected Screen::Pins")
 }
+fn gists_mut(state: &mut AppState) -> &mut GistsManagerState {
+    if !state.screen.is_gists() {
+        state.screen = Screen::Gists(Box::default());
+    }
+    state.gist_manager_mut().expect("expected Screen::Gists")
+}
+fn gists_ref(state: &AppState) -> &GistsManagerState {
+    state.gist_manager().expect("expected Screen::Gists")
+}
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
@@ -82,7 +91,7 @@ fn state_with_gists() -> AppState {
             node_id: None,
         },
     ];
-    state.gist_manager.index = 0;
+    gists_mut(&mut state).index = 0;
     state
 }
 
@@ -290,7 +299,7 @@ fn moving_driver_pane_resets_ranked_pane() {
 #[test]
 fn enter_on_gist_opens_detail() {
     let mut state = state_with_gists();
-    state.screen = Screen::Gists;
+    state.screen = Screen::Gists(Box::default());
     let outcome = state.handle_key(KeyCode::Enter);
     assert!(matches!(outcome, KeyOutcome::OpenGistDetail));
 }
@@ -387,7 +396,7 @@ fn detail_q_returns_to_gists() {
     let mut state = state_with_gists();
     state.screen = Screen::GistDetail;
     state.handle_key(KeyCode::Char('q'));
-    assert_eq!(state.screen, Screen::Gists);
+    assert!(state.screen.is_gists());
 }
 
 #[test]
@@ -588,8 +597,8 @@ fn context_gist_id_uses_detail_id_on_detail_screen() {
 #[test]
 fn context_gist_id_uses_group_cursor_on_gists_screen() {
     let mut state = state_with_gists();
-    state.screen = Screen::Gists;
-    state.gist_manager.index = 0;
+    state.screen = Screen::Gists(Box::default());
+    gists_mut(&mut state).index = 0;
     assert_eq!(
         state.context_gist_id(),
         state.selected_group().map(|g| g.id)
@@ -2406,7 +2415,7 @@ fn u_without_selection_is_noop() {
 #[test]
 fn o_in_gist_view_opens_browser() {
     let mut state = state_with_two_gists();
-    state.screen = Screen::Gists;
+    state.screen = Screen::Gists(Box::default());
     assert_eq!(
         state.handle_key(KeyCode::Char('o')),
         KeyOutcome::OpenBrowser
@@ -2426,7 +2435,7 @@ fn y_copies_gist_url_on_list_gists_and_detail() {
     assert_eq!(list.handle_key(KeyCode::Char('y')), KeyOutcome::CopyGistUrl);
 
     let mut gists = state_with_two_gists();
-    gists.screen = Screen::Gists;
+    gists.screen = Screen::Gists(Box::default());
     assert_eq!(
         gists.handle_key(KeyCode::Char('y')),
         KeyOutcome::CopyGistUrl
@@ -2458,7 +2467,7 @@ fn preview_y_copies_url_and_capital_y_copies_content() {
 #[test]
 fn c_in_detail_requests_compaction_not_gist_manager() {
     let mut state = state_with_two_gists();
-    state.screen = Screen::Gists;
+    state.screen = Screen::Gists(Box::default());
     assert_eq!(state.handle_key(KeyCode::Char('c')), KeyOutcome::None);
     state.screen = Screen::GistDetail;
     state.detail.gist_id = Some("a".into());
@@ -2487,7 +2496,7 @@ fn compact_confirm_y_executes_and_n_returns_to_gist_manager() {
 
     // Cancelling drops the pending action and lands back in the gist manager.
     state.handle_key(KeyCode::Char('n'));
-    assert_eq!(state.screen, Screen::Gists);
+    assert!(state.screen.is_gists());
     assert!(state.pending_action.is_none());
 }
 
@@ -3073,8 +3082,8 @@ fn g_opens_gist_view_landing_on_the_selected_files_gist() {
     // gist-level view; it should land on that same gist.
     state.gist_index = 1;
     assert_eq!(state.handle_key(KeyCode::Char('g')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::Gists);
-    assert_eq!(state.gist_manager.index, 1);
+    assert!(state.screen.is_gists());
+    assert_eq!(gists_ref(&state).index, 1);
     assert_eq!(state.selected_group().unwrap().id, "b");
 }
 
@@ -3205,7 +3214,7 @@ fn detail_x_stages_whole_gist_delete() {
 #[test]
 fn gist_view_q_returns_to_list() {
     let mut state = state_with_two_gists();
-    state.screen = Screen::Gists;
+    state.screen = Screen::Gists(Box::default());
     state.handle_key(KeyCode::Char('q'));
     assert_eq!(state.screen, Screen::List);
 }
@@ -3214,7 +3223,7 @@ fn gist_view_q_returns_to_list() {
 fn gist_view_v_cycles_visibility_filter() {
     // state_with_two_gists: gist "a" is public, gist "b" is secret.
     let mut state = state_with_two_gists();
-    state.screen = Screen::Gists;
+    state.screen = Screen::Gists(Box::default());
     assert_eq!(state.visible_gist_groups().len(), 2);
 
     state.handle_key(KeyCode::Char('v')); // -> public
@@ -3240,9 +3249,9 @@ fn gist_view_v_cycles_visibility_filter() {
 #[test]
 fn gist_view_filter_narrows_then_esc_clears() {
     let mut state = state_with_two_gists();
-    state.screen = Screen::Gists;
+    state.screen = Screen::Gists(Box::default());
     state.handle_key(KeyCode::Char('/'));
-    assert!(state.gist_manager.filtering);
+    assert!(gists_ref(&state).filtering);
     for c in "ssh".chars() {
         state.handle_key(KeyCode::Char(c));
     }
@@ -3251,15 +3260,15 @@ fn gist_view_filter_narrows_then_esc_clears() {
     assert_eq!(vis[0].id, "b"); // "SSH config"
 
     state.handle_key(KeyCode::Esc);
-    assert!(!state.gist_manager.filtering);
-    assert!(state.gist_manager.filter_query.is_empty());
+    assert!(!gists_ref(&state).filtering);
+    assert!(gists_ref(&state).filter_query.is_empty());
     assert_eq!(state.visible_gist_groups().len(), 2);
 }
 
 #[test]
 fn gist_view_s_cycles_sort_updated_then_created() {
     let mut state = initial_state();
-    state.screen = Screen::Gists;
+    state.screen = Screen::Gists(Box::default());
     state.gists = vec![
         GistFile {
             gist_id: "old-upd".into(),
@@ -3295,26 +3304,26 @@ fn gist_view_s_cycles_sort_updated_then_created() {
         },
     ];
     // Default: sort by updated (newest first).
-    assert_eq!(state.gist_manager.sort, GistGroupSort::Updated);
+    assert_eq!(gists_ref(&state).sort, GistGroupSort::Updated);
     assert_eq!(state.visible_gist_groups()[0].id, "new-upd");
     // s -> sort by created (newest created first).
     state.handle_key(KeyCode::Char('s'));
-    assert_eq!(state.gist_manager.sort, GistGroupSort::Created);
+    assert_eq!(gists_ref(&state).sort, GistGroupSort::Created);
     assert_eq!(state.visible_gist_groups()[0].id, "old-upd");
 }
 
 #[test]
 fn gist_view_left_right_scrolls_horizontally() {
     let mut state = state_with_two_gists();
-    state.screen = Screen::Gists;
-    assert_eq!(state.gist_manager.hscroll, 0);
+    state.screen = Screen::Gists(Box::default());
+    assert_eq!(gists_ref(&state).hscroll, 0);
     state.handle_key(KeyCode::Right);
-    assert_eq!(state.gist_manager.hscroll, 1);
+    assert_eq!(gists_ref(&state).hscroll, 1);
     state.handle_key(KeyCode::Left);
-    assert_eq!(state.gist_manager.hscroll, 0);
+    assert_eq!(gists_ref(&state).hscroll, 0);
     // Left at the origin saturates at 0.
     state.handle_key(KeyCode::Left);
-    assert_eq!(state.gist_manager.hscroll, 0);
+    assert_eq!(gists_ref(&state).hscroll, 0);
 }
 
 #[test]
@@ -3600,7 +3609,7 @@ fn top_bar_gists_click_opens_gist_manager_from_any_screen() {
         ..Default::default()
     };
     let out = state.handle_mouse(MouseInput::Click { col: 12, row: 0 }, &layout);
-    assert_eq!(state.screen, Screen::Gists);
+    assert!(state.screen.is_gists());
     assert_eq!(out, KeyOutcome::None);
 }
 
@@ -4036,43 +4045,43 @@ fn gists_screen_state() -> AppState {
             node_id: None,
         },
     ];
-    state.screen = Screen::Gists;
+    state.screen = Screen::Gists(Box::default());
     state
 }
 
 #[test]
 fn gists_filter_navigates_while_typing() {
     let mut state = gists_screen_state();
-    state.gist_manager.filtering = true;
+    gists_mut(&mut state).filtering = true;
 
     state.handle_key(KeyCode::Down);
-    assert_eq!(state.gist_manager.index, 1);
-    assert!(state.gist_manager.filtering);
+    assert_eq!(gists_ref(&state).index, 1);
+    assert!(gists_ref(&state).filtering);
     state.handle_key(KeyCode::Up);
-    assert_eq!(state.gist_manager.index, 0);
+    assert_eq!(gists_ref(&state).index, 0);
 }
 
 #[test]
 fn gists_filter_empty_backspace_exits() {
     let mut state = gists_screen_state();
-    state.gist_manager.filtering = true;
+    gists_mut(&mut state).filtering = true;
 
     state.handle_key(KeyCode::Char('a'));
     state.handle_key(KeyCode::Backspace); // empty again, still filtering
-    assert!(state.gist_manager.filtering);
+    assert!(gists_ref(&state).filtering);
     state.handle_key(KeyCode::Backspace); // empty -> exit
-    assert!(!state.gist_manager.filtering);
+    assert!(!gists_ref(&state).filtering);
 }
 
 #[test]
 fn gists_filter_tab_is_noop() {
     let mut state = gists_screen_state();
-    state.gist_manager.filtering = true;
+    gists_mut(&mut state).filtering = true;
     state.handle_key(KeyCode::Char('a'));
 
     state.handle_key(KeyCode::Tab);
-    assert!(state.gist_manager.filtering); // still typing
-    assert_eq!(state.gist_manager.filter_query, "a"); // unchanged
+    assert!(gists_ref(&state).filtering); // still typing
+    assert_eq!(gists_ref(&state).filter_query, "a"); // unchanged
 }
 
 // ── Pins screen filter ────────────────────────────────────────────────────────
@@ -4190,7 +4199,7 @@ fn help_topic_for_screen_maps_key_dense_screens() {
         HelpTopic::Pins
     );
     assert_eq!(
-        HelpTopic::for_screen(&Screen::Gists),
+        HelpTopic::for_screen(&Screen::Gists(Box::default())),
         HelpTopic::GistManager
     );
     assert_eq!(
@@ -4459,7 +4468,7 @@ fn pins_page_keys_jump_selection() {
 #[test]
 fn gists_page_keys_jump_selection() {
     let mut state = initial_state();
-    state.screen = Screen::Gists;
+    state.screen = Screen::Gists(Box::default());
     state.gists = (0..12)
         .map(|i| GistFile {
             gist_id: format!("g{i}"),
@@ -4476,9 +4485,9 @@ fn gists_page_keys_jump_selection() {
         })
         .collect();
     state.handle_key(KeyCode::PageDown);
-    assert_eq!(state.gist_manager.index, 10);
+    assert_eq!(gists_ref(&state).index, 10);
     state.handle_key(KeyCode::PageDown);
-    assert_eq!(state.gist_manager.index, 11);
+    assert_eq!(gists_ref(&state).index, 11);
 }
 
 #[test]
@@ -4596,9 +4605,9 @@ fn repo_link_click_opens_repo_url_regardless_of_which_screen_set_the_rect() {
 fn help_topic_view_esc_returns_to_origin() {
     let mut state = initial_state();
     state.screen = Screen::Help(Box::default());
-    help_mut(&mut state).return_screen = Screen::Gists;
+    help_mut(&mut state).return_screen = Screen::Gists(Box::default());
     state.handle_key(KeyCode::Esc);
-    assert_eq!(state.screen, Screen::Gists);
+    assert!(state.screen.is_gists());
 }
 
 #[test]
@@ -5036,9 +5045,9 @@ fn fork_key_ignored_on_list_and_gist_manager() {
     state.gist_index = 0;
     assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::None);
 
-    state.screen = Screen::Gists;
-    state.gist_manager.type_filter = GistTypeFilter::Starred;
-    state.gist_manager.index = 0;
+    state.screen = Screen::Gists(Box::default());
+    gists_mut(&mut state).type_filter = GistTypeFilter::Starred;
+    gists_mut(&mut state).index = 0;
     assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::None);
 }
 
@@ -5401,7 +5410,7 @@ fn wheel_step_help_index_moves_one() {
 #[test]
 fn gists_click_selects_and_double_click_matches_enter() {
     let mut state = gists_screen_state(); // 2 groups, Screen::Gists
-    state.gist_manager.index = 0;
+    gists_mut(&mut state).index = 0;
     let hit = PaneHit {
         rect: Rect::new(0, 0, 40, 10),
         offset: 0,
@@ -5413,7 +5422,7 @@ fn gists_click_selects_and_double_click_matches_enter() {
     // Row 2 is the 2nd content row (border at row 0) -> idx 1.
     let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
     assert_eq!(out, KeyOutcome::None);
-    assert_eq!(state.gist_manager.index, 1);
+    assert_eq!(gists_ref(&state).index, 1);
     // Double-click activates the same row, exactly as Enter would.
     let mut by_key = state.clone();
     let key_out = by_key.handle_key(KeyCode::Enter);

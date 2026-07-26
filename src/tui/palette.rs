@@ -53,7 +53,7 @@ impl AppState {
         self.screen == Screen::Confirm
             || self.filtering
             || self.pins().is_some_and(|p| p.filtering)
-            || self.gist_manager.filtering
+            || self.gist_manager().is_some_and(|g| g.filtering)
             || self.editing_description
     }
 
@@ -297,7 +297,7 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
     let mut items = match screen {
         Screen::List => list_palette_items(state),
         Screen::Pins(_) => pins_palette_items(state),
-        Screen::Gists => gists_palette_items(state),
+        Screen::Gists(_) => gists_palette_items(state),
         Screen::GistDetail => detail_palette_items(state),
         Screen::Revisions(_) => revisions_palette_items(state),
         Screen::Diff => diff_palette_items(state),
@@ -437,7 +437,8 @@ fn pins_palette_items(state: &AppState) -> Vec<PaletteItem> {
 
 fn gists_palette_items(state: &AppState) -> Vec<PaletteItem> {
     let groups = state.visible_gist_groups();
-    let has_sel = state.gist_manager.index < groups.len();
+    let index = state.gist_manager().map(|g| g.index).unwrap_or(0);
+    let has_sel = index < groups.len();
     vec![
         key_item("Enter", "Open gist detail", KeyCode::Enter, has_sel),
         key_item("o", "Open in browser", KeyCode::Char('o'), has_sel),

@@ -1201,8 +1201,12 @@ pub(super) fn absorb_background_results(
                     state.gist_index = 0;
                 }
                 let count = state.visible_gist_groups().len();
-                if count > 0 && state.gist_manager.index >= count {
-                    state.gist_manager.index = count - 1;
+                if count > 0 {
+                    if let Some(gm) = state.gist_manager_mut() {
+                        if gm.index >= count {
+                            gm.index = count - 1;
+                        }
+                    }
                 }
                 channels.gist = None;
                 let gist_ids: std::collections::HashSet<String> = state
