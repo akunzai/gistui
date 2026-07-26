@@ -568,7 +568,7 @@ pub(super) fn dispatch_outcome(
         }
         KeyOutcome::ThemeToggle => persist_theme(state),
         KeyOutcome::FetchRevisions => {
-            let Some(gist_id) = state.revision.gist_id.clone() else {
+            let Some(gist_id) = state.revision().and_then(|r| r.gist_id.clone()) else {
                 return Ok(LoopFlow::Proceed);
             };
             spawn_bg(state, &mut channels.bg, "Loading revisions…", move || {
@@ -581,20 +581,23 @@ pub(super) fn dispatch_outcome(
             });
         }
         KeyOutcome::RevisionDiffIncremental => {
-            let Some(gist_id) = state.revision.gist_id.clone() else {
+            let Some(gist_id) = state.revision().and_then(|r| r.gist_id.clone()) else {
                 return Ok(LoopFlow::Proceed);
             };
             let Some(child) = state.selected_revision().cloned() else {
                 return Ok(LoopFlow::Proceed);
             };
-            let filename = state.revision.target_file.clone();
+            let filename = state
+                .revision()
+                .map(|r| r.target_file.clone())
+                .unwrap_or_default();
             let child_version = child.version.clone();
             let child_label = revision_version_label(&child);
-            let parent = state
-                .revision
-                .entries
-                .as_ref()
-                .and_then(|entries| entries.get(state.revision.index + 1).cloned());
+            let parent = state.revision().and_then(|r| {
+                r.entries
+                    .as_ref()
+                    .and_then(|entries| entries.get(r.index + 1).cloned())
+            });
             let (parent_version, old_label) = match parent {
                 Some(parent) => {
                     let label = revision_version_label(&parent);
@@ -620,13 +623,16 @@ pub(super) fn dispatch_outcome(
             });
         }
         KeyOutcome::RevisionDiff => {
-            let Some(gist_id) = state.revision.gist_id.clone() else {
+            let Some(gist_id) = state.revision().and_then(|r| r.gist_id.clone()) else {
                 return Ok(LoopFlow::Proceed);
             };
             let Some(revision) = state.selected_revision().cloned() else {
                 return Ok(LoopFlow::Proceed);
             };
-            let filename = state.revision.target_file.clone();
+            let filename = state
+                .revision()
+                .map(|r| r.target_file.clone())
+                .unwrap_or_default();
             let version = revision.version.clone();
             let version_label = revision_version_label(&revision);
             let old_label = format!("revision {version_label}");
@@ -651,13 +657,16 @@ pub(super) fn dispatch_outcome(
             });
         }
         KeyOutcome::RestoreRevisionPreview => {
-            let Some(gist_id) = state.revision.gist_id.clone() else {
+            let Some(gist_id) = state.revision().and_then(|r| r.gist_id.clone()) else {
                 return Ok(LoopFlow::Proceed);
             };
             let Some(revision) = state.selected_revision().cloned() else {
                 return Ok(LoopFlow::Proceed);
             };
-            let filename = state.revision.target_file.clone();
+            let filename = state
+                .revision()
+                .map(|r| r.target_file.clone())
+                .unwrap_or_default();
             let version = revision.version.clone();
             let version_label = revision_version_label(&revision);
             let raw_url = state.gist_file_raw_url(&gist_id, &filename);

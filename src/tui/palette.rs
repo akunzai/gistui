@@ -299,7 +299,7 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
         Screen::Pins => pins_palette_items(state),
         Screen::Gists => gists_palette_items(state),
         Screen::GistDetail => detail_palette_items(state),
-        Screen::Revisions => revisions_palette_items(state),
+        Screen::Revisions(_) => revisions_palette_items(state),
         Screen::Diff => diff_palette_items(state),
         Screen::Preview => preview_palette_items(state),
         Screen::Help(_) => help_palette_items(),
@@ -519,20 +519,18 @@ fn detail_palette_items(state: &AppState) -> Vec<PaletteItem> {
 }
 
 fn revisions_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let entries_len = state
-        .revision
-        .entries
-        .as_ref()
-        .map(|e| e.len())
+    let rev = state.revision();
+    let entries_len = rev
+        .and_then(|r| r.entries.as_ref().map(|e| e.len()))
         .unwrap_or(0);
     let has_entries = entries_len > 0;
-    let not_head = state.revision.index > 0;
-    let gist_id = state.revision.gist_id.clone();
+    let not_head = rev.is_some_and(|r| r.index > 0);
+    let gist_id = rev.and_then(|r| r.gist_id.clone());
     let owned = gist_id
         .as_deref()
         .map(|id| state.gist_is_owned(id))
         .unwrap_or(false);
-    let file = state.revision.target_file.clone();
+    let file = rev.map(|r| r.target_file.clone()).unwrap_or_default();
     let previewable = gist_id
         .as_ref()
         .is_some_and(|id| state.gist_file_is_text_previewable(id, &file));

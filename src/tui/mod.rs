@@ -18,8 +18,9 @@ pub enum FocusPane {
     Gist,
 }
 
-/// Active TUI screen. Unit tags for most screens; **Help** / **Config** carry payloads so
-/// screen-local UI + return path cannot go stale on the root state (issue #242). Not `Copy`.
+/// Active TUI screen. Unit tags for most screens; **Help** / **Config** / **Revisions** carry
+/// payloads so screen-local UI + return path cannot go stale on the root state (issue #242).
+/// Not `Copy`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Screen {
     #[default]
@@ -34,8 +35,9 @@ pub enum Screen {
     Gists,
     /// Single-gist detail: basic info + file list + comments (entered from Gists with Enter).
     GistDetail,
-    /// Revision history for one gist (entered with `H` from the list, Gist manager, or Gist detail).
-    Revisions,
+    /// Revision history for one gist; payload owns list/cursor/return (and may sit in
+    /// `diff_return` while a revision diff is open).
+    Revisions(Box<RevisionState>),
     /// Unified context menu / command palette overlay (`;` or right-click / `Ctrl+p`).
     Palette,
     /// Flat settings list (issue #227); payload owns cursor + return path.
@@ -50,6 +52,10 @@ impl Screen {
 
     pub fn is_config(&self) -> bool {
         matches!(self, Screen::Config(_))
+    }
+
+    pub fn is_revisions(&self) -> bool {
+        matches!(self, Screen::Revisions(_))
     }
 
     /// Borrow help payload when this is [`Screen::Help`].
@@ -78,6 +84,20 @@ impl Screen {
     pub fn config_state_mut(&mut self) -> Option<&mut ConfigState> {
         match self {
             Screen::Config(c) => Some(c.as_mut()),
+            _ => None,
+        }
+    }
+
+    pub fn revision_state(&self) -> Option<&RevisionState> {
+        match self {
+            Screen::Revisions(r) => Some(r.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn revision_state_mut(&mut self) -> Option<&mut RevisionState> {
+        match self {
+            Screen::Revisions(r) => Some(r.as_mut()),
             _ => None,
         }
     }
@@ -188,7 +208,7 @@ impl HelpTopic {
             Screen::Pins => HelpTopic::Pins,
             Screen::Gists => HelpTopic::GistManager,
             Screen::GistDetail => HelpTopic::GistDetail,
-            Screen::Revisions => HelpTopic::Revisions,
+            Screen::Revisions(_) => HelpTopic::Revisions,
             Screen::Config(_) => HelpTopic::Config,
             Screen::Help(_) => HelpTopic::List,
             _ => HelpTopic::List,
@@ -573,9 +593,8 @@ pub struct UploadState {
     pub watching: bool,
 }
 
-/// Per-screen revision-history state (`Screen::Revisions`). Data only — the revision
-/// methods stay on `AppState`.
-#[derive(Debug, Clone, Default)]
+/// Revision-history state — carried on [`Screen::Revisions`] (issue #242).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RevisionState {
     /// Gist whose revisions are shown.
     pub gist_id: Option<String>,
@@ -788,7 +807,7 @@ pub struct AppState {
     pub theme_choice: crate::config::ThemeChoice,
     /// Resolved colour palette for the current theme choice (from config).
     pub theme: Theme,
-    pub revision: RevisionState,
+
     pub palette: PaletteState,
     /// Presentation cache for the Pins list: sync status + mtimes, filled by
     /// [`Self::refresh_pin_sync_cache`] (impure). The pure view-model builder and Pins paint
@@ -865,6 +884,34 @@ impl AppState {
 
     pub fn config_mut(&mut self) -> Option<&mut ConfigState> {
         self.screen.config_state_mut()
+    }
+
+    /// Revision payload when Revisions is active, parked in `diff_return` during a revision
+    /// diff/confirm, or under palette origin (issue #242).
+    pub fn revision(&self) -> Option<&RevisionState> {
+        match &self.screen {
+            Screen::Revisions(r) => Some(r.as_ref()),
+            Screen::Diff | Screen::Confirm | Screen::Preview => self.diff_return.revision_state(),
+            Screen::Palette => match &self.palette.origin_screen {
+                Screen::Revisions(r) => Some(r.as_ref()),
+                Screen::Diff | Screen::Confirm | Screen::Preview => {
+                    // Palette over diff that returned from revisions is rare; check origin only.
+                    None
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    pub fn revision_mut(&mut self) -> Option<&mut RevisionState> {
+        match &mut self.screen {
+            Screen::Revisions(r) => Some(r.as_mut()),
+            Screen::Diff | Screen::Confirm | Screen::Preview => {
+                self.diff_return.revision_state_mut()
+            }
+            _ => None,
+        }
     }
 
     pub fn upload_local_path(&self) -> Option<std::path::PathBuf> {
@@ -1485,61 +1532,69 @@ impl AppState {
         let Some(target_file) = target_file else {
             return false;
         };
-        self.revision.gist_id = Some(gist_id);
-        self.revision.target_file = target_file;
-        self.revision.return_screen = return_screen;
-        self.revision.index = 0;
-        self.revision.hscroll = 0;
-        self.revision.entries = None;
-        self.revision.fetch_error = None;
-        self.screen = Screen::Revisions;
+        self.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some(gist_id),
+            target_file,
+            return_screen,
+            index: 0,
+            hscroll: 0,
+            entries: None,
+            fetch_error: None,
+        }));
         true
     }
 
     pub fn selected_revision(&self) -> Option<&GistRevision> {
-        let entries = self.revision.entries.as_ref()?;
-        entries.get(self.revision.index)
+        let rev = self.revision()?;
+        let entries = rev.entries.as_ref()?;
+        entries.get(rev.index)
     }
 
     /// Advance `revision_target_file` to the next filename in this gist (wraps). Returns
     /// false when the gist has at most one file.
     pub fn cycle_revision_target_file(&mut self) -> bool {
-        let Some(gist_id) = self.revision.gist_id.clone() else {
+        let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) else {
             return false;
         };
         let files = self.gist_filenames(&gist_id);
         if files.len() <= 1 {
             return false;
         }
+        let Some(rev) = self.revision_mut() else {
+            return false;
+        };
         let current = files
             .iter()
-            .position(|f| f == &self.revision.target_file)
+            .position(|f| f == &rev.target_file)
             .unwrap_or(0);
-        self.revision.target_file = files[(current + 1) % files.len()].clone();
+        rev.target_file = files[(current + 1) % files.len()].clone();
         true
     }
 
     /// True when the diff view supports local↔gist download/upload (`d`/`u`). Revision-history
     /// diffs (returning to `Screen::Revisions`) are read-only comparisons.
     pub fn diff_allows_sync(&self) -> bool {
-        self.diff_return != Screen::Revisions
+        !self.diff_return.is_revisions()
     }
 
     /// Footer label for the revision-history target file, including `(n/total)` when multi-file.
     pub fn revision_target_file_label(&self) -> String {
-        let Some(gist_id) = self.revision.gist_id.as_deref() else {
-            return self.revision.target_file.clone();
+        let Some(rev) = self.revision() else {
+            return String::new();
+        };
+        let Some(gist_id) = rev.gist_id.as_deref() else {
+            return rev.target_file.clone();
         };
         let files = self.gist_filenames(gist_id);
         if files.len() <= 1 {
-            return self.revision.target_file.clone();
+            return rev.target_file.clone();
         }
         let pos = files
             .iter()
-            .position(|f| f == &self.revision.target_file)
+            .position(|f| f == &rev.target_file)
             .map(|i| i + 1)
             .unwrap_or(1);
-        format!("{} ({pos}/{})", self.revision.target_file, files.len())
+        format!("{} ({pos}/{})", rev.target_file, files.len())
     }
 
     pub fn group_by_id(&self, gist_id: &str) -> Option<GistGroup> {
@@ -1859,10 +1914,6 @@ pub fn initial_state() -> AppState {
         gist_star_counts: std::collections::HashMap::new(),
         theme_choice: crate::config::ThemeChoice::Dark,
         theme: Theme::DARK,
-        revision: RevisionState {
-            return_screen: Screen::GistDetail,
-            ..Default::default()
-        },
         palette: PaletteState::default(),
         pin_sync_cache: Vec::new(),
         pin_sync_cache_dirty: true,
