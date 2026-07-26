@@ -53,8 +53,8 @@ pub(super) fn run_loop(
     let mut pin_sync_screen_active = false;
 
     loop {
-        let pins_active = state.screen == Screen::Pins
-            || (state.screen == Screen::Palette && state.palette.origin_screen == Screen::Pins);
+        let pins_active = state.screen.is_pins()
+            || (state.screen == Screen::Palette && state.palette.origin_screen.is_pins());
         if pins_active
             && (state.pin_sync_cache_dirty
                 || !pin_sync_screen_active

@@ -31,6 +31,15 @@ fn revision_mut(state: &mut AppState) -> &mut RevisionState {
 fn revision_ref(state: &AppState) -> &RevisionState {
     state.revision().expect("expected Screen::Revisions")
 }
+fn pins_mut(state: &mut AppState) -> &mut PinsState {
+    if !state.screen.is_pins() {
+        state.screen = Screen::Pins(Box::default());
+    }
+    state.pins_mut().expect("expected Screen::Pins")
+}
+fn pins_ref(state: &AppState) -> &PinsState {
+    state.pins().expect("expected Screen::Pins")
+}
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
@@ -505,7 +514,7 @@ fn file_list_scroll_keeps_cursor_visible() {
 #[test]
 fn pins_key_clears_lingering_status_for_one_shot_display() {
     let mut state = initial_state();
-    state.screen = Screen::Pins;
+    state.screen = Screen::Pins(Box::default());
     state.status = Some("already in sync".into());
     state.handle_key(KeyCode::Up); // any key
     assert_eq!(state.status, None);
@@ -2615,13 +2624,12 @@ fn confirm_upload_n_cancels_to_diff_return_screen() {
         local_path: PathBuf::from("/tmp/settings.json"),
     });
     state.screen = Screen::Confirm;
-    state.diff_return = Screen::Pins;
+    state.diff_return = Screen::Pins(Box::default());
 
     assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
     assert!(state.pending_action.is_none());
-    assert_eq!(
-        state.screen,
-        Screen::Pins,
+    assert!(
+        state.screen.is_pins(),
         "cancelling an upload initiated from Pins must return to Pins, not always List"
     );
 }
@@ -3399,7 +3407,7 @@ fn create_esc_while_editing_description_cancels() {
 #[test]
 fn pins_screen_sync_keys_emit_outcomes() {
     let mut state = initial_state();
-    state.screen = Screen::Pins;
+    state.screen = Screen::Pins(Box::default());
     state.pinned = vec![PinnedMapping {
         local_path: PathBuf::from("/tmp/a.txt"),
         gist_id: "g1".into(),
@@ -3425,7 +3433,7 @@ fn pins_screen_sync_keys_emit_outcomes() {
 #[test]
 fn pins_screen_enter_emits_preview_pin_diff() {
     let mut state = initial_state();
-    state.screen = Screen::Pins;
+    state.screen = Screen::Pins(Box::default());
     state.pinned = vec![PinnedMapping {
         local_path: PathBuf::from("/tmp/a.txt"),
         gist_id: "g1".into(),
@@ -3438,7 +3446,7 @@ fn pins_screen_enter_emits_preview_pin_diff() {
 
 fn pins_state_with_long_home_path() -> AppState {
     let mut state = initial_state();
-    state.screen = Screen::Pins;
+    state.screen = Screen::Pins(Box::default());
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
     state.pinned = vec![PinnedMapping {
         local_path: home.join("code/very/deeply/nested/project/config.json"),
@@ -3447,13 +3455,15 @@ fn pins_state_with_long_home_path() -> AppState {
         direction: None,
         last_seen_hash: None,
     }];
-    state.pins.index = 0;
+    pins_mut(&mut state).index = 0;
     state
 }
 
 #[test]
 fn pins_hscroll_starts_at_zero() {
-    assert_eq!(initial_state().pins.hscroll, 0);
+    let mut state = initial_state();
+    state.screen = Screen::Pins(Box::default());
+    assert_eq!(pins_ref(&state).hscroll, 0);
 }
 
 #[test]
@@ -3522,14 +3532,22 @@ fn pin_row_label_shows_home_as_tilde() {
 fn pins_right_scrolls_then_clamps_at_a_bound() {
     let mut state = pins_state_with_long_home_path();
     state.handle_key(KeyCode::Right);
-    assert_eq!(state.pins.hscroll, 1, "Right should advance the scroll");
+    assert_eq!(
+        pins_ref(&state).hscroll,
+        1,
+        "Right should advance the scroll"
+    );
     // Far past the end clamps to a stable maximum (does not run away).
     for _ in 0..500 {
         state.handle_key(KeyCode::Right);
     }
-    let clamped = state.pins.hscroll;
+    let clamped = pins_ref(&state).hscroll;
     state.handle_key(KeyCode::Right);
-    assert_eq!(state.pins.hscroll, clamped, "scroll must clamp at its max");
+    assert_eq!(
+        pins_ref(&state).hscroll,
+        clamped,
+        "scroll must clamp at its max"
+    );
     assert!(clamped > 0, "a long path must be scrollable");
 }
 
@@ -3539,7 +3557,7 @@ fn pins_left_clamps_at_zero() {
     state.handle_key(KeyCode::Right);
     state.handle_key(KeyCode::Left);
     state.handle_key(KeyCode::Left);
-    assert_eq!(state.pins.hscroll, 0);
+    assert_eq!(pins_ref(&state).hscroll, 0);
 }
 
 #[test]
@@ -3553,20 +3571,24 @@ fn pins_hscroll_resets_when_selection_moves() {
         last_seen_hash: None,
     });
     state.handle_key(KeyCode::Right);
-    assert!(state.pins.hscroll > 0);
+    assert!(pins_ref(&state).hscroll > 0);
     state.handle_key(KeyCode::Down);
-    assert_eq!(state.pins.hscroll, 0, "moving selection resets hscroll");
+    assert_eq!(
+        pins_ref(&state).hscroll,
+        0,
+        "moving selection resets hscroll"
+    );
 }
 
 #[test]
 fn entering_pins_screen_resets_hscroll() {
     let mut state = pins_state_with_long_home_path();
     state.handle_key(KeyCode::Right);
-    assert!(state.pins.hscroll > 0);
+    assert!(pins_ref(&state).hscroll > 0);
     state.screen = Screen::List;
     state.handle_key(KeyCode::Char('P'));
-    assert_eq!(state.screen, Screen::Pins);
-    assert_eq!(state.pins.hscroll, 0);
+    assert!(state.screen.is_pins());
+    assert_eq!(pins_ref(&state).hscroll, 0);
 }
 
 #[test]
@@ -3586,15 +3608,15 @@ fn top_bar_gists_click_opens_gist_manager_from_any_screen() {
 fn top_bar_pins_click_opens_pins_from_any_screen() {
     let mut state = pins_state_with_long_home_path();
     state.handle_key(KeyCode::Right); // dirty the hscroll so the reset is observable
-    assert!(state.pins.hscroll > 0);
+    assert!(pins_ref(&state).hscroll > 0);
     state.screen = Screen::Preview;
     let layout = MouseLayout {
         top_bar_pins: Some(Rect::new(20, 0, 6, 1)),
         ..Default::default()
     };
     let out = state.handle_mouse(MouseInput::Click { col: 22, row: 0 }, &layout);
-    assert_eq!(state.screen, Screen::Pins);
-    assert_eq!(state.pins.hscroll, 0);
+    assert!(state.screen.is_pins());
+    assert_eq!(pins_ref(&state).hscroll, 0);
     assert_eq!(out, KeyOutcome::None);
 }
 
@@ -4058,7 +4080,7 @@ fn gists_filter_tab_is_noop() {
 fn state_with_pins(rows: &[(&str, &str, &str)]) -> AppState {
     let mut state = initial_state();
     state.cwd = PathBuf::from("/cwd");
-    state.screen = Screen::Pins;
+    state.screen = Screen::Pins(Box::default());
     state.pinned = rows
         .iter()
         .map(|(lp, id, fname)| PinnedMapping {
@@ -4081,10 +4103,10 @@ fn visible_pin_indices_filters_by_path_and_filename() {
     ]);
     assert_eq!(state.visible_pin_indices(), vec![0, 1, 2]);
 
-    state.pins.filter_query = "lua".into(); // matches filename of row 1
+    pins_mut(&mut state).filter_query = "lua".into(); // matches filename of row 1
     assert_eq!(state.visible_pin_indices(), vec![1]);
 
-    state.pins.filter_query = "ZSH".into(); // case-insensitive, matches path of row 0
+    pins_mut(&mut state).filter_query = "ZSH".into(); // case-insensitive, matches path of row 0
     assert_eq!(state.visible_pin_indices(), vec![0]);
 }
 
@@ -4095,8 +4117,8 @@ fn selected_pin_index_maps_through_filter() {
         ("/cwd/beta", "g2", "beta"),
         ("/cwd/gamma", "g3", "gamma"),
     ]);
-    state.pins.filter_query = "gamma".into(); // only row 2 visible
-    state.pins.index = 0; // first (and only) visible row
+    pins_mut(&mut state).filter_query = "gamma".into(); // only row 2 visible
+    pins_mut(&mut state).index = 0; // first (and only) visible row
     assert_eq!(state.selected_pin_index(), Some(2)); // TRUE index, not 0
 }
 
@@ -4107,43 +4129,43 @@ fn pins_down_clamps_to_filtered_count() {
         ("/cwd/blua", "g2", "blua"),
         ("/cwd/c", "g3", "c"),
     ]);
-    state.pins.filter_query = "lua".into(); // 1 visible
+    pins_mut(&mut state).filter_query = "lua".into(); // 1 visible
     state.handle_key(KeyCode::Down);
-    assert_eq!(state.pins.index, 0); // clamped to the single filtered row
+    assert_eq!(pins_ref(&state).index, 0); // clamped to the single filtered row
 }
 
 #[test]
 fn pins_filter_input_behaviors() {
     let mut state = state_with_pins(&[("/cwd/a", "g1", "a"), ("/cwd/b", "g2", "b")]);
-    state.pins.filtering = true;
+    pins_mut(&mut state).filtering = true;
 
     // live nav while typing
     state.handle_key(KeyCode::Down);
-    assert_eq!(state.pins.index, 1);
-    assert!(state.pins.filtering);
+    assert_eq!(pins_ref(&state).index, 1);
+    assert!(pins_ref(&state).filtering);
 
     // Tab is a no-op (single pane)
     state.handle_key(KeyCode::Char('a'));
     state.handle_key(KeyCode::Tab);
-    assert!(state.pins.filtering);
-    assert_eq!(state.pins.filter_query, "a");
+    assert!(pins_ref(&state).filtering);
+    assert_eq!(pins_ref(&state).filter_query, "a");
 
     // Esc clears + exits
     state.handle_key(KeyCode::Esc);
-    assert!(!state.pins.filtering);
-    assert_eq!(state.pins.filter_query, "");
+    assert!(!pins_ref(&state).filtering);
+    assert_eq!(pins_ref(&state).filter_query, "");
 
     // Backspace on empty exits
-    state.pins.filtering = true;
+    pins_mut(&mut state).filtering = true;
     state.handle_key(KeyCode::Backspace);
-    assert!(!state.pins.filtering);
+    assert!(!pins_ref(&state).filtering);
 
     // Enter keeps query + exits
-    state.pins.filtering = true;
+    pins_mut(&mut state).filtering = true;
     state.handle_key(KeyCode::Char('b'));
     state.handle_key(KeyCode::Enter);
-    assert!(!state.pins.filtering);
-    assert_eq!(state.pins.filter_query, "b");
+    assert!(!pins_ref(&state).filtering);
+    assert_eq!(pins_ref(&state).filter_query, "b");
 }
 
 #[test]
@@ -4163,7 +4185,10 @@ fn help_topic_all_is_ordered_and_titled() {
 #[test]
 fn help_topic_for_screen_maps_key_dense_screens() {
     assert_eq!(HelpTopic::for_screen(&Screen::List), HelpTopic::List);
-    assert_eq!(HelpTopic::for_screen(&Screen::Pins), HelpTopic::Pins);
+    assert_eq!(
+        HelpTopic::for_screen(&Screen::Pins(Box::default())),
+        HelpTopic::Pins
+    );
     assert_eq!(
         HelpTopic::for_screen(&Screen::Gists),
         HelpTopic::GistManager
@@ -4415,7 +4440,7 @@ fn list_page_keys_jump_local_selection() {
 fn pins_page_keys_jump_selection() {
     use crossterm::event::KeyModifiers;
     let mut state = initial_state();
-    state.screen = Screen::Pins;
+    state.screen = Screen::Pins(Box::default());
     state.pinned = (0..12)
         .map(|i| PinnedMapping {
             local_path: PathBuf::from(format!("/cwd/p{i}.txt")),
@@ -4426,9 +4451,9 @@ fn pins_page_keys_jump_selection() {
         })
         .collect();
     state.handle_key_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
-    assert_eq!(state.pins.index, 10);
+    assert_eq!(pins_ref(&state).index, 10);
     state.handle_key(KeyCode::PageUp);
-    assert_eq!(state.pins.index, 0);
+    assert_eq!(pins_ref(&state).index, 0);
 }
 
 #[test]
@@ -4504,11 +4529,11 @@ fn restore_revision_confirm_prompt_and_y_intent() {
 #[test]
 fn question_mark_opens_contextual_help_from_pins() {
     let mut state = initial_state();
-    state.screen = Screen::Pins;
+    state.screen = Screen::Pins(Box::default());
     state.handle_key(KeyCode::Char('?'));
     assert!(state.screen.is_help());
     assert_eq!(help_ref(&state).topic, HelpTopic::Pins);
-    assert_eq!(help_ref(&state).return_screen, Screen::Pins);
+    assert!(help_ref(&state).return_screen.is_pins());
     assert!(!help_ref(&state).index_open);
 }
 
@@ -4606,9 +4631,9 @@ fn help_index_question_mark_exits_help() {
     let mut state = initial_state();
     state.screen = Screen::Help(Box::default());
     help_mut(&mut state).index_open = true;
-    help_mut(&mut state).return_screen = Screen::Pins;
+    help_mut(&mut state).return_screen = Screen::Pins(Box::default());
     state.handle_key(KeyCode::Char('?'));
-    assert_eq!(state.screen, Screen::Pins);
+    assert!(state.screen.is_pins());
     assert!(state.help().is_none());
 }
 
@@ -5410,7 +5435,7 @@ fn pins_click_selects_and_double_click_matches_enter() {
     };
     let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
     assert_eq!(out, KeyOutcome::None);
-    assert_eq!(state.pins.index, 1);
+    assert_eq!(pins_ref(&state).index, 1);
     let mut by_key = state.clone();
     let key_out = by_key.handle_key(KeyCode::Enter);
     let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
@@ -5730,11 +5755,11 @@ fn ctrl_p_opens_command_palette() {
 #[test]
 fn palette_esc_returns_to_origin() {
     let mut state = crate::tui::initial_state();
-    state.screen = Screen::Pins;
+    state.screen = Screen::Pins(Box::default());
     state.open_palette_menu(None);
     assert_eq!(state.screen, Screen::Palette);
     state.handle_key(KeyCode::Esc);
-    assert_eq!(state.screen, Screen::Pins);
+    assert!(state.screen.is_pins());
 }
 
 #[test]

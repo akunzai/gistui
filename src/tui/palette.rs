@@ -52,7 +52,7 @@ impl AppState {
     pub(crate) fn palette_blocked(&self) -> bool {
         self.screen == Screen::Confirm
             || self.filtering
-            || self.pins.filtering
+            || self.pins().is_some_and(|p| p.filtering)
             || self.gist_manager.filtering
             || self.editing_description
     }
@@ -296,7 +296,7 @@ fn cross_items() -> Vec<PaletteItem> {
 fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> Vec<PaletteItem> {
     let mut items = match screen {
         Screen::List => list_palette_items(state),
-        Screen::Pins => pins_palette_items(state),
+        Screen::Pins(_) => pins_palette_items(state),
         Screen::Gists => gists_palette_items(state),
         Screen::GistDetail => detail_palette_items(state),
         Screen::Revisions(_) => revisions_palette_items(state),

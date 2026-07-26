@@ -555,7 +555,11 @@ pub(super) fn dispatch_outcome(
         }
         KeyOutcome::PreviewPinDiff => {
             if let Some(m) = selected_pin(state) {
-                state.diff_return = Screen::Pins;
+                if let Screen::Pins(p) = &state.screen {
+                    state.diff_return = Screen::Pins(p.clone());
+                } else {
+                    state.diff_return = Screen::Pins(Box::default());
+                }
                 spawn_pin_diff(state, &mut channels.bg, &m);
             }
         }
