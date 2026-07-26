@@ -1507,12 +1507,68 @@ fn gist_hscroll_caps_at_longest_row() {
         node_id: None,
     }];
     state.focus = FocusPane::Gist;
-    let row = gist_row_label(&state.ranked_gists()[0], state.gist_view);
-    let max = (row.chars().count() - 1) as u16;
+    // Cap must use the painted display string (star / pin prefixes included), not the
+    // star-less label helper — see issue #247.
+    let ranked = state.ranked_gists();
+    let row = marked_row_text(
+        gist_row_display(&ranked[0], state.gist_view, &state),
+        row_mark(&ranked[0].reasons),
+    );
+    let max = super::text::hscroll_max_for_text(&row);
     for _ in 0..200 {
         state.handle_key(KeyCode::Right);
     }
     assert_eq!(state.gist_hscroll, max);
+}
+
+#[test]
+fn gist_hscroll_caps_include_star_prefix() {
+    let mut state = initial_state();
+    state.gists = vec![GistFile {
+        gist_id: "starred-id".into(),
+        description: "tiny".into(),
+        filename: "f".into(),
+        public: false,
+        updated_at: "x".into(),
+        created_at: "x".into(),
+        owner_login: String::new(),
+        fork_of_id: None,
+        raw_url: None,
+        content_type: None,
+        node_id: None,
+    }];
+    state.starred_gist_ids.insert("starred-id".into());
+    state.focus = FocusPane::Gist;
+
+    let ranked = state.ranked_gists();
+    let display = gist_row_display(&ranked[0], state.gist_view, &state);
+    assert!(
+        display.starts_with("★ "),
+        "display must include star prefix, got {display:?}"
+    );
+    let label = gist_row_label(&ranked[0], state.gist_view);
+    assert!(
+        !label.starts_with('★'),
+        "label helper stays star-less for pure text tests"
+    );
+    // Regression: measuring the label (no star) under-scrolled by 2 chars.
+    assert_eq!(
+        super::text::text_len(&display),
+        super::text::text_len(&label) + 2
+    );
+
+    let row = marked_row_text(display, row_mark(&ranked[0].reasons));
+    let max = super::text::hscroll_max_for_text(&row);
+    let label_only_max = super::text::hscroll_max_for_text(&label);
+    assert!(max > label_only_max, "star must raise the hscroll cap");
+
+    for _ in 0..200 {
+        state.handle_key(KeyCode::Right);
+    }
+    assert_eq!(
+        state.gist_hscroll, max,
+        "Right must reach the display-string max, not the star-less label max"
+    );
 }
 
 #[test]
