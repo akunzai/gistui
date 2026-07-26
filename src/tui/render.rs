@@ -2630,7 +2630,7 @@ fn render_palette_vm(
         Screen::GistDetail(_) => render_gist_detail(frame, state, &mut bg_layout),
         Screen::Revisions(_) => render_revisions(frame, state, &mut bg_layout),
         Screen::Config(_) => render_config(frame, state, &mut bg_layout),
-        Screen::Confirm | Screen::Palette => {}
+        Screen::Confirm | Screen::Palette(_) => {}
     }
 
     let area = frame.area();
@@ -2677,7 +2677,8 @@ fn render_palette_vm(
         .add_modifier(Modifier::BOLD);
     let mut lines: Vec<Line<'static>> = Vec::new();
     if palette.has_query {
-        lines.push(input_line("> ", &state.palette.query, ""));
+        let query = state.palette().map(|p| p.query.clone()).unwrap_or_default();
+        lines.push(input_line("> ", &query, ""));
     }
     if palette.items.is_empty() {
         lines.push(Line::from(Span::styled("  (no matches)", dim)));
