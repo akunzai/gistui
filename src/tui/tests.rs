@@ -5757,18 +5757,21 @@ fn m_key_noop_when_at_oldest_page() {
 fn semicolon_opens_menu_palette() {
     let mut state = crate::tui::initial_state();
     state.handle_key(KeyCode::Char(';'));
-    assert_eq!(state.screen, Screen::Palette);
-    assert_eq!(state.palette.mode, crate::tui::palette::PaletteMode::Menu);
-    assert_eq!(state.palette.origin_screen, Screen::List);
+    assert!(state.screen.is_palette());
+    assert_eq!(
+        state.palette().unwrap().mode,
+        crate::tui::palette::PaletteMode::Menu
+    );
+    assert_eq!(state.palette().unwrap().origin_screen, Screen::List);
 }
 
 #[test]
 fn ctrl_p_opens_command_palette() {
     let mut state = crate::tui::initial_state();
     state.handle_key_with(KeyCode::Char('p'), KeyModifiers::CONTROL);
-    assert_eq!(state.screen, Screen::Palette);
+    assert!(state.screen.is_palette());
     assert_eq!(
-        state.palette.mode,
+        state.palette().unwrap().mode,
         crate::tui::palette::PaletteMode::Command
     );
 }
@@ -5778,7 +5781,7 @@ fn palette_esc_returns_to_origin() {
     let mut state = crate::tui::initial_state();
     state.screen = Screen::Pins(Box::default());
     state.open_palette_menu(None);
-    assert_eq!(state.screen, Screen::Palette);
+    assert!(state.screen.is_palette());
     state.handle_key(KeyCode::Esc);
     assert!(state.screen.is_pins());
 }
@@ -5810,7 +5813,7 @@ fn command_palette_fuzzy_filter_narrows_items() {
     let mut state = crate::tui::initial_state();
     state.open_palette_command();
     let before = state.palette_visible_items().len();
-    state.palette.query.set("quit");
+    state.palette_mut().unwrap().query.set("quit");
     let after = state.palette_visible_items().len();
     assert!(after < before);
     assert!(state
@@ -5827,8 +5830,8 @@ fn right_click_opens_menu_palette() {
         &MouseLayout::default(),
     );
     assert_eq!(out, KeyOutcome::None);
-    assert_eq!(state.screen, Screen::Palette);
-    assert_eq!(state.palette.anchor, Some((10, 5)));
+    assert!(state.screen.is_palette());
+    assert_eq!(state.palette().unwrap().anchor, Some((10, 5)));
 }
 
 #[test]

@@ -370,15 +370,16 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::Pins(_) => ScreenVm::Pins(build_pins_vm(state)),
         Screen::Confirm => ScreenVm::Confirm(build_confirm_vm(state)),
         Screen::Help(_) => ScreenVm::Help(build_help_vm(state)),
-        Screen::Palette => ScreenVm::Palette(build_palette_vm(state)),
+        Screen::Palette(_) => ScreenVm::Palette(build_palette_vm(state)),
     };
     ViewModel { chrome, screen }
 }
 
 /// Palette overlay body — origin background is painted separately from `origin_screen`.
 pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
-    let has_query = state.palette.mode == PaletteMode::Command;
-    let title = match state.palette.mode {
+    let p = state.palette().cloned().unwrap_or_default();
+    let has_query = p.mode == PaletteMode::Command;
+    let title = match p.mode {
         PaletteMode::Menu => "Menu",
         PaletteMode::Command => "Command palette",
     };
@@ -398,14 +399,14 @@ pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
         .unwrap_or(1)
         .max(1);
     PaletteVm {
-        origin_screen: state.palette.origin_screen.clone(),
+        origin_screen: p.origin_screen,
         title,
         has_query,
-        selected: state.palette.selected,
+        selected: p.selected,
         items,
         key_width,
-        mode: state.palette.mode,
-        anchor: state.palette.anchor,
+        mode: p.mode,
+        anchor: p.anchor,
     }
 }
 
@@ -1640,8 +1641,7 @@ mod tests {
         use crossterm::event::KeyCode;
 
         let mut state = initial_state();
-        state.screen = Screen::Palette;
-        state.palette = PaletteState {
+        state.screen = Screen::Palette(Box::new(PaletteState {
             mode: PaletteMode::Menu,
             items: vec![PaletteItem {
                 key_hint: "d".into(),
@@ -1654,7 +1654,7 @@ mod tests {
             origin_screen: Screen::List,
             anchor: Some((10, 5)),
             ..PaletteState::default()
-        };
+        }));
         match build_view_model(&state).screen {
             ScreenVm::Palette(p) => {
                 assert_eq!(p.title, "Menu");

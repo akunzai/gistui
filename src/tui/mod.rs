@@ -19,8 +19,8 @@ pub enum FocusPane {
 }
 
 /// Active TUI screen. Unit tags for some screens; **Help** / **Config** / **Revisions** /
-/// **Pins** / **Gists** / **GistDetail** carry payloads so screen-local UI cannot go stale on
-/// the root state (issue #242). Not `Copy`.
+/// **Pins** / **Gists** / **GistDetail** / **Palette** carry payloads so screen-local UI
+/// cannot go stale on the root state (issue #242). Not `Copy`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Screen {
     #[default]
@@ -41,8 +41,9 @@ pub enum Screen {
     /// Revision history for one gist; payload owns list/cursor/return (and may sit in
     /// `diff_return` while a revision diff is open).
     Revisions(Box<RevisionState>),
-    /// Unified context menu / command palette overlay (`;` or right-click / `Ctrl+p`).
-    Palette,
+    /// Command palette / context menu overlay; payload owns query, items, origin, selection.
+    /// Boxed so `PaletteState::origin_screen: Screen` stays finite-sized.
+    Palette(Box<PaletteState>),
     /// Flat settings list (issue #227); payload owns cursor + return path.
     Config(Box<ConfigState>),
 }
@@ -71,6 +72,10 @@ impl Screen {
 
     pub fn is_gist_detail(&self) -> bool {
         matches!(self, Screen::GistDetail(_))
+    }
+
+    pub fn is_palette(&self) -> bool {
+        matches!(self, Screen::Palette(_))
     }
 
     /// Borrow help payload when this is [`Screen::Help`].
@@ -155,6 +160,20 @@ impl Screen {
     pub fn detail_state_mut(&mut self) -> Option<&mut DetailState> {
         match self {
             Screen::GistDetail(d) => Some(d.as_mut()),
+            _ => None,
+        }
+    }
+
+    pub fn palette_state(&self) -> Option<&PaletteState> {
+        match self {
+            Screen::Palette(p) => Some(p.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn palette_state_mut(&mut self) -> Option<&mut PaletteState> {
+        match self {
+            Screen::Palette(p) => Some(p.as_mut()),
             _ => None,
         }
     }
@@ -888,7 +907,6 @@ pub struct AppState {
     /// Resolved colour palette for the current theme choice (from config).
     pub theme: Theme,
 
-    pub palette: PaletteState,
     /// Presentation cache for the Pins list: sync status + mtimes, filled by
     /// [`Self::refresh_pin_sync_cache`] (impure). The pure view-model builder and Pins paint
     /// read only this cache — never `fs::read` / hash on the draw path (issue #241).
@@ -943,7 +961,7 @@ impl AppState {
     pub fn help(&self) -> Option<&HelpState> {
         match &self.screen {
             Screen::Help(h) => Some(h.as_ref()),
-            Screen::Palette => self.palette.origin_screen.help_state(),
+            Screen::Palette(p) => p.origin_screen.help_state(),
             _ => None,
         }
     }
@@ -957,7 +975,7 @@ impl AppState {
     pub fn config(&self) -> Option<&ConfigState> {
         match &self.screen {
             Screen::Config(c) => Some(c.as_ref()),
-            Screen::Palette => self.palette.origin_screen.config_state(),
+            Screen::Palette(p) => p.origin_screen.config_state(),
             _ => None,
         }
     }
@@ -972,7 +990,7 @@ impl AppState {
         match &self.screen {
             Screen::Revisions(r) => Some(r.as_ref()),
             Screen::Diff | Screen::Confirm | Screen::Preview => self.diff_return.revision_state(),
-            Screen::Palette => match &self.palette.origin_screen {
+            Screen::Palette(p) => match &p.origin_screen {
                 Screen::Revisions(r) => Some(r.as_ref()),
                 Screen::Diff | Screen::Confirm | Screen::Preview => {
                     // Palette over diff that returned from revisions is rare; check origin only.
@@ -1000,7 +1018,7 @@ impl AppState {
         match &self.screen {
             Screen::Pins(p) => Some(p.as_ref()),
             Screen::Diff | Screen::Confirm | Screen::Preview => self.diff_return.pins_state(),
-            Screen::Palette => self.palette.origin_screen.pins_state(),
+            Screen::Palette(p) => p.origin_screen.pins_state(),
             _ => None,
         }
     }
@@ -1020,7 +1038,7 @@ impl AppState {
             Screen::Gists(g) => Some(g.as_ref()),
             Screen::GistDetail(d) => d.return_screen.gists_state(),
             Screen::Revisions(r) => r.return_screen.gists_state(),
-            Screen::Palette => match &self.palette.origin_screen {
+            Screen::Palette(p) => match &p.origin_screen {
                 Screen::Gists(g) => Some(g.as_ref()),
                 Screen::GistDetail(d) => d.return_screen.gists_state(),
                 Screen::Revisions(r) => r.return_screen.gists_state(),
@@ -1054,7 +1072,7 @@ impl AppState {
             Screen::Gists(g) => Some(g.as_mut()),
             Screen::GistDetail(d) => d.return_screen.gists_state_mut(),
             Screen::Revisions(r) => r.return_screen.gists_state_mut(),
-            Screen::Palette => match &mut self.palette.origin_screen {
+            Screen::Palette(p) => match &mut p.origin_screen {
                 Screen::Gists(g) => Some(g.as_mut()),
                 Screen::GistDetail(d) => d.return_screen.gists_state_mut(),
                 Screen::Revisions(r) => r.return_screen.gists_state_mut(),
@@ -1077,7 +1095,7 @@ impl AppState {
             Screen::GistDetail(d) => Some(d.as_ref()),
             Screen::Preview => self.preview_return.detail_state(),
             Screen::Revisions(r) => r.return_screen.detail_state(),
-            Screen::Palette => self.palette.origin_screen.detail_state(),
+            Screen::Palette(p) => p.origin_screen.detail_state(),
             Screen::Help(h) => h.return_screen.detail_state(),
             Screen::Config(c) => c.return_screen.detail_state(),
             Screen::Diff | Screen::Confirm => self
@@ -1093,7 +1111,7 @@ impl AppState {
             Screen::GistDetail(d) => Some(d.as_mut()),
             Screen::Preview => self.preview_return.detail_state_mut(),
             Screen::Revisions(r) => r.return_screen.detail_state_mut(),
-            Screen::Palette => self.palette.origin_screen.detail_state_mut(),
+            Screen::Palette(p) => p.origin_screen.detail_state_mut(),
             Screen::Diff | Screen::Confirm => {
                 if self.diff_return.detail_state().is_some() {
                     return self.diff_return.detail_state_mut();
@@ -1102,6 +1120,15 @@ impl AppState {
             }
             _ => None,
         }
+    }
+
+    /// Palette payload when the overlay is open (issue #242).
+    pub fn palette(&self) -> Option<&PaletteState> {
+        self.screen.palette_state()
+    }
+
+    pub fn palette_mut(&mut self) -> Option<&mut PaletteState> {
+        self.screen.palette_state_mut()
     }
 
     /// Snapshot the current detail payload as a restore `Screen` (for preview/compact/etc.).
@@ -2130,7 +2157,6 @@ pub fn initial_state() -> AppState {
         gist_star_counts: std::collections::HashMap::new(),
         theme_choice: crate::config::ThemeChoice::Dark,
         theme: Theme::DARK,
-        palette: PaletteState::default(),
         pin_sync_cache: Vec::new(),
         pin_sync_cache_dirty: true,
     }

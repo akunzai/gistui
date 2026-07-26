@@ -26,7 +26,7 @@ pub enum CrossAction {
     Quit,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PaletteItem {
     pub key_hint: String,
     pub label: String,
@@ -36,7 +36,7 @@ pub struct PaletteItem {
     pub search: String,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PaletteState {
     pub mode: PaletteMode,
     pub query: TextInput,
@@ -64,48 +64,51 @@ impl AppState {
             self.set_status("no actions available");
             return;
         }
-        self.palette = PaletteState {
+        self.screen = Screen::Palette(Box::new(PaletteState {
             mode: PaletteMode::Menu,
             items,
             origin_screen: origin,
             anchor,
             ..PaletteState::default()
-        };
-        self.screen = Screen::Palette;
+        }));
     }
 
     pub(crate) fn open_palette_command(&mut self) {
         let origin = self.screen.clone();
         let items = build_palette_items(self, &origin, PaletteMode::Command);
-        self.palette = PaletteState {
+        self.screen = Screen::Palette(Box::new(PaletteState {
             mode: PaletteMode::Command,
             items,
             origin_screen: origin,
             ..PaletteState::default()
-        };
-        self.screen = Screen::Palette;
+        }));
     }
 
     pub(crate) fn close_palette(&mut self) {
-        self.screen = self.palette.origin_screen.clone();
-        self.palette = PaletteState::default();
+        let origin = self
+            .palette()
+            .map(|p| p.origin_screen.clone())
+            .unwrap_or(Screen::List);
+        self.screen = origin;
     }
 
     /// Visible palette rows after mode-specific filtering and (in command mode) fuzzy query.
     pub(crate) fn palette_visible_items(&self) -> Vec<&PaletteItem> {
-        let query: &str = &self.palette.query;
-        let mut matched: Vec<(&PaletteItem, u32)> = self
-            .palette
+        let Some(p) = self.palette() else {
+            return Vec::new();
+        };
+        let query: &str = &p.query;
+        let mut matched: Vec<(&PaletteItem, u32)> = p
             .items
             .iter()
             .filter_map(|item| {
-                if self.palette.mode == PaletteMode::Menu && !item.enabled {
+                if p.mode == PaletteMode::Menu && !item.enabled {
                     return None;
                 }
                 fuzzy_match(query, &item.search).map(|score| (item, score))
             })
             .collect();
-        if self.palette.mode == PaletteMode::Command && !query.is_empty() {
+        if p.mode == PaletteMode::Command && !query.is_empty() {
             matched.sort_by_key(|item| std::cmp::Reverse(item.1));
         }
         matched.into_iter().map(|(item, _)| item).collect()
@@ -113,10 +116,12 @@ impl AppState {
 
     fn palette_clamp_selection(&mut self) {
         let len = self.palette_visible_items().len();
-        if len == 0 {
-            self.palette.selected = 0;
-        } else if self.palette.selected >= len {
-            self.palette.selected = len - 1;
+        if let Some(p) = self.palette_mut() {
+            if len == 0 {
+                p.selected = 0;
+            } else if p.selected >= len {
+                p.selected = len - 1;
+            }
         }
     }
 
@@ -125,27 +130,34 @@ impl AppState {
         code: KeyCode,
         _modifiers: KeyModifiers,
     ) -> KeyOutcome {
-        if self.palette.mode == PaletteMode::Command {
+        let mode = self.palette().map(|p| p.mode).unwrap_or_default();
+        if mode == PaletteMode::Command {
             match code {
                 KeyCode::Esc => {
                     self.close_palette();
                     return KeyOutcome::None;
                 }
                 KeyCode::Up => {
-                    self.palette.selected = self.palette.selected.saturating_sub(1);
+                    if let Some(p) = self.palette_mut() {
+                        p.selected = p.selected.saturating_sub(1);
+                    }
                     return KeyOutcome::None;
                 }
                 KeyCode::Down => {
                     let len = self.palette_visible_items().len();
-                    if len > 0 && self.palette.selected + 1 < len {
-                        self.palette.selected += 1;
+                    if let Some(p) = self.palette_mut() {
+                        if len > 0 && p.selected + 1 < len {
+                            p.selected += 1;
+                        }
                     }
                     return KeyOutcome::None;
                 }
                 KeyCode::Enter => return self.execute_palette_selection(),
                 _ => {
-                    if let EditResult::Changed = self.palette.query.apply_edit(code) {
-                        self.palette.selected = 0;
+                    if let Some(p) = self.palette_mut() {
+                        if let EditResult::Changed = p.query.apply_edit(code) {
+                            p.selected = 0;
+                        }
                     }
                     self.palette_clamp_selection();
                     return KeyOutcome::None;
@@ -160,13 +172,17 @@ impl AppState {
                 KeyOutcome::None
             }
             KeyCode::Up => {
-                self.palette.selected = self.palette.selected.saturating_sub(1);
+                if let Some(p) = self.palette_mut() {
+                    p.selected = p.selected.saturating_sub(1);
+                }
                 KeyOutcome::None
             }
             KeyCode::Down => {
                 let len = self.palette_visible_items().len();
-                if len > 0 && self.palette.selected + 1 < len {
-                    self.palette.selected += 1;
+                if let Some(p) = self.palette_mut() {
+                    if len > 0 && p.selected + 1 < len {
+                        p.selected += 1;
+                    }
                 }
                 KeyOutcome::None
             }
@@ -176,9 +192,10 @@ impl AppState {
     }
 
     fn execute_palette_selection(&mut self) -> KeyOutcome {
+        let selected = self.palette().map(|p| p.selected).unwrap_or(0);
         let item = self
             .palette_visible_items()
-            .get(self.palette.selected)
+            .get(selected)
             .map(|i| (*i).clone());
         let Some(item) = item else {
             return KeyOutcome::None;
@@ -187,7 +204,10 @@ impl AppState {
             return KeyOutcome::None;
         }
         let exec = item.exec;
-        let origin = self.palette.origin_screen.clone();
+        let origin = self
+            .palette()
+            .map(|p| p.origin_screen.clone())
+            .unwrap_or(Screen::List);
         self.close_palette();
         self.screen = origin;
         match exec {
@@ -229,7 +249,9 @@ impl AppState {
         }
         for (i, rect) in layout.palette_rows.iter().enumerate() {
             if point_in(*rect, col, row) {
-                self.palette.selected = i;
+                if let Some(p) = self.palette_mut() {
+                    p.selected = i;
+                }
                 return self.execute_palette_selection();
             }
         }
@@ -304,7 +326,7 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
         Screen::Preview => preview_palette_items(state),
         Screen::Help(_) => help_palette_items(),
         Screen::Config(_) => config_palette_items(),
-        Screen::Confirm | Screen::Palette => Vec::new(),
+        Screen::Confirm | Screen::Palette(_) => Vec::new(),
     };
     if mode == PaletteMode::Command {
         items.extend(cross_items());

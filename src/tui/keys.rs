@@ -47,7 +47,7 @@ impl AppState {
     }
 
     pub fn handle_key_with(&mut self, code: KeyCode, modifiers: KeyModifiers) -> KeyOutcome {
-        if self.screen == Screen::Palette {
+        if self.screen.is_palette() {
             return self.handle_key_palette(code, modifiers);
         }
         if code == KeyCode::Char(';') && modifiers.is_empty() && !self.palette_blocked() {
@@ -95,7 +95,8 @@ impl AppState {
             Screen::GistDetail(_) => self.handle_key_detail(code),
             Screen::Revisions(_) => self.handle_key_revisions(code),
             Screen::Config(_) => self.handle_key_config(code),
-            Screen::Palette => KeyOutcome::None,
+            // Exhaustiveness only — palette keys return above via is_palette() early path.
+            Screen::Palette(_) => KeyOutcome::None,
         }
     }
 
@@ -361,18 +362,20 @@ impl AppState {
             return true;
         }
         match &mut self.screen {
-            Screen::Palette => {
+            Screen::Palette(_) => {
                 let len = self.palette_visible_items().len();
-                match action {
-                    NavAction::Up => {
-                        self.palette.selected = self.palette.selected.saturating_sub(1);
-                    }
-                    NavAction::Down => {
-                        if len > 0 && self.palette.selected + 1 < len {
-                            self.palette.selected += 1;
+                if let Some(p) = self.palette_mut() {
+                    match action {
+                        NavAction::Up => {
+                            p.selected = p.selected.saturating_sub(1);
                         }
+                        NavAction::Down => {
+                            if len > 0 && p.selected + 1 < len {
+                                p.selected += 1;
+                            }
+                        }
+                        _ => return false,
                     }
-                    _ => return false,
                 }
                 true
             }
@@ -983,7 +986,7 @@ impl AppState {
                 3
             }
             Screen::Help(h) if !h.index_open => 3, // help body scrolls; topic index is a list
-            Screen::Palette => 1,
+            Screen::Palette(_) => 1,
             _ => 1, // List/Pins/Gists/Revisions/Help index/GistDetail Files
         }
     }
@@ -1205,7 +1208,7 @@ impl AppState {
     /// logic. Pure (no IO, no clock); returns a `KeyOutcome` so `run_loop` can perform any
     /// follow-up IO (e.g. `PreviewDiff` on double-click).
     pub fn handle_mouse(&mut self, input: MouseInput, layout: &MouseLayout) -> KeyOutcome {
-        if self.screen == Screen::Palette {
+        if self.screen.is_palette() {
             return match input {
                 MouseInput::Click { col, row } | MouseInput::DoubleClick { col, row } => {
                     self.palette_click(col, row, layout)
