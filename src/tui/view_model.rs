@@ -364,7 +364,7 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::Gists => ScreenVm::Gists(build_gists_vm(state)),
         Screen::GistDetail => ScreenVm::GistDetail(build_gist_detail_vm(state)),
         Screen::Revisions => ScreenVm::Revisions(build_revisions_vm(state)),
-        Screen::Config => ScreenVm::Config(build_config_vm(state)),
+        Screen::Config(_) => ScreenVm::Config(build_config_vm(state)),
         Screen::Diff => ScreenVm::Diff(build_diff_vm(state)),
         Screen::Preview => ScreenVm::Preview(build_preview_vm(state)),
         Screen::Pins => ScreenVm::Pins(build_pins_vm(state)),
@@ -572,7 +572,7 @@ pub(crate) fn build_config_vm(state: &AppState) -> ConfigVm {
         .collect();
     ConfigVm {
         rows,
-        selected: state.config.index,
+        selected: state.config().map(|c| c.index).unwrap_or(0),
         status: state.status.clone(),
     }
 }
@@ -1086,7 +1086,7 @@ pub(crate) fn build_help_vm(state: &AppState) -> HelpVm {
 mod tests {
     use super::*;
     use crate::domain::{PinnedMapping, SyncStatus};
-    use crate::tui::{initial_state, HelpState};
+    use crate::tui::{initial_state, ConfigState, HelpState};
     use std::path::PathBuf;
 
     #[test]
@@ -1556,8 +1556,10 @@ mod tests {
     #[test]
     fn config_vm_rows_and_status() {
         let mut state = initial_state();
-        state.screen = Screen::Config;
-        state.config.index = 1;
+        state.screen = Screen::Config(Box::new(ConfigState {
+            index: 1,
+            ..ConfigState::default()
+        }));
         state.status = Some("Theme saved".into());
         match build_view_model(&state).screen {
             ScreenVm::Config(c) => {

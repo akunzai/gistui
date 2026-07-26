@@ -94,7 +94,7 @@ impl AppState {
             Screen::Gists => self.handle_key_gists(code),
             Screen::GistDetail => self.handle_key_detail(code),
             Screen::Revisions => self.handle_key_revisions(code),
-            Screen::Config => self.handle_key_config(code),
+            Screen::Config(_) => self.handle_key_config(code),
             Screen::Palette => KeyOutcome::None,
         }
     }
@@ -120,12 +120,14 @@ impl AppState {
 
     /// Open the flat Settings screen (`C` or palette). Opening alone does not write config.
     pub(crate) fn open_config(&mut self) {
-        if self.screen == Screen::Config {
+        if self.screen.is_config() {
             return;
         }
-        self.config.return_screen = self.screen.clone();
-        self.config.index = 0;
-        self.screen = Screen::Config;
+        let return_screen = self.screen.clone();
+        self.screen = Screen::Config(Box::new(ConfigState {
+            index: 0,
+            return_screen,
+        }));
     }
 
     /// Value string shown for a Config field row.
@@ -164,8 +166,9 @@ impl AppState {
     /// Toggle or nudge the selected Config field. Returns true when a value changed
     /// (caller should persist). Pure aside from mutating `self`.
     pub(crate) fn adjust_config_field(&mut self, forward: bool) -> bool {
+        let index = self.config().map(|c| c.index).unwrap_or(0);
         let field = ConfigField::ALL
-            .get(self.config.index)
+            .get(index)
             .copied()
             .unwrap_or(ConfigField::Theme);
         match field {
@@ -226,15 +229,22 @@ impl AppState {
         let n = ConfigField::ALL.len();
         match code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                self.screen = self.config.return_screen.clone();
-                self.config.return_screen = Screen::List;
+                let ret = match &self.screen {
+                    Screen::Config(c) => c.return_screen.clone(),
+                    _ => Screen::List,
+                };
+                self.screen = ret;
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                self.config.index = self.config.index.saturating_sub(1);
+                if let Some(c) = self.config_mut() {
+                    c.index = c.index.saturating_sub(1);
+                }
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.config.index + 1 < n {
-                    self.config.index += 1;
+                if let Some(c) = self.config_mut() {
+                    if c.index + 1 < n {
+                        c.index += 1;
+                    }
                 }
             }
             KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right | KeyCode::Char('l') => {
@@ -438,15 +448,15 @@ impl AppState {
                 }
                 true
             }
-            Screen::Config => {
+            Screen::Config(cfg) => {
                 let n = ConfigField::ALL.len();
                 match action {
                     NavAction::Up => {
-                        self.config.index = self.config.index.saturating_sub(1);
+                        cfg.index = cfg.index.saturating_sub(1);
                     }
                     NavAction::Down => {
-                        if self.config.index + 1 < n {
-                            self.config.index += 1;
+                        if cfg.index + 1 < n {
+                            cfg.index += 1;
                         }
                     }
                     NavAction::Left | NavAction::Right => {
@@ -991,11 +1001,11 @@ impl AppState {
                 }
                 false
             }
-            Screen::Config => {
+            Screen::Config(cfg) => {
                 if let Some(hit) = layout.list {
                     if point_in(hit.rect, col, row) {
                         if let Some(idx) = hit.index_at(row, ConfigField::ALL.len()) {
-                            self.config.index = idx;
+                            cfg.index = idx;
                             return true;
                         }
                     }

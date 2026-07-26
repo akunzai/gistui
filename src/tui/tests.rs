@@ -13,6 +13,15 @@ fn help_mut(state: &mut AppState) -> &mut HelpState {
 fn help_ref(state: &AppState) -> &HelpState {
     state.help().expect("expected Screen::Help")
 }
+fn config_mut(state: &mut AppState) -> &mut ConfigState {
+    if !state.screen.is_config() {
+        state.screen = Screen::Config(Box::default());
+    }
+    state.config_mut().expect("expected Screen::Config")
+}
+fn config_ref(state: &AppState) -> &ConfigState {
+    state.config().expect("expected Screen::Config")
+}
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
@@ -3589,8 +3598,8 @@ fn top_bar_config_click_opens_settings_from_any_screen() {
         ..Default::default()
     };
     let out = state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
-    assert_eq!(state.screen, Screen::Config);
-    assert_eq!(state.config.return_screen, Screen::Preview);
+    assert!(state.screen.is_config());
+    assert_eq!(config_ref(&state).return_screen, Screen::Preview);
     assert_eq!(out, KeyOutcome::None);
 }
 
@@ -3603,13 +3612,13 @@ fn top_bar_config_click_while_already_on_config_does_not_trap_keyboard_exit() {
         ..Default::default()
     };
     state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
-    assert_eq!(state.screen, Screen::Config);
-    assert_eq!(state.config.return_screen, Screen::Preview);
+    assert!(state.screen.is_config());
+    assert_eq!(config_ref(&state).return_screen, Screen::Preview);
 
     // Second click on Config while already there must not overwrite return_screen.
     let out = state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
-    assert_eq!(state.screen, Screen::Config);
-    assert_eq!(state.config.return_screen, Screen::Preview);
+    assert!(state.screen.is_config());
+    assert_eq!(config_ref(&state).return_screen, Screen::Preview);
     assert_eq!(out, KeyOutcome::None);
 
     state.handle_key(KeyCode::Esc);
@@ -5870,7 +5879,7 @@ fn open_config_does_not_write_config_file() {
     let mut state = initial_state();
     state.screen = Screen::List;
     state.open_config();
-    assert_eq!(state.screen, Screen::Config);
+    assert!(state.screen.is_config());
     // Opening alone must not create the file — persist only after a field change.
     assert!(
         !path.exists(),
@@ -5888,7 +5897,7 @@ fn open_config_does_not_write_config_file() {
 fn adjust_config_mouse_updates_mouse_enabled_respecting_cli() {
     let mut state = initial_state();
     state.open_config();
-    state.config.index = ConfigField::ALL
+    config_mut(&mut state).index = ConfigField::ALL
         .iter()
         .position(|f| *f == ConfigField::Mouse)
         .unwrap();
@@ -5920,7 +5929,7 @@ fn config_adjust_theme_returns_persist_settings() {
     let mut state = initial_state();
     state.open_config();
     // Theme is index 0
-    state.config.index = 0;
+    config_mut(&mut state).index = 0;
     assert_eq!(state.theme_choice, crate::config::ThemeChoice::Dark);
     assert!(state.adjust_config_field(true));
     assert_eq!(state.theme_choice, crate::config::ThemeChoice::Light);
@@ -5933,7 +5942,7 @@ fn config_adjust_theme_returns_persist_settings() {
 fn config_adjust_scan_depth_clamps_and_reports_change() {
     let mut state = initial_state();
     state.open_config();
-    state.config.index = ConfigField::ALL
+    config_mut(&mut state).index = ConfigField::ALL
         .iter()
         .position(|f| *f == ConfigField::ScanDepth)
         .unwrap();
@@ -5980,7 +5989,7 @@ fn config_c_key_opens_settings_from_list() {
     let mut state = initial_state();
     state.screen = Screen::List;
     state.handle_key(KeyCode::Char('C'));
-    assert_eq!(state.screen, Screen::Config);
+    assert!(state.screen.is_config());
     state.handle_key(KeyCode::Esc);
     assert_eq!(state.screen, Screen::List);
 }

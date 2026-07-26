@@ -2618,7 +2618,7 @@ fn render_palette_vm(
         Screen::Gists => render_gists(frame, state, &mut bg_layout),
         Screen::GistDetail => render_gist_detail(frame, state, &mut bg_layout),
         Screen::Revisions => render_revisions(frame, state, &mut bg_layout),
-        Screen::Config => render_config(frame, state, &mut bg_layout),
+        Screen::Config(_) => render_config(frame, state, &mut bg_layout),
         Screen::Confirm | Screen::Palette => {}
     }
 
