@@ -65,11 +65,15 @@ pub(super) fn run_loop(
         pin_sync_screen_active = pins_active;
 
         terminal.draw(|frame| render(frame, &state, &mut mouse_layout))?;
-        if state.detail.comments_scroll_to_bottom {
+        if state.detail().is_some_and(|d| d.comments_scroll_to_bottom) {
             if let Some(max) = mouse_layout.comments_max_scroll {
-                state.detail.scroll = max;
+                if let Some(d) = state.detail_mut() {
+                    d.scroll = max;
+                }
             }
-            state.detail.comments_scroll_to_bottom = false;
+            if let Some(d) = state.detail_mut() {
+                d.comments_scroll_to_bottom = false;
+            }
         }
         // Advance the spinner once per iteration; the poll below caps the loop at ~150ms, so
         // in-progress states (scanning/loading/working) animate even with no input.

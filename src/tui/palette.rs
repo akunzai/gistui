@@ -298,7 +298,7 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
         Screen::List => list_palette_items(state),
         Screen::Pins(_) => pins_palette_items(state),
         Screen::Gists(_) => gists_palette_items(state),
-        Screen::GistDetail => detail_palette_items(state),
+        Screen::GistDetail(_) => detail_palette_items(state),
         Screen::Revisions(_) => revisions_palette_items(state),
         Screen::Diff => diff_palette_items(state),
         Screen::Preview => preview_palette_items(state),
@@ -454,22 +454,24 @@ fn gists_palette_items(state: &AppState) -> Vec<PaletteItem> {
 }
 
 fn detail_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let gist_id = state.detail.gist_id.clone();
+    let d = state.detail();
+    let gist_id = d.and_then(|d| d.gist_id.clone());
     let owned = gist_id
         .as_deref()
         .map(|id| state.gist_is_owned(id))
         .unwrap_or(false);
-    let on_files = state.detail.focus == DetailFocus::Files;
+    let on_files = d.is_some_and(|d| d.focus == DetailFocus::Files);
     let file_count = gist_id
         .as_deref()
         .map(|id| state.gist_filenames(id).len())
         .unwrap_or(0);
-    let has_file = on_files && state.detail.file_cursor < file_count;
+    let file_cursor = d.map(|d| d.file_cursor).unwrap_or(0);
+    let has_file = on_files && file_cursor < file_count;
     let previewable = gist_id.as_ref().is_some_and(|id| {
         state
             .gist_filenames(id)
             .into_iter()
-            .nth(state.detail.file_cursor)
+            .nth(file_cursor)
             .is_some_and(|name| state.gist_file_is_text_previewable(id, &name))
     }) && has_file;
     vec![

@@ -362,7 +362,7 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
     let screen = match &state.screen {
         Screen::List => ScreenVm::List(build_list_vm(state)),
         Screen::Gists(_) => ScreenVm::Gists(build_gists_vm(state)),
-        Screen::GistDetail => ScreenVm::GistDetail(build_gist_detail_vm(state)),
+        Screen::GistDetail(_) => ScreenVm::GistDetail(build_gist_detail_vm(state)),
         Screen::Revisions(_) => ScreenVm::Revisions(build_revisions_vm(state)),
         Screen::Config(_) => ScreenVm::Config(build_config_vm(state)),
         Screen::Diff => ScreenVm::Diff(build_diff_vm(state)),
@@ -417,7 +417,11 @@ pub(crate) fn build_compact_gist_bg_vm(state: &AppState, gist_id: &str) -> Optio
         format!("Gist: {}", group.description)
     };
     let files = state.gist_file_display_names(gist_id);
-    let file_cursor = state.detail.file_cursor.min(files.len().saturating_sub(1));
+    let file_cursor = state
+        .detail()
+        .map(|d| d.file_cursor)
+        .unwrap_or(0)
+        .min(files.len().saturating_sub(1));
     Some(CompactGistBgVm {
         block_title,
         info_line: gist_info_line(
@@ -576,12 +580,13 @@ pub(crate) fn build_config_vm(state: &AppState) -> ConfigVm {
 /// Gist detail body — usable under Palette-over-GistDetail as well.
 pub(crate) fn build_gist_detail_vm(state: &AppState) -> GistDetailVm {
     let (footer, footer_colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
-    let Some(gist_id) = state.detail.gist_id.as_deref() else {
+    let detail = state.detail().cloned().unwrap_or_default();
+    let Some(gist_id) = detail.gist_id.as_deref() else {
         return GistDetailVm {
             missing: true,
             block_title: String::new(),
             info_line: String::new(),
-            focus: state.detail.focus,
+            focus: detail.focus,
             files: Vec::new(),
             file_cursor: 0,
             comments: CommentsPaneVm::PromptLoad,
@@ -595,7 +600,7 @@ pub(crate) fn build_gist_detail_vm(state: &AppState) -> GistDetailVm {
             missing: true,
             block_title: String::new(),
             info_line: String::new(),
-            focus: state.detail.focus,
+            focus: detail.focus,
             files: Vec::new(),
             file_cursor: 0,
             comments: CommentsPaneVm::PromptLoad,
@@ -618,14 +623,14 @@ pub(crate) fn build_gist_detail_vm(state: &AppState) -> GistDetailVm {
         state.gist_counts(gist_id),
     );
     let files = state.gist_file_display_names(gist_id);
-    let file_cursor = state.detail.file_cursor.min(files.len().saturating_sub(1));
+    let file_cursor = detail.file_cursor.min(files.len().saturating_sub(1));
     let comments = build_comments_pane_vm(state);
 
     GistDetailVm {
         missing: false,
         block_title,
         info_line,
-        focus: state.detail.focus,
+        focus: detail.focus,
         files,
         file_cursor,
         comments,
@@ -637,10 +642,11 @@ pub(crate) fn build_gist_detail_vm(state: &AppState) -> GistDetailVm {
 
 fn build_comments_pane_vm(state: &AppState) -> CommentsPaneVm {
     let now = unix_now() as i64;
+    let detail = state.detail().cloned().unwrap_or_default();
     match (
-        &state.detail.comments,
-        state.detail.comments_loading,
-        &state.detail.comments_error,
+        &detail.comments,
+        detail.comments_loading,
+        &detail.comments_error,
     ) {
         (None, true, _) => CommentsPaneVm::Loading,
         (None, false, _) => CommentsPaneVm::PromptLoad,
@@ -649,9 +655,9 @@ fn build_comments_pane_vm(state: &AppState) -> CommentsPaneVm {
         },
         (Some(comments), _, None) if comments.is_empty() => CommentsPaneVm::Empty,
         (Some(comments), _, None) => {
-            let affordance = if state.detail.comments_loading_more {
+            let affordance = if detail.comments_loading_more {
                 CommentsAffordance::LoadingMore
-            } else if state.detail.comments_loaded_oldest_page > 1 {
+            } else if detail.comments_loaded_oldest_page > 1 {
                 CommentsAffordance::LoadOlder
             } else {
                 CommentsAffordance::StartOfThread
@@ -675,7 +681,7 @@ fn build_comments_pane_vm(state: &AppState) -> CommentsPaneVm {
                 title: comments_title_text(state),
                 affordance,
                 lines,
-                scroll: state.detail.scroll,
+                scroll: detail.scroll,
             }
         }
     }
@@ -683,8 +689,9 @@ fn build_comments_pane_vm(state: &AppState) -> CommentsPaneVm {
 
 /// Mirror of render-side comments title (pure; used by the view model).
 fn comments_title_text(state: &AppState) -> String {
-    match (&state.detail.comments, state.detail.comments_total) {
-        (Some(c), _) if state.detail.comments_error.is_some() => format!("Comments ({})", c.len()),
+    let detail = state.detail().cloned().unwrap_or_default();
+    match (&detail.comments, detail.comments_total) {
+        (Some(c), _) if detail.comments_error.is_some() => format!("Comments ({})", c.len()),
         (Some(c), Some(total)) if !c.is_empty() => {
             let loaded = c.len() as u32;
             let first = total.saturating_sub(loaded) + 1;
@@ -1432,7 +1439,7 @@ mod tests {
     #[test]
     fn gist_detail_vm_missing_without_id() {
         let mut state = initial_state();
-        state.screen = Screen::GistDetail;
+        state.screen = Screen::GistDetail(Box::default());
         match build_view_model(&state).screen {
             ScreenVm::GistDetail(d) => {
                 assert!(d.missing);
@@ -1447,7 +1454,7 @@ mod tests {
         use crate::domain::{GistComment, GistFile};
 
         let mut state = initial_state();
-        state.screen = Screen::GistDetail;
+        state.screen = Screen::GistDetail(Box::default());
         state.gists = vec![
             GistFile {
                 description: "demo".into(),
@@ -1455,9 +1462,11 @@ mod tests {
             },
             GistFile::for_sync("g1".into(), "b.txt".into(), None),
         ];
-        state.detail.gist_id = Some("g1".into());
-        state.detail.focus = DetailFocus::Files;
-        state.detail.file_cursor = 1;
+        if let Some(d) = state.detail_mut() {
+            d.gist_id = Some("g1".into());
+            d.focus = DetailFocus::Files;
+            d.file_cursor = 1;
+        }
 
         match build_view_model(&state).screen {
             ScreenVm::GistDetail(d) => {
@@ -1476,14 +1485,16 @@ mod tests {
             other => panic!("expected GistDetail, got {other:?}"),
         }
 
-        state.detail.focus = DetailFocus::Comments;
-        state.detail.comments = Some(vec![GistComment {
-            author: "alice".into(),
-            body: "hello\nworld".into(),
-            created_at: "2020-01-01T00:00:00Z".into(),
-        }]);
-        state.detail.comments_total = Some(1);
-        state.detail.comments_loaded_oldest_page = 1;
+        if let Some(d) = state.detail_mut() {
+            d.focus = DetailFocus::Comments;
+            d.comments = Some(vec![GistComment {
+                author: "alice".into(),
+                body: "hello\nworld".into(),
+                created_at: "2020-01-01T00:00:00Z".into(),
+            }]);
+            d.comments_total = Some(1);
+            d.comments_loaded_oldest_page = 1;
+        }
         match build_view_model(&state).screen {
             ScreenVm::GistDetail(d) => match d.comments {
                 CommentsPaneVm::Thread {
@@ -1508,7 +1519,9 @@ mod tests {
             other => panic!("expected GistDetail, got {other:?}"),
         }
 
-        state.detail.comments = Some(vec![]);
+        if let Some(d) = state.detail_mut() {
+            d.comments = Some(vec![]);
+        }
         match build_view_model(&state).screen {
             ScreenVm::GistDetail(d) => assert!(matches!(d.comments, CommentsPaneVm::Empty)),
             other => panic!("expected GistDetail, got {other:?}"),
