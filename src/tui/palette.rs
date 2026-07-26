@@ -303,7 +303,7 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
         Screen::Diff => diff_palette_items(state),
         Screen::Preview => preview_palette_items(state),
         Screen::Help(_) => help_palette_items(),
-        Screen::Config => config_palette_items(),
+        Screen::Config(_) => config_palette_items(),
         Screen::Confirm | Screen::Palette => Vec::new(),
     };
     if mode == PaletteMode::Command {

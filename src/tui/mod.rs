@@ -18,9 +18,8 @@ pub enum FocusPane {
     Gist,
 }
 
-/// Active TUI screen. Most variants are tags; **Help** carries its own payload so help
-/// scroll/topic/return path cannot go stale on the root state while another screen is active
-/// (issue #242 first slice). Not `Copy` — payloads require `Clone`.
+/// Active TUI screen. Unit tags for most screens; **Help** / **Config** carry payloads so
+/// screen-local UI + return path cannot go stale on the root state (issue #242). Not `Copy`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Screen {
     #[default]
@@ -39,14 +38,18 @@ pub enum Screen {
     Revisions,
     /// Unified context menu / command palette overlay (`;` or right-click / `Ctrl+p`).
     Palette,
-    /// Flat settings list (issue #227); opened with `C` or the command palette.
-    Config,
+    /// Flat settings list (issue #227); payload owns cursor + return path.
+    Config(Box<ConfigState>),
 }
 
 impl Screen {
     /// Tag equality ignoring payloads (e.g. "are we on Help?" regardless of topic).
     pub fn is_help(&self) -> bool {
         matches!(self, Screen::Help(_))
+    }
+
+    pub fn is_config(&self) -> bool {
+        matches!(self, Screen::Config(_))
     }
 
     /// Borrow help payload when this is [`Screen::Help`].
@@ -61,6 +64,20 @@ impl Screen {
     pub fn help_state_mut(&mut self) -> Option<&mut HelpState> {
         match self {
             Screen::Help(h) => Some(h),
+            _ => None,
+        }
+    }
+
+    pub fn config_state(&self) -> Option<&ConfigState> {
+        match self {
+            Screen::Config(c) => Some(c.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn config_state_mut(&mut self) -> Option<&mut ConfigState> {
+        match self {
+            Screen::Config(c) => Some(c.as_mut()),
             _ => None,
         }
     }
@@ -103,7 +120,8 @@ impl ConfigField {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+/// Settings-screen state — carried on [`Screen::Config`] (issue #242).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ConfigState {
     pub index: usize,
     pub return_screen: Screen,
@@ -171,7 +189,7 @@ impl HelpTopic {
             Screen::Gists => HelpTopic::GistManager,
             Screen::GistDetail => HelpTopic::GistDetail,
             Screen::Revisions => HelpTopic::Revisions,
-            Screen::Config => HelpTopic::Config,
+            Screen::Config(_) => HelpTopic::Config,
             Screen::Help(_) => HelpTopic::List,
             _ => HelpTopic::List,
         }
@@ -714,8 +732,6 @@ pub struct AppState {
     pub update_check_enabled: bool,
     /// CLI `--no-update-check` for the process.
     pub no_update_check_cli: bool,
-    /// Config screen navigation state.
-    pub config: ConfigState,
     /// Newer release version found by the background check, if any (footer hint on the List).
     pub update_available: Option<String>,
     /// How this binary was installed — resolved once at startup so the update hint can show
@@ -836,6 +852,19 @@ impl AppState {
     /// Mutable help payload when Help is the active screen (not via palette origin).
     pub fn help_mut(&mut self) -> Option<&mut HelpState> {
         self.screen.help_state_mut()
+    }
+
+    /// Config payload when Settings is active, or when the palette is open over Config.
+    pub fn config(&self) -> Option<&ConfigState> {
+        match &self.screen {
+            Screen::Config(c) => Some(c.as_ref()),
+            Screen::Palette => self.palette.origin_screen.config_state(),
+            _ => None,
+        }
+    }
+
+    pub fn config_mut(&mut self) -> Option<&mut ConfigState> {
+        self.screen.config_state_mut()
     }
 
     pub fn upload_local_path(&self) -> Option<std::path::PathBuf> {
@@ -1796,7 +1825,6 @@ pub fn initial_state() -> AppState {
         config_check_updates: true,
         update_check_enabled: true,
         no_update_check_cli: false,
-        config: ConfigState::default(),
         update_available: None,
         install_method: crate::upgrade::InstallMethod::Standalone,
         preview_gist_key: None,

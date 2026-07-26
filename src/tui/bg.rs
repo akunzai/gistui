@@ -1016,7 +1016,7 @@ pub(super) fn persist_settings(state: &mut AppState) {
     match result {
         Ok(()) => {
             let field = ConfigField::ALL
-                .get(state.config.index)
+                .get(state.config().map(|c| c.index).unwrap_or(0))
                 .copied()
                 .unwrap_or(ConfigField::Theme);
             state.set_status(format!(
