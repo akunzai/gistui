@@ -1639,25 +1639,27 @@ pub(super) fn absorb_background_results(
                         state.apply_older_comments(&gist_id, result);
                     }
                     BgTaskOutcome::RevisionsFetched { gist_id, result } => {
-                        if state.revision.gist_id.as_deref() != Some(gist_id.as_str()) {
+                        if state.revision().and_then(|r| r.gist_id.as_deref())
+                            != Some(gist_id.as_str())
+                        {
                             return Ok(LoopFlow::SkipIteration);
                         }
                         match result {
                             Ok(entries) => {
-                                state.revision.fetch_error = None;
-                                state.revision.entries = Some(entries);
-                                if state
-                                    .revision
-                                    .entries
-                                    .as_ref()
-                                    .is_some_and(|e| e.len() <= 1)
-                                {
+                                let short = entries.len() <= 1;
+                                if let Some(rev) = state.revision_mut() {
+                                    rev.fetch_error = None;
+                                    rev.entries = Some(entries);
+                                }
+                                if short {
                                     state.set_status("only one revision — nothing to restore");
                                 }
                             }
                             Err(error) => {
-                                state.revision.entries = Some(Vec::new());
-                                state.revision.fetch_error = Some(error);
+                                if let Some(rev) = state.revision_mut() {
+                                    rev.entries = Some(Vec::new());
+                                    rev.fetch_error = Some(error);
+                                }
                             }
                         }
                     }
@@ -1678,7 +1680,10 @@ pub(super) fn absorb_background_results(
                             state.diff_scroll = 0;
                             state.diff_hscroll = 0;
                             state.diff_identical = old_content == new_content;
-                            state.diff_return = Screen::Revisions;
+                            // Park revision payload so Esc restores list cursor/entries.
+                            if let Screen::Revisions(rev) = &state.screen {
+                                state.diff_return = Screen::Revisions(rev.clone());
+                            }
                             state.pending_action = None;
                             state.screen = Screen::Diff;
                         }
@@ -1759,12 +1764,19 @@ pub(super) fn absorb_background_results(
                                 "Restored {filename} from old revision (new revision created)"
                             ));
                             state.pending_action = None;
-                            state.screen = Screen::Revisions;
-                            state.revision.index = 0;
-                            state.revision.entries = None;
+                            // Return to revisions list (prefer payload parked on diff_return).
+                            let mut rev = match &state.diff_return {
+                                Screen::Revisions(r) => r.as_ref().clone(),
+                                _ => state.revision().cloned().unwrap_or_default(),
+                            };
+                            let gist_id = rev.gist_id.clone();
+                            rev.index = 0;
+                            rev.entries = None;
+                            rev.fetch_error = None;
+                            state.screen = Screen::Revisions(Box::new(rev));
                             state.loading = true;
                             channels.gist = Some(spawn_gist_fetch());
-                            if let Some(gist_id) = state.revision.gist_id.clone() {
+                            if let Some(gist_id) = gist_id {
                                 spawn_bg(
                                     state,
                                     &mut channels.bg,

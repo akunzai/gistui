@@ -363,7 +363,7 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::List => ScreenVm::List(build_list_vm(state)),
         Screen::Gists => ScreenVm::Gists(build_gists_vm(state)),
         Screen::GistDetail => ScreenVm::GistDetail(build_gist_detail_vm(state)),
-        Screen::Revisions => ScreenVm::Revisions(build_revisions_vm(state)),
+        Screen::Revisions(_) => ScreenVm::Revisions(build_revisions_vm(state)),
         Screen::Config(_) => ScreenVm::Config(build_config_vm(state)),
         Screen::Diff => ScreenVm::Diff(build_diff_vm(state)),
         Screen::Preview => ScreenVm::Preview(build_preview_vm(state)),
@@ -490,18 +490,19 @@ pub(crate) fn build_preview_vm(state: &AppState) -> PreviewVm {
 
 /// Revisions body — usable under Palette-over-Revisions as well.
 pub(crate) fn build_revisions_vm(state: &AppState) -> RevisionsVm {
+    let rev = state.revision().cloned().unwrap_or_default();
     let (footer, footer_colored) = if let Some(message) = &state.status {
         (message.clone(), false)
-    } else if state.revision.entries.is_none() {
+    } else if rev.entries.is_none() {
         ("Loading revisions…".to_string(), false)
-    } else if let Some(err) = &state.revision.fetch_error {
+    } else if let Some(err) = &rev.fetch_error {
         (err.clone(), false)
     } else {
         let file = state.revision_target_file_label();
         (format!("file={file}"), false)
     };
 
-    let gist_id = state.revision.gist_id.as_deref().unwrap_or("");
+    let gist_id = rev.gist_id.as_deref().unwrap_or("");
     let label = state
         .group_by_id(gist_id)
         .map(|g| {
@@ -514,7 +515,7 @@ pub(crate) fn build_revisions_vm(state: &AppState) -> RevisionsVm {
         .unwrap_or_else(|| gist_id.to_string());
 
     let now = unix_now();
-    let (empty, empty_message, rows, selected) = match &state.revision.entries {
+    let (empty, empty_message, rows, selected) = match &rev.entries {
         None => (
             RevisionsEmptyKind::Loading,
             Some("  ⏳ Loading revisions…".into()),
@@ -531,14 +532,9 @@ pub(crate) fn build_revisions_vm(state: &AppState) -> RevisionsVm {
             let rows = entries
                 .iter()
                 .enumerate()
-                .map(|(i, rev)| revision_row_label(rev, i, now))
+                .map(|(i, r)| revision_row_label(r, i, now))
                 .collect();
-            (
-                RevisionsEmptyKind::HasRows,
-                None,
-                rows,
-                Some(state.revision.index),
-            )
+            (RevisionsEmptyKind::HasRows, None, rows, Some(rev.index))
         }
     };
 
@@ -551,7 +547,7 @@ pub(crate) fn build_revisions_vm(state: &AppState) -> RevisionsVm {
         selected,
         footer,
         footer_colored,
-        hscroll: state.revision.hscroll,
+        hscroll: rev.hscroll,
     }
 }
 
@@ -1516,8 +1512,10 @@ mod tests {
         use crate::domain::{GistFile, GistRevision};
 
         let mut state = initial_state();
-        state.screen = Screen::Revisions;
-        state.revision.gist_id = Some("g1".into());
+        state.screen = Screen::Revisions(Box::default());
+        if let Some(r) = state.revision_mut() {
+            r.gist_id = Some("g1".into());
+        }
         state.gists = vec![GistFile {
             description: "hist".into(),
             ..GistFile::for_sync("g1".into(), "a.txt".into(), None)
@@ -1531,17 +1529,19 @@ mod tests {
             other => panic!("expected Revisions, got {other:?}"),
         }
 
-        state.revision.entries = Some(vec![GistRevision {
-            version: "abc1234deadbeef".into(),
-            committed_at: "2020-01-01T00:00:00Z".into(),
-            user: "alice".into(),
-            change_status: crate::domain::GistRevisionChangeStatus {
-                total: 1,
-                additions: 1,
-                deletions: 0,
-            },
-        }]);
-        state.revision.index = 0;
+        if let Some(r) = state.revision_mut() {
+            r.entries = Some(vec![GistRevision {
+                version: "abc1234deadbeef".into(),
+                committed_at: "2020-01-01T00:00:00Z".into(),
+                user: "alice".into(),
+                change_status: crate::domain::GistRevisionChangeStatus {
+                    total: 1,
+                    additions: 1,
+                    deletions: 0,
+                },
+            }]);
+            r.index = 0;
+        }
         match build_view_model(&state).screen {
             ScreenVm::Revisions(r) => {
                 assert_eq!(r.empty, RevisionsEmptyKind::HasRows);
