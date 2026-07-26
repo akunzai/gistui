@@ -712,7 +712,14 @@ fn render_pins_vm(
             frame,
             chunks[1],
             &pins.footer_title,
-            input_line("/", &state.pins.filter_query, ""),
+            input_line(
+                "/",
+                &state
+                    .pins()
+                    .expect("filtering PinsVm implies Screen::Pins payload")
+                    .filter_query,
+                "",
+            ),
             &state.theme,
             layout,
         );
@@ -2614,7 +2621,7 @@ fn render_palette_vm(
         Screen::Diff => render_diff(frame, state, &mut bg_layout),
         Screen::Preview => render_preview(frame, state, &mut bg_layout),
         Screen::Help(_) => render_help(frame, state, &mut bg_layout),
-        Screen::Pins => render_pins(frame, state, &mut bg_layout),
+        Screen::Pins(_) => render_pins(frame, state, &mut bg_layout),
         Screen::Gists => render_gists(frame, state, &mut bg_layout),
         Screen::GistDetail => render_gist_detail(frame, state, &mut bg_layout),
         Screen::Revisions(_) => render_revisions(frame, state, &mut bg_layout),

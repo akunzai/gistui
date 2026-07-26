@@ -18,8 +18,8 @@ pub enum FocusPane {
     Gist,
 }
 
-/// Active TUI screen. Unit tags for most screens; **Help** / **Config** / **Revisions** carry
-/// payloads so screen-local UI + return path cannot go stale on the root state (issue #242).
+/// Active TUI screen. Unit tags for some screens; **Help** / **Config** / **Revisions** /
+/// **Pins** carry payloads so screen-local UI cannot go stale on the root state (issue #242).
 /// Not `Copy`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Screen {
@@ -31,7 +31,8 @@ pub enum Screen {
     /// Help topic/index state lives on the variant (not a parallel `AppState` field).
     /// Boxed so `HelpState::return_screen: Screen` does not make `Screen` infinite-sized.
     Help(Box<HelpState>),
-    Pins,
+    /// Pins list cursor/filter/sort; may also sit on `diff_return` during a pin diff.
+    Pins(Box<PinsState>),
     Gists,
     /// Single-gist detail: basic info + file list + comments (entered from Gists with Enter).
     GistDetail,
@@ -56,6 +57,10 @@ impl Screen {
 
     pub fn is_revisions(&self) -> bool {
         matches!(self, Screen::Revisions(_))
+    }
+
+    pub fn is_pins(&self) -> bool {
+        matches!(self, Screen::Pins(_))
     }
 
     /// Borrow help payload when this is [`Screen::Help`].
@@ -98,6 +103,20 @@ impl Screen {
     pub fn revision_state_mut(&mut self) -> Option<&mut RevisionState> {
         match self {
             Screen::Revisions(r) => Some(r.as_mut()),
+            _ => None,
+        }
+    }
+
+    pub fn pins_state(&self) -> Option<&PinsState> {
+        match self {
+            Screen::Pins(p) => Some(p.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn pins_state_mut(&mut self) -> Option<&mut PinsState> {
+        match self {
+            Screen::Pins(p) => Some(p.as_mut()),
             _ => None,
         }
     }
@@ -205,7 +224,7 @@ impl HelpTopic {
     /// fall back to the List topic.
     pub fn for_screen(screen: &Screen) -> HelpTopic {
         match screen {
-            Screen::Pins => HelpTopic::Pins,
+            Screen::Pins(_) => HelpTopic::Pins,
             Screen::Gists => HelpTopic::GistManager,
             Screen::GistDetail => HelpTopic::GistDetail,
             Screen::Revisions(_) => HelpTopic::Revisions,
@@ -625,8 +644,8 @@ pub struct HelpState {
     pub index_sel: usize,
 }
 
-/// Pins-screen state (`Screen::Pins`). Data only — the pins methods stay on `AppState`.
-#[derive(Debug, Clone, Default)]
+/// Pins-screen state — carried on [`Screen::Pins`] (issue #242).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PinsState {
     pub index: usize,
     pub hscroll: u16,
@@ -773,7 +792,7 @@ pub struct AppState {
     /// [`Self::begin_local_scan`]; absorb ignores results with a mismatched id so a
     /// slow older scan cannot clobber a newer one (issue #221).
     pub local_scan_generation: u64,
-    pub pins: PinsState,
+
     pub gist_manager: GistsManagerState,
     pub editing_description: bool,
     pub description_input: TextInput,
@@ -910,6 +929,25 @@ impl AppState {
             Screen::Diff | Screen::Confirm | Screen::Preview => {
                 self.diff_return.revision_state_mut()
             }
+            _ => None,
+        }
+    }
+
+    /// Pins payload when Pins is active, parked on `diff_return` during a pin diff, or under
+    /// palette origin (issue #242).
+    pub fn pins(&self) -> Option<&PinsState> {
+        match &self.screen {
+            Screen::Pins(p) => Some(p.as_ref()),
+            Screen::Diff | Screen::Confirm | Screen::Preview => self.diff_return.pins_state(),
+            Screen::Palette => self.palette.origin_screen.pins_state(),
+            _ => None,
+        }
+    }
+
+    pub fn pins_mut(&mut self) -> Option<&mut PinsState> {
+        match &mut self.screen {
+            Screen::Pins(p) => Some(p.as_mut()),
+            Screen::Diff | Screen::Confirm | Screen::Preview => self.diff_return.pins_state_mut(),
             _ => None,
         }
     }
@@ -1380,7 +1418,10 @@ impl AppState {
     /// Empty query → every index. Matched against the cwd/home-shortened local path plus
     /// the gist filename (the meaningful, visible parts of the row).
     pub fn visible_pin_indices(&self) -> Vec<usize> {
-        let query = self.pins.filter_query.to_lowercase();
+        let query = self
+            .pins()
+            .map(|p| p.filter_query.to_lowercase())
+            .unwrap_or_default();
         let mut indices: Vec<usize> = self
             .pinned
             .iter()
@@ -1399,7 +1440,7 @@ impl AppState {
             })
             .map(|(i, _)| i)
             .collect();
-        match self.pins.sort {
+        match self.pins().map(|p| p.sort).unwrap_or_default() {
             PinSort::Default => {}
             PinSort::Local => indices.sort_by(|&a, &b| {
                 crate::config::display_path(&self.pinned[a].local_path)
@@ -1417,7 +1458,8 @@ impl AppState {
     /// The true `self.pinned` index of the currently selected Pins row (selection is a
     /// position within the filtered view).
     pub fn selected_pin_index(&self) -> Option<usize> {
-        self.visible_pin_indices().get(self.pins.index).copied()
+        let idx = self.pins().map(|p| p.index).unwrap_or(0);
+        self.visible_pin_indices().get(idx).copied()
     }
 
     /// Number of files the given gist holds in the current in-memory list. Used to guard
@@ -1893,7 +1935,7 @@ pub fn initial_state() -> AppState {
         scan_depth: crate::config::AppConfig::default().scan_depth,
         local_scanning: false,
         local_scan_generation: 0,
-        pins: PinsState::default(),
+
         gist_manager: GistsManagerState::default(),
         editing_description: false,
         description_input: TextInput::default(),

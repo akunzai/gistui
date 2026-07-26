@@ -454,6 +454,17 @@ pub(super) fn pin_local_abs(state: &AppState, m: &crate::domain::PinnedMapping) 
     }
 }
 
+/// Park the current Pins payload on `diff_return` so pin diffs/confirm restore list state.
+fn park_pins_on_diff_return(state: &mut AppState) {
+    if let Screen::Pins(p) = &state.screen {
+        state.diff_return = Screen::Pins(p.clone());
+    } else if let Some(p) = state.pins() {
+        state.diff_return = Screen::Pins(Box::new(p.clone()));
+    } else {
+        state.diff_return = Screen::Pins(Box::default());
+    }
+}
+
 /// Spawn the push (upload local → gist) flow for a pin: lands in the existing
 /// upload `Screen::Confirm` diff.
 pub(super) fn spawn_pin_push(
@@ -461,7 +472,7 @@ pub(super) fn spawn_pin_push(
     bg_rx: &mut BgRx,
     m: &crate::domain::PinnedMapping,
 ) {
-    state.diff_return = Screen::Pins;
+    park_pins_on_diff_return(state);
     let local_path = pin_local_abs(state, m);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
@@ -493,7 +504,7 @@ pub(super) fn spawn_pin_pull(
     bg_rx: &mut BgRx,
     m: &crate::domain::PinnedMapping,
 ) {
-    state.diff_return = Screen::Pins;
+    park_pins_on_diff_return(state);
     let target = pin_local_abs(state, m);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
@@ -1115,10 +1126,10 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState) {
             state.skip_dirs = config.skip_dirs;
             state.scan_depth = config.scan_depth;
             state.mark_pin_sync_cache_dirty();
-            state.pins.index = state
-                .pins
-                .index
-                .min(state.visible_pin_indices().len().saturating_sub(1));
+            let max = state.visible_pin_indices().len().saturating_sub(1);
+            if let Some(pins) = state.pins_mut() {
+                pins.index = pins.index.min(max);
+            }
             refresh_locals(state);
             state.set_status(format!("Unpinned {label}"));
         }

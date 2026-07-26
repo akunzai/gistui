@@ -367,7 +367,7 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::Config(_) => ScreenVm::Config(build_config_vm(state)),
         Screen::Diff => ScreenVm::Diff(build_diff_vm(state)),
         Screen::Preview => ScreenVm::Preview(build_preview_vm(state)),
-        Screen::Pins => ScreenVm::Pins(build_pins_vm(state)),
+        Screen::Pins(_) => ScreenVm::Pins(build_pins_vm(state)),
         Screen::Confirm => ScreenVm::Confirm(build_confirm_vm(state)),
         Screen::Help(_) => ScreenVm::Help(build_help_vm(state)),
         Screen::Palette => ScreenVm::Palette(build_palette_vm(state)),
@@ -914,10 +914,11 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
 
 /// Pins body only — usable under Palette-over-Pins as well.
 pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
-    let (footer_title, footer, footer_colored) = if state.pins.filtering {
+    let pins = state.pins().cloned().unwrap_or_default();
+    let (footer_title, footer, footer_colored) = if pins.filtering {
         (
             "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
-            format!("/{}_", state.pins.filter_query),
+            format!("/{}_", pins.filter_query),
             false,
         )
     } else {
@@ -973,24 +974,24 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
         "Pinned Mappings {}",
         count_label(visible.len(), state.pinned.len())
     );
-    if !state.pins.filter_query.is_empty() {
-        title.push_str(&format!(" · /{}", state.pins.filter_query));
+    if !pins.filter_query.is_empty() {
+        title.push_str(&format!(" · /{}", pins.filter_query));
     }
-    if state.pins.sort != crate::tui::PinSort::Default {
-        title.push_str(&format!(" · sort:{}", state.pins.sort.label()));
+    if pins.sort != crate::tui::PinSort::Default {
+        title.push_str(&format!(" · sort:{}", pins.sort.label()));
     }
 
     PinsVm {
         title,
         empty,
         rows,
-        selected: (!visible.is_empty()).then_some(state.pins.index),
-        filtering: state.pins.filtering,
-        filter_query: state.pins.filter_query.to_string(),
+        selected: (!visible.is_empty()).then_some(pins.index),
+        filtering: pins.filtering,
+        filter_query: pins.filter_query.to_string(),
         footer_title,
         footer,
         footer_colored,
-        hscroll: state.pins.hscroll,
+        hscroll: pins.hscroll,
     }
 }
 
@@ -1088,7 +1089,7 @@ mod tests {
     #[test]
     fn pins_vm_reads_cache_not_requiring_disk_for_status() {
         let mut state = initial_state();
-        state.screen = Screen::Pins;
+        state.screen = Screen::Pins(Box::default());
         state.pinned = vec![PinnedMapping {
             local_path: PathBuf::from("notes.txt"),
             gist_id: "g1".into(),
@@ -1120,7 +1121,7 @@ mod tests {
     #[test]
     fn pins_vm_unknown_when_cache_missing() {
         let mut state = initial_state();
-        state.screen = Screen::Pins;
+        state.screen = Screen::Pins(Box::default());
         state.pinned = vec![PinnedMapping {
             local_path: PathBuf::from("a.txt"),
             gist_id: "g1".into(),
@@ -1142,7 +1143,7 @@ mod tests {
     #[test]
     fn pins_vm_empty_states() {
         let mut state = initial_state();
-        state.screen = Screen::Pins;
+        state.screen = Screen::Pins(Box::default());
         let vm = build_view_model(&state);
         match vm.screen {
             ScreenVm::Pins(pins) => assert_eq!(pins.empty, PinsEmptyKind::NoMappings),
@@ -1156,7 +1157,9 @@ mod tests {
             direction: None,
             last_seen_hash: None,
         }];
-        state.pins.filter_query = crate::tui::TextInput::from("zzz-no-match");
+        if let Some(p) = state.pins_mut() {
+            p.filter_query = crate::tui::TextInput::from("zzz-no-match");
+        }
         state.pin_sync_cache = vec![crate::tui::PinSyncCacheEntry::default()];
         let vm = build_view_model(&state);
         match vm.screen {
