@@ -25,6 +25,9 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
     match &vm.screen {
         super::ScreenVm::List(list) => render_list_vm(frame, state, list, &vm.chrome, layout),
         super::ScreenVm::Gists(gists) => render_gists_vm(frame, state, gists, &vm.chrome, layout),
+        super::ScreenVm::GistDetail(detail) => {
+            render_gist_detail_vm(frame, state, detail, &vm.chrome, layout)
+        }
         super::ScreenVm::Pins(pins) => render_pins_vm(frame, state, pins, &vm.chrome, layout),
         super::ScreenVm::Confirm(confirm) => {
             render_confirm_vm(frame, state, confirm, &vm.chrome, layout)
@@ -34,12 +37,12 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
             Screen::Palette => render_palette(frame, state, layout),
             Screen::Diff => render_diff(frame, state, layout),
             Screen::Preview => render_preview(frame, state, layout),
-            Screen::GistDetail => render_gist_detail(frame, state, layout),
             Screen::Revisions => render_revisions(frame, state, layout),
             Screen::Config => render_config(frame, state, layout),
             // Migrated screens should not land in Legacy; fall back safely.
             Screen::List => render_list(frame, state, layout),
             Screen::Gists => render_gists(frame, state, layout),
+            Screen::GistDetail => render_gist_detail(frame, state, layout),
             Screen::Confirm => render_confirm(frame, state, layout),
             Screen::Help => render_help(frame, state, layout),
             Screen::Pins => render_pins(frame, state, layout),
@@ -1198,41 +1201,32 @@ pub(super) fn render_gist_info_and_files(
     );
 }
 
-/// The gist detail header: a block holding the basic-info line and the `Files │ Comments`
-/// focus tabs. The active tab's content is rendered below it.
-fn render_detail_header(
+/// The gist detail header from a view model: info line + `Files │ Comments` tabs.
+fn render_detail_header_vm(
     frame: &mut Frame,
     area: Rect,
-    state: &AppState,
-    gist_id: &str,
+    detail: &super::view_model::GistDetailVm,
+    chrome: &super::view_model::ChromeVm,
+    theme: &Theme,
     layout: &mut MouseLayout,
 ) {
-    let Some(group) = state.group_by_id(gist_id) else {
-        return;
-    };
     let lines = vec![
-        Line::from(gist_info_line(
-            &group,
-            unix_now(),
-            state.current_user_login.as_deref(),
-            state.gist_is_starred(gist_id),
-            state.gist_counts(gist_id),
-        )),
-        detail_focus_tabs_line(state.detail.focus, &state.theme),
+        Line::from(detail.info_line.clone()),
+        detail_focus_tabs_line(detail.focus, theme),
     ];
     frame.render_widget(
-        Paragraph::new(lines).style(state.theme.base_style()).block(
+        Paragraph::new(lines).style(theme.base_style()).block(
             Block::default()
-                .title(gist_block_title(&group))
+                .title(detail.block_title.clone())
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(state.theme.accent))
-                .style(state.theme.base_style())
+                .border_style(Style::default().fg(theme.accent))
+                .style(theme.base_style())
                 .padding(Padding::horizontal(1)),
         ),
         area,
     );
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         // Tab line is the 2nd content row (border + gist-info line above it); content starts
         // after the left border (1) + horizontal padding (1). Labels: " Files " (7), " │ " (3),
         // " Comments " (10) — see detail_focus_tabs_line.
@@ -1243,124 +1237,103 @@ fn render_detail_header(
     }
 }
 
-/// The gist detail's Files tab: the numbered, cursor-highlighted, scrollable file list,
-/// titled with the file count.
-fn render_gist_file_list(
+/// Files tab from the view model (full file list; paint windows to the area height).
+fn render_gist_file_list_vm(
     frame: &mut Frame,
     area: Rect,
-    state: &AppState,
-    gist_id: &str,
+    detail: &super::view_model::GistDetailVm,
+    chrome: &super::view_model::ChromeVm,
+    theme: &Theme,
     layout: &mut MouseLayout,
 ) {
-    let files = state.gist_file_display_names(gist_id);
-    let cursor = state.detail.file_cursor.min(files.len().saturating_sub(1));
+    let files = &detail.files;
+    let cursor = detail.file_cursor.min(files.len().saturating_sub(1));
     let visible_rows = (area.height as usize).saturating_sub(2);
     let offset = file_list_scroll(cursor, visible_rows, files.len());
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         layout.detail_files = Some(PaneHit { rect: area, offset });
     }
-    let lines = file_rows(&files, cursor, offset, visible_rows, true, &state.theme);
+    let lines = file_rows(files, cursor, offset, visible_rows, true, theme);
     frame.render_widget(
-        Paragraph::new(lines).style(state.theme.base_style()).block(
+        Paragraph::new(lines).style(theme.base_style()).block(
             Block::default()
                 .title(format!("Files ({})", files.len()))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(state.theme.accent))
-                .style(state.theme.base_style())
+                .border_style(Style::default().fg(theme.accent))
+                .style(theme.base_style())
                 .padding(Padding::horizontal(1)),
         ),
         area,
     );
 }
 
-/// Build the styled lines for a run of comments (author·age header, 2-space-indented body,
-/// trailing blank). Pure so the count below can mirror it exactly for scroll compensation.
-pub(super) fn comment_lines<'a>(
-    comments: &'a [GistComment],
-    theme: &Theme,
-    now: i64,
-) -> Vec<Line<'a>> {
-    let mut lines = Vec::new();
-    for c in comments {
-        let age = crate::domain::parse_rfc3339_to_unix(&c.created_at)
-            .map(|t| crate::domain::humanize_age(now - t as i64))
-            .unwrap_or_else(|| "?".into());
-        lines.push(Line::from(Span::styled(
-            format!("{} · {age}", c.author),
-            Style::default().fg(theme.accent),
-        )));
-        for raw in c.body.lines() {
-            lines.push(Line::from(format!("  {raw}")));
-        }
-        lines.push(Line::from(""));
-    }
-    lines
-}
-
-/// Dim helper line (matches the existing dim placeholder styling).
-fn dim_line<'a>(text: &'a str, state: &AppState) -> Line<'a> {
-    Line::from(Span::styled(text, Style::default().fg(state.theme.dim)))
-}
-
-/// Title for the comments block: shows the loaded range out of the total when known.
-fn comments_title(state: &AppState) -> String {
-    match (&state.detail.comments, state.detail.comments_total) {
-        (Some(c), _) if state.detail.comments_error.is_some() => format!("Comments ({})", c.len()),
-        (Some(c), Some(total)) if !c.is_empty() => {
-            let loaded = c.len() as u32;
-            let first = total.saturating_sub(loaded) + 1;
-            format!("Comments ({first}–{total} / {total})")
-        }
-        (Some(c), None) if !c.is_empty() => format!("Comments (newest {})", c.len()),
-        _ => "Comments".to_string(),
-    }
-}
-
-/// Comments pane: loading / error / empty / a paged window (newest page first; older pages
-/// prepended). Renders a clickable "load older" affordance at the top, styles each comment,
-/// and publishes the affordance rect + max scroll into `layout`.
-pub(super) fn render_gist_comments(
+/// Comments pane from the view model: styles plain presentation facts and fills hit/scroll layout.
+fn render_gist_comments_vm(
     frame: &mut Frame,
     area: Rect,
-    state: &AppState,
+    comments: &super::view_model::CommentsPaneVm,
+    theme: &Theme,
     layout: &mut MouseLayout,
 ) {
-    let now = unix_now();
+    use super::view_model::{CommentLineVm, CommentsAffordance, CommentsPaneVm};
+
     let mut body: Vec<Line> = Vec::new();
     let mut affordance_present = false;
+    let mut title = "Comments".to_string();
+    let mut scroll = 0u16;
 
-    match (
-        &state.detail.comments,
-        state.detail.comments_loading,
-        &state.detail.comments_error,
-    ) {
-        (None, true, _) => body.push(dim_line("Loading comments…", state)),
-        (None, false, _) => body.push(dim_line("Tab here to load comments", state)),
-        (Some(_), _, Some(err)) => body.push(Line::from(Span::styled(
-            format!("comments error: {err}"),
-            Style::default().fg(state.theme.del_color),
+    match comments {
+        CommentsPaneVm::Loading => body.push(Line::from(Span::styled(
+            "Loading comments…",
+            Style::default().fg(theme.dim),
         ))),
-        (Some(comments), _, None) if comments.is_empty() => {
-            body.push(dim_line("No comments", state))
-        }
-        (Some(comments), _, None) => {
-            // Top affordance line: load-older / loading / start-of-thread.
-            let label = if state.detail.comments_loading_more {
-                "Loading…"
-            } else if state.detail.comments_loaded_oldest_page > 1 {
-                affordance_present = true;
-                "↑ Load 30 older comments"
-            } else {
-                "— Start of thread —"
+        CommentsPaneVm::PromptLoad => body.push(Line::from(Span::styled(
+            "Tab here to load comments",
+            Style::default().fg(theme.dim),
+        ))),
+        CommentsPaneVm::Error { message } => body.push(Line::from(Span::styled(
+            message.clone(),
+            Style::default().fg(theme.del_color),
+        ))),
+        CommentsPaneVm::Empty => body.push(Line::from(Span::styled(
+            "No comments",
+            Style::default().fg(theme.dim),
+        ))),
+        CommentsPaneVm::Thread {
+            title: t,
+            affordance,
+            lines,
+            scroll: s,
+        } => {
+            title = t.clone();
+            scroll = *s;
+            let label = match affordance {
+                CommentsAffordance::LoadingMore => "Loading…",
+                CommentsAffordance::LoadOlder => {
+                    affordance_present = true;
+                    "↑ Load 30 older comments"
+                }
+                CommentsAffordance::StartOfThread => "— Start of thread —",
             };
-            body.push(dim_line(label, state));
+            body.push(Line::from(Span::styled(
+                label,
+                Style::default().fg(theme.dim),
+            )));
             body.push(Line::from(""));
-            body.extend(comment_lines(comments, &state.theme, now as i64));
+            for line in lines {
+                match line {
+                    CommentLineVm::Author { text } => body.push(Line::from(Span::styled(
+                        text.clone(),
+                        Style::default().fg(theme.accent),
+                    ))),
+                    CommentLineVm::Body { text } => body.push(Line::from(text.clone())),
+                    CommentLineVm::Blank => body.push(Line::from("")),
+                }
+            }
         }
     }
 
-    // Record the affordance hit region (line 0 inside the bordered area) for mouse clicks.
     layout.comments_load_older = if affordance_present {
         Some(Rect::new(
             area.x + 1,
@@ -1372,28 +1345,25 @@ pub(super) fn render_gist_comments(
         None
     };
 
-    // The scrollbar uses the logical line count, which shares units with `detail_scroll`, so the
-    // thumb position is exact (its size is approximate when long comments soft-wrap).
     let total_lines = body.len();
     let inner_rows = area.height.saturating_sub(2);
     layout.comments_max_scroll = Some((total_lines as u16).saturating_sub(inner_rows));
 
-    let title = comments_title(state);
     frame.render_widget(
         Paragraph::new(body)
-            .style(state.theme.base_style())
-            .scroll((state.detail.scroll, 0))
+            .style(theme.base_style())
+            .scroll((scroll, 0))
             .wrap(Wrap { trim: false })
             .block(
                 Block::default()
                     .title(title)
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
-                    .style(state.theme.base_style()),
+                    .style(theme.base_style()),
             ),
         area,
     );
-    render_text_scrollbar(frame, area, total_lines, state.detail.scroll as usize);
+    render_text_scrollbar(frame, area, total_lines, scroll as usize);
 }
 
 /// The default (idle) footer hint on screens that used to show a long per-screen key dump.
@@ -1445,9 +1415,21 @@ pub(super) fn detail_focus_tabs_line(focus: DetailFocus, theme: &Theme) -> Line<
 }
 
 pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+    // Build body directly so Palette-over-GistDetail still paints (screen is Palette).
+    let chrome = super::view_model::build_chrome(state);
+    let detail = super::view_model::build_gist_detail_vm(state);
+    render_gist_detail_vm(frame, state, &detail, &chrome, layout);
+}
+
+fn render_gist_detail_vm(
+    frame: &mut Frame,
+    state: &AppState,
+    detail: &super::view_model::GistDetailVm,
+    chrome: &super::view_model::ChromeVm,
+    layout: &mut MouseLayout,
+) {
     let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
-    let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
+    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
     // Fixed 4-row header (borders + basic-info line + focus tabs); the active tab — the file
     // list or the comments, never both — fills the rest above the footer.
     let chunks = Layout::default()
@@ -1455,19 +1437,31 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &m
         .constraints([
             Constraint::Length(4),
             Constraint::Min(3),
-            Constraint::Length(footer_height(&footer, area.width, "")),
+            Constraint::Length(footer_height(&detail.footer, area.width, "")),
         ])
         .split(area);
-    if let Some(id) = state.detail.gist_id.as_deref() {
-        render_detail_header(frame, chunks[0], state, id, layout);
-        match state.detail.focus {
-            DetailFocus::Files => render_gist_file_list(frame, chunks[1], state, id, layout),
-            DetailFocus::Comments => render_gist_comments(frame, chunks[1], state, layout),
+    if !detail.missing {
+        render_detail_header_vm(frame, chunks[0], detail, chrome, &state.theme, layout);
+        match detail.focus {
+            DetailFocus::Files => {
+                render_gist_file_list_vm(frame, chunks[1], detail, chrome, &state.theme, layout)
+            }
+            DetailFocus::Comments => {
+                render_gist_comments_vm(frame, chunks[1], &detail.comments, &state.theme, layout)
+            }
         }
     }
-    render_footer(frame, chunks[2], "", &footer, colored, &state.theme, layout);
+    render_footer(
+        frame,
+        chunks[2],
+        "",
+        &detail.footer,
+        detail.footer_colored,
+        &state.theme,
+        layout,
+    );
 
-    let edit_modal = if state.editing_description {
+    let edit_modal = if detail.editing_description {
         // The modal covers the file list and tabs; drop their hit regions so a click
         // behind the modal doesn't move the cursor or switch tabs.
         layout.detail_files = None;
@@ -1486,7 +1480,7 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &m
     } else {
         None
     };
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         // When the edit-description modal is open, the close button belongs on it;
         // otherwise it sits on the full-screen detail view's top-right corner.
         layout.close_button = Some(render_close_button(
