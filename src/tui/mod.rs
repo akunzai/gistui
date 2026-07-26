@@ -2088,7 +2088,9 @@ impl AppState {
 /// confirm prompt.
 mod highlight;
 mod palette;
-use palette::{PaletteItem, PaletteMode, PaletteState};
+#[cfg(test)]
+use palette::PaletteItem;
+use palette::{PaletteMode, PaletteState};
 
 mod render;
 use render::*;
