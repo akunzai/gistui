@@ -28,6 +28,12 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
         super::ScreenVm::GistDetail(detail) => {
             render_gist_detail_vm(frame, state, detail, &vm.chrome, layout)
         }
+        super::ScreenVm::Revisions(revs) => {
+            render_revisions_vm(frame, state, revs, &vm.chrome, layout)
+        }
+        super::ScreenVm::Config(config) => {
+            render_config_vm(frame, state, config, &vm.chrome, layout)
+        }
         super::ScreenVm::Pins(pins) => render_pins_vm(frame, state, pins, &vm.chrome, layout),
         super::ScreenVm::Confirm(confirm) => {
             render_confirm_vm(frame, state, confirm, &vm.chrome, layout)
@@ -37,12 +43,12 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
             Screen::Palette => render_palette(frame, state, layout),
             Screen::Diff => render_diff(frame, state, layout),
             Screen::Preview => render_preview(frame, state, layout),
-            Screen::Revisions => render_revisions(frame, state, layout),
-            Screen::Config => render_config(frame, state, layout),
             // Migrated screens should not land in Legacy; fall back safely.
             Screen::List => render_list(frame, state, layout),
             Screen::Gists => render_gists(frame, state, layout),
             Screen::GistDetail => render_gist_detail(frame, state, layout),
+            Screen::Revisions => render_revisions(frame, state, layout),
+            Screen::Config => render_config(frame, state, layout),
             Screen::Confirm => render_confirm(frame, state, layout),
             Screen::Help => render_help(frame, state, layout),
             Screen::Pins => render_pins(frame, state, layout),
@@ -370,26 +376,30 @@ pub(super) fn about_topic_lines_plain(state: &AppState) -> Vec<String> {
 }
 
 pub(super) fn render_config(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+    let chrome = super::view_model::build_chrome(state);
+    let config = super::view_model::build_config_vm(state);
+    render_config_vm(frame, state, &config, &chrome, layout);
+}
+
+fn render_config_vm(
+    frame: &mut Frame,
+    state: &AppState,
+    config: &super::view_model::ConfigVm,
+    chrome: &super::view_model::ChromeVm,
+    layout: &mut MouseLayout,
+) {
     let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
+    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(1)])
         .split(area);
-    let items: Vec<ListItem> = ConfigField::ALL
+    let items: Vec<ListItem> = config
+        .rows
         .iter()
-        .map(|field| {
-            let label = field.label();
-            let value = state.config_field_value(*field);
-            let hint = if field.is_numeric() {
-                "←/→"
-            } else {
-                "Enter"
-            };
-            ListItem::new(format!("  {label:<28} {value:<8}  ({hint})"))
-        })
+        .map(|row| ListItem::new(row.clone()))
         .collect();
-    let mut list_state = ListState::default().with_selected(Some(state.config.index));
+    let mut list_state = ListState::default().with_selected(Some(config.selected));
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
@@ -409,14 +419,14 @@ pub(super) fn render_config(frame: &mut Frame, state: &AppState, layout: &mut Mo
         )
         .highlight_symbol("▸ ");
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, chunks[0], &state.theme));
         layout.list = Some(PaneHit {
             rect: chunks[0],
             offset: 0,
         });
     }
-    if let Some(ref status) = state.status {
+    if let Some(ref status) = config.status {
         frame.render_widget(
             Paragraph::new(status.as_str()).style(Style::default().fg(state.theme.accent)),
             chunks[1],
@@ -981,69 +991,42 @@ pub(super) fn revision_row_label(
 }
 
 pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+    let chrome = super::view_model::build_chrome(state);
+    let revs = super::view_model::build_revisions_vm(state);
+    render_revisions_vm(frame, state, &revs, &chrome, layout);
+}
+
+fn render_revisions_vm(
+    frame: &mut Frame,
+    state: &AppState,
+    revs: &super::view_model::RevisionsVm,
+    chrome: &super::view_model::ChromeVm,
+    layout: &mut MouseLayout,
+) {
     let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
-    let (ftitle, footer, colored) = if let Some(message) = &state.status {
-        (String::new(), message.clone(), false)
-    } else if state.revision.entries.is_none() {
-        (String::new(), "Loading revisions…".to_string(), false)
-    } else if let Some(err) = &state.revision.fetch_error {
-        (String::new(), err.clone(), false)
-    } else {
-        let file = state.revision_target_file_label();
-        (String::new(), format!("file={file}"), false)
-    };
-    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
+    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
+    let footer_lines = wrap_line_count(&revs.footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(3), Constraint::Length(footer_lines)])
         .split(area);
 
-    let gist_id = state.revision.gist_id.as_deref().unwrap_or("");
-    let label = state
-        .group_by_id(gist_id)
-        .map(|g| {
-            if g.description.trim().is_empty() {
-                g.id.clone()
-            } else {
-                g.description.clone()
-            }
-        })
-        .unwrap_or_else(|| gist_id.to_string());
-    let count = state
-        .revision
-        .entries
-        .as_ref()
-        .map(|e| e.len())
-        .unwrap_or(0);
-    let now = unix_now();
+    let items: Vec<ListItem> = match revs.empty {
+        super::view_model::RevisionsEmptyKind::HasRows => revs
+            .rows
+            .iter()
+            .map(|row| ListItem::new(hscroll_str(row, revs.hscroll)))
+            .collect(),
+        _ => {
+            let msg = revs.empty_message.clone().unwrap_or_else(|| "  ".into());
+            vec![ListItem::new(msg).style(Style::default().fg(state.theme.dim))]
+        }
+    };
 
-    let items: Vec<ListItem> =
-        match &state.revision.entries {
-            None => vec![ListItem::new("  ⏳ Loading revisions…")
-                .style(Style::default().fg(state.theme.dim))],
-            Some(entries) if entries.is_empty() => {
-                vec![ListItem::new("  📭 No revisions found")
-                    .style(Style::default().fg(state.theme.dim))]
-            }
-            Some(entries) => entries
-                .iter()
-                .enumerate()
-                .map(|(i, rev)| {
-                    ListItem::new(hscroll_str(
-                        &revision_row_label(rev, i, now),
-                        state.revision.hscroll,
-                    ))
-                })
-                .collect(),
-        };
-
-    let selected = (count > 0).then_some(state.revision.index);
-    let title = format!("Revisions: {label} {}", count_label(count, count));
     let list = List::new(items)
         .block(
             Block::default()
-                .title(title)
+                .title(revs.title.clone())
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(state.theme.accent))
@@ -1060,9 +1043,9 @@ pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut
         .highlight_symbol("▶ ");
 
     let mut list_state = ListState::default();
-    list_state.select(selected);
+    list_state.select(revs.selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         layout.list = Some(PaneHit {
             rect: chunks[0],
             offset: list_state.offset(),
@@ -1071,13 +1054,13 @@ pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut
     render_footer(
         frame,
         chunks[1],
-        &ftitle,
-        &footer,
-        colored,
+        "",
+        &revs.footer,
+        revs.footer_colored,
         &state.theme,
         layout,
     );
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }
 }

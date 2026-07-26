@@ -8,10 +8,10 @@
 use super::render::{
     about_topic_lines_plain, confirm_modal_style, confirm_prompt, count_label, footer_with_status,
     gist_group_row_label, gist_info_line, gist_row_display, help_topic_body, marked_row_text,
-    pin_row_label, row_mark, spinner_glyph, unix_now, RowMark, CREATE_DESC_PREFIX,
-    CREATE_DESC_SUFFIX, MINIMAL_HINT,
+    pin_row_label, revision_row_label, row_mark, spinner_glyph, unix_now, RowMark,
+    CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX, MINIMAL_HINT,
 };
-use super::{AppState, DetailFocus, FocusPane, HelpTopic, PendingAction, Screen};
+use super::{AppState, ConfigField, DetailFocus, FocusPane, HelpTopic, PendingAction, Screen};
 use crate::domain::SyncStatus;
 use ratatui::style::Color;
 
@@ -38,11 +38,41 @@ pub enum ScreenVm {
     List(ListVm),
     Gists(GistsVm),
     GistDetail(GistDetailVm),
+    Revisions(RevisionsVm),
+    Config(ConfigVm),
     Pins(PinsVm),
     Confirm(ConfirmVm),
     Help(HelpVm),
     /// Body still painted from `AppState` directly (transition toward #250).
     Legacy,
+}
+
+/// Revision history list (#250).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevisionsVm {
+    pub title: String,
+    pub empty: RevisionsEmptyKind,
+    pub empty_message: Option<String>,
+    pub rows: Vec<String>,
+    pub selected: Option<usize>,
+    pub footer: String,
+    pub footer_colored: bool,
+    pub hscroll: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RevisionsEmptyKind {
+    HasRows,
+    Loading,
+    NoRevisions,
+}
+
+/// Settings screen (#250).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigVm {
+    pub rows: Vec<String>,
+    pub selected: usize,
+    pub status: Option<String>,
 }
 
 /// Single-gist detail presentation (#250). Layout geometry still filled during paint.
@@ -262,12 +292,103 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::List => ScreenVm::List(build_list_vm(state)),
         Screen::Gists => ScreenVm::Gists(build_gists_vm(state)),
         Screen::GistDetail => ScreenVm::GistDetail(build_gist_detail_vm(state)),
+        Screen::Revisions => ScreenVm::Revisions(build_revisions_vm(state)),
+        Screen::Config => ScreenVm::Config(build_config_vm(state)),
         Screen::Pins => ScreenVm::Pins(build_pins_vm(state)),
         Screen::Confirm => ScreenVm::Confirm(build_confirm_vm(state)),
         Screen::Help => ScreenVm::Help(build_help_vm(state)),
         _ => ScreenVm::Legacy,
     };
     ViewModel { chrome, screen }
+}
+
+/// Revisions body — usable under Palette-over-Revisions as well.
+pub(crate) fn build_revisions_vm(state: &AppState) -> RevisionsVm {
+    let (footer, footer_colored) = if let Some(message) = &state.status {
+        (message.clone(), false)
+    } else if state.revision.entries.is_none() {
+        ("Loading revisions…".to_string(), false)
+    } else if let Some(err) = &state.revision.fetch_error {
+        (err.clone(), false)
+    } else {
+        let file = state.revision_target_file_label();
+        (format!("file={file}"), false)
+    };
+
+    let gist_id = state.revision.gist_id.as_deref().unwrap_or("");
+    let label = state
+        .group_by_id(gist_id)
+        .map(|g| {
+            if g.description.trim().is_empty() {
+                g.id.clone()
+            } else {
+                g.description.clone()
+            }
+        })
+        .unwrap_or_else(|| gist_id.to_string());
+
+    let now = unix_now();
+    let (empty, empty_message, rows, selected) = match &state.revision.entries {
+        None => (
+            RevisionsEmptyKind::Loading,
+            Some("  ⏳ Loading revisions…".into()),
+            Vec::new(),
+            None,
+        ),
+        Some(entries) if entries.is_empty() => (
+            RevisionsEmptyKind::NoRevisions,
+            Some("  📭 No revisions found".into()),
+            Vec::new(),
+            None,
+        ),
+        Some(entries) => {
+            let rows = entries
+                .iter()
+                .enumerate()
+                .map(|(i, rev)| revision_row_label(rev, i, now))
+                .collect();
+            (
+                RevisionsEmptyKind::HasRows,
+                None,
+                rows,
+                Some(state.revision.index),
+            )
+        }
+    };
+
+    let count = rows.len();
+    RevisionsVm {
+        title: format!("Revisions: {label} {}", count_label(count, count)),
+        empty,
+        empty_message,
+        rows,
+        selected,
+        footer,
+        footer_colored,
+        hscroll: state.revision.hscroll,
+    }
+}
+
+/// Config/settings body — usable under Palette-over-Config as well.
+pub(crate) fn build_config_vm(state: &AppState) -> ConfigVm {
+    let rows = ConfigField::ALL
+        .iter()
+        .map(|field| {
+            let label = field.label();
+            let value = state.config_field_value(*field);
+            let hint = if field.is_numeric() {
+                "←/→"
+            } else {
+                "Enter"
+            };
+            format!("  {label:<28} {value:<8}  ({hint})")
+        })
+        .collect();
+    ConfigVm {
+        rows,
+        selected: state.config.index,
+        status: state.status.clone(),
+    }
 }
 
 /// Gist detail body — usable under Palette-over-GistDetail as well.
@@ -1188,6 +1309,68 @@ mod tests {
         match build_view_model(&state).screen {
             ScreenVm::GistDetail(d) => assert!(matches!(d.comments, CommentsPaneVm::Empty)),
             other => panic!("expected GistDetail, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn revisions_vm_loading_and_rows() {
+        use crate::domain::{GistFile, GistRevision};
+
+        let mut state = initial_state();
+        state.screen = Screen::Revisions;
+        state.revision.gist_id = Some("g1".into());
+        state.gists = vec![GistFile {
+            description: "hist".into(),
+            ..GistFile::for_sync("g1".into(), "a.txt".into(), None)
+        }];
+        match build_view_model(&state).screen {
+            ScreenVm::Revisions(r) => {
+                assert_eq!(r.empty, RevisionsEmptyKind::Loading);
+                assert!(r.footer.contains("Loading"));
+                assert!(r.title.contains("hist") || r.title.contains("g1"));
+            }
+            other => panic!("expected Revisions, got {other:?}"),
+        }
+
+        state.revision.entries = Some(vec![GistRevision {
+            version: "abc1234deadbeef".into(),
+            committed_at: "2020-01-01T00:00:00Z".into(),
+            user: "alice".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 1,
+                additions: 1,
+                deletions: 0,
+            },
+        }]);
+        state.revision.index = 0;
+        match build_view_model(&state).screen {
+            ScreenVm::Revisions(r) => {
+                assert_eq!(r.empty, RevisionsEmptyKind::HasRows);
+                assert_eq!(r.rows.len(), 1);
+                assert!(r.rows[0].contains("alice") || r.rows[0].contains("abc"));
+                assert_eq!(r.selected, Some(0));
+            }
+            other => panic!("expected Revisions, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn config_vm_rows_and_status() {
+        let mut state = initial_state();
+        state.screen = Screen::Config;
+        state.config.index = 1;
+        state.status = Some("Theme saved".into());
+        match build_view_model(&state).screen {
+            ScreenVm::Config(c) => {
+                assert!(!c.rows.is_empty());
+                assert_eq!(c.selected, 1);
+                assert_eq!(c.status.as_deref(), Some("Theme saved"));
+                assert!(c
+                    .rows
+                    .iter()
+                    .any(|r| r.contains("Theme") || r.contains("Mouse")));
+            }
+            other => panic!("expected Config, got {other:?}"),
         }
     }
 
