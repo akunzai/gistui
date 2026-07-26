@@ -34,6 +34,10 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
         super::ScreenVm::Config(config) => {
             render_config_vm(frame, state, config, &vm.chrome, layout)
         }
+        super::ScreenVm::Diff(diff) => render_diff_vm(frame, state, diff, &vm.chrome, layout),
+        super::ScreenVm::Preview(preview) => {
+            render_preview_vm(frame, state, preview, &vm.chrome, layout)
+        }
         super::ScreenVm::Pins(pins) => render_pins_vm(frame, state, pins, &vm.chrome, layout),
         super::ScreenVm::Confirm(confirm) => {
             render_confirm_vm(frame, state, confirm, &vm.chrome, layout)
@@ -41,14 +45,14 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
         super::ScreenVm::Help(help) => render_help_vm(frame, state, help, &vm.chrome, layout),
         super::ScreenVm::Legacy => match state.screen {
             Screen::Palette => render_palette(frame, state, layout),
-            Screen::Diff => render_diff(frame, state, layout),
-            Screen::Preview => render_preview(frame, state, layout),
             // Migrated screens should not land in Legacy; fall back safely.
             Screen::List => render_list(frame, state, layout),
             Screen::Gists => render_gists(frame, state, layout),
             Screen::GistDetail => render_gist_detail(frame, state, layout),
             Screen::Revisions => render_revisions(frame, state, layout),
             Screen::Config => render_config(frame, state, layout),
+            Screen::Diff => render_diff(frame, state, layout),
+            Screen::Preview => render_preview(frame, state, layout),
             Screen::Confirm => render_confirm(frame, state, layout),
             Screen::Help => render_help(frame, state, layout),
             Screen::Pins => render_pins(frame, state, layout),
@@ -544,53 +548,37 @@ fn render_help_vm(
     }
 }
 
-/// Lowercase file extension of a filename or path string, if any.
-fn file_ext(name: &str) -> Option<String> {
-    std::path::Path::new(name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_lowercase())
-}
-
-/// Language extension for the previewed file, taken from its gist key's filename.
-fn preview_ext(state: &AppState) -> Option<String> {
-    state
-        .preview_gist_key
-        .as_ref()
-        .and_then(|(_, filename)| file_ext(filename))
-}
-
-/// Language extension for the diff's file — the local/target filename both sides share.
-fn diff_ext(state: &AppState) -> Option<String> {
-    state
-        .download_target
-        .file_name()
-        .or_else(|| state.preview_local.file_name())
-        .and_then(|n| n.to_str())
-        .and_then(file_ext)
-}
-
 /// The preview body as per-line span vectors: syntax-highlighted when the feature is enabled and
 /// the file type is known, otherwise one plain span per line.
-fn preview_line_spans(state: &AppState) -> Vec<Vec<Span<'static>>> {
-    let lines: Vec<String> = state.diff_text.lines().map(str::to_string).collect();
-    match (state.syntax_highlight, preview_ext(state)) {
-        (true, Some(ext)) => super::highlight::highlight_buffer(&ext, &lines, &state.theme),
+fn preview_line_spans(
+    body: &str,
+    syntax_highlight: bool,
+    ext: Option<&str>,
+    theme: &Theme,
+) -> Vec<Vec<Span<'static>>> {
+    let lines: Vec<String> = body.lines().map(str::to_string).collect();
+    match (syntax_highlight, ext) {
+        (true, Some(ext)) => super::highlight::highlight_buffer(ext, &lines, theme),
         _ => lines.into_iter().map(|l| vec![Span::raw(l)]).collect(),
     }
 }
 
 pub(super) fn render_preview(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+    let chrome = super::view_model::build_chrome(state);
+    let preview = super::view_model::build_preview_vm(state);
+    render_preview_vm(frame, state, &preview, &chrome, layout);
+}
+
+fn render_preview_vm(
+    frame: &mut Frame,
+    state: &AppState,
+    preview: &super::view_model::PreviewVm,
+    chrome: &super::view_model::ChromeVm,
+    layout: &mut MouseLayout,
+) {
     let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
-    // A `R`-refresh fetch error (set via state.status) must surface here, not be swallowed.
-    let hints = if state.preview_wrap {
-        "↑↓ PgUp/Dn scroll  ·  w wrap [on]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
-    } else {
-        "↑↓←→ PgUp/Dn scroll  ·  w wrap [off]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
-    };
-    let (footer, colored) = footer_with_status(state.status.as_deref(), hints);
-    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
+    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
+    let footer_lines = wrap_line_count(&preview.footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(footer_lines)])
@@ -599,19 +587,24 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState, layout: &mut M
     // When wrapping, horizontal scroll is meaningless — pin the x offset to 0 so long lines
     // wrap into view instead of being scrolled off-screen.
     let block = Block::default()
-        .title(state.preview_title.clone())
+        .title(preview.title.clone())
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .style(state.theme.base_style())
         .padding(Padding::horizontal(1));
-    let line_spans = preview_line_spans(state);
+    let line_spans = preview_line_spans(
+        &preview.body,
+        preview.syntax_highlight,
+        preview.ext.as_deref(),
+        &state.theme,
+    );
     let total_lines = line_spans.len();
-    let paragraph = if state.preview_wrap {
+    let paragraph = if preview.wrap {
         // Wrapping needs the full line set; vertical scroll goes through Paragraph (no hscroll).
         let body = Text::from(line_spans.into_iter().map(Line::from).collect::<Vec<_>>());
         Paragraph::new(body)
             .style(state.theme.base_style())
-            .scroll((state.diff_scroll, 0))
+            .scroll((preview.scroll, 0))
             .wrap(Wrap { trim: false })
             .block(block)
     } else {
@@ -619,8 +612,8 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState, layout: &mut M
         // redraw artifacts that Paragraph::scroll leaves on coloured spans.
         let visible: Vec<Line> = line_spans
             .into_iter()
-            .map(|spans| apply_hscroll_spans(spans, state.diff_hscroll as usize))
-            .skip(state.diff_scroll as usize)
+            .map(|spans| apply_hscroll_spans(spans, preview.hscroll as usize))
+            .skip(preview.scroll as usize)
             .collect();
         Paragraph::new(Text::from(visible))
             .style(state.theme.base_style())
@@ -629,11 +622,19 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState, layout: &mut M
     frame.render_widget(paragraph, chunks[0]);
     // Only the non-wrap path keeps a 1:1 line↔row mapping for an accurate thumb; under soft
     // wrapping the logical line count diverges from rendered rows, so skip the scrollbar there.
-    if !state.preview_wrap {
-        render_text_scrollbar(frame, chunks[0], total_lines, state.diff_scroll as usize);
+    if !preview.wrap {
+        render_text_scrollbar(frame, chunks[0], total_lines, preview.scroll as usize);
     }
-    render_footer(frame, chunks[1], "", &footer, colored, &state.theme, layout);
-    if state.mouse_enabled {
+    render_footer(
+        frame,
+        chunks[1],
+        "",
+        &preview.footer,
+        preview.footer_colored,
+        &state.theme,
+        layout,
+    );
+    if chrome.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }
 }
@@ -2331,52 +2332,51 @@ fn render_text_scrollbar(frame: &mut Frame, area: Rect, total: usize, offset: us
     );
 }
 
-/// Render just the diff content pane (no footer) into `area`.
-pub(super) fn render_diff_pane(frame: &mut Frame, area: Rect, state: &AppState) {
-    // Collapse unchanged context to the configured radius unless the user toggled full view.
-    let diff_body = match state.effective_diff_context() {
-        Some(radius) => crate::diff::collapse_context(&state.diff_text, radius),
-        None => state.diff_text.clone(),
-    };
-    let ext = diff_ext(state);
+/// Render just the diff content pane (no footer) into `area` from a [`DiffVm`].
+fn render_diff_pane_vm(
+    frame: &mut Frame,
+    area: Rect,
+    diff: &super::view_model::DiffVm,
+    theme: &Theme,
+) {
     let block = Block::default()
-        .title(diff_title(state))
+        .title(diff.title.clone())
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .style(state.theme.base_style())
+        .style(theme.base_style())
         .padding(Padding::horizontal(1));
-    let paragraph = if state.diff_wrap {
+    let paragraph = if diff.wrap {
         // Wrapping needs the full, un-h-scrolled line set; vertical scroll goes through
         // Paragraph. Mirrors render_preview's wrap branch.
         Paragraph::new(diff_view_highlighted(
-            &diff_body,
+            &diff.body,
             0,
             0,
-            ext.as_deref(),
-            state.syntax_highlight,
-            &state.theme,
+            diff.ext.as_deref(),
+            diff.syntax_highlight,
+            theme,
         ))
-        .style(state.theme.base_style())
-        .scroll((state.diff_scroll, 0))
+        .style(theme.base_style())
+        .scroll((diff.scroll, 0))
         .wrap(Wrap { trim: false })
         .block(block)
     } else {
         Paragraph::new(diff_view_highlighted(
-            &diff_body,
-            state.diff_scroll,
-            state.diff_hscroll,
-            ext.as_deref(),
-            state.syntax_highlight,
-            &state.theme,
+            &diff.body,
+            diff.scroll,
+            diff.hscroll,
+            diff.ext.as_deref(),
+            diff.syntax_highlight,
+            theme,
         ))
-        .style(state.theme.base_style())
+        .style(theme.base_style())
         .block(block)
     };
     frame.render_widget(paragraph, area);
     // The scrollbar's 1:1 line↔row mapping only holds without soft wrapping (see render_preview).
-    if !state.diff_wrap {
-        let total_lines = diff_body.lines().count();
-        render_text_scrollbar(frame, area, total_lines, state.diff_scroll as usize);
+    if !diff.wrap {
+        let total_lines = diff.body.lines().count();
+        render_text_scrollbar(frame, area, total_lines, diff.scroll as usize);
     }
 }
 
@@ -2418,20 +2418,38 @@ pub(super) fn diff_footer(state: &AppState) -> String {
 }
 
 pub(super) fn render_diff(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    let footer = diff_footer(state);
+    let chrome = super::view_model::build_chrome(state);
+    let diff = super::view_model::build_diff_vm(state);
+    render_diff_vm(frame, state, &diff, &chrome, layout);
+}
 
+fn render_diff_vm(
+    frame: &mut Frame,
+    state: &AppState,
+    diff: &super::view_model::DiffVm,
+    chrome: &super::view_model::ChromeVm,
+    layout: &mut MouseLayout,
+) {
     let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
-    let footer_lines = wrap_line_count(&footer, area.width.saturating_sub(2)).max(1);
+    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
+    let footer_lines = wrap_line_count(&diff.footer, area.width.saturating_sub(2)).max(1);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(footer_lines)])
         .split(area);
 
-    render_diff_pane(frame, chunks[0], state);
+    render_diff_pane_vm(frame, chunks[0], diff, &state.theme);
 
-    render_footer(frame, chunks[1], "", &footer, true, &state.theme, layout);
-    if state.mouse_enabled {
+    render_footer(
+        frame,
+        chunks[1],
+        "",
+        &diff.footer,
+        true,
+        &state.theme,
+        layout,
+    );
+    if chrome.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }
 }
@@ -2441,7 +2459,8 @@ pub(super) fn render_diff(frame: &mut Frame, state: &AppState, layout: &mut Mous
 /// #72 audit: this modal intentionally does not surface `state.status`. It is a transient y/n
 /// gate — confirming executes the action and transitions to `List`/`Gists`, where the result
 /// status is shown; cancelling returns to the launching screen without setting a status here.
-/// Modal chrome comes from the pure view model; background still reads `AppState` (#241).
+/// Modal chrome comes from the pure view model; overwrite background uses `DiffVm`,
+/// compact-gist background still reads `AppState` for gist info (#241 / #250).
 pub(super) fn render_confirm(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     let chrome = super::view_model::build_chrome(state);
     let confirm = super::view_model::build_confirm_vm(state);
@@ -2459,7 +2478,10 @@ fn render_confirm_vm(
         Some(PendingAction::CompactGist { gist_id, .. }) => {
             render_gist_info_and_files(frame, frame.area(), state, gist_id);
         }
-        _ => render_diff_pane(frame, frame.area(), state),
+        _ => {
+            let diff = super::view_model::build_diff_vm(state);
+            render_diff_pane_vm(frame, frame.area(), &diff, &state.theme);
+        }
     }
     let modal = match &confirm.kind {
         super::view_model::ConfirmModalKind::DescriptionInput {
