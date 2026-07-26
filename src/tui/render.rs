@@ -1534,9 +1534,7 @@ pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &m
     }
 }
 
-pub(super) fn hscroll_str(text: &str, offset: u16) -> String {
-    text.chars().skip(offset as usize).collect()
-}
+pub(super) use super::text::hscroll_str;
 
 /// Builds a single Pins-screen row. The local path is rendered with `display_path`
 /// (home → `~`) so it stays readable; the full row is horizontally scrollable. Pure so
@@ -1578,17 +1576,27 @@ pub(super) fn row_mark(reasons: &[MatchReason]) -> RowMark {
     }
 }
 
-/// Build a file-list row from its base text and match mark: 📌 prefix for a pinned pair,
-/// bold for a same-name match, plain otherwise. Shared by both panes in `render_list`.
-pub(super) fn marked_item(base: String, mark: RowMark, hscroll: u16) -> ListItem<'static> {
+/// Compose the full list-row string (including pin mark) that paint and hscroll max must share.
+pub(super) fn marked_row_text(base: String, mark: RowMark) -> String {
     match mark {
-        RowMark::Pinned => ListItem::new(hscroll_str(&format!("📌 {base}"), hscroll)),
-        RowMark::SameName => ListItem::new(hscroll_str(&base, hscroll))
-            .style(Style::default().add_modifier(Modifier::BOLD)),
-        RowMark::None => ListItem::new(hscroll_str(&base, hscroll)),
+        RowMark::Pinned => format!("📌 {base}"),
+        RowMark::SameName | RowMark::None => base,
     }
 }
 
+/// Build a file-list row from its base text and match mark: 📌 prefix for a pinned pair,
+/// bold for a same-name match, plain otherwise. Shared by both panes in `render_list`.
+pub(super) fn marked_item(base: String, mark: RowMark, hscroll: u16) -> ListItem<'static> {
+    let text = marked_row_text(base, mark);
+    let item = ListItem::new(hscroll_str(&text, hscroll));
+    match mark {
+        RowMark::SameName => item.style(Style::default().add_modifier(Modifier::BOLD)),
+        RowMark::Pinned | RowMark::None => item,
+    }
+}
+
+/// Gist file-list row **without** the live star mark (fork badge still applied). Used as the
+/// shared base for paint/hscroll; star is layered in [`gist_row_display`] so both stay aligned.
 pub(super) fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
     let base = match view {
         GistView::Description => {
@@ -1603,22 +1611,15 @@ pub(super) fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
     format!("{}{}", gist_badge_prefix(false, g.file.is_fork()), base)
 }
 
+/// Full gist file-list row as painted — [`gist_row_label`] plus `★ ` when the gist is starred.
+/// Hscroll max must measure this string (or [`marked_row_text`] of it), not the star-less label.
 pub(super) fn gist_row_display(g: &RankedGistFile, view: GistView, state: &AppState) -> String {
-    let base = match view {
-        GistView::Description => {
-            if g.file.description.trim().is_empty() {
-                g.file.filename.clone()
-            } else {
-                format!("{} — {}", g.file.filename, g.file.description)
-            }
-        }
-        GistView::Id => format!("{} / {}", g.file.gist_id, g.file.filename),
-    };
-    format!(
-        "{}{}",
-        gist_badge_prefix(state.gist_is_starred(&g.file.gist_id), g.file.is_fork()),
-        base
-    )
+    let label = gist_row_label(g, view);
+    if state.gist_is_starred(&g.file.gist_id) {
+        format!("★ {label}")
+    } else {
+        label
+    }
 }
 
 /// Greedy word-wrap line count, matching how `Paragraph` with `Wrap { trim: true }` breaks

@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Starred gist rows can fully horizontal-scroll again: the scroll limit now uses the same display string as painting (including the `★ ` prefix), so the trailing characters are reachable.
+
 ## [0.17.0] — 2026-07-09
 
 - The top-right shortcut bar now includes `(C)onfig` immediately left of `(?)Help` (click or press `C`, same as duodiff).

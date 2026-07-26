@@ -1207,41 +1207,31 @@ impl AppState {
     /// Highest horizontal-scroll offset for the gist-level view, based on its longest
     /// visible row (mirrors `focused_hscroll_max` for the main panes).
     fn gists_hscroll_max(&self) -> u16 {
-        self.visible_gist_groups()
-            .iter()
-            .map(|g| {
-                gist_group_row_label(
-                    g,
-                    unix_now(),
-                    self.gist_manager.sort,
-                    (
-                        self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
-                        self.gist_star_counts.get(&g.id).copied().unwrap_or(0),
-                        self.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
-                    ),
-                    self.gist_is_starred(&g.id),
-                    self.current_user_login.as_deref(),
-                )
-                .chars()
-                .count()
-            })
-            .max()
-            .unwrap_or(0)
-            .saturating_sub(1)
-            .min(u16::MAX as usize) as u16
+        hscroll_max_among(self.visible_gist_groups().iter().map(|g| {
+            gist_group_row_label(
+                g,
+                unix_now(),
+                self.gist_manager.sort,
+                (
+                    self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
+                    self.gist_star_counts.get(&g.id).copied().unwrap_or(0),
+                    self.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
+                ),
+                self.gist_is_starred(&g.id),
+                self.current_user_login.as_deref(),
+            )
+        }))
     }
 
     /// Highest horizontal-scroll offset for the Pins screen, bounded by the longest
     /// displayed local path (the only variable-length, overflow-prone field in a pin row).
     /// Pure helper modeled on `gists_hscroll_max`.
     fn pins_hscroll_max(&self) -> u16 {
-        self.pinned
-            .iter()
-            .map(|m| crate::config::display_path(&m.local_path).chars().count())
-            .max()
-            .unwrap_or(0)
-            .saturating_sub(1)
-            .min(u16::MAX as usize) as u16
+        hscroll_max_among(
+            self.pinned
+                .iter()
+                .map(|m| crate::config::display_path(&m.local_path)),
+        )
     }
 
     /// Indices into `self.pinned` that match the Pins-screen text filter, in sort order.
@@ -1544,23 +1534,26 @@ impl AppState {
 
     /// Highest horizontal-scroll offset for the focused pane, based on its longest row
     /// (viewport width is unknown to the pure key logic, mirroring the diff scroll cap).
+    ///
+    /// Must measure the **same** string the list paint path draws (`gist_row_display` /
+    /// local label + pin mark), not a star-less or mark-less variant — otherwise starred
+    /// or pinned rows cannot scroll far enough to reveal their trailing characters (#247).
     fn focused_hscroll_max(&self) -> u16 {
-        let longest = match self.focus {
-            FocusPane::Local => self
-                .locals
-                .iter()
-                .map(|c| local_row_label(&c.path, &self.cwd).chars().count())
-                .max(),
-            FocusPane::Gist => self
-                .ranked_gists()
-                .iter()
-                .map(|g| gist_row_label(g, self.gist_view).chars().count())
-                .max(),
-        };
-        longest
-            .unwrap_or(0)
-            .saturating_sub(1)
-            .min(u16::MAX as usize) as u16
+        let (visible_locals, ranked) = self.list_pane_snapshots();
+        match self.focus {
+            FocusPane::Local => hscroll_max_among(visible_locals.iter().map(|r| {
+                marked_row_text(
+                    local_row_label(&r.candidate.path, &self.cwd),
+                    row_mark(&r.reasons),
+                )
+            })),
+            FocusPane::Gist => hscroll_max_among(ranked.iter().map(|g| {
+                marked_row_text(
+                    gist_row_display(g, self.gist_view, self),
+                    row_mark(&g.reasons),
+                )
+            })),
+        }
     }
 
     fn scroll_focused_right(&mut self) {
@@ -1669,14 +1662,7 @@ impl AppState {
     }
 
     pub fn scroll_diff_right(&mut self) {
-        let max = self
-            .diff_text
-            .lines()
-            .map(|line| line.chars().count())
-            .max()
-            .unwrap_or(0)
-            .saturating_sub(1)
-            .min(u16::MAX as usize) as u16;
+        let max = hscroll_max_among(self.diff_text.lines());
         if self.diff_hscroll < max {
             self.diff_hscroll += 1;
         }
@@ -2045,7 +2031,7 @@ use palette::{PaletteItem, PaletteMode, PaletteState};
 mod render;
 use render::*;
 mod text;
-use text::{comment_lines_count, local_row_label};
+use text::{comment_lines_count, hscroll_max_among, local_row_label};
 mod bg;
 mod dispatch;
 mod keys;
