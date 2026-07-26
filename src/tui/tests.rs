@@ -4625,7 +4625,10 @@ fn pin_sync_status_is_missing_when_local_file_absent() {
     }];
 
     assert_eq!(
-        state.pin_sync_status(0),
+        {
+            state.refresh_pin_sync_cache();
+            state.cached_pin_sync_status(0)
+        },
         crate::domain::SyncStatus::Missing,
         "a pin whose local file doesn't exist must report Missing even though \
          the gist side has a known mtime"
@@ -4660,7 +4663,10 @@ fn pin_sync_status_upgrades_to_in_sync_when_content_hash_matches_baseline() {
     }];
 
     assert_eq!(
-        state.pin_sync_status(0),
+        {
+            state.refresh_pin_sync_cache();
+            state.cached_pin_sync_status(0)
+        },
         crate::domain::SyncStatus::InSync,
         "a matching content hash must override a stale-timestamp Push into InSync"
     );
@@ -4689,7 +4695,10 @@ fn pin_sync_status_keeps_push_when_content_hash_does_not_match_baseline() {
     }];
 
     assert_eq!(
-        state.pin_sync_status(0),
+        {
+            state.refresh_pin_sync_cache();
+            state.cached_pin_sync_status(0)
+        },
         crate::domain::SyncStatus::Push,
         "a non-matching baseline hash must not mask a real content change"
     );
@@ -4717,7 +4726,11 @@ fn pin_sync_status_keeps_push_when_no_baseline_hash_recorded() {
         ..GistFile::for_sync("g1".into(), "settings.json".into(), None)
     }];
 
-    assert_eq!(state.pin_sync_status(0), crate::domain::SyncStatus::Push);
+    state.refresh_pin_sync_cache();
+    assert_eq!(
+        state.cached_pin_sync_status(0),
+        crate::domain::SyncStatus::Push
+    );
 }
 
 #[test]

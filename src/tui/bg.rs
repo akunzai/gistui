@@ -589,6 +589,7 @@ pub(super) fn record_pin_sync(
                 direction,
             ) {
                 state.pinned = updated.pinned;
+                state.mark_pin_sync_cache_dirty();
             }
         }
     }
@@ -1064,6 +1065,7 @@ pub(super) fn pin_selected(state: &mut AppState) {
             state.pinned = config.pinned;
             state.skip_dirs = config.skip_dirs;
             state.scan_depth = config.scan_depth;
+            state.mark_pin_sync_cache_dirty();
             state.set_status(format!(
                 "Pinned {} <-> {}",
                 local.path.display(),
@@ -1087,6 +1089,7 @@ pub(super) fn unpin_selected(state: &mut AppState) {
             state.pinned = config.pinned;
             state.skip_dirs = config.skip_dirs;
             state.scan_depth = config.scan_depth;
+            state.mark_pin_sync_cache_dirty();
             state.set_status(format!(
                 "Unpinned {}",
                 crate::config::display_path(&local.path)
@@ -1111,6 +1114,7 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState) {
             state.pinned = config.pinned;
             state.skip_dirs = config.skip_dirs;
             state.scan_depth = config.scan_depth;
+            state.mark_pin_sync_cache_dirty();
             state.pins.index = state
                 .pins
                 .index
@@ -1357,11 +1361,11 @@ pub(super) fn absorb_background_results(
                                     // A pin diff that turns out identical confirms the cached
                                     // last_seen_hash is (still) accurate — refresh it for free
                                     // using the content we already fetched, so the Pins list's
-                                    // content-hash check (AppState::pin_sync_status) stays
+                                    // content-hash check (AppState::compute_pin_sync_status) stays
                                     // correct even if the gist changed elsewhere since the last
                                     // real sync. Hash the LOCAL content's raw bytes (not the
                                     // trailing-newline-normalized `identical` comparison), so
-                                    // this matches the raw-byte hashing pin_sync_status does.
+                                    // this matches the raw-byte hashing compute_pin_sync_status does.
                                     if identical {
                                         if let (Some(gid), Some(fname)) = (
                                             state.download_gist_id.clone(),
