@@ -511,7 +511,7 @@ pub(super) fn dispatch_outcome(
                 return Ok(LoopFlow::Proceed);
             };
             let m = state.pinned[idx].clone();
-            match state.pin_sync_status(idx) {
+            match state.compute_pin_sync_status(idx) {
                 crate::domain::SyncStatus::Push => spawn_pin_push(state, &mut channels.bg, &m),
                 crate::domain::SyncStatus::Pull => spawn_pin_pull(state, &mut channels.bg, &m),
                 crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
@@ -538,12 +538,12 @@ pub(super) fn dispatch_outcome(
                 return Ok(LoopFlow::Proceed);
             };
             let m = state.pinned[pin_idx].clone();
-            match state.pin_sync_status(pin_idx) {
+            match state.compute_pin_sync_status(pin_idx) {
                 crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
                 crate::domain::SyncStatus::Pull => spawn_pin_pull(state, &mut channels.bg, &m),
-                // The content-hash no-op check now happens upstream in
-                // AppState::pin_sync_status (a matching hash is already reclassified to
-                // InSync above), so a genuine Push here always means a real change.
+                // The content-hash no-op check lives in `compute_pin_sync_status` (a matching
+                // hash is already reclassified to InSync above), so a genuine Push here always
+                // means a real change. Presentation uses the pin_sync_cache instead (#241).
                 crate::domain::SyncStatus::Push => spawn_pin_push(state, &mut channels.bg, &m),
                 crate::domain::SyncStatus::Missing => {
                     state.set_status("local file is missing — use d to pull it back")

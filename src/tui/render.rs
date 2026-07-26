@@ -19,21 +19,32 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
         Block::default().style(state.theme.base_style()),
         frame.area(),
     );
-    match state.screen {
-        Screen::Palette => render_palette(frame, state, layout),
-        Screen::List => render_list(frame, state, layout),
-        Screen::Diff => render_diff(frame, state, layout),
-        Screen::Confirm => render_confirm(frame, state, layout),
-        Screen::Preview => render_preview(frame, state, layout),
-        Screen::Help => render_help(frame, state, layout),
-        Screen::Pins => render_pins(frame, state, layout),
-        Screen::Gists => render_gists(frame, state, layout),
-        Screen::GistDetail => render_gist_detail(frame, state, layout),
-        Screen::Revisions => render_revisions(frame, state, layout),
-        Screen::Config => render_config(frame, state, layout),
+    // Pure presentation seam (issue #241): first-batch screens paint from the view model;
+    // Legacy bodies still read `AppState`. Pin sync IO is never done here — only cache reads.
+    let vm = super::build_view_model(state);
+    match &vm.screen {
+        super::ScreenVm::Pins(pins) => render_pins_vm(frame, state, pins, &vm.chrome, layout),
+        super::ScreenVm::Confirm(confirm) => {
+            render_confirm_vm(frame, state, confirm, &vm.chrome, layout)
+        }
+        super::ScreenVm::Help(help) => render_help_vm(frame, state, help, &vm.chrome, layout),
+        super::ScreenVm::Legacy => match state.screen {
+            Screen::Palette => render_palette(frame, state, layout),
+            Screen::List => render_list(frame, state, layout),
+            Screen::Diff => render_diff(frame, state, layout),
+            Screen::Preview => render_preview(frame, state, layout),
+            Screen::Gists => render_gists(frame, state, layout),
+            Screen::GistDetail => render_gist_detail(frame, state, layout),
+            Screen::Revisions => render_revisions(frame, state, layout),
+            Screen::Config => render_config(frame, state, layout),
+            // First-batch screens should not land in Legacy; fall back safely.
+            Screen::Confirm => render_confirm(frame, state, layout),
+            Screen::Help => render_help(frame, state, layout),
+            Screen::Pins => render_pins(frame, state, layout),
+        },
     }
-    if let Some(ref msg) = state.bg_task_msg {
-        render_loading_overlay(frame, msg, state.spinner_frame, &state.theme);
+    if let Some(ref msg) = vm.chrome.bg_task_msg {
+        render_loading_overlay(frame, msg, vm.chrome.spinner_frame, &state.theme);
     }
 }
 
@@ -136,7 +147,7 @@ pub(super) fn count_label(shown: usize, total: usize) -> String {
     }
 }
 
-fn help_topic_body(topic: HelpTopic) -> &'static str {
+pub(super) fn help_topic_body(topic: HelpTopic) -> &'static str {
     match topic {
         HelpTopic::List => {
             "\
@@ -330,37 +341,25 @@ Fields
 /// Fixed row (0-indexed, within the topic body) of the clickable repo-URL line — used to
 /// place `MouseLayout::repo_link`'s hit-rect. Kept stable regardless of update-check state
 /// (see `about_topic_lines`) so this constant never has to change.
-const ABOUT_REPO_LINE: u16 = 2;
+pub(super) const ABOUT_REPO_LINE: usize = 2;
 
-/// The `About` topic's body: version, the clickable repo link (relocated from the old
-/// per-screen footer — see `render_footer`), and the update-check status if a newer release
-/// is available. Unlike every other topic's `&'static str` (`help_topic_body`), this one
-/// needs `state`, so it returns owned `Line`s instead.
-fn about_topic_lines(state: &AppState) -> Vec<Line<'static>> {
+/// Plain-text About topic lines for the pure view-model (issue #241). Paint re-applies the
+/// underlined repo style from [`ABOUT_REPO_LINE`].
+pub(super) fn about_topic_lines_plain(state: &AppState) -> Vec<String> {
     let repo = env!("CARGO_PKG_REPOSITORY")
         .trim_start_matches("https://")
         .trim_start_matches("http://");
     let mut lines = vec![
-        Line::from(format!("gistui v{}", env!("CARGO_PKG_VERSION"))),
-        Line::from(""),
-        // The leading indent is a plain (unstyled) span so only the repo URL itself is
-        // underlined — not the whitespace in front of it.
-        Line::from(vec![
-            Span::raw("  "),
-            Span::styled(
-                repo.to_string(),
-                Style::default()
-                    .fg(state.theme.fg)
-                    .add_modifier(Modifier::UNDERLINED),
-            ),
-        ]),
-        Line::from(""),
+        format!("gistui v{}", env!("CARGO_PKG_VERSION")),
+        String::new(),
+        format!("  {repo}"),
+        String::new(),
     ];
     if let Some(latest) = &state.update_available {
-        lines.push(Line::from(crate::update_check::update_hint(
+        lines.push(crate::update_check::update_hint(
             latest,
             &state.install_method,
-        )));
+        ));
     }
     lines
 }
@@ -421,89 +420,111 @@ pub(super) fn render_config(frame: &mut Frame, state: &AppState, layout: &mut Mo
 }
 
 pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+    let vm = super::build_view_model(state);
+    if let super::ScreenVm::Help(help) = &vm.screen {
+        render_help_vm(frame, state, help, &vm.chrome, layout);
+    }
+}
+
+fn render_help_vm(
+    frame: &mut Frame,
+    state: &AppState,
+    help: &super::view_model::HelpVm,
+    chrome: &super::view_model::ChromeVm,
+    layout: &mut MouseLayout,
+) {
     let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
-    if state.help.index_open {
-        let items: Vec<ListItem> = HelpTopic::all()
-            .iter()
-            .enumerate()
-            .map(|(i, t)| {
-                // `0` marks About; otherwise 1-based index (1–9, then 10+).
-                let key = if *t == HelpTopic::About {
-                    "0".to_string()
-                } else {
-                    (i + 1).to_string()
-                };
-                ListItem::new(format!("  {}  {}", key, t.title()))
-            })
-            .collect();
-        let list = List::new(items)
-            .block(
-                Block::default()
-                    .title("Help — pick a topic (1-9,0 / ↑↓ Enter · Esc back)")
-                    .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
-                    .style(state.theme.base_style())
-                    .padding(Padding::horizontal(1)),
-            )
-            .style(state.theme.base_style())
-            .highlight_style(
-                Style::default()
-                    .bg(state.theme.accent)
-                    .fg(state.theme.fg_on_accent)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .highlight_symbol("▶ ");
-        let mut list_state = ListState::default();
-        list_state.select(Some(state.help.index_sel));
-        frame.render_stateful_widget(list, area, &mut list_state);
-        if state.mouse_enabled {
-            layout.list = Some(PaneHit {
-                rect: area,
-                offset: list_state.offset(),
-            });
-        }
-    } else {
-        let title = format!(
-            "Help · {} — Tab topics · ↑↓ scroll · Esc back",
-            state.help.topic.title()
-        );
-        let body: Text = if state.help.topic == HelpTopic::About {
-            Text::from(about_topic_lines(state))
-        } else {
-            Text::from(help_topic_body(state.help.topic))
-        };
-        frame.render_widget(
-            Paragraph::new(body)
-                .style(state.theme.base_style())
-                .scroll((state.help.scroll, 0))
+    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
+    match &help.mode {
+        super::view_model::HelpModeVm::Index { items, selected } => {
+            let list_items: Vec<ListItem> = items
+                .iter()
+                .map(|item| ListItem::new(format!("  {}  {}", item.key, item.title)))
+                .collect();
+            let list = List::new(list_items)
                 .block(
                     Block::default()
-                        .title(title)
+                        .title("Help — pick a topic (1-9,0 / ↑↓ Enter · Esc back)")
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
                         .style(state.theme.base_style())
                         .padding(Padding::horizontal(1)),
-                ),
-            area,
-        );
-        // The repo-link line only gets a click target while it's actually the About topic and
-        // currently scrolled into view — if the user has scrolled it off-screen, the hit-rect
-        // is simply omitted this frame rather than tracked at a stale position.
-        if state.help.topic == HelpTopic::About && state.mouse_enabled {
-            let visible_row = ABOUT_REPO_LINE as i32 - state.help.scroll as i32;
-            let inner_height = area.height.saturating_sub(2);
-            if visible_row >= 0 && (visible_row as u16) < inner_height {
-                layout.repo_link = Some(Rect::new(
-                    area.x + 1,
-                    area.y + 1 + visible_row as u16,
-                    area.width.saturating_sub(2),
-                    1,
-                ));
+                )
+                .style(state.theme.base_style())
+                .highlight_style(
+                    Style::default()
+                        .bg(state.theme.accent)
+                        .fg(state.theme.fg_on_accent)
+                        .add_modifier(Modifier::BOLD),
+                )
+                .highlight_symbol("▶ ");
+            let mut list_state = ListState::default();
+            list_state.select(Some(*selected));
+            frame.render_stateful_widget(list, area, &mut list_state);
+            if chrome.mouse_enabled {
+                layout.list = Some(PaneHit {
+                    rect: area,
+                    offset: list_state.offset(),
+                });
+            }
+        }
+        super::view_model::HelpModeVm::Topic {
+            title,
+            lines,
+            scroll,
+            about_repo_line,
+        } => {
+            let body_lines: Vec<Line<'static>> = lines
+                .iter()
+                .enumerate()
+                .map(|(i, text)| {
+                    if about_repo_line == &Some(i) {
+                        let repo = text.trim_start();
+                        let indent_len = text.len() - repo.len();
+                        let indent = text[..indent_len].to_string();
+                        Line::from(vec![
+                            Span::raw(indent),
+                            Span::styled(
+                                repo.to_string(),
+                                Style::default()
+                                    .fg(state.theme.fg)
+                                    .add_modifier(Modifier::UNDERLINED),
+                            ),
+                        ])
+                    } else {
+                        Line::from(text.clone())
+                    }
+                })
+                .collect();
+            frame.render_widget(
+                Paragraph::new(Text::from(body_lines))
+                    .style(state.theme.base_style())
+                    .scroll((*scroll, 0))
+                    .block(
+                        Block::default()
+                            .title(title.clone())
+                            .borders(Borders::ALL)
+                            .border_type(BorderType::Rounded)
+                            .style(state.theme.base_style())
+                            .padding(Padding::horizontal(1)),
+                    ),
+                area,
+            );
+            if let (Some(repo_line), true) = (*about_repo_line, chrome.mouse_enabled) {
+                let visible_row = repo_line as i32 - *scroll as i32;
+                let inner_height = area.height.saturating_sub(2);
+                if visible_row >= 0 && (visible_row as u16) < inner_height {
+                    layout.repo_link = Some(Rect::new(
+                        area.x + 1,
+                        area.y + 1 + visible_row as u16,
+                        area.width.saturating_sub(2),
+                        1,
+                    ));
+                }
             }
         }
     }
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }
 }
@@ -603,92 +624,59 @@ pub(super) fn render_preview(frame: &mut Frame, state: &AppState, layout: &mut M
 }
 
 pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+    let vm = super::build_view_model(state);
+    if let super::ScreenVm::Pins(pins) = &vm.screen {
+        render_pins_vm(frame, state, pins, &vm.chrome, layout);
+    }
+}
+
+fn render_pins_vm(
+    frame: &mut Frame,
+    state: &AppState,
+    pins: &super::view_model::PinsVm,
+    chrome: &super::view_model::ChromeVm,
+    layout: &mut MouseLayout,
+) {
     let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, state.mouse_enabled, layout);
-    // Sync feedback (e.g. "already in sync", "can't tell which side is newer") is set via
-    // state.status while staying on this screen, so the footer must surface it (see #72).
-    let (ftitle, footer, colored) = if state.pins.filtering {
-        (
-            "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
-            format!("/{}_", state.pins.filter_query),
-            false,
-        )
-    } else {
-        let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
-        (String::new(), footer, colored)
-    };
+    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
+    // Sync feedback (e.g. "already in sync") is carried in the Pins VM footer (see #72 / #241).
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(3),
-            Constraint::Length(footer_height(&footer, area.width, &ftitle)),
+            Constraint::Length(footer_height(&pins.footer, area.width, &pins.footer_title)),
         ])
         .split(area);
 
-    let visible = state.visible_pin_indices();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let items: Vec<ListItem> = if state.pinned.is_empty() {
-        vec![
-            ListItem::new("  📌 No pinned mappings found (use p to pin a pair)")
-                .style(Style::default().fg(state.theme.dim)),
-        ]
-    } else if visible.is_empty() {
-        vec![ListItem::new("  🔍 No pins match the filter")
-            .style(Style::default().fg(state.theme.dim))]
-    } else {
-        visible
+    let items: Vec<ListItem> = match pins.empty {
+        super::view_model::PinsEmptyKind::NoMappings => {
+            vec![
+                ListItem::new("  📌 No pinned mappings found (use p to pin a pair)")
+                    .style(Style::default().fg(state.theme.dim)),
+            ]
+        }
+        super::view_model::PinsEmptyKind::NoFilterMatch => {
+            vec![ListItem::new("  🔍 No pins match the filter")
+                .style(Style::default().fg(state.theme.dim))]
+        }
+        super::view_model::PinsEmptyKind::HasRows => pins
+            .rows
             .iter()
-            .map(|&i| {
-                let m = &state.pinned[i];
-                let (lts, rts) = state.pin_mtimes(i);
-                let age = |ts: Option<u64>| {
-                    ts.map(|t| crate::domain::humanize_age(now - t as i64))
-                        .unwrap_or_else(|| "?".to_string())
-                };
-                let status = state.pin_sync_status(i);
-                let local_age = if status == crate::domain::SyncStatus::Missing {
-                    "missing".to_string()
-                } else {
-                    age(lts)
-                };
-                let item = ListItem::new(hscroll_str(
-                    &pin_row_label(
-                        status.icon(),
-                        &m.local_path,
-                        &m.gist_id,
-                        &m.gist_filename,
-                        &local_age,
-                        &age(rts),
-                    ),
-                    state.pins.hscroll,
-                ));
-                if status == crate::domain::SyncStatus::Missing {
+            .map(|row| {
+                let item = ListItem::new(hscroll_str(&row.label, pins.hscroll));
+                if row.status == crate::domain::SyncStatus::Missing {
                     item.style(Style::default().fg(state.theme.del_color))
                 } else {
                     item
                 }
             })
-            .collect()
+            .collect(),
     };
 
-    let selected = (!visible.is_empty()).then_some(state.pins.index);
-    let mut title = format!(
-        "Pinned Mappings {}",
-        count_label(visible.len(), state.pinned.len())
-    );
-    if !state.pins.filter_query.is_empty() {
-        title.push_str(&format!(" · /{}", state.pins.filter_query));
-    }
-    if state.pins.sort != crate::tui::PinSort::Default {
-        title.push_str(&format!(" · sort:{}", state.pins.sort.label()));
-    }
     let list = List::new(items)
         .block(
             Block::default()
-                .title(title)
+                .title(pins.title.clone())
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(state.theme.accent))
@@ -705,20 +693,20 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
         .highlight_symbol("▶ ");
 
     let mut list_state = ListState::default();
-    list_state.select(selected);
+    list_state.select(pins.selected);
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         layout.list = Some(PaneHit {
             rect: chunks[0],
             offset: list_state.offset(),
         });
     }
 
-    if state.pins.filtering {
+    if pins.filtering {
         render_footer_line(
             frame,
             chunks[1],
-            &ftitle,
+            &pins.footer_title,
             input_line("/", &state.pins.filter_query, ""),
             &state.theme,
             layout,
@@ -727,14 +715,14 @@ pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut Mous
         render_footer(
             frame,
             chunks[1],
-            &ftitle,
-            &footer,
-            colored,
+            &pins.footer_title,
+            &pins.footer,
+            pins.footer_colored,
             &state.theme,
             layout,
         );
     }
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }
 }
@@ -2556,32 +2544,50 @@ pub(super) fn render_diff(frame: &mut Frame, state: &AppState, layout: &mut Mous
 /// #72 audit: this modal intentionally does not surface `state.status`. It is a transient y/n
 /// gate — confirming executes the action and transitions to `List`/`Gists`, where the result
 /// status is shown; cancelling returns to the launching screen without setting a status here.
+/// Modal chrome comes from the pure view model; background still reads `AppState` (#241).
 pub(super) fn render_confirm(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
+    let vm = super::build_view_model(state);
+    if let super::ScreenVm::Confirm(confirm) = &vm.screen {
+        render_confirm_vm(frame, state, confirm, &vm.chrome, layout);
+    }
+}
+
+fn render_confirm_vm(
+    frame: &mut Frame,
+    state: &AppState,
+    confirm: &super::view_model::ConfirmVm,
+    chrome: &super::view_model::ChromeVm,
+    layout: &mut MouseLayout,
+) {
     match &state.pending_action {
         Some(PendingAction::CompactGist { gist_id, .. }) => {
             render_gist_info_and_files(frame, frame.area(), state, gist_id);
         }
         _ => render_diff_pane(frame, frame.area(), state),
     }
-    let (title, border) = confirm_modal_style(state);
-    // The create flow's description step is an active text input, so it needs the
-    // reverse-video cursor; every other confirm prompt is static text.
-    let modal = if matches!(state.pending_action, Some(PendingAction::Create { .. }))
-        && state.editing_description
-    {
-        render_centered_modal_input(
-            frame,
-            title,
-            CREATE_DESC_PREFIX,
-            &state.description_input,
-            CREATE_DESC_SUFFIX,
-            border,
-            &state.theme,
-        )
-    } else {
-        render_centered_modal(frame, title, &confirm_prompt(state), border, &state.theme)
+    let modal = match &confirm.kind {
+        super::view_model::ConfirmModalKind::DescriptionInput {
+            prefix,
+            value: _,
+            suffix,
+        } => {
+            // Cursor-aware paint still uses live `TextInput` from state (same buffer the VM
+            // snapshot was built from this frame).
+            render_centered_modal_input(
+                frame,
+                confirm.title,
+                prefix,
+                &state.description_input,
+                suffix,
+                confirm.border,
+                &state.theme,
+            )
+        }
+        super::view_model::ConfirmModalKind::Prompt { text } => {
+            render_centered_modal(frame, confirm.title, text, confirm.border, &state.theme)
+        }
     };
-    if state.mouse_enabled {
+    if chrome.mouse_enabled {
         // Put the close button on the modal box itself, not the full-screen corner.
         layout.close_button = Some(render_close_button(frame, modal, &state.theme));
     }

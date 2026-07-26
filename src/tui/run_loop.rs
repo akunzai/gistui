@@ -48,8 +48,22 @@ pub(super) fn run_loop(
         upload_edit_watch: None,
         bg: None,
     };
+    // Pins presentation cache: refresh on enter/return to Pins (or Pins-as-palette-bg) and
+    // whenever the dirty flag is set — never every frame while already on Pins (#241).
+    let mut pin_sync_screen_active = false;
 
     loop {
+        let pins_active = state.screen == Screen::Pins
+            || (state.screen == Screen::Palette && state.palette.origin_screen == Screen::Pins);
+        if pins_active
+            && (state.pin_sync_cache_dirty
+                || !pin_sync_screen_active
+                || state.pin_sync_cache.len() != state.pinned.len())
+        {
+            state.refresh_pin_sync_cache();
+        }
+        pin_sync_screen_active = pins_active;
+
         terminal.draw(|frame| render(frame, &state, &mut mouse_layout))?;
         if state.detail.comments_scroll_to_bottom {
             if let Some(max) = mouse_layout.comments_max_scroll {

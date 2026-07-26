@@ -746,6 +746,30 @@ pub struct AppState {
     pub theme: Theme,
     pub revision: RevisionState,
     pub palette: PaletteState,
+    /// Presentation cache for the Pins list: sync status + mtimes, filled by
+    /// [`Self::refresh_pin_sync_cache`] (impure). The pure view-model builder and Pins paint
+    /// read only this cache — never `fs::read` / hash on the draw path (issue #241).
+    pub pin_sync_cache: Vec<PinSyncCacheEntry>,
+    /// When true, the next Pins draw (or explicit refresh) must rebuild [`Self::pin_sync_cache`].
+    pub pin_sync_cache_dirty: bool,
+}
+
+/// One pin's presentation-derived sync facts, computed off the draw path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PinSyncCacheEntry {
+    pub status: crate::domain::SyncStatus,
+    pub local_ts: Option<u64>,
+    pub remote_ts: Option<u64>,
+}
+
+impl Default for PinSyncCacheEntry {
+    fn default() -> Self {
+        Self {
+            status: crate::domain::SyncStatus::Unknown,
+            local_ts: None,
+            remote_ts: None,
+        }
+    }
 }
 
 fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
@@ -1771,6 +1795,8 @@ pub fn initial_state() -> AppState {
             ..Default::default()
         },
         palette: PaletteState::default(),
+        pin_sync_cache: Vec::new(),
+        pin_sync_cache_dirty: true,
     }
 }
 
@@ -1781,6 +1807,7 @@ pub fn load_startup_state(no_mouse: bool, no_update_check: bool) -> Result<AppSt
     let cwd = std::env::current_dir()?;
 
     state.pinned = config.pinned;
+    state.mark_pin_sync_cache_dirty();
     state.skip_dirs = config.skip_dirs;
     state.scan_depth = config.scan_depth;
     state.diff_context = config.diff_context;
@@ -1899,12 +1926,11 @@ impl AppState {
         (local_ts, remote_ts)
     }
 
-    /// Derive the [`SyncStatus`] for `pinned[index]` from in-memory mtimes, with a
-    /// content-hash fallback: when the timestamps disagree (`Push`/`Pull`) but the local
-    /// file's current content still hashes to the pin's `last_seen_hash` baseline, report
-    /// `InSync` instead — the timestamp drifted but nothing actually changed. The extra
-    /// file read only happens for this ambiguous, has-a-baseline case, not on every pin.
-    pub fn pin_sync_status(&self, index: usize) -> crate::domain::SyncStatus {
+    /// Impure single-pin status: in-memory mtimes plus a content-hash fallback when
+    /// timestamps disagree (`Push`/`Pull`) but the local file still matches `last_seen_hash`.
+    /// Used by [`Self::refresh_pin_sync_cache`] and by action dispatch (smart-sync); **not**
+    /// for paint — presentation reads [`Self::cached_pin_sync_status`] (issue #241).
+    pub(crate) fn compute_pin_sync_status(&self, index: usize) -> crate::domain::SyncStatus {
         let (local_ts, remote_ts) = self.pin_mtimes(index);
         let status = crate::domain::sync_status(local_ts, remote_ts);
         if !matches!(
@@ -1926,6 +1952,42 @@ impl AppState {
             }
             _ => status,
         }
+    }
+
+    /// Rebuild [`Self::pin_sync_cache`] for every pin (may stat / read local files). Clears
+    /// the dirty flag. Call from run_loop before drawing Pins, after pin-list changes, and
+    /// after successful pin sync absorb — not from pure `handle_key` or the view-model builder.
+    pub fn refresh_pin_sync_cache(&mut self) {
+        self.pin_sync_cache = (0..self.pinned.len())
+            .map(|i| {
+                let (local_ts, remote_ts) = self.pin_mtimes(i);
+                PinSyncCacheEntry {
+                    status: self.compute_pin_sync_status(i),
+                    local_ts,
+                    remote_ts,
+                }
+            })
+            .collect();
+        self.pin_sync_cache_dirty = false;
+    }
+
+    /// Mark the pin presentation cache dirty so the next Pins draw refreshes it.
+    pub fn mark_pin_sync_cache_dirty(&mut self) {
+        self.pin_sync_cache_dirty = true;
+    }
+
+    /// Pure read of cached pin sync status. Missing / short cache → [`SyncStatus::Unknown`]
+    /// (refresh invariant should have filled the cache before Pins paint).
+    pub fn cached_pin_sync_status(&self, index: usize) -> crate::domain::SyncStatus {
+        self.pin_sync_cache
+            .get(index)
+            .map(|e| e.status)
+            .unwrap_or(crate::domain::SyncStatus::Unknown)
+    }
+
+    /// Pure read of a full cache entry; default [`PinSyncCacheEntry`] when missing.
+    pub fn cached_pin_sync_entry(&self, index: usize) -> PinSyncCacheEntry {
+        self.pin_sync_cache.get(index).copied().unwrap_or_default()
     }
 }
 
@@ -2041,6 +2103,8 @@ mod text_input;
 pub use text_input::{EditResult, TextInput};
 mod theme;
 pub use theme::Theme;
+mod view_model;
+pub(crate) use view_model::{build_view_model, ScreenVm};
 
 #[cfg(test)]
 mod tests;

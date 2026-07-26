@@ -40,9 +40,11 @@ If `cargo fmt --check` fails, run `cargo fmt` and confirm only formatting change
 
 Pure, testable domain logic is kept separate from impure shell/filesystem adapters:
 
-- Pure modules (unit-tested): `domain`, `config`, `ranking`, `local`, `diff`, and the command-planning/guard parts of `actions`.
+- Pure modules (unit-tested): `domain`, `config`, `ranking`, `local`, `diff`, the command-planning/guard parts of `actions`, and `tui::view_model` (`build_view_model`: `AppState` + pin-sync cache → presentation facts).
 - Thin IO boundaries (not unit-tested by design): `gh` (`gh` subprocess calls), the `actions` execute helpers, and the IO helper fns in `tui::run_loop`.
-- `tui.rs` is a screen state machine (`Screen::{List, Diff, Confirm, Preview, Help, Pins, Gists}`; `Gists` is the gist-level manager). `AppState::handle_key` is **pure** — it mutates state and returns a `KeyOutcome` intent; `run_loop` performs the IO (fetch/download/upload/create/delete/remove-file/edit-description). Keep new key logic in `handle_key` (testable) and new IO in `run_loop` helpers.
+- `tui` is a screen state machine (`Screen::{List, Diff, Confirm, Preview, Help, Pins, Gists, …}`; `Gists` is the gist-level manager). `AppState::handle_key` is **pure** — it mutates state and returns a `KeyOutcome` intent; `run_loop` performs the IO (fetch/download/upload/create/delete/remove-file/edit-description). Keep new key logic in `handle_key` (testable) and new IO in `run_loop` helpers.
+- **View-model seam (issue #241):** each frame builds a pure `ViewModel` (`ChromeVm` + `ScreenVm`) at the draw entry. First-batch bodies (Pins, Confirm modal, Help) paint from the VM only; other screens are `ScreenVm::Legacy` and may still read `AppState` for body paint. Do **not** put business rules or FS/network work in paint helpers.
+- **Pin sync presentation:** `refresh_pin_sync_cache` (impure: may stat/read/hash local files) fills `AppState::pin_sync_cache`. Refresh on enter/return to Pins, when the pin list changes, after successful pin sync absorb, or when the dirty flag / length mismatch requires it — **not** every frame and not from the pure builder. Action dispatch may call `compute_pin_sync_status` for a one-shot decision; paint uses only `cached_pin_sync_status` / the VM. While staying on Pins, external editor edits may leave badges temporarily stale until the next refresh (no mtime watch).
 - `run()` wraps `run_loop()` so terminal teardown (raw mode / alternate screen) ALWAYS runs, even on error — keep fallible startup/IO inside `run_loop`, never between `enable_raw_mode` and the teardown.
 
 ## Non-Obvious Rules
