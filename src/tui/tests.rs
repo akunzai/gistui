@@ -62,6 +62,85 @@ fn preview_ref(state: &AppState) -> &PreviewState {
     state.preview().expect("expected Screen::Preview")
 }
 
+/// Open Confirm with the given action (keeps existing body text when already on Diff/Confirm).
+/// Consumes staged `diff_return` as the cancel path when present (test convenience matching
+/// production `enter_confirm`).
+fn set_pending(state: &mut AppState, action: PendingAction) {
+    let staged = std::mem::replace(&mut state.diff_return, Screen::List);
+    if state.screen.is_confirm() {
+        if let Some(c) = state.confirm_mut() {
+            c.action = action;
+            if matches!(c.return_screen, Screen::List) && !matches!(staged, Screen::List) {
+                c.return_screen = staged;
+            } else if !matches!(staged, Screen::List) {
+                // keep existing confirm return; re-stage unused
+                state.diff_return = staged;
+            }
+        }
+        return;
+    }
+    let (text, scroll, hscroll, return_screen) = match &state.screen {
+        Screen::Diff(d) => {
+            // Keep staged for other uses; Diff cancel path embeds Diff.
+            state.diff_return = staged;
+            (d.text.clone(), d.scroll, d.hscroll, Screen::Diff(d.clone()))
+        }
+        _ => (String::new(), 0, 0, staged),
+    };
+    state.screen = Screen::Confirm(Box::new(ConfirmState {
+        action,
+        text,
+        scroll,
+        hscroll,
+        return_screen,
+    }));
+}
+
+fn clear_pending(state: &mut AppState) {
+    if state.screen.is_confirm() {
+        state.screen = Screen::List;
+    }
+}
+
+fn set_diff_body(state: &mut AppState, text: impl Into<String>) {
+    let text = text.into();
+    if let Some(t) = state.diff_body_text_mut() {
+        *t = text;
+        return;
+    }
+    // Ensure a Diff payload exists for tests that set body before navigating.
+    state.screen = Screen::Diff(Box::new(DiffState {
+        text,
+        ..DiffState::default()
+    }));
+}
+
+fn set_diff_scroll(state: &mut AppState, scroll: u16) {
+    match &mut state.screen {
+        Screen::Diff(d) => d.scroll = scroll,
+        Screen::Confirm(c) => c.scroll = scroll,
+        _ => {
+            state.screen = Screen::Diff(Box::new(DiffState {
+                scroll,
+                ..DiffState::default()
+            }));
+        }
+    }
+}
+
+fn set_diff_hscroll(state: &mut AppState, hscroll: u16) {
+    match &mut state.screen {
+        Screen::Diff(d) => d.hscroll = hscroll,
+        Screen::Confirm(c) => c.hscroll = hscroll,
+        _ => {
+            state.screen = Screen::Diff(Box::new(DiffState {
+                hscroll,
+                ..DiffState::default()
+            }));
+        }
+    }
+}
+
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -470,13 +549,13 @@ fn preview_w_toggles_line_wrapping() {
 #[test]
 fn diff_w_toggles_wrap_and_resets_hscroll() {
     let mut state = initial_state();
-    state.screen = Screen::Diff;
-    state.diff_hscroll = 5;
+    state.screen = Screen::Diff(Box::default());
+    set_diff_hscroll(&mut state, 5);
     assert!(!state.diff_wrap);
     state.handle_key(KeyCode::Char('w'));
     assert!(state.diff_wrap);
     // Horizontal offset is meaningless once wrapping, so it resets.
-    assert_eq!(state.diff_hscroll, 0);
+    assert_eq!(state.diff_hscroll(), 0);
     state.handle_key(KeyCode::Char('w'));
     assert!(!state.diff_wrap);
 }
@@ -484,7 +563,7 @@ fn diff_w_toggles_wrap_and_resets_hscroll() {
 #[test]
 fn diff_footer_reflects_wrap_toggle() {
     let mut state = initial_state();
-    state.screen = Screen::Diff;
+    state.screen = Screen::Diff(Box::default());
     assert!(diff_footer(&state).contains("w wrap [off]"));
     state.diff_wrap = true;
     let footer = diff_footer(&state);
@@ -500,10 +579,10 @@ fn detail_x_requests_gist_delete_confirm() {
     detail_mut(&mut state).gist_id = Some("g1".into());
     let outcome = state.handle_key(KeyCode::Char('X'));
     assert!(matches!(outcome, KeyOutcome::None));
-    assert_eq!(state.screen, Screen::Confirm);
+    assert!(state.screen.is_confirm());
     assert!(matches!(
-        state.pending_action,
-        Some(PendingAction::Delete { ref gist_id, .. }) if gist_id == "g1"
+        state.pending_action(),
+        Some(PendingAction::Delete { gist_id, .. }) if gist_id == "g1"
     ));
 }
 
@@ -1102,13 +1181,12 @@ fn filter_backspace_deletes_last_char() {
 #[test]
 fn confirm_screen_scrolls_diff() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Download);
-    state.screen = Screen::Confirm;
-    state.diff_text = "l1\nl2\nl3".into();
+    set_pending(&mut state, PendingAction::Download);
+    set_diff_body(&mut state, "l1\nl2\nl3");
     assert_eq!(state.handle_key(KeyCode::Down), KeyOutcome::None);
-    assert_eq!(state.diff_scroll, 1);
+    assert_eq!(state.diff_scroll(), 1);
     state.handle_key(KeyCode::Up);
-    assert_eq!(state.diff_scroll, 0);
+    assert_eq!(state.diff_scroll(), 0);
 }
 
 #[test]
@@ -1195,11 +1273,11 @@ fn page_keys_jump_by_ten_clamped_to_bounds() {
 #[test]
 fn page_up_saturates_at_top_in_diff() {
     let mut state = initial_state();
-    state.screen = Screen::Diff;
-    state.diff_text = "a\nb\nc".into();
-    state.diff_scroll = 1;
+    state.screen = Screen::Diff(Box::default());
+    set_diff_body(&mut state, "a\nb\nc");
+    set_diff_scroll(&mut state, 1);
     state.handle_key(KeyCode::PageUp);
-    assert_eq!(state.diff_scroll, 0);
+    assert_eq!(state.diff_scroll(), 0);
 }
 
 #[test]
@@ -1239,12 +1317,12 @@ fn diff_context_toggle_flips_effective_radius() {
     assert_eq!(state.effective_diff_context(), Some(3));
 
     // Pressing `c` in the diff view flips to full view and resets the scroll.
-    state.screen = Screen::Diff;
-    state.diff_scroll = 12;
+    state.screen = Screen::Diff(Box::default());
+    set_diff_scroll(&mut state, 12);
     let outcome = state.handle_key(KeyCode::Char('c'));
     assert_eq!(outcome, KeyOutcome::PersistDiffContext);
     assert!(state.diff_show_full);
-    assert_eq!(state.diff_scroll, 0);
+    assert_eq!(state.diff_scroll(), 0);
     assert_eq!(state.effective_diff_context(), None);
 
     // Pressing it again returns to the configured radius.
@@ -1411,33 +1489,42 @@ fn confirm_prompt_covers_each_pending_action() {
     let mut state = initial_state();
 
     state.download_target = PathBuf::from("notes.txt");
-    state.pending_action = Some(PendingAction::Download);
+    set_pending(&mut state, PendingAction::Download);
     assert_eq!(confirm_prompt(&state), "Overwrite notes.txt? (y/n)");
     assert_eq!(confirm_modal_style(&state), ("Overwrite", Color::Red));
 
-    state.pending_action = Some(PendingAction::Delete {
-        gist_id: "abc".into(),
-        label: "my config".into(),
-    });
+    set_pending(
+        &mut state,
+        PendingAction::Delete {
+            gist_id: "abc".into(),
+            label: "my config".into(),
+        },
+    );
     assert_eq!(
         confirm_prompt(&state),
         "Permanently delete \"my config\" (abc)? (y/n)"
     );
     assert_eq!(confirm_modal_style(&state), ("Delete", Color::Red));
 
-    state.pending_action = Some(PendingAction::Upload {
-        gist_id: "g1".into(),
-        filename: "main.rs".into(),
-        local_path: PathBuf::from("main.rs"),
-    });
+    set_pending(
+        &mut state,
+        PendingAction::Upload {
+            gist_id: "g1".into(),
+            filename: "main.rs".into(),
+            local_path: PathBuf::from("main.rs"),
+        },
+    );
     assert!(confirm_prompt(&state).starts_with("Upload main.rs to gist g1?"));
     assert_eq!(confirm_modal_style(&state), ("Upload", Color::Yellow));
 
-    state.pending_action = Some(PendingAction::CompactGist {
-        gist_id: "abc".into(),
-        label: "my config".into(),
-        count: 4,
-    });
+    set_pending(
+        &mut state,
+        PendingAction::CompactGist {
+            gist_id: "abc".into(),
+            label: "my config".into(),
+            count: 4,
+        },
+    );
     assert_eq!(
             confirm_prompt(&state),
             "Compact 4 revisions of \"my config\" into one? This force-pushes and cannot be undone. (y/n)"
@@ -1451,9 +1538,12 @@ fn confirm_prompt_covers_each_pending_action() {
 #[test]
 fn confirm_prompt_shows_description_editor_for_create() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Create {
-        local_path: PathBuf::from("notes.txt"),
-    });
+    set_pending(
+        &mut state,
+        PendingAction::Create {
+            local_path: PathBuf::from("notes.txt"),
+        },
+    );
     state.editing_description = true;
     state.description_input = "hello".into();
     assert_eq!(
@@ -1466,12 +1556,14 @@ fn confirm_prompt_shows_description_editor_for_create() {
 #[test]
 fn confirm_prompt_shows_watching_indicator_for_upload() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Upload {
-        gist_id: "a".into(),
-        filename: "notes.txt".into(),
-        local_path: PathBuf::from("/tmp/notes.txt"),
-    });
-    state.screen = Screen::Confirm;
+    set_pending(
+        &mut state,
+        PendingAction::Upload {
+            gist_id: "a".into(),
+            filename: "notes.txt".into(),
+            local_path: PathBuf::from("/tmp/notes.txt"),
+        },
+    );
     state.upload.watching = true;
 
     let prompt = confirm_prompt(&state);
@@ -2034,12 +2126,12 @@ fn enter_diff_sets_diff_screen() {
         PathBuf::from("/tmp/x"),
         PathBuf::from("/tmp/cwd/x"),
     );
-    assert_eq!(state.screen, Screen::Diff);
+    assert!(state.screen.is_diff());
     assert!(state.diff_previewed);
     assert_eq!(state.preview_remote, "remote body");
     assert_eq!(state.preview_local, PathBuf::from("/tmp/x"));
     assert_eq!(state.download_target, PathBuf::from("/tmp/cwd/x"));
-    assert_eq!(state.diff_scroll, 0);
+    assert_eq!(state.diff_scroll(), 0);
 }
 
 #[test]
@@ -2054,7 +2146,7 @@ fn back_to_list_clears_preview() {
     state.back_to_list();
     assert_eq!(state.screen, Screen::List);
     assert!(!state.diff_previewed);
-    assert!(state.diff_text.is_empty());
+    assert!(state.diff_body_text().is_empty());
     assert!(state.preview_remote.is_empty());
     assert_eq!(state.preview_local, PathBuf::new());
     assert_eq!(state.download_target, PathBuf::new());
@@ -2134,17 +2226,17 @@ fn diff_scroll_respects_bounds() {
         PathBuf::from("/tmp/x"),
         PathBuf::from("/tmp/x"),
     );
-    assert_eq!(state.diff_scroll, 0);
+    assert_eq!(state.diff_scroll(), 0);
     state.handle_key(KeyCode::Up); // stays at 0
-    assert_eq!(state.diff_scroll, 0);
+    assert_eq!(state.diff_scroll(), 0);
     state.handle_key(KeyCode::Down);
-    assert_eq!(state.diff_scroll, 1);
+    assert_eq!(state.diff_scroll(), 1);
     state.handle_key(KeyCode::Down);
-    assert_eq!(state.diff_scroll, 2);
+    assert_eq!(state.diff_scroll(), 2);
     state.handle_key(KeyCode::Down); // capped at lines-1 = 2
-    assert_eq!(state.diff_scroll, 2);
+    assert_eq!(state.diff_scroll(), 2);
     state.handle_key(KeyCode::Up);
-    assert_eq!(state.diff_scroll, 1);
+    assert_eq!(state.diff_scroll(), 1);
 }
 
 #[test]
@@ -2174,15 +2266,15 @@ fn diff_hscroll_respects_bounds() {
         PathBuf::from("/tmp/x"),
         PathBuf::from("/tmp/x"),
     );
-    assert_eq!(state.diff_hscroll, 0);
+    assert_eq!(state.diff_hscroll(), 0);
     state.handle_key(KeyCode::Left); // stays at 0
-    assert_eq!(state.diff_hscroll, 0);
+    assert_eq!(state.diff_hscroll(), 0);
     for _ in 0..10 {
         state.handle_key(KeyCode::Right);
     }
-    assert_eq!(state.diff_hscroll, 3);
+    assert_eq!(state.diff_hscroll(), 3);
     state.handle_key(KeyCode::Left);
-    assert_eq!(state.diff_hscroll, 2);
+    assert_eq!(state.diff_hscroll(), 2);
 }
 
 #[test]
@@ -2221,7 +2313,7 @@ fn d_in_diff_confirms_when_file_exists() {
         existing,
     );
     assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::Confirm);
+    assert!(state.screen.is_confirm());
 }
 
 #[test]
@@ -2233,8 +2325,7 @@ fn confirm_y_returns_download() {
         PathBuf::from("/tmp/x"),
         PathBuf::from("/tmp/x"),
     );
-    state.pending_action = Some(PendingAction::Download);
-    state.screen = Screen::Confirm;
+    set_pending(&mut state, PendingAction::Download);
     assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::Download);
 }
 
@@ -2247,10 +2338,9 @@ fn confirm_n_returns_to_diff() {
         PathBuf::from("/tmp/x"),
         PathBuf::from("/tmp/x"),
     );
-    state.pending_action = Some(PendingAction::Download);
-    state.screen = Screen::Confirm;
+    set_pending(&mut state, PendingAction::Download);
     assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::Diff);
+    assert!(state.screen.is_diff());
 }
 
 #[test]
@@ -2304,10 +2394,9 @@ fn q_in_confirm_cancels_without_quitting() {
         PathBuf::from("/tmp/x"),
         PathBuf::from("/tmp/x"),
     );
-    state.pending_action = Some(PendingAction::Download);
-    state.screen = Screen::Confirm;
+    set_pending(&mut state, PendingAction::Download);
     assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::Diff);
+    assert!(state.screen.is_diff());
 }
 
 #[test]
@@ -2319,10 +2408,9 @@ fn confirm_esc_returns_to_diff() {
         PathBuf::from("/tmp/x"),
         PathBuf::from("/tmp/x"),
     );
-    state.pending_action = Some(PendingAction::Download);
-    state.screen = Screen::Confirm;
+    set_pending(&mut state, PendingAction::Download);
     assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::Diff);
+    assert!(state.screen.is_diff());
 }
 
 #[test]
@@ -2338,8 +2426,11 @@ fn d_in_diff_on_existing_sets_download_pending() {
         existing,
     );
     assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::Confirm);
-    assert_eq!(state.pending_action, Some(PendingAction::Download));
+    assert!(state.screen.is_confirm());
+    assert_eq!(
+        state.pending_action().cloned(),
+        Some(PendingAction::Download)
+    );
 }
 
 #[test]
@@ -2498,23 +2589,35 @@ fn c_in_detail_requests_compaction_not_gist_manager() {
 #[test]
 fn compact_confirm_y_executes_and_n_returns_to_gist_manager() {
     let mut state = state_with_two_gists();
-    state.screen = Screen::Confirm;
-    // CompactAnalyze parks the restore target on diff_return before Confirm opens.
+    // CompactAnalyze parks the restore target before Confirm opens (staged diff_return).
     state.diff_return = Screen::Gists(Box::default());
-    state.pending_action = Some(PendingAction::CompactGist {
-        gist_id: "a".into(),
-        label: "My Ghostty config".into(),
-        count: 3,
-    });
+    set_pending(
+        &mut state,
+        PendingAction::CompactGist {
+            gist_id: "a".into(),
+            label: "My Ghostty config".into(),
+            count: 3,
+        },
+    );
     assert_eq!(
         state.handle_key(KeyCode::Char('y')),
         KeyOutcome::ExecuteCompactGist
     );
 
+    // Re-open confirm for the cancel path (y does not leave Confirm until IO runs).
+    state.diff_return = Screen::Gists(Box::default());
+    set_pending(
+        &mut state,
+        PendingAction::CompactGist {
+            gist_id: "a".into(),
+            label: "My Ghostty config".into(),
+            count: 3,
+        },
+    );
     // Cancelling drops the pending action and lands back on the parked restore target.
     state.handle_key(KeyCode::Char('n'));
     assert!(state.screen.is_gists());
-    assert!(state.pending_action.is_none());
+    assert!(state.pending_action().is_none());
 }
 
 #[test]
@@ -2558,7 +2661,7 @@ fn u_in_diff_screen_returns_upload_intent() {
 
         node_id: None,
     }];
-    state.screen = Screen::Diff;
+    state.screen = Screen::Diff(Box::default());
     // The gist has no "config" file -> case B -> add directly.
     assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::UploadAdd);
 }
@@ -2566,36 +2669,42 @@ fn u_in_diff_screen_returns_upload_intent() {
 #[test]
 fn confirm_upload_y_returns_upload() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Upload {
-        gist_id: "a".into(),
-        filename: "settings.json".into(),
-        local_path: PathBuf::from("/tmp/settings.json"),
-    });
-    state.screen = Screen::Confirm;
+    set_pending(
+        &mut state,
+        PendingAction::Upload {
+            gist_id: "a".into(),
+            filename: "settings.json".into(),
+            local_path: PathBuf::from("/tmp/settings.json"),
+        },
+    );
     assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::Upload);
 }
 
 #[test]
 fn confirm_upload_e_returns_edit_upload() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Upload {
-        gist_id: "a".into(),
-        filename: "settings.json".into(),
-        local_path: PathBuf::from("/tmp/settings.json"),
-    });
-    state.screen = Screen::Confirm;
+    set_pending(
+        &mut state,
+        PendingAction::Upload {
+            gist_id: "a".into(),
+            filename: "settings.json".into(),
+            local_path: PathBuf::from("/tmp/settings.json"),
+        },
+    );
     assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::EditUpload);
 }
 
 #[test]
 fn confirm_upload_y_is_blocked_while_watching() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Upload {
-        gist_id: "a".into(),
-        filename: "settings.json".into(),
-        local_path: PathBuf::from("/tmp/settings.json"),
-    });
-    state.screen = Screen::Confirm;
+    set_pending(
+        &mut state,
+        PendingAction::Upload {
+            gist_id: "a".into(),
+            filename: "settings.json".into(),
+            local_path: PathBuf::from("/tmp/settings.json"),
+        },
+    );
     state.upload.watching = true;
 
     assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::None);
@@ -2608,12 +2717,14 @@ fn confirm_upload_y_is_blocked_while_watching() {
 #[test]
 fn confirm_upload_e_is_blocked_while_watching() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Upload {
-        gist_id: "a".into(),
-        filename: "settings.json".into(),
-        local_path: PathBuf::from("/tmp/settings.json"),
-    });
-    state.screen = Screen::Confirm;
+    set_pending(
+        &mut state,
+        PendingAction::Upload {
+            gist_id: "a".into(),
+            filename: "settings.json".into(),
+            local_path: PathBuf::from("/tmp/settings.json"),
+        },
+    );
     state.upload.watching = true;
 
     assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::None);
@@ -2623,16 +2734,18 @@ fn confirm_upload_e_is_blocked_while_watching() {
 #[test]
 fn confirm_upload_n_cancels_and_resets_watching() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Upload {
-        gist_id: "a".into(),
-        filename: "settings.json".into(),
-        local_path: PathBuf::from("/tmp/settings.json"),
-    });
-    state.screen = Screen::Confirm;
+    set_pending(
+        &mut state,
+        PendingAction::Upload {
+            gist_id: "a".into(),
+            filename: "settings.json".into(),
+            local_path: PathBuf::from("/tmp/settings.json"),
+        },
+    );
     state.upload.watching = true;
 
     assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
-    assert!(state.pending_action.is_none());
+    assert!(state.pending_action().is_none());
     assert_eq!(state.screen, Screen::List);
     assert!(
         !state.upload.watching,
@@ -2644,16 +2757,18 @@ fn confirm_upload_n_cancels_and_resets_watching() {
 #[test]
 fn confirm_upload_n_cancels_to_diff_return_screen() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Upload {
-        gist_id: "a".into(),
-        filename: "settings.json".into(),
-        local_path: PathBuf::from("/tmp/settings.json"),
-    });
-    state.screen = Screen::Confirm;
     state.diff_return = Screen::Pins(Box::default());
+    set_pending(
+        &mut state,
+        PendingAction::Upload {
+            gist_id: "a".into(),
+            filename: "settings.json".into(),
+            local_path: PathBuf::from("/tmp/settings.json"),
+        },
+    );
 
     assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
-    assert!(state.pending_action.is_none());
+    assert!(state.pending_action().is_none());
     assert!(
         state.screen.is_pins(),
         "cancelling an upload initiated from Pins must return to Pins, not always List"
@@ -2663,12 +2778,14 @@ fn confirm_upload_n_cancels_to_diff_return_screen() {
 #[test]
 fn confirm_upload_json_toggles() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Upload {
-        gist_id: "a".into(),
-        filename: "settings.json".into(),
-        local_path: PathBuf::from("/tmp/settings.json"),
-    });
-    state.screen = Screen::Confirm;
+    set_pending(
+        &mut state,
+        PendingAction::Upload {
+            gist_id: "a".into(),
+            filename: "settings.json".into(),
+            local_path: PathBuf::from("/tmp/settings.json"),
+        },
+    );
     assert!(!state.upload.json_pretty);
     assert!(!state.upload.json_sort);
 
@@ -2779,11 +2896,14 @@ fn editor_is_gui_matches_by_basename_from_full_path() {
 #[test]
 fn content_to_upload_prefers_edited_content() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Upload {
-        gist_id: "a".into(),
-        filename: "notes.txt".into(),
-        local_path: PathBuf::from("/tmp/notes.txt"),
-    });
+    set_pending(
+        &mut state,
+        PendingAction::Upload {
+            gist_id: "a".into(),
+            filename: "notes.txt".into(),
+            local_path: PathBuf::from("/tmp/notes.txt"),
+        },
+    );
     state.upload.original_content = "token=abc123secret".into();
     state.upload.edited_content = Some("token=REDACTED".into());
     assert_eq!(state.content_to_upload(), "token=REDACTED");
@@ -2792,11 +2912,14 @@ fn content_to_upload_prefers_edited_content() {
 #[test]
 fn content_to_upload_prefers_edited_content_for_json() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Upload {
-        gist_id: "a".into(),
-        filename: "settings.json".into(),
-        local_path: PathBuf::from("/tmp/settings.json"),
-    });
+    set_pending(
+        &mut state,
+        PendingAction::Upload {
+            gist_id: "a".into(),
+            filename: "settings.json".into(),
+            local_path: PathBuf::from("/tmp/settings.json"),
+        },
+    );
     state.upload.original_content = r#"{"token":"abc123secret"}"#.into();
     state.upload.edited_content = Some(r#"{"token":"REDACTED"}"#.into());
     assert_eq!(state.content_to_upload(), r#"{"token":"REDACTED"}"#);
@@ -2813,8 +2936,8 @@ fn upload_pending(gist_id: &str, filename: &str) -> PendingAction {
 #[test]
 fn apply_upload_edit_event_content_changed_updates_diff_live() {
     let mut state = initial_state();
-    state.screen = Screen::Confirm;
-    state.pending_action = Some(upload_pending("a", "notes.txt"));
+    state.screen = Screen::Confirm(Box::default());
+    set_pending(&mut state, upload_pending("a", "notes.txt"));
     state.upload.watching = true;
     state.upload.remote_content = Some("old\n".into());
     state.upload.local_label = Some("local".into());
@@ -2831,14 +2954,14 @@ fn apply_upload_edit_event_content_changed_updates_diff_live() {
         state.upload.watching,
         "still watching — editor hasn't closed yet"
     );
-    assert!(state.diff_text.contains("new"));
+    assert!(state.diff_body_text().contains("new"));
 }
 
 #[test]
 fn apply_upload_edit_event_editor_closed_stops_watching() {
     let mut state = initial_state();
-    state.screen = Screen::Confirm;
-    state.pending_action = Some(upload_pending("a", "notes.txt"));
+    state.screen = Screen::Confirm(Box::default());
+    set_pending(&mut state, upload_pending("a", "notes.txt"));
     state.upload.watching = true;
 
     state.apply_upload_edit_event(super::bg::UploadEditWatchEvent::EditorClosed {
@@ -2854,8 +2977,8 @@ fn apply_upload_edit_event_editor_closed_stops_watching() {
 #[test]
 fn apply_upload_edit_event_read_error_stops_watching_and_sets_status() {
     let mut state = initial_state();
-    state.screen = Screen::Confirm;
-    state.pending_action = Some(upload_pending("a", "notes.txt"));
+    state.screen = Screen::Confirm(Box::default());
+    set_pending(&mut state, upload_pending("a", "notes.txt"));
     state.upload.watching = true;
 
     state.apply_upload_edit_event(super::bg::UploadEditWatchEvent::ReadError {
@@ -2876,7 +2999,7 @@ fn apply_upload_edit_event_discards_when_context_is_stale() {
     let mut state = initial_state();
     // The user already left Confirm (e.g. cancelled) before this late event arrived.
     state.screen = Screen::List;
-    state.pending_action = None;
+    clear_pending(&mut state);
     state.upload.watching = false;
     state.upload.edited_content = None;
 
@@ -2893,8 +3016,8 @@ fn apply_upload_edit_event_discards_when_context_is_stale() {
 fn apply_upload_edit_event_discards_when_a_different_upload_is_now_pending() {
     let mut state = initial_state();
     // A new upload edit session started before the OLD one's final event arrived.
-    state.screen = Screen::Confirm;
-    state.pending_action = Some(upload_pending("a", "other.txt"));
+    state.screen = Screen::Confirm(Box::default());
+    set_pending(&mut state, upload_pending("a", "other.txt"));
     state.upload.watching = true;
     state.upload.edited_content = Some("current session content".into());
 
@@ -2921,8 +3044,8 @@ fn apply_upload_edit_event_discards_stale_event_after_cancel_reentry_same_identi
     // does NOT kill the background thread), then re-entered upload for the SAME gist/file
     // without pressing `e` again. An event from the abandoned first session's thread must
     // not silently overwrite this new, non-watching session's content.
-    state.screen = Screen::Confirm;
-    state.pending_action = Some(upload_pending("a", "notes.txt"));
+    state.screen = Screen::Confirm(Box::default());
+    set_pending(&mut state, upload_pending("a", "notes.txt"));
     state.upload.watching = false; // never re-entered edit mode this session
     state.upload.edited_content = None;
 
@@ -2948,9 +3071,9 @@ fn n_opens_create_confirm() {
         modified: None,
     }];
     assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::Confirm);
+    assert!(state.screen.is_confirm());
     assert_eq!(
-        state.pending_action,
+        state.pending_action().cloned(),
         Some(PendingAction::Create {
             local_path: PathBuf::from("/tmp/config.toml")
         })
@@ -3012,9 +3135,9 @@ fn x_removes_selected_file_from_a_multifile_gist() {
     ];
     // X stages a single-file removal (not a whole-gist delete) and asks to confirm.
     assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::Confirm);
+    assert!(state.screen.is_confirm());
     assert_eq!(
-        state.pending_action,
+        state.pending_action().cloned(),
         Some(PendingAction::RemoveFile {
             gist_id: "abc123".into(),
             filename: "a.md".into(),
@@ -3046,19 +3169,21 @@ fn x_on_a_gists_only_file_is_blocked() {
     // Removing the only file would leave a fileless gist, which GitHub forbids.
     assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
     assert_eq!(state.screen, Screen::List);
-    assert!(state.pending_action.is_none());
+    assert!(state.pending_action().is_none());
     assert!(state.status.as_deref().unwrap().contains("only file"));
 }
 
 #[test]
 fn remove_file_confirm_y_returns_execute_remove_file() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::RemoveFile {
-        gist_id: "abc123".into(),
-        filename: "a.md".into(),
-        label: "my notes".into(),
-    });
-    state.screen = Screen::Confirm;
+    set_pending(
+        &mut state,
+        PendingAction::RemoveFile {
+            gist_id: "abc123".into(),
+            filename: "a.md".into(),
+            label: "my notes".into(),
+        },
+    );
     assert_eq!(
         state.handle_key(KeyCode::Char('y')),
         KeyOutcome::ExecuteRemoveFile
@@ -3068,11 +3193,13 @@ fn remove_file_confirm_y_returns_execute_remove_file() {
 #[test]
 fn delete_confirm_y_returns_execute_delete() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Delete {
-        gist_id: "abc123".into(),
-        label: "my notes".into(),
-    });
-    state.screen = Screen::Confirm;
+    set_pending(
+        &mut state,
+        PendingAction::Delete {
+            gist_id: "abc123".into(),
+            label: "my notes".into(),
+        },
+    );
     assert_eq!(
         state.handle_key(KeyCode::Char('y')),
         KeyOutcome::ExecuteDelete
@@ -3082,14 +3209,16 @@ fn delete_confirm_y_returns_execute_delete() {
 #[test]
 fn delete_confirm_n_returns_to_list() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Delete {
-        gist_id: "abc123".into(),
-        label: "my notes".into(),
-    });
-    state.screen = Screen::Confirm;
+    set_pending(
+        &mut state,
+        PendingAction::Delete {
+            gist_id: "abc123".into(),
+            label: "my notes".into(),
+        },
+    );
     assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
     assert_eq!(state.screen, Screen::List);
-    assert!(state.pending_action.is_none());
+    assert!(state.pending_action().is_none());
 }
 
 #[test]
@@ -3182,11 +3311,13 @@ fn detail_description_edits_mid_string_with_cursor_keys() {
 #[test]
 fn create_description_edits_mid_string_with_cursor_keys() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Create {
-        local_path: PathBuf::from("notes.txt"),
-    });
+    set_pending(
+        &mut state,
+        PendingAction::Create {
+            local_path: PathBuf::from("notes.txt"),
+        },
+    );
     state.editing_description = true;
-    state.screen = Screen::Confirm;
     for c in "helo".chars() {
         state.handle_key(KeyCode::Char(c));
     }
@@ -3218,9 +3349,9 @@ fn detail_x_stages_whole_gist_delete() {
     state.screen = Screen::GistDetail(Box::default());
     detail_mut(&mut state).gist_id = Some("b".into());
     assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::Confirm);
+    assert!(state.screen.is_confirm());
     assert_eq!(
-        state.pending_action,
+        state.pending_action().cloned(),
         Some(PendingAction::Delete {
             gist_id: "b".into(),
             label: "SSH config".into(),
@@ -3346,19 +3477,23 @@ fn gist_view_left_right_scrolls_horizontally() {
 #[test]
 fn create_confirm_s_and_p_choose_visibility() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Create {
-        local_path: PathBuf::from("/tmp/config.toml"),
-    });
-    state.screen = Screen::Confirm;
+    set_pending(
+        &mut state,
+        PendingAction::Create {
+            local_path: PathBuf::from("/tmp/config.toml"),
+        },
+    );
     assert_eq!(
         state.handle_key(KeyCode::Char('s')),
         KeyOutcome::Create(false)
     );
 
-    state.pending_action = Some(PendingAction::Create {
-        local_path: PathBuf::from("/tmp/config.toml"),
-    });
-    state.screen = Screen::Confirm;
+    set_pending(
+        &mut state,
+        PendingAction::Create {
+            local_path: PathBuf::from("/tmp/config.toml"),
+        },
+    );
     assert_eq!(
         state.handle_key(KeyCode::Char('p')),
         KeyOutcome::Create(true)
@@ -3368,13 +3503,15 @@ fn create_confirm_s_and_p_choose_visibility() {
 #[test]
 fn create_confirm_esc_cancels() {
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Create {
-        local_path: PathBuf::from("/tmp/config.toml"),
-    });
-    state.screen = Screen::Confirm;
+    set_pending(
+        &mut state,
+        PendingAction::Create {
+            local_path: PathBuf::from("/tmp/config.toml"),
+        },
+    );
     assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
     assert_eq!(state.screen, Screen::List);
-    assert_eq!(state.pending_action, None);
+    assert_eq!(state.pending_action().cloned(), None);
 }
 
 fn state_ready_to_create() -> AppState {
@@ -3391,7 +3528,7 @@ fn state_ready_to_create() -> AppState {
 fn n_starts_create_in_the_description_editor() {
     let mut state = state_ready_to_create();
     state.handle_key(KeyCode::Char('n'));
-    assert_eq!(state.screen, Screen::Confirm);
+    assert!(state.screen.is_confirm());
     assert!(state.editing_description);
     // While editing, letters (incl. s/p) are typed into the description, not
     // interpreted as the visibility choice.
@@ -3425,7 +3562,7 @@ fn create_esc_while_editing_description_cancels() {
     state.handle_key(KeyCode::Char('x'));
     assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
     assert_eq!(state.screen, Screen::List);
-    assert_eq!(state.pending_action, None);
+    assert_eq!(state.pending_action().cloned(), None);
     assert!(!state.editing_description);
     assert!(state.description_input.is_empty());
 }
@@ -3496,9 +3633,12 @@ fn pins_hscroll_starts_at_zero() {
 fn create_diff_title_shortens_home_path() {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Create {
-        local_path: home.join("notes.txt"),
-    });
+    set_pending(
+        &mut state,
+        PendingAction::Create {
+            local_path: home.join("notes.txt"),
+        },
+    );
     assert_eq!(diff_title(&state), "Create gist from ~/notes.txt");
 }
 
@@ -3506,7 +3646,7 @@ fn create_diff_title_shortens_home_path() {
 fn diff_view_title_shortens_single_home_path() {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
     let mut state = initial_state();
-    state.pending_action = None;
+    clear_pending(&mut state);
     state.preview_local = PathBuf::new();
     state.download_target = home.join("notes.txt");
     assert_eq!(diff_title(&state), "Diff → ~/notes.txt");
@@ -3516,7 +3656,7 @@ fn diff_view_title_shortens_single_home_path() {
 fn diff_view_title_shortens_both_home_paths() {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
     let mut state = initial_state();
-    state.pending_action = None;
+    clear_pending(&mut state);
     state.preview_local = home.join("src").join("a.txt");
     state.download_target = home.join("b.txt");
     assert_eq!(diff_title(&state), "Diff: ~/src/a.txt → ~/b.txt");
@@ -3526,9 +3666,12 @@ fn diff_view_title_shortens_both_home_paths() {
 fn create_confirm_prompt_shortens_home_path() {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
     let mut state = initial_state();
-    state.pending_action = Some(PendingAction::Create {
-        local_path: home.join("notes.txt"),
-    });
+    set_pending(
+        &mut state,
+        PendingAction::Create {
+            local_path: home.join("notes.txt"),
+        },
+    );
     assert!(
         confirm_prompt(&state).starts_with("Create gist from ~/notes.txt"),
         "got {}",
@@ -4227,7 +4370,10 @@ fn help_topic_for_screen_maps_key_dense_screens() {
         HelpTopic::for_screen(&Screen::Revisions(Box::default())),
         HelpTopic::Revisions
     );
-    assert_eq!(HelpTopic::for_screen(&Screen::Diff), HelpTopic::List);
+    assert_eq!(
+        HelpTopic::for_screen(&Screen::Diff(Box::default())),
+        HelpTopic::List
+    );
 }
 
 #[test]
@@ -4356,7 +4502,7 @@ fn revisions_enter_triggers_incremental_diff() {
 #[test]
 fn revision_diff_omits_download_upload() {
     let mut state = initial_state();
-    state.screen = Screen::Diff;
+    state.screen = Screen::Diff(Box::default());
     state.diff_return = Screen::Revisions(Box::default());
     state.diff_identical = false;
     let footer = diff_footer(&state);
@@ -4533,14 +4679,17 @@ fn lowercase_h_does_not_open_revision_history() {
 #[test]
 fn restore_revision_confirm_prompt_and_y_intent() {
     let mut state = state_with_gists();
-    state.screen = Screen::Confirm;
-    state.pending_action = Some(PendingAction::RestoreRevision {
-        gist_id: "g1".into(),
-        filename: "a.txt".into(),
-        version: "oldsha".into(),
-        version_label: "oldsha (3d ago)".into(),
-        content: "old\n".into(),
-    });
+    state.screen = Screen::Confirm(Box::default());
+    set_pending(
+        &mut state,
+        PendingAction::RestoreRevision {
+            gist_id: "g1".into(),
+            filename: "a.txt".into(),
+            version: "oldsha".into(),
+            version_label: "oldsha (3d ago)".into(),
+            content: "old\n".into(),
+        },
+    );
     assert_eq!(
         confirm_modal_style(&state),
         ("Restore revision", Color::Yellow)
@@ -5173,10 +5322,10 @@ fn scroll_down_moves_content_three_lines() {
         std::path::PathBuf::from("/tmp/x"),
         std::path::PathBuf::from("/tmp/cwd/x"),
     );
-    assert_eq!(state.screen, Screen::Diff);
-    assert_eq!(state.diff_scroll, 0);
+    assert!(state.screen.is_diff());
+    assert_eq!(state.diff_scroll(), 0);
     state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
-    assert_eq!(state.diff_scroll, 3);
+    assert_eq!(state.diff_scroll(), 3);
 }
 
 #[test]
@@ -5188,9 +5337,9 @@ fn scroll_up_moves_content_three_lines() {
         std::path::PathBuf::from("/tmp/x"),
         std::path::PathBuf::from("/tmp/cwd/x"),
     );
-    state.diff_scroll = 3;
+    set_diff_scroll(&mut state, 3);
     state.handle_mouse(MouseInput::ScrollUp, &MouseLayout::default());
-    assert_eq!(state.diff_scroll, 0);
+    assert_eq!(state.diff_scroll(), 0);
 }
 
 #[test]
@@ -5341,20 +5490,19 @@ fn scroll_down_clamps_at_list_end() {
 
 #[test]
 fn close_button_click_confirm_cancel_clears_pending() {
-    // Close button on Screen::Confirm dispatches Esc, which cancels the pending action.
-    // Using PendingAction::Download: Esc sets pending_action = None and screen = Screen::Diff.
+    // Close button on Screen::Confirm(Box::default()) dispatches Esc, which cancels the pending action.
+    // Using PendingAction::Download: Esc sets pending_action = None and screen = Screen::Diff(Box::default()).
     let mut state = state_with_gists();
-    state.diff_text = "line1\nline2\nline3".into();
-    state.screen = Screen::Confirm;
-    state.pending_action = Some(PendingAction::Download);
+    set_diff_body(&mut state, "line1\nline2\nline3");
+    set_pending(&mut state, PendingAction::Download);
     let layout = MouseLayout {
         close_button: Some(Rect::new(36, 0, 5, 1)),
         ..Default::default()
     };
     let out = state.handle_mouse(MouseInput::Click { col: 38, row: 0 }, &layout);
     assert_eq!(out, KeyOutcome::None);
-    assert!(state.pending_action.is_none());
-    assert_eq!(state.screen, Screen::Diff);
+    assert!(state.pending_action().is_none());
+    assert!(state.screen.is_diff());
 }
 
 #[test]
@@ -5363,10 +5511,13 @@ fn close_button_click_create_description_cancels_not_types() {
     // (Esc), NOT append 'n' to the description field.  This test fails against the old
     // `KeyCode::Char('n')` dispatch and passes with `KeyCode::Esc`.
     let mut state = initial_state();
-    state.screen = Screen::Confirm;
-    state.pending_action = Some(PendingAction::Create {
-        local_path: std::path::PathBuf::from("notes.txt"),
-    });
+    state.screen = Screen::Confirm(Box::default());
+    set_pending(
+        &mut state,
+        PendingAction::Create {
+            local_path: std::path::PathBuf::from("notes.txt"),
+        },
+    );
     state.editing_description = true;
     // Pre-fill description so we can assert it was cleared (not grown by a typed 'n').
     state.description_input = "my desc".into();
@@ -5385,7 +5536,7 @@ fn close_button_click_create_description_cancels_not_types() {
         "description must be cleared, not have 'n' appended"
     );
     assert_eq!(state.screen, Screen::List);
-    assert!(state.pending_action.is_none());
+    assert!(state.pending_action().is_none());
 }
 
 #[test]
@@ -5862,9 +6013,9 @@ fn palette_row_line_aligns_long_keys() {
 #[test]
 fn palette_blocked_during_confirm() {
     let mut state = crate::tui::initial_state();
-    state.screen = Screen::Confirm;
+    state.screen = Screen::Confirm(Box::default());
     state.handle_key(KeyCode::Char(';'));
-    assert_eq!(state.screen, Screen::Confirm);
+    assert!(state.screen.is_confirm());
 }
 
 #[test]

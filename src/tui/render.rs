@@ -2135,7 +2135,7 @@ pub(super) fn diff_view_highlighted(
 /// `--- / +++` header lines (see `diff_labels`); the title stays concise and avoids
 /// repeating a path.
 pub(super) fn diff_title(state: &AppState) -> String {
-    match &state.pending_action {
+    match state.pending_action() {
         Some(PendingAction::Upload {
             gist_id, filename, ..
         }) => format!("Upload → gist {gist_id} / {filename}"),
@@ -2186,7 +2186,7 @@ pub(super) const CREATE_DESC_SUFFIX: &str = "   ·  Enter next  ·  Esc cancel";
 /// The prompt shown inside the centered confirm modal — one line per pending action,
 /// listing the keys that resolve it. Pure so it can be unit-tested.
 pub(super) fn confirm_prompt(state: &AppState) -> String {
-    match &state.pending_action {
+    match state.pending_action() {
         Some(PendingAction::Create { .. }) if state.editing_description => {
             // `_` is the plain-text caret; the rendered modal draws a reverse-video
             // cursor at its real position instead (see render_confirm).
@@ -2276,7 +2276,7 @@ pub(super) fn confirm_prompt(state: &AppState) -> String {
 /// `notice_color` prompt.
 pub(super) fn confirm_modal_style(state: &AppState) -> (&'static str, Color) {
     let theme = &state.theme;
-    match &state.pending_action {
+    match state.pending_action() {
         Some(PendingAction::Create { .. }) if state.editing_description => {
             ("Description", theme.accent)
         }
@@ -2622,7 +2622,7 @@ fn render_palette_vm(
     let mut bg_layout = MouseLayout::default();
     match palette.origin_screen {
         Screen::List => render_list(frame, state, &mut bg_layout),
-        Screen::Diff => render_diff(frame, state, &mut bg_layout),
+        Screen::Diff(_) => render_diff(frame, state, &mut bg_layout),
         Screen::Preview(_) => render_preview(frame, state, &mut bg_layout),
         Screen::Help(_) => render_help(frame, state, &mut bg_layout),
         Screen::Pins(_) => render_pins(frame, state, &mut bg_layout),
@@ -2630,7 +2630,7 @@ fn render_palette_vm(
         Screen::GistDetail(_) => render_gist_detail(frame, state, &mut bg_layout),
         Screen::Revisions(_) => render_revisions(frame, state, &mut bg_layout),
         Screen::Config(_) => render_config(frame, state, &mut bg_layout),
-        Screen::Confirm | Screen::Palette(_) => {}
+        Screen::Confirm(_) | Screen::Palette(_) => {}
     }
 
     let area = frame.area();

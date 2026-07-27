@@ -205,19 +205,21 @@ pub(super) fn dispatch_outcome(
                 return Ok(LoopFlow::Proceed);
             };
 
-            state.pending_action = Some(PendingAction::Upload {
+            let action = PendingAction::Upload {
                 gist_id,
                 filename: filename.clone(),
                 local_path: local_path.clone(),
-            });
+            };
 
             let local_label = format!("local: {}", crate::config::display_path(&local_path));
             let gist_label = "(new file)".to_string();
             match state.init_upload_state(&local_path, Some(String::new()), local_label, gist_label)
             {
-                Ok(()) => state.screen = Screen::Confirm,
+                Ok(()) => {
+                    state.enter_confirm(action, String::new());
+                    state.update_upload_diff();
+                }
                 Err(error) => {
-                    state.pending_action = None;
                     state.set_status(format!(
                         "cannot read {}: {error}",
                         crate::config::display_path(&local_path)
@@ -277,7 +279,7 @@ pub(super) fn dispatch_outcome(
                 gist_id,
                 filename,
                 local_path: _,
-            }) = state.pending_action.clone()
+            }) = state.pending_action().cloned()
             else {
                 return Ok(LoopFlow::Proceed);
             };
@@ -317,7 +319,10 @@ pub(super) fn dispatch_outcome(
 
             // Return to wherever this upload was initiated from (List, or Pins for a pin
             // push) instead of always snapping to List (mirrors download()).
-            let return_screen = state.diff_return.clone();
+            let return_screen = state
+                .confirm()
+                .map(|c| c.return_screen.clone())
+                .unwrap_or_else(|| state.diff_return.clone());
             state.back_to_list();
             state.screen = return_screen;
             spawn_bg(state, &mut channels.bg, "Uploading…", move || {
@@ -338,7 +343,7 @@ pub(super) fn dispatch_outcome(
             edit_upload_buffer(terminal, state, channels)?;
         }
         KeyOutcome::Create(public) => {
-            let Some(PendingAction::Create { local_path }) = state.pending_action.clone() else {
+            let Some(PendingAction::Create { local_path }) = state.pending_action().cloned() else {
                 return Ok(LoopFlow::Proceed);
             };
             let description = state.description_input.to_string();
@@ -410,7 +415,8 @@ pub(super) fn dispatch_outcome(
         KeyOutcome::CopyPreviewContent => copy_preview_content(state),
         KeyOutcome::EditLocal => edit_local(terminal, state)?,
         KeyOutcome::ExecuteDelete => {
-            let Some(PendingAction::Delete { gist_id, .. }) = state.pending_action.clone() else {
+            let Some(PendingAction::Delete { gist_id, .. }) = state.pending_action().cloned()
+            else {
                 return Ok(LoopFlow::Proceed);
             };
             let plan = crate::actions::delete_command(&gist_id);
@@ -426,7 +432,7 @@ pub(super) fn dispatch_outcome(
         KeyOutcome::ExecuteRemoveFile => {
             let Some(PendingAction::RemoveFile {
                 gist_id, filename, ..
-            }) = state.pending_action.clone()
+            }) = state.pending_action().cloned()
             else {
                 return Ok(LoopFlow::Proceed);
             };
@@ -449,13 +455,12 @@ pub(super) fn dispatch_outcome(
                 gist_id,
                 label,
                 count,
-            }) = state.pending_action.clone()
+            }) = state.pending_action().cloned()
             else {
                 return Ok(LoopFlow::Proceed);
             };
-            state.pending_action = None;
-            // Compact restore target was parked on diff_return when Confirm opened.
-            state.screen = state.diff_return.clone();
+            // Compact restore target was parked on Confirm.return_screen when Confirm opened.
+            state.cancel_confirm();
 
             spawn_bg(
                 state,
@@ -716,7 +721,7 @@ pub(super) fn dispatch_outcome(
                 filename,
                 content,
                 ..
-            }) = state.pending_action.clone()
+            }) = state.pending_action().cloned()
             else {
                 return Ok(LoopFlow::Proceed);
             };

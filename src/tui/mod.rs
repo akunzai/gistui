@@ -18,21 +18,22 @@ pub enum FocusPane {
     Gist,
 }
 
-/// Active TUI screen. Unit tags for some screens; **Help** / **Config** / **Revisions** /
-/// **Pins** / **Gists** / **GistDetail** / **Palette** / **Preview** carry payloads so
+/// Active TUI screen. Unit tags for List only; other screens carry payloads so
 /// screen-local UI cannot go stale on the root state (issue #242). Not `Copy`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum Screen {
     #[default]
     List,
-    Diff,
-    Confirm,
+    /// Unified-diff view; payload owns body/scroll/return.
+    Diff(Box<DiffState>),
+    /// y/n (and multi-step create) modal; payload owns action, background text, return.
+    Confirm(Box<ConfirmState>),
     /// Full-screen file content preview; payload owns title/body/scroll/return.
     Preview(Box<PreviewState>),
     /// Help topic/index state lives on the variant (not a parallel `AppState` field).
     /// Boxed so `HelpState::return_screen: Screen` does not make `Screen` infinite-sized.
     Help(Box<HelpState>),
-    /// Pins list cursor/filter/sort; may also sit on `diff_return` during a pin diff.
+    /// Pins list cursor/filter/sort; may also sit on Diff/Confirm return paths.
     Pins(Box<PinsState>),
     /// Gist manager list cursor/filter/sort; may sit on detail/revision return paths.
     Gists(Box<GistsManagerState>),
@@ -40,7 +41,7 @@ pub enum Screen {
     /// Boxed so `DetailState::{return,compact_return}_screen: Screen` stay finite-sized.
     GistDetail(Box<DetailState>),
     /// Revision history for one gist; payload owns list/cursor/return (and may sit in
-    /// `diff_return` while a revision diff is open).
+    /// Diff/Confirm return while a revision diff/confirm is open).
     Revisions(Box<RevisionState>),
     /// Command palette / context menu overlay; payload owns query, items, origin, selection.
     /// Boxed so `PaletteState::origin_screen: Screen` stays finite-sized.
@@ -81,6 +82,14 @@ impl Screen {
 
     pub fn is_preview(&self) -> bool {
         matches!(self, Screen::Preview(_))
+    }
+
+    pub fn is_diff(&self) -> bool {
+        matches!(self, Screen::Diff(_))
+    }
+
+    pub fn is_confirm(&self) -> bool {
+        matches!(self, Screen::Confirm(_))
     }
 
     /// Borrow help payload when this is [`Screen::Help`].
@@ -193,6 +202,34 @@ impl Screen {
     pub fn preview_state_mut(&mut self) -> Option<&mut PreviewState> {
         match self {
             Screen::Preview(p) => Some(p.as_mut()),
+            _ => None,
+        }
+    }
+
+    pub fn diff_state(&self) -> Option<&DiffState> {
+        match self {
+            Screen::Diff(d) => Some(d.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn diff_state_mut(&mut self) -> Option<&mut DiffState> {
+        match self {
+            Screen::Diff(d) => Some(d.as_mut()),
+            _ => None,
+        }
+    }
+
+    pub fn confirm_state(&self) -> Option<&ConfirmState> {
+        match self {
+            Screen::Confirm(c) => Some(c.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn confirm_state_mut(&mut self) -> Option<&mut ConfirmState> {
+        match self {
+            Screen::Confirm(c) => Some(c.as_mut()),
             _ => None,
         }
     }
@@ -731,7 +768,6 @@ pub struct PinsState {
 }
 
 /// Full-screen content preview — carried on [`Screen::Preview`] (issue #242).
-/// Owns body text and scroll so Diff/Confirm can keep using the root diff buffer.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewState {
     pub title: String,
@@ -743,6 +779,42 @@ pub struct PreviewState {
     pub gist_key: Option<(String, String)>,
     /// Where `q`/`Esc` returns (List, GistDetail payload, etc.).
     pub return_screen: Screen,
+}
+
+/// Unified-diff view — carried on [`Screen::Diff`] (issue #242).
+/// Owns body text and scroll so inactive Diff state cannot linger on the root.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DiffState {
+    pub text: String,
+    pub scroll: u16,
+    pub hscroll: u16,
+    /// Where `q`/`Esc` returns (List, Pins, Revisions, …).
+    pub return_screen: Screen,
+}
+
+/// Confirm modal — carried on [`Screen::Confirm`] (issue #242).
+/// Owns the pending action and the background text (real diff or short message).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmState {
+    pub action: PendingAction,
+    /// Background body (unified diff or explanatory message).
+    pub text: String,
+    pub scroll: u16,
+    pub hscroll: u16,
+    /// Where cancel lands (may be [`Screen::Diff`] after a download overwrite gate).
+    pub return_screen: Screen,
+}
+
+impl Default for ConfirmState {
+    fn default() -> Self {
+        Self {
+            action: PendingAction::Download,
+            text: String::new(),
+            scroll: 0,
+            hscroll: 0,
+            return_screen: Screen::List,
+        }
+    }
 }
 
 /// Gist-manager screen state — carried on [`Screen::Gists`] (issue #242). Named
@@ -830,7 +902,6 @@ pub struct AppState {
     pub local_hscroll: u16,
     pub gist_hscroll: u16,
     pub screen: Screen,
-    pub pending_action: Option<PendingAction>,
     pub gist_view: GistView,
     pub gist_type_filter: GistTypeFilter,
     pub gist_sort: GistSort,
@@ -842,9 +913,6 @@ pub struct AppState {
     /// cwd-relative display label, i.e. the exact string shown in the local list.
     pub local_filter_query: TextInput,
     pub diff_previewed: bool,
-    pub diff_text: String,
-    pub diff_scroll: u16,
-    pub diff_hscroll: u16,
     /// Soft-wrap long lines in the diff view instead of horizontal scrolling (`w` toggles;
     /// session-scoped, mirrors `preview_wrap`).
     pub diff_wrap: bool,
@@ -919,9 +987,9 @@ pub struct AppState {
     pub download_gist_id: Option<String>,
     /// filename of the active download (set when entering the diff Confirm for a pull).
     pub download_gist_filename: Option<String>,
-    /// Screen to return to when leaving the diff (default: List; set to Pins for pin diffs).
-    /// Also used to park compact restore target (`GistDetail`/`Gists` payload) while Confirm
-    /// is open for revision compaction (issue #242).
+    /// Staged return path for the next Diff/Confirm open (copied into the payload by
+    /// [`Self::enter_diff`] / [`Self::enter_confirm`]). Live Esc path while Diff/Confirm is
+    /// open lives on the payload (issue #242).
     pub diff_return: Screen,
     /// Monotonic tick advanced once per event-loop iteration (~150ms); drives the in-progress
     /// spinner animation. Wraps freely — only its value modulo the frame count is observed.
@@ -1016,22 +1084,15 @@ impl AppState {
         self.screen.config_state_mut()
     }
 
-    /// Revision payload when Revisions is active, parked in `diff_return` during a revision
-    /// diff/confirm, or under palette origin (issue #242).
+    /// Revision payload when Revisions is active, parked on Diff/Confirm return, or under
+    /// palette origin (issue #242).
     pub fn revision(&self) -> Option<&RevisionState> {
         match &self.screen {
             Screen::Revisions(r) => Some(r.as_ref()),
-            Screen::Diff | Screen::Confirm | Screen::Preview(_) => {
-                self.diff_return.revision_state()
-            }
-            Screen::Palette(p) => match &p.origin_screen {
-                Screen::Revisions(r) => Some(r.as_ref()),
-                Screen::Diff | Screen::Confirm | Screen::Preview(_) => {
-                    // Palette over diff that returned from revisions is rare; check origin only.
-                    None
-                }
-                _ => None,
-            },
+            Screen::Diff(d) => d.return_screen.revision_state(),
+            Screen::Confirm(c) => Self::nav_return_of_confirm(c).revision_state(),
+            Screen::Preview(_) => self.diff_return.revision_state(),
+            Screen::Palette(p) => p.origin_screen.revision_state(),
             _ => None,
         }
     }
@@ -1039,19 +1100,24 @@ impl AppState {
     pub fn revision_mut(&mut self) -> Option<&mut RevisionState> {
         match &mut self.screen {
             Screen::Revisions(r) => Some(r.as_mut()),
-            Screen::Diff | Screen::Confirm | Screen::Preview(_) => {
-                self.diff_return.revision_state_mut()
-            }
+            Screen::Diff(d) => d.return_screen.revision_state_mut(),
+            Screen::Confirm(c) => match &mut c.return_screen {
+                Screen::Diff(d) => d.return_screen.revision_state_mut(),
+                other => other.revision_state_mut(),
+            },
+            Screen::Preview(_) => self.diff_return.revision_state_mut(),
             _ => None,
         }
     }
 
-    /// Pins payload when Pins is active, parked on `diff_return` during a pin diff, or under
-    /// palette origin (issue #242).
+    /// Pins payload when Pins is active, parked on Diff/Confirm return, or under palette
+    /// origin (issue #242).
     pub fn pins(&self) -> Option<&PinsState> {
         match &self.screen {
             Screen::Pins(p) => Some(p.as_ref()),
-            Screen::Diff | Screen::Confirm | Screen::Preview(_) => self.diff_return.pins_state(),
+            Screen::Diff(d) => d.return_screen.pins_state(),
+            Screen::Confirm(c) => Self::nav_return_of_confirm(c).pins_state(),
+            Screen::Preview(_) => self.diff_return.pins_state(),
             Screen::Palette(p) => p.origin_screen.pins_state(),
             _ => None,
         }
@@ -1060,10 +1126,21 @@ impl AppState {
     pub fn pins_mut(&mut self) -> Option<&mut PinsState> {
         match &mut self.screen {
             Screen::Pins(p) => Some(p.as_mut()),
-            Screen::Diff | Screen::Confirm | Screen::Preview(_) => {
-                self.diff_return.pins_state_mut()
-            }
+            Screen::Diff(d) => d.return_screen.pins_state_mut(),
+            Screen::Confirm(c) => match &mut c.return_screen {
+                Screen::Diff(d) => d.return_screen.pins_state_mut(),
+                other => other.pins_state_mut(),
+            },
+            Screen::Preview(_) => self.diff_return.pins_state_mut(),
             _ => None,
+        }
+    }
+
+    /// Nested Diff cancel path: Confirm may park `Screen::Diff` so download-n restores Diff.
+    fn nav_return_of_confirm(c: &ConfirmState) -> &Screen {
+        match &c.return_screen {
+            Screen::Diff(d) => &d.return_screen,
+            other => other,
         }
     }
 
@@ -1095,14 +1172,17 @@ impl AppState {
                 .detail_state()
                 .and_then(|d| d.return_screen.gists_state())
                 .or_else(|| p.return_screen.gists_state()),
-            Screen::Diff | Screen::Confirm => match &self.diff_return {
+            Screen::Diff(d) => match &d.return_screen {
+                Screen::Gists(g) => Some(g.as_ref()),
+                Screen::GistDetail(det) => det.return_screen.gists_state(),
+                Screen::Revisions(r) => r.return_screen.gists_state(),
+                _ => None,
+            },
+            Screen::Confirm(c) => match Self::nav_return_of_confirm(c) {
                 Screen::Gists(g) => Some(g.as_ref()),
                 Screen::GistDetail(d) => d.return_screen.gists_state(),
                 Screen::Revisions(r) => r.return_screen.gists_state(),
-                _ => self
-                    .preview_return
-                    .detail_state()
-                    .and_then(|d| d.return_screen.gists_state()),
+                _ => None,
             },
             _ => None,
         }
@@ -1124,7 +1204,19 @@ impl AppState {
                 Screen::GistDetail(d) => d.return_screen.gists_state_mut(),
                 _ => None,
             },
-            Screen::Diff | Screen::Confirm => match &mut self.diff_return {
+            Screen::Diff(d) => match &mut d.return_screen {
+                Screen::Gists(g) => Some(g.as_mut()),
+                Screen::GistDetail(det) => det.return_screen.gists_state_mut(),
+                Screen::Revisions(r) => r.return_screen.gists_state_mut(),
+                _ => None,
+            },
+            Screen::Confirm(c) => match &mut c.return_screen {
+                Screen::Diff(d) => match &mut d.return_screen {
+                    Screen::Gists(g) => Some(g.as_mut()),
+                    Screen::GistDetail(det) => det.return_screen.gists_state_mut(),
+                    Screen::Revisions(r) => r.return_screen.gists_state_mut(),
+                    _ => None,
+                },
                 Screen::Gists(g) => Some(g.as_mut()),
                 Screen::GistDetail(d) => d.return_screen.gists_state_mut(),
                 Screen::Revisions(r) => r.return_screen.gists_state_mut(),
@@ -1134,8 +1226,8 @@ impl AppState {
         }
     }
 
-    /// Detail payload when GistDetail is active, parked on preview/revision return, palette
-    /// origin, compact restore (`diff_return`), or help/config return (issue #242).
+    /// Detail payload when GistDetail is active, parked on preview/revision/diff/confirm
+    /// return, palette origin, or help/config return (issue #242).
     pub fn detail(&self) -> Option<&DetailState> {
         match &self.screen {
             Screen::GistDetail(d) => Some(d.as_ref()),
@@ -1144,10 +1236,8 @@ impl AppState {
             Screen::Palette(p) => p.origin_screen.detail_state(),
             Screen::Help(h) => h.return_screen.detail_state(),
             Screen::Config(c) => c.return_screen.detail_state(),
-            Screen::Diff | Screen::Confirm => self
-                .diff_return
-                .detail_state()
-                .or_else(|| self.preview_return.detail_state()),
+            Screen::Diff(d) => d.return_screen.detail_state(),
+            Screen::Confirm(c) => Self::nav_return_of_confirm(c).detail_state(),
             _ => None,
         }
     }
@@ -1158,12 +1248,11 @@ impl AppState {
             Screen::Preview(p) => p.return_screen.detail_state_mut(),
             Screen::Revisions(r) => r.return_screen.detail_state_mut(),
             Screen::Palette(p) => p.origin_screen.detail_state_mut(),
-            Screen::Diff | Screen::Confirm => {
-                if self.diff_return.detail_state().is_some() {
-                    return self.diff_return.detail_state_mut();
-                }
-                self.preview_return.detail_state_mut()
-            }
+            Screen::Diff(d) => d.return_screen.detail_state_mut(),
+            Screen::Confirm(c) => match &mut c.return_screen {
+                Screen::Diff(d) => d.return_screen.detail_state_mut(),
+                other => other.detail_state_mut(),
+            },
             _ => None,
         }
     }
@@ -1215,6 +1304,155 @@ impl AppState {
         }));
     }
 
+    /// Diff payload when Diff is active, under Confirm cancel path (`Screen::Diff`), or
+    /// palette origin (issue #242).
+    pub fn diff(&self) -> Option<&DiffState> {
+        match &self.screen {
+            Screen::Diff(d) => Some(d.as_ref()),
+            Screen::Confirm(c) => c.return_screen.diff_state(),
+            Screen::Palette(p) => p.origin_screen.diff_state(),
+            Screen::Help(h) => h.return_screen.diff_state(),
+            Screen::Config(c) => c.return_screen.diff_state(),
+            _ => None,
+        }
+    }
+
+    pub fn diff_mut(&mut self) -> Option<&mut DiffState> {
+        match &mut self.screen {
+            Screen::Diff(d) => Some(d.as_mut()),
+            Screen::Confirm(c) => c.return_screen.diff_state_mut(),
+            Screen::Palette(p) => p.origin_screen.diff_state_mut(),
+            _ => None,
+        }
+    }
+
+    /// Confirm payload when Confirm is active (issue #242).
+    pub fn confirm(&self) -> Option<&ConfirmState> {
+        match &self.screen {
+            Screen::Confirm(c) => Some(c.as_ref()),
+            Screen::Palette(p) => p.origin_screen.confirm_state(),
+            Screen::Help(h) => h.return_screen.confirm_state(),
+            Screen::Config(c) => c.return_screen.confirm_state(),
+            _ => None,
+        }
+    }
+
+    pub fn confirm_mut(&mut self) -> Option<&mut ConfirmState> {
+        match &mut self.screen {
+            Screen::Confirm(c) => Some(c.as_mut()),
+            Screen::Palette(p) => p.origin_screen.confirm_state_mut(),
+            _ => None,
+        }
+    }
+
+    /// Pending action while Confirm is open.
+    pub fn pending_action(&self) -> Option<&PendingAction> {
+        self.confirm().map(|c| &c.action)
+    }
+
+    /// Background body text for Diff or Confirm (not Preview).
+    pub fn diff_body_text(&self) -> &str {
+        match &self.screen {
+            Screen::Diff(d) => d.text.as_str(),
+            Screen::Confirm(c) => c.text.as_str(),
+            _ => "",
+        }
+    }
+
+    pub fn diff_body_text_mut(&mut self) -> Option<&mut String> {
+        match &mut self.screen {
+            Screen::Diff(d) => Some(&mut d.text),
+            Screen::Confirm(c) => Some(&mut c.text),
+            _ => None,
+        }
+    }
+
+    pub fn diff_scroll(&self) -> u16 {
+        match &self.screen {
+            Screen::Diff(d) => d.scroll,
+            Screen::Confirm(c) => c.scroll,
+            _ => 0,
+        }
+    }
+
+    pub fn diff_hscroll(&self) -> u16 {
+        match &self.screen {
+            Screen::Diff(d) => d.hscroll,
+            Screen::Confirm(c) => c.hscroll,
+            _ => 0,
+        }
+    }
+
+    /// Open Confirm with background `text` and the staged [`Self::diff_return`] as cancel path.
+    pub fn enter_confirm(&mut self, action: PendingAction, text: String) {
+        let return_screen = std::mem::replace(&mut self.diff_return, Screen::List);
+        self.status = None;
+        self.screen = Screen::Confirm(Box::new(ConfirmState {
+            action,
+            text,
+            scroll: 0,
+            hscroll: 0,
+            return_screen,
+        }));
+    }
+
+    /// Open Confirm from the active Diff (download overwrite gate). Cancel restores Diff.
+    pub fn enter_confirm_from_diff(&mut self, action: PendingAction) {
+        let Screen::Diff(d) = std::mem::replace(&mut self.screen, Screen::List) else {
+            return;
+        };
+        let DiffState {
+            text,
+            scroll,
+            hscroll,
+            return_screen,
+        } = *d;
+        self.status = None;
+        self.screen = Screen::Confirm(Box::new(ConfirmState {
+            action,
+            text: text.clone(),
+            scroll,
+            hscroll,
+            return_screen: Screen::Diff(Box::new(DiffState {
+                text,
+                scroll,
+                hscroll,
+                return_screen,
+            })),
+        }));
+    }
+
+    /// Leave Confirm for a Download cancel: restore the parked Diff payload.
+    pub fn cancel_confirm_to_diff(&mut self) {
+        let Screen::Confirm(c) = std::mem::replace(&mut self.screen, Screen::List) else {
+            return;
+        };
+        let ConfirmState {
+            text,
+            scroll,
+            hscroll,
+            return_screen,
+            ..
+        } = *c;
+        if let Screen::Diff(mut d) = return_screen {
+            d.text = text;
+            d.scroll = scroll;
+            d.hscroll = hscroll;
+            self.screen = Screen::Diff(d);
+        } else {
+            self.screen = return_screen;
+        }
+    }
+
+    /// Leave Confirm restoring `return_screen` from the payload (upload/compact/etc.).
+    pub fn cancel_confirm(&mut self) {
+        let Screen::Confirm(c) = std::mem::replace(&mut self.screen, Screen::List) else {
+            self.screen = Screen::List;
+            return;
+        };
+        self.screen = c.return_screen;
+    }
+
     /// Snapshot the current detail payload as a restore `Screen` (for preview/compact/etc.).
     fn park_gist_detail_screen(&self) -> Screen {
         match &self.screen {
@@ -1236,7 +1474,7 @@ impl AppState {
     }
 
     pub fn upload_local_path(&self) -> Option<std::path::PathBuf> {
-        match &self.pending_action {
+        match self.pending_action() {
             Some(PendingAction::Upload { local_path, .. }) => Some(local_path.clone()),
             _ => None,
         }
@@ -1280,7 +1518,9 @@ impl AppState {
             &local_content,
             self.ignore_trailing_newline,
         );
-        self.diff_text = diff;
+        if let Some(body) = self.diff_body_text_mut() {
+            *body = diff;
+        }
     }
 
     /// Prime the upload-diff state from the local file. Returns the read error instead of
@@ -1384,10 +1624,10 @@ impl AppState {
                 gist_id, filename, ..
             } => (gist_id.as_str(), filename.as_str()),
         };
-        let context_matches = self.screen == Screen::Confirm
+        let context_matches = self.screen.is_confirm()
             && self.upload.watching
             && matches!(
-                &self.pending_action,
+                self.pending_action(),
                 Some(PendingAction::Upload { gist_id, filename, .. })
                     if gist_id == event_gist_id && filename == event_filename
             );
@@ -1903,7 +2143,10 @@ impl AppState {
     /// True when the diff view supports local↔gist download/upload (`d`/`u`). Revision-history
     /// diffs (returning to `Screen::Revisions`) are read-only comparisons.
     pub fn diff_allows_sync(&self) -> bool {
-        !self.diff_return.is_revisions()
+        !matches!(
+            self.screen.diff_state().map(|d| &d.return_screen),
+            Some(Screen::Revisions(_))
+        ) && !self.diff_return.is_revisions()
     }
 
     /// Footer label for the revision-history target file, including `(n/total)` when multi-file.
@@ -1957,7 +2200,7 @@ impl AppState {
     /// hold the pin's gist identity, so upload/download should use those instead of the
     /// Files-view selection which may point to a completely different pair.
     pub fn is_pin_diff_context(&self) -> bool {
-        self.screen == Screen::Diff
+        self.screen.is_diff()
             && !self.preview_local.as_os_str().is_empty()
             && self.download_gist_id.is_some()
     }
@@ -2079,22 +2322,47 @@ impl AppState {
         local: PathBuf,
         target: PathBuf,
     ) {
-        self.diff_text = diff_text;
+        let return_screen = std::mem::replace(&mut self.diff_return, Screen::List);
         self.preview_remote = remote;
         self.preview_local = local;
         self.download_target = target;
         self.diff_previewed = true;
-        self.diff_scroll = 0;
-        self.diff_hscroll = 0;
         self.diff_identical = false;
         self.status = None;
-        self.screen = Screen::Diff;
+        self.screen = Screen::Diff(Box::new(DiffState {
+            text: diff_text,
+            scroll: 0,
+            hscroll: 0,
+            return_screen,
+        }));
+    }
+
+    /// Enter Diff with explicit return path (does not consume staged `diff_return`).
+    pub fn enter_diff_returning(
+        &mut self,
+        diff_text: String,
+        remote: String,
+        local: PathBuf,
+        target: PathBuf,
+        return_screen: Screen,
+    ) {
+        self.diff_return = Screen::List;
+        self.preview_remote = remote;
+        self.preview_local = local;
+        self.download_target = target;
+        self.diff_previewed = true;
+        self.diff_identical = false;
+        self.status = None;
+        self.screen = Screen::Diff(Box::new(DiffState {
+            text: diff_text,
+            scroll: 0,
+            hscroll: 0,
+            return_screen,
+        }));
     }
 
     pub fn back_to_list(&mut self) {
         self.screen = Screen::List;
-        self.pending_action = None;
-        self.diff_text.clear();
         self.preview_remote.clear();
         self.preview_local = PathBuf::new();
         self.download_target = PathBuf::new();
@@ -2102,10 +2370,9 @@ impl AppState {
         // can't be mis-attributed to a pin via a stale gist id/filename.
         self.download_gist_id = None;
         self.download_gist_filename = None;
-        self.diff_scroll = 0;
-        self.diff_hscroll = 0;
         self.diff_identical = false;
         self.diff_previewed = false;
+        self.diff_return = Screen::List;
     }
 
     pub fn set_status(&mut self, message: impl Into<String>) {
@@ -2120,8 +2387,10 @@ impl AppState {
             }
             return;
         }
-        if self.diff_scroll < max {
-            self.diff_scroll += 1;
+        match &mut self.screen {
+            Screen::Diff(d) if d.scroll < max => d.scroll += 1,
+            Screen::Confirm(c) if c.scroll < max => c.scroll += 1,
+            _ => {}
         }
     }
 
@@ -2130,7 +2399,7 @@ impl AppState {
         let text = self
             .preview()
             .map(|p| p.text.as_str())
-            .unwrap_or(self.diff_text.as_str());
+            .unwrap_or_else(|| self.diff_body_text());
         text.lines()
             .count()
             .saturating_sub(1)
@@ -2142,7 +2411,11 @@ impl AppState {
             p.scroll = p.scroll.saturating_sub(1);
             return;
         }
-        self.diff_scroll = self.diff_scroll.saturating_sub(1);
+        match &mut self.screen {
+            Screen::Diff(d) => d.scroll = d.scroll.saturating_sub(1),
+            Screen::Confirm(c) => c.scroll = c.scroll.saturating_sub(1),
+            _ => {}
+        }
     }
 
     /// Page the diff/preview down by `lines`, clamped to the same bottom as `scroll_diff_down`.
@@ -2152,7 +2425,11 @@ impl AppState {
             p.scroll = p.scroll.saturating_add(lines).min(max);
             return;
         }
-        self.diff_scroll = self.diff_scroll.saturating_add(lines).min(max);
+        match &mut self.screen {
+            Screen::Diff(d) => d.scroll = d.scroll.saturating_add(lines).min(max),
+            Screen::Confirm(c) => c.scroll = c.scroll.saturating_add(lines).min(max),
+            _ => {}
+        }
     }
 
     /// Page the diff/preview up by `lines`, saturating at the top.
@@ -2161,7 +2438,11 @@ impl AppState {
             p.scroll = p.scroll.saturating_sub(lines);
             return;
         }
-        self.diff_scroll = self.diff_scroll.saturating_sub(lines);
+        match &mut self.screen {
+            Screen::Diff(d) => d.scroll = d.scroll.saturating_sub(lines),
+            Screen::Confirm(c) => c.scroll = c.scroll.saturating_sub(lines),
+            _ => {}
+        }
     }
 
     pub fn scroll_diff_right(&mut self) {
@@ -2172,9 +2453,11 @@ impl AppState {
             }
             return;
         }
-        let max = hscroll_max_among(self.diff_text.lines());
-        if self.diff_hscroll < max {
-            self.diff_hscroll += 1;
+        let max = hscroll_max_among(self.diff_body_text().lines());
+        match &mut self.screen {
+            Screen::Diff(d) if d.hscroll < max => d.hscroll += 1,
+            Screen::Confirm(c) if c.hscroll < max => c.hscroll += 1,
+            _ => {}
         }
     }
 
@@ -2183,7 +2466,11 @@ impl AppState {
             p.hscroll = p.hscroll.saturating_sub(1);
             return;
         }
-        self.diff_hscroll = self.diff_hscroll.saturating_sub(1);
+        match &mut self.screen {
+            Screen::Diff(d) => d.hscroll = d.hscroll.saturating_sub(1),
+            Screen::Confirm(c) => c.hscroll = c.hscroll.saturating_sub(1),
+            _ => {}
+        }
     }
 
     /// Context radius to render the diff with: `None` shows the full file, `Some(n)`
@@ -2212,7 +2499,6 @@ pub fn initial_state() -> AppState {
         local_hscroll: 0,
         gist_hscroll: 0,
         screen: Screen::List,
-        pending_action: None,
         gist_view: GistView::Description,
         gist_type_filter: GistTypeFilter::All,
         gist_sort: GistSort::Match,
@@ -2221,9 +2507,6 @@ pub fn initial_state() -> AppState {
         filter_query: TextInput::default(),
         local_filter_query: TextInput::default(),
         diff_previewed: false,
-        diff_text: String::new(),
-        diff_scroll: 0,
-        diff_hscroll: 0,
         diff_wrap: false,
         diff_identical: false,
         diff_context: 3,

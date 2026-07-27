@@ -86,8 +86,8 @@ impl AppState {
         match &self.screen {
             Screen::List if self.filtering => self.handle_key_filter(code),
             Screen::List => self.handle_key_list(code),
-            Screen::Diff => self.handle_key_diff(code),
-            Screen::Confirm => self.handle_key_confirm(code),
+            Screen::Diff(_) => self.handle_key_diff(code),
+            Screen::Confirm(_) => self.handle_key_confirm(code),
             Screen::Preview(_) => self.handle_key_preview(code),
             Screen::Help(_) => self.handle_key_help(code),
             Screen::Pins(_) => self.handle_key_pins(code),
@@ -478,7 +478,7 @@ impl AppState {
                 true
             }
             // Diff, Preview and Confirm all scroll the same diff/preview buffer identically.
-            Screen::Diff | Screen::Preview(_) | Screen::Confirm => {
+            Screen::Diff(_) | Screen::Preview(_) | Screen::Confirm(_) => {
                 match action {
                     NavAction::Down => self.scroll_diff_down(),
                     NavAction::Up => self.scroll_diff_up(),
@@ -833,17 +833,19 @@ impl AppState {
                     } else {
                         group.description.clone()
                     };
-                    self.diff_text = format!(
+                    // Park detail so cancel can restore; staged into Confirm.return_screen.
+                    self.diff_return = self.park_gist_detail_screen();
+                    let text = format!(
                         "Delete gist {} ({} file(s)): {label}.\n\nThis permanently removes the entire gist and all its files.",
                         group.id, group.file_count
                     );
-                    self.diff_scroll = 0;
-                    self.diff_hscroll = 0;
-                    self.pending_action = Some(PendingAction::Delete {
-                        gist_id: group.id.clone(),
-                        label,
-                    });
-                    self.screen = Screen::Confirm;
+                    self.enter_confirm(
+                        PendingAction::Delete {
+                            gist_id: group.id.clone(),
+                            label,
+                        },
+                        text,
+                    );
                 }
             }
             KeyCode::Enter if self.detail().is_some_and(|d| d.focus == DetailFocus::Files) => {
@@ -975,7 +977,7 @@ impl AppState {
     /// panning. Help body also scrolls three; the Help topic index is a list (one row).
     fn wheel_step(&self) -> usize {
         match &self.screen {
-            Screen::Diff | Screen::Preview(_) | Screen::Confirm => 3,
+            Screen::Diff(_) | Screen::Preview(_) | Screen::Confirm(_) => 3,
             // GistDetail: the comments body scrolls like content (3 lines); the file list
             // steps one file at a time.
             Screen::GistDetail(_)
@@ -1761,17 +1763,18 @@ impl AppState {
         } else {
             gist.file.description.clone()
         };
-        self.diff_text = format!(
+        self.diff_return = Screen::List;
+        let text = format!(
             "Remove file \"{filename}\" from gist {gist_id} ({label}).\n\nThe other files in this gist are kept. This cannot be undone."
         );
-        self.diff_scroll = 0;
-        self.diff_hscroll = 0;
-        self.pending_action = Some(PendingAction::RemoveFile {
-            gist_id,
-            filename,
-            label,
-        });
-        self.screen = Screen::Confirm;
+        self.enter_confirm(
+            PendingAction::RemoveFile {
+                gist_id,
+                filename,
+                label,
+            },
+            text,
+        );
     }
 
     /// Stage creation of a new gist from the selected local file. Create is a two-step confirm:
@@ -1782,35 +1785,36 @@ impl AppState {
             self.status = Some("select a local file to create a gist".into());
             return;
         };
-        self.diff_text = format!(
-            "Create a new gist from {}.\n\nType an optional description, then choose visibility.",
-            local.path.display()
-        );
-        self.diff_scroll = 0;
-        self.diff_hscroll = 0;
         self.editing_description = true;
         self.description_input.clear();
-        self.pending_action = Some(PendingAction::Create {
-            local_path: local.path,
-        });
-        self.screen = Screen::Confirm;
+        self.diff_return = Screen::List;
+        self.enter_confirm(
+            PendingAction::Create {
+                local_path: local.path.clone(),
+            },
+            format!(
+                "Create a new gist from {}.\n\nType an optional description, then choose visibility.",
+                local.path.display()
+            ),
+        );
     }
 
     fn handle_key_diff(&mut self, code: KeyCode) -> KeyOutcome {
         match code {
-            // In the diff, q and Esc return to diff_return (normally List; Pins for pin diffs).
+            // In the diff, q and Esc return to the payload return path (List, Pins, …).
             KeyCode::Char('q') | KeyCode::Esc => {
-                let ret = self.diff_return.clone();
+                let ret = self
+                    .diff()
+                    .map(|d| d.return_screen.clone())
+                    .unwrap_or(Screen::List);
                 self.back_to_list();
                 self.screen = ret;
-                self.diff_return = Screen::List;
             }
             // Identical files have nothing to sync, so download/upload are not offered.
             // Revision-history diffs are read-only (no local file pairing).
             KeyCode::Char('d') if self.diff_allows_sync() && !self.diff_identical => {
                 if self.download_target.exists() {
-                    self.pending_action = Some(PendingAction::Download);
-                    self.screen = Screen::Confirm;
+                    self.enter_confirm_from_diff(PendingAction::Download);
                 } else {
                     return KeyOutcome::Download;
                 }
@@ -1822,14 +1826,18 @@ impl AppState {
             // count changes, so reset the vertical scroll. The choice is persisted.
             KeyCode::Char('c') => {
                 self.diff_show_full = !self.diff_show_full;
-                self.diff_scroll = 0;
+                if let Some(d) = self.diff_mut() {
+                    d.scroll = 0;
+                }
                 return KeyOutcome::PersistDiffContext;
             }
             // Soft-wrap long lines instead of horizontal scrolling; reset the now-meaningless
             // horizontal offset so wrapped lines start at column 0.
             KeyCode::Char('w') => {
                 self.diff_wrap = !self.diff_wrap;
-                self.diff_hscroll = 0;
+                if let Some(d) = self.diff_mut() {
+                    d.hscroll = 0;
+                }
             }
             _ => {}
         }
@@ -1839,12 +1847,11 @@ impl AppState {
     fn handle_key_confirm(&mut self, code: KeyCode) -> KeyOutcome {
         // While typing the create flow's description, arrows drive the text cursor (handled
         // below), not the background diff scroll.
-        match self.pending_action.clone() {
+        match self.pending_action().cloned() {
             Some(PendingAction::Download) => match code {
                 KeyCode::Char('y') => return KeyOutcome::Download,
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                    self.pending_action = None;
-                    self.screen = Screen::Diff;
+                    self.cancel_confirm_to_diff();
                 }
                 _ => {}
             },
@@ -1854,10 +1861,9 @@ impl AppState {
                 }
                 KeyCode::Char('y') => return KeyOutcome::Upload,
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                    self.pending_action = None;
                     // Return to wherever the upload was initiated from (List, or Pins for
                     // a pin push) instead of always snapping back to List.
-                    self.screen = self.diff_return.clone();
+                    self.cancel_confirm();
                     // The background watch thread (if any) is not force-killed — it cleans
                     // itself up once the editor closes. Reset the flag now so a stale
                     // late-arriving event (see AppState::apply_upload_edit_event) doesn't
@@ -1904,7 +1910,7 @@ impl AppState {
             Some(PendingAction::Delete { .. }) => match code {
                 KeyCode::Char('y') => return KeyOutcome::ExecuteDelete,
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                    self.back_to_list();
+                    self.cancel_confirm();
                 }
                 _ => {}
             },
@@ -1919,29 +1925,23 @@ impl AppState {
                 KeyCode::Char('y') => return KeyOutcome::ExecuteCompactGist,
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     // Return to whichever screen launched the compaction (Gists or GistDetail).
-                    self.pending_action = None;
-                    // Parked on diff_return when Confirm opened (CompactAnalyze).
-                    self.screen = self.diff_return.clone();
+                    self.cancel_confirm();
                 }
                 _ => {}
             },
             Some(PendingAction::RestoreRevision { .. }) => match code {
                 KeyCode::Char('y') => return KeyOutcome::ExecuteRestoreRevision,
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                    self.pending_action = None;
-                    // Restore revision list with previous payload if parked in diff_return.
-                    self.screen = if self.diff_return.is_revisions() {
-                        self.diff_return.clone()
-                    } else {
-                        Screen::Revisions(Box::default())
-                    };
+                    self.cancel_confirm();
+                    if !self.screen.is_revisions() {
+                        self.screen = Screen::Revisions(Box::default());
+                    }
                 }
                 _ => {}
             },
             _ => {
                 if matches!(code, KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q')) {
-                    self.pending_action = None;
-                    self.screen = Screen::List;
+                    self.cancel_confirm();
                 }
             }
         }
