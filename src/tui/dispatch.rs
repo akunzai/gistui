@@ -40,7 +40,7 @@ pub(super) fn dispatch_outcome(
                 }
             });
         }
-        KeyOutcome::Download => download(state),
+        KeyOutcome::Download { mode } => download(state, mode),
         KeyOutcome::DownloadGist {
             gist_id,
             filename,

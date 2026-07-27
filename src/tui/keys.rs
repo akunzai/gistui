@@ -2054,7 +2054,9 @@ impl AppState {
                 if self.download_target().exists() {
                     self.enter_confirm_from_diff(PendingAction::Download);
                 } else {
-                    return KeyOutcome::Download;
+                    return KeyOutcome::Download {
+                        mode: crate::actions::DownloadMode::CreateNew,
+                    };
                 }
             }
             KeyCode::Char('u') if self.diff_allows_sync() && !self.diff_identical() => {
@@ -2087,7 +2089,11 @@ impl AppState {
         // below), not the background diff scroll.
         match self.pending_action().cloned() {
             Some(PendingAction::Download) => match code {
-                KeyCode::Char('y') => return KeyOutcome::Download,
+                KeyCode::Char('y') => {
+                    return KeyOutcome::Download {
+                        mode: crate::actions::DownloadMode::overwrite_after_user_confirm(),
+                    };
+                }
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     self.cancel_confirm_to_diff();
                 }
