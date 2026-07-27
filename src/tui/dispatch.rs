@@ -1,5 +1,6 @@
 //! `KeyOutcome` → IO side effects for the TUI event loop.
-//! Extracted from `run_loop` (issue #225).
+//! Extracted from `run_loop` (issue #225). Outcomes carry payloads (issue #244) so this
+//! layer does not re-resolve list/detail selection.
 
 use super::bg::*;
 use super::*;
@@ -14,21 +15,18 @@ pub(super) fn dispatch_outcome(
 ) -> Result<LoopFlow> {
     match outcome {
         KeyOutcome::Quit => return Ok(LoopFlow::Quit),
-        KeyOutcome::PreviewDiff => {
-            let Some(ranked) = state.selected_gist() else {
-                return Ok(LoopFlow::Proceed);
-            };
-            // List-originated diff returns to the List on Esc (reset any
-            // leftover Pins origin from an earlier pin diff).
+        KeyOutcome::PreviewDiff {
+            local_path,
+            gist_id,
+            filename,
+            raw_url,
+            target,
+            upload_orientation,
+        } => {
+            // List-originated diff returns to List on Esc.
             state.diff_return = Screen::List;
-            let local_path = state.selected_local().map(|local| local.path.clone());
-            let gist = ranked.file.clone();
-            let gist_id = gist.gist_id.clone();
-            let filename = gist.filename.clone();
-            let raw_url = gist.raw_url.clone();
+            let gist = GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone());
             let (local_label, gist_label) = diff_labels(local_path.as_deref(), &gist);
-            let target = state.cwd.join(&filename);
-            let upload_orientation = state.focus == FocusPane::Local;
 
             spawn_bg(state, &mut channels.bg, "Loading diff…", move || {
                 let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
@@ -43,15 +41,13 @@ pub(super) fn dispatch_outcome(
             });
         }
         KeyOutcome::Download => download(state),
-        KeyOutcome::DownloadGist => {
-            let Some(ranked) = state.selected_gist() else {
-                return Ok(LoopFlow::Proceed);
-            };
-            let gist = ranked.file.clone();
-            let gist_id = gist.gist_id.clone();
-            let filename = gist.filename.clone();
-            let raw_url = gist.raw_url.clone();
-            let target = state.cwd.join(&filename);
+        KeyOutcome::DownloadGist {
+            gist_id,
+            filename,
+            raw_url,
+            target,
+        } => {
+            let gist = GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone());
             let (local_label, gist_label) = diff_labels(Some(&target), &gist);
 
             spawn_bg(state, &mut channels.bg, "Downloading…", move || {
@@ -66,12 +62,7 @@ pub(super) fn dispatch_outcome(
                 }
             });
         }
-        KeyOutcome::OpenGistDetail => {
-            let Some(group) = state.selected_group() else {
-                return Ok(LoopFlow::Proceed);
-            };
-            let gist_id = group.id.clone();
-            // Park Gists payload so Esc restores list cursor/filter/sort (issue #242).
+        KeyOutcome::OpenGistDetail { gist_id } => {
             let gists_return = match &state.screen {
                 Screen::Gists(g) => Screen::Gists(g.clone()),
                 _ => Screen::Gists(Box::default()),
@@ -87,10 +78,7 @@ pub(super) fn dispatch_outcome(
             }));
             state.reset_comment_pagination();
         }
-        KeyOutcome::FetchComments => {
-            let Some(gist_id) = state.detail().and_then(|d| d.gist_id.clone()) else {
-                return Ok(LoopFlow::Proceed);
-            };
+        KeyOutcome::FetchComments { gist_id } => {
             if state
                 .detail()
                 .is_some_and(|d| d.comments.is_some() || d.comments_loading)
@@ -109,18 +97,8 @@ pub(super) fn dispatch_outcome(
                 }
             });
         }
-        KeyOutcome::LoadOlderComments => {
-            let Some(gist_id) = state.detail().and_then(|d| d.gist_id.clone()) else {
-                return Ok(LoopFlow::Proceed);
-            };
-            if !state.can_load_older_comments() {
-                return Ok(LoopFlow::Proceed);
-            }
-            let page = state
-                .detail()
-                .map(|d| d.comments_loaded_oldest_page.saturating_sub(1))
-                .unwrap_or(0);
-            if page == 0 {
+        KeyOutcome::LoadOlderComments { gist_id, page } => {
+            if page == 0 || !state.can_load_older_comments() {
                 return Ok(LoopFlow::Proceed);
             }
             if let Some(d) = state.detail_mut() {
@@ -148,19 +126,7 @@ pub(super) fn dispatch_outcome(
                 },
             );
         }
-        KeyOutcome::CompactGist => {
-            let Some(gist_id) = state.context_gist_id() else {
-                return Ok(LoopFlow::Proceed);
-            };
-            let Some(group) = state.group_by_id(&gist_id) else {
-                return Ok(LoopFlow::Proceed);
-            };
-            let label = if group.description.trim().is_empty() {
-                group.id.clone()
-            } else {
-                group.description.clone()
-            };
-
+        KeyOutcome::CompactGist { gist_id, label } => {
             spawn_bg(
                 state,
                 &mut channels.bg,
@@ -182,35 +148,29 @@ pub(super) fn dispatch_outcome(
                 },
             );
         }
-        KeyOutcome::Pin => pin_selected(state),
-        KeyOutcome::Unpin => unpin_selected(state),
-        KeyOutcome::UploadAdd => {
-            let (local_path, gist_id) = if state.is_pin_diff_context() {
-                let Some(gist_id) = state.download_gist_id().map(str::to_string) else {
-                    return Ok(LoopFlow::Proceed);
-                };
-                (state.preview_local(), gist_id)
-            } else {
-                // List-originated upload: reset any leftover Pins origin from an earlier
-                // pin push (mirrors KeyOutcome::PreviewDiff's own reset).
+        KeyOutcome::Pin {
+            local_path,
+            gist_id,
+            filename,
+        } => pin_paths(state, &local_path, &gist_id, &filename),
+        KeyOutcome::Unpin {
+            local_path,
+            gist_id: _,
+            filename: _,
+        } => unpin_path(state, &local_path),
+        KeyOutcome::UploadAdd {
+            local_path,
+            gist_id,
+            filename,
+        } => {
+            if !state.is_pin_diff_context() {
                 state.diff_return = Screen::List;
-                let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist())
-                else {
-                    return Ok(LoopFlow::Proceed);
-                };
-                (local.path.clone(), gist.file.gist_id.clone())
-            };
-            let Some(filename) = upload_local_filename(&local_path) else {
-                state.set_status("local file has no name");
-                return Ok(LoopFlow::Proceed);
-            };
-
+            }
             let action = PendingAction::Upload {
                 gist_id,
                 filename: filename.clone(),
                 local_path: local_path.clone(),
             };
-
             let local_label = format!("local: {}", crate::config::display_path(&local_path));
             let gist_label = "(new file)".to_string();
             match state.init_upload_state(&local_path, Some(String::new()), local_label, gist_label)
@@ -227,43 +187,24 @@ pub(super) fn dispatch_outcome(
                 }
             }
         }
-        KeyOutcome::UploadPreview => {
-            let (local_path, gist_id, gist_file) = if state.is_pin_diff_context() {
-                let Some(gist_id) = state.download_gist_id().map(str::to_string) else {
-                    return Ok(LoopFlow::Proceed);
-                };
-                let local_path = state.preview_local();
-                let filename = state
-                    .download_gist_filename()
-                    .unwrap_or_default()
-                    .to_string();
-                let gist_file = state
-                    .gists
-                    .iter()
-                    .find(|g| g.gist_id == gist_id && g.filename == filename)
-                    .cloned()
-                    .unwrap_or_else(|| GistFile::for_sync(gist_id.clone(), filename.clone(), None));
-                (local_path, gist_id, gist_file)
-            } else {
-                // List-originated upload: reset any leftover Pins origin from an earlier
-                // pin push (mirrors KeyOutcome::PreviewDiff's own reset).
+        KeyOutcome::UploadPreview {
+            local_path,
+            gist_id,
+            filename,
+            raw_url,
+            from_pin_diff,
+        } => {
+            if !from_pin_diff {
                 state.diff_return = Screen::List;
-                let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist())
-                else {
-                    return Ok(LoopFlow::Proceed);
-                };
-                (
-                    local.path.clone(),
-                    gist.file.gist_id.clone(),
-                    gist.file.clone(),
-                )
-            };
-            let Some(filename) = upload_local_filename(&local_path) else {
-                state.set_status("local file has no name");
-                return Ok(LoopFlow::Proceed);
-            };
-            let raw_url = gist_file.raw_url.clone();
+            }
+            let gist_file = state
+                .gists
+                .iter()
+                .find(|g| g.gist_id == gist_id && g.filename == filename)
+                .cloned()
+                .unwrap_or_else(|| GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url));
             let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
+            let raw_url = gist_file.raw_url.clone();
 
             spawn_bg(state, &mut channels.bg, "Loading diff…", move || {
                 let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
@@ -289,7 +230,6 @@ pub(super) fn dispatch_outcome(
 
             let upload_content = state.content_to_upload();
 
-            // Generate unique temp directory in workspace
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_nanos())
@@ -320,8 +260,6 @@ pub(super) fn dispatch_outcome(
                 crate::actions::upload_add_command(&temp_file_path, &gist_id)
             };
 
-            // Return to wherever this upload was initiated from (List, or Pins for a pin
-            // push) instead of always snapping to List (mirrors download()).
             let return_screen = state
                 .confirm()
                 .map(|c| c.return_screen.clone())
@@ -363,22 +301,15 @@ pub(super) fn dispatch_outcome(
                 }
             });
         }
-        KeyOutcome::PreviewContent => {
-            // A detail-view number key records the exact file in `preview_request`;
-            // otherwise fall back to the file selected on the list.
-            let key = match state.preview_request.take() {
-                Some(key) => key,
-                None => match state.selected_gist() {
-                    Some(gist) => (gist.file.gist_id.clone(), gist.file.filename.clone()),
-                    None => return Ok(LoopFlow::Proceed),
-                },
-            };
-            if let Some(cached) = state.gist_content_cache.get(&key).cloned() {
-                let title = format!("Preview: {} / {}", key.0, key.1);
-                state.enter_preview(title, cached, Some(key));
+        KeyOutcome::PreviewContent { gist_id, filename } => {
+            let key = (gist_id.clone(), filename.clone());
+            if let Some(content) = state.gist_content_cache.get(&key).cloned() {
+                state.enter_preview(
+                    format!("Preview: {gist_id} / {filename}"),
+                    content,
+                    Some(key),
+                );
             } else {
-                let gist_id = key.0.clone();
-                let filename = key.1.clone();
                 let raw_url = state.gist_file_raw_url(&gist_id, &filename);
                 let preview_title = format!("Preview: {gist_id} / {filename}");
                 spawn_bg(state, &mut channels.bg, "Loading preview…", move || {
@@ -391,32 +322,31 @@ pub(super) fn dispatch_outcome(
                 });
             }
         }
-        KeyOutcome::RefreshPreview => {
-            if let Some(key) = state.preview().and_then(|p| p.gist_key.clone()) {
-                // Keep the current return path when reloading.
-                if let Some(p) = state.preview() {
-                    state.preview_return = p.return_screen.clone();
+        KeyOutcome::RefreshPreview { gist_id, filename } => {
+            // Keep the current return path when reloading.
+            if let Some(p) = state.preview() {
+                state.preview_return = p.return_screen.clone();
+            }
+            let key = (gist_id.clone(), filename.clone());
+            state.gist_content_cache.remove(&key);
+            let raw_url = state.gist_file_raw_url(&gist_id, &filename);
+            let preview_title = format!("Preview: {gist_id} / {filename}");
+            spawn_bg(state, &mut channels.bg, "Loading preview…", move || {
+                let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
+                BgTaskOutcome::PreviewContent {
+                    result,
+                    key,
+                    preview_title,
                 }
-                state.gist_content_cache.remove(&key);
-                let gist_id = key.0.clone();
-                let filename = key.1.clone();
-                let raw_url = state.gist_file_raw_url(&gist_id, &filename);
-                let preview_title = format!("Preview: {gist_id} / {filename}");
-                spawn_bg(state, &mut channels.bg, "Loading preview…", move || {
-                    let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
-                    BgTaskOutcome::PreviewContent {
-                        result,
-                        key,
-                        preview_title,
-                    }
-                });
-            }
+            });
         }
-        KeyOutcome::OpenBrowser => open_browser(state),
-        KeyOutcome::OpenRepoUrl => open_repo_url(state),
-        KeyOutcome::CopyGistUrl => copy_gist_url(state),
+        KeyOutcome::OpenBrowser { gist_id } => open_browser_gist(state, &gist_id),
+        KeyOutcome::OpenRepoUrl { url } => {
+            open_url(state, &url, "Opening GitHub repository in the browser…")
+        }
+        KeyOutcome::CopyGistUrl { gist_id } => copy_gist_url_id(state, &gist_id),
         KeyOutcome::CopyPreviewContent => copy_preview_content(state),
-        KeyOutcome::EditLocal => edit_local(terminal, state)?,
+        KeyOutcome::EditLocal { path } => edit_local_path(terminal, state, &path)?,
         KeyOutcome::ExecuteDelete => {
             let Some(PendingAction::Delete { gist_id, .. }) = state.pending_action().cloned()
             else {
@@ -462,7 +392,6 @@ pub(super) fn dispatch_outcome(
             else {
                 return Ok(LoopFlow::Proceed);
             };
-            // Compact restore target was parked on Confirm.return_screen when Confirm opened.
             state.cancel_confirm();
 
             spawn_bg(
@@ -480,16 +409,10 @@ pub(super) fn dispatch_outcome(
                 },
             );
         }
-        KeyOutcome::ApplyDescription => {
-            let gist_id = state
-                .detail()
-                .and_then(|d| d.gist_id.clone())
-                .or_else(|| state.selected_group().map(|g| g.id.clone()));
-            let Some(gist_id) = gist_id else {
-                state.editing_description = false;
-                return Ok(LoopFlow::Proceed);
-            };
-            let description = state.description_input.to_string();
+        KeyOutcome::ApplyDescription {
+            gist_id,
+            description,
+        } => {
             let plan = crate::actions::edit_description_command(&gist_id, &description);
             state.editing_description = false;
             state.description_input.clear();
@@ -519,14 +442,13 @@ pub(super) fn dispatch_outcome(
                 state.scan_depth,
             ));
         }
-        KeyOutcome::UnpinAtPin => unpin_at_pin_index(state),
-        KeyOutcome::SyncSelectedPair => {
-            let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist()) else {
-                return Ok(LoopFlow::Proceed);
-            };
-            let local_abs = state.cwd.join(&local.path);
-            let gist_id = gist.file.gist_id.clone();
-            let filename = gist.file.filename.clone();
+        KeyOutcome::UnpinAtPin { index } => unpin_at_pin_index(state, index),
+        KeyOutcome::SyncSelectedPair {
+            local_path,
+            gist_id,
+            filename,
+        } => {
+            let local_abs = state.cwd.join(&local_path);
             let idx = state.pinned.iter().position(|m| {
                 pin_local_abs(state, m) == local_abs
                     && m.gist_id == gist_id
@@ -549,27 +471,23 @@ pub(super) fn dispatch_outcome(
                 }
             }
         }
-        KeyOutcome::SyncPinPush => {
-            if let Some(m) = selected_pin(state) {
+        KeyOutcome::SyncPinPush { index } => {
+            if let Some(m) = state.pinned.get(index).cloned() {
                 spawn_pin_push(state, &mut channels.bg, &m);
             }
         }
-        KeyOutcome::SyncPinPull => {
-            if let Some(m) = selected_pin(state) {
+        KeyOutcome::SyncPinPull { index } => {
+            if let Some(m) = state.pinned.get(index).cloned() {
                 spawn_pin_pull(state, &mut channels.bg, &m);
             }
         }
-        KeyOutcome::SyncPinAuto => {
-            let Some(pin_idx) = state.selected_pin_index() else {
+        KeyOutcome::SyncPinAuto { index } => {
+            let Some(m) = state.pinned.get(index).cloned() else {
                 return Ok(LoopFlow::Proceed);
             };
-            let m = state.pinned[pin_idx].clone();
-            match state.compute_pin_sync_status(pin_idx) {
+            match state.compute_pin_sync_status(index) {
                 crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
                 crate::domain::SyncStatus::Pull => spawn_pin_pull(state, &mut channels.bg, &m),
-                // The content-hash no-op check lives in `compute_pin_sync_status` (a matching
-                // hash is already reclassified to InSync above), so a genuine Push here always
-                // means a real change. Presentation uses the pin_sync_cache instead (#241).
                 crate::domain::SyncStatus::Push => spawn_pin_push(state, &mut channels.bg, &m),
                 crate::domain::SyncStatus::Missing => {
                     state.set_status("local file is missing — use d to pull it back")
@@ -579,8 +497,8 @@ pub(super) fn dispatch_outcome(
                 }
             }
         }
-        KeyOutcome::PreviewPinDiff => {
-            if let Some(m) = selected_pin(state) {
+        KeyOutcome::PreviewPinDiff { index } => {
+            if let Some(m) = state.pinned.get(index).cloned() {
                 if let Screen::Pins(p) = &state.screen {
                     state.diff_return = Screen::Pins(p.clone());
                 } else {
@@ -591,16 +509,11 @@ pub(super) fn dispatch_outcome(
         }
         KeyOutcome::PersistDiffContext => persist_diff_context(state),
         KeyOutcome::PersistSettings => {
-            // `adjust_config_field` already updated `mouse_enabled`; sync the terminal
-            // capture so toggling mouse on/off works without restart.
             persist_settings(state);
             sync_mouse_capture(terminal, state.mouse_enabled)?;
         }
         KeyOutcome::ThemeToggle => persist_theme(state),
-        KeyOutcome::FetchRevisions => {
-            let Some(gist_id) = state.revision().and_then(|r| r.gist_id.clone()) else {
-                return Ok(LoopFlow::Proceed);
-            };
+        KeyOutcome::FetchRevisions { gist_id } => {
             spawn_bg(state, &mut channels.bg, "Loading revisions…", move || {
                 let result = crate::gh::fetch_gist_commits_json(&gist_id)
                     .map_err(|e| e.to_string())
@@ -610,33 +523,15 @@ pub(super) fn dispatch_outcome(
                 BgTaskOutcome::RevisionsFetched { gist_id, result }
             });
         }
-        KeyOutcome::RevisionDiffIncremental => {
-            let Some(gist_id) = state.revision().and_then(|r| r.gist_id.clone()) else {
-                return Ok(LoopFlow::Proceed);
-            };
-            let Some(child) = state.selected_revision().cloned() else {
-                return Ok(LoopFlow::Proceed);
-            };
-            let filename = state
-                .revision()
-                .map(|r| r.target_file.clone())
-                .unwrap_or_default();
-            let child_version = child.version.clone();
-            let child_label = revision_version_label(&child);
-            let parent = state.revision().and_then(|r| {
-                r.entries
-                    .as_ref()
-                    .and_then(|entries| entries.get(r.index + 1).cloned())
-            });
-            let (parent_version, old_label) = match parent {
-                Some(parent) => {
-                    let label = revision_version_label(&parent);
-                    (Some(parent.version), format!("revision {label}"))
-                }
-                None => (None, "(initial)".into()),
-            };
-            let new_label = format!("revision {child_label}");
-            let owner_login = state.gist_owner_login(&gist_id);
+        KeyOutcome::RevisionDiffIncremental {
+            gist_id,
+            filename,
+            child_version,
+            parent_version,
+            old_label,
+            new_label,
+            owner_login,
+        } => {
             spawn_bg(state, &mut channels.bg, "Loading diff…", move || {
                 let result = fetch_revision_incremental_pair(
                     &gist_id,
@@ -652,23 +547,15 @@ pub(super) fn dispatch_outcome(
                 }
             });
         }
-        KeyOutcome::RevisionDiff => {
-            let Some(gist_id) = state.revision().and_then(|r| r.gist_id.clone()) else {
-                return Ok(LoopFlow::Proceed);
-            };
-            let Some(revision) = state.selected_revision().cloned() else {
-                return Ok(LoopFlow::Proceed);
-            };
-            let filename = state
-                .revision()
-                .map(|r| r.target_file.clone())
-                .unwrap_or_default();
-            let version = revision.version.clone();
-            let version_label = revision_version_label(&revision);
-            let old_label = format!("revision {version_label}");
-            let new_label = format!("current {filename}");
-            let raw_url = state.gist_file_raw_url(&gist_id, &filename);
-            let owner_login = state.gist_owner_login(&gist_id);
+        KeyOutcome::RevisionDiff {
+            gist_id,
+            filename,
+            version,
+            old_label,
+            new_label,
+            raw_url,
+            owner_login,
+        } => {
             spawn_bg(state, &mut channels.bg, "Loading diff…", move || {
                 let result = fetch_revision_pair(
                     &gist_id,
@@ -686,21 +573,14 @@ pub(super) fn dispatch_outcome(
                 }
             });
         }
-        KeyOutcome::RestoreRevisionPreview => {
-            let Some(gist_id) = state.revision().and_then(|r| r.gist_id.clone()) else {
-                return Ok(LoopFlow::Proceed);
-            };
-            let Some(revision) = state.selected_revision().cloned() else {
-                return Ok(LoopFlow::Proceed);
-            };
-            let filename = state
-                .revision()
-                .map(|r| r.target_file.clone())
-                .unwrap_or_default();
-            let version = revision.version.clone();
-            let version_label = revision_version_label(&revision);
-            let raw_url = state.gist_file_raw_url(&gist_id, &filename);
-            let owner_login = state.gist_owner_login(&gist_id);
+        KeyOutcome::RestoreRevisionPreview {
+            gist_id,
+            filename,
+            version,
+            version_label,
+            raw_url,
+            owner_login,
+        } => {
             spawn_bg(state, &mut channels.bg, "Loading revision…", move || {
                 let result = fetch_revision_pair_for_restore(
                     &gist_id,
@@ -762,12 +642,7 @@ pub(super) fn dispatch_outcome(
                 },
             );
         }
-        KeyOutcome::ToggleGistStar => {
-            let Some(gist_id) = state.context_gist_id() else {
-                state.set_status("select a gist first");
-                return Ok(LoopFlow::Proceed);
-            };
-            let starring = !state.gist_is_starred(&gist_id);
+        KeyOutcome::ToggleGistStar { gist_id, starring } => {
             let plan = if starring {
                 crate::actions::star_gist_command(&gist_id)
             } else {
@@ -789,11 +664,7 @@ pub(super) fn dispatch_outcome(
                 }
             });
         }
-        KeyOutcome::ForkGist => {
-            let Some(gist_id) = state.context_gist_id() else {
-                state.set_status("select a gist to fork");
-                return Ok(LoopFlow::Proceed);
-            };
+        KeyOutcome::ForkGist { gist_id } => {
             if state.gist_is_owned(&gist_id) {
                 state.set_status("already yours — no fork needed");
                 return Ok(LoopFlow::Proceed);
