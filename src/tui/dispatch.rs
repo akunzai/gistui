@@ -214,21 +214,19 @@ pub(super) fn dispatch_outcome(
 
             let upload_content = state.content_to_upload();
 
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let temp_dir = std::env::temp_dir().join(format!(".gistui_upload_{timestamp}"));
+            // ScratchDir owns cleanup: early write failure drops here; on success
+            // ownership moves into the bg job and drops after execute (issue #275).
+            let scratch = match crate::temp_dir::ScratchDir::create("upload") {
+                Ok(dir) => dir,
+                Err(e) => {
+                    state.set_status(format!("failed to create temp dir: {e}"));
+                    return Ok(LoopFlow::Proceed);
+                }
+            };
 
-            if let Err(e) = std::fs::create_dir_all(&temp_dir) {
-                state.set_status(format!("failed to create temp dir: {e}"));
-                return Ok(LoopFlow::Proceed);
-            }
-
-            let temp_file_path = temp_dir.join(&filename);
+            let temp_file_path = scratch.path().join(&filename);
             if let Err(e) = std::fs::write(&temp_file_path, &upload_content) {
                 state.set_status(format!("failed to write temp file: {e}"));
-                let _ = std::fs::remove_dir_all(&temp_dir);
                 return Ok(LoopFlow::Proceed);
             }
 
@@ -251,7 +249,7 @@ pub(super) fn dispatch_outcome(
                     .map(|_| ())
                     .map_err(|e| e.to_string());
 
-                let _ = std::fs::remove_dir_all(&temp_dir);
+                drop(scratch);
 
                 BgTaskOutcome::UploadReplace {
                     result,
@@ -564,20 +562,19 @@ pub(super) fn dispatch_outcome(
             else {
                 return Ok(LoopFlow::Proceed);
             };
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0);
-            let temp_dir = std::env::temp_dir().join(format!(".gistui_restore_{timestamp}"));
-            if let Err(e) = std::fs::create_dir_all(&temp_dir) {
-                state.set_status(format!("failed to create temp dir: {e}"));
-                return Ok(LoopFlow::Proceed);
-            }
-            let json_path = temp_dir.join("restore.json");
+            // ScratchDir owns cleanup across write-failure early return and the
+            // bg job that consumes the JSON payload (issue #275).
+            let scratch = match crate::temp_dir::ScratchDir::create("restore") {
+                Ok(dir) => dir,
+                Err(e) => {
+                    state.set_status(format!("failed to create temp dir: {e}"));
+                    return Ok(LoopFlow::Proceed);
+                }
+            };
+            let json_path = scratch.path().join("restore.json");
             let body = crate::actions::restore_revision_json(&filename, &content);
             if let Err(e) = std::fs::write(&json_path, &body) {
                 state.set_status(format!("failed to write restore payload: {e}"));
-                let _ = std::fs::remove_dir_all(&temp_dir);
                 return Ok(LoopFlow::Proceed);
             }
             let plan = crate::actions::restore_revision_command(&gist_id, &json_path);
@@ -585,7 +582,7 @@ pub(super) fn dispatch_outcome(
                 let result = crate::actions::execute_command(&plan)
                     .map(|_| ())
                     .map_err(|e| e.to_string());
-                let _ = std::fs::remove_dir_all(&temp_dir);
+                drop(scratch);
                 BgTaskOutcome::RestoreRevisionDone {
                     result,
                     gist_id,

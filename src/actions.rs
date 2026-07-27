@@ -2,7 +2,7 @@ use crate::config::{save_config, AppConfig};
 use crate::domain::{GistFile, PinnedMapping, SyncDirection};
 use anyhow::{anyhow, bail, Context, Result};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -423,9 +423,11 @@ pub fn compact_git_plans(dir: &Path, branch: &str) -> Vec<CommandPlan> {
 /// and remove the temp dir. The temp dir is always cleaned up, even on error. This is a thin IO
 /// boundary (real `gh`/`git`); the command planning it drives is what carries the unit tests.
 pub fn execute_compact_gist(gist_id: &str) -> Result<()> {
-    let dir = compact_temp_dir(gist_id);
-    let result = compact_in_dir(gist_id, &dir);
-    let _ = fs::remove_dir_all(&dir);
+    // `with_temp_scratch_dir` owns create + cleanup, including on clone/compact failure (issue #275).
+    // The dir is created empty; `git clone` accepts an empty existing destination.
+    let safe: String = gist_id.chars().filter(|c| c.is_alphanumeric()).collect();
+    let kind = format!("compact-{safe}");
+    let result = crate::temp_dir::with_temp_scratch_dir(&kind, |dir| compact_in_dir(gist_id, dir));
     // A raw git HTTPS auth failure (no gist.github.com credential helper) is confusing; map it
     // to an actionable hint. Unrelated errors surface verbatim, and the happy path is untouched.
     result.map_err(|e| match compact_auth_hint(&e.to_string()) {
@@ -463,22 +465,6 @@ fn compact_in_dir(gist_id: &str, dir: &Path) -> Result<()> {
         run_command(&SystemRunner, &plan)?;
     }
     Ok(())
-}
-
-/// A unique, not-yet-existing temp path for a clone (let `git` create it, avoiding any
-/// "clone into a non-empty dir" surprise). Uniqueness: gist id + pid + a high-resolution stamp.
-fn compact_temp_dir(gist_id: &str) -> PathBuf {
-    let stamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let safe: String = gist_id.chars().filter(|c| c.is_alphanumeric()).collect();
-    let mut dir = std::env::temp_dir();
-    dir.push(format!(
-        "gistui-compact-{safe}-{}-{stamp}",
-        std::process::id()
-    ));
-    dir
 }
 
 pub fn execute_command(plan: &CommandPlan) -> Result<String> {
@@ -639,6 +625,7 @@ pub fn unpin_mapping_exact(
 mod tests {
     use super::*;
     use crate::config::{load_config, AppConfig};
+    use std::path::PathBuf;
 
     fn gist_file() -> GistFile {
         GistFile {
