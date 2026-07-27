@@ -832,7 +832,9 @@ impl AppState {
                             return KeyOutcome::None;
                         }
                         self.pending_return = Some(self.park_gist_detail_screen());
-                        return KeyOutcome::PreviewContent { gist_id, filename };
+                        return KeyOutcome::PreviewContent {
+                            file: crate::domain::GistFileRef::id_name(gist_id, filename),
+                        };
                     }
                 }
             }
@@ -1105,7 +1107,9 @@ impl AppState {
                     return KeyOutcome::None;
                 }
                 self.pending_return = Some(self.park_gist_detail_screen());
-                return KeyOutcome::PreviewContent { gist_id, filename };
+                return KeyOutcome::PreviewContent {
+                    file: crate::domain::GistFileRef::id_name(gist_id, filename),
+                };
             }
         }
         KeyOutcome::None
@@ -1401,7 +1405,9 @@ impl AppState {
                 let Some((gist_id, filename)) = p.gist_key.clone() else {
                     return KeyOutcome::None;
                 };
-                return KeyOutcome::RefreshPreview { gist_id, filename };
+                return KeyOutcome::RefreshPreview {
+                    file: crate::domain::GistFileRef::id_name(gist_id, filename),
+                };
             }
             KeyCode::Char('w') => self.preview_wrap = !self.preview_wrap,
             KeyCode::Char('y') => {
@@ -1603,8 +1609,11 @@ impl AppState {
                 }
                 self.pending_return = Some(Screen::List);
                 return KeyOutcome::PreviewContent {
-                    gist_id: gist.file.gist_id.clone(),
-                    filename: gist.file.filename.clone(),
+                    file: crate::domain::GistFileRef::new(
+                        gist.file.gist_id.clone(),
+                        gist.file.filename.clone(),
+                        gist.file.raw_url.clone(),
+                    ),
                 };
             }
             KeyCode::Char('d') if self.focus == FocusPane::Gist => {
@@ -1612,9 +1621,11 @@ impl AppState {
                 if let Some(gist) = ranked.get(self.gist_index) {
                     let filename = gist.file.filename.clone();
                     return KeyOutcome::DownloadGist {
-                        gist_id: gist.file.gist_id.clone(),
-                        filename: filename.clone(),
-                        raw_url: gist.file.raw_url.clone(),
+                        file: crate::domain::GistFileRef::new(
+                            gist.file.gist_id.clone(),
+                            filename.clone(),
+                            gist.file.raw_url.clone(),
+                        ),
                         target: self.cwd.join(&filename),
                     };
                 }
@@ -1640,9 +1651,11 @@ impl AppState {
                 let filename = gist.file.filename.clone();
                 return KeyOutcome::PreviewDiff {
                     local_path,
-                    gist_id: gist.file.gist_id.clone(),
-                    filename: filename.clone(),
-                    raw_url: gist.file.raw_url.clone(),
+                    file: crate::domain::GistFileRef::new(
+                        gist.file.gist_id.clone(),
+                        filename.clone(),
+                        gist.file.raw_url.clone(),
+                    ),
                     target: self.cwd.join(&filename),
                     upload_orientation: self.focus == FocusPane::Local,
                 };

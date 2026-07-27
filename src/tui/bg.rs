@@ -49,21 +49,18 @@ pub(super) enum BgTaskOutcome {
         target: PathBuf,
         local_label: String,
         gist_label: String,
-        gist_id: String,
-        filename: String,
+        file: crate::domain::GistFileRef,
     },
     UploadPreview {
         result: std::result::Result<String, String>,
-        gist_id: String,
-        filename: String,
+        file: crate::domain::GistFileRef,
         local_path: PathBuf,
         local_label: String,
         gist_label: String,
     },
     UploadReplace {
         result: std::result::Result<(), String>,
-        gist_id: String,
-        filename: String,
+        file: crate::domain::GistFileRef,
     },
     CreateGist {
         result: std::result::Result<(), String>,
@@ -72,7 +69,7 @@ pub(super) enum BgTaskOutcome {
     },
     PreviewContent {
         result: std::result::Result<String, String>,
-        key: (String, String),
+        file: crate::domain::GistFileRef,
         preview_title: String,
     },
     DeleteGist {
@@ -455,14 +452,13 @@ pub(super) fn spawn_pin_push(
     let filename = m.gist_filename.clone();
     // Upload Confirm is opened when UploadPreview completes (staged return is Pins).
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
-    let gist_file = GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone());
-    let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
+    let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
+    let (local_label, gist_label) = diff_labels(Some(&local_path), &file.to_gist_file());
     jobs.spawn_action(state, "Loading diff…", move || {
-        let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
+        let result = fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
         BgTaskOutcome::UploadPreview {
             result,
-            gist_id,
-            filename,
+            file,
             local_path,
             local_label,
             gist_label,
@@ -482,17 +478,16 @@ pub(super) fn spawn_pin_pull(
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
-    let gist_file = GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone());
-    let (local_label, gist_label) = diff_labels(Some(&target), &gist_file);
+    let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
+    let (local_label, gist_label) = diff_labels(Some(&target), &file.to_gist_file());
     jobs.spawn_action(state, "Downloading…", move || {
-        let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
+        let result = fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
         BgTaskOutcome::DownloadSelected {
             result,
             target,
             local_label,
             gist_label,
-            gist_id,
-            filename,
+            file,
         }
     });
 }
@@ -1463,8 +1458,7 @@ fn absorb_background_results_body(
                         target,
                         local_label,
                         gist_label,
-                        gist_id,
-                        filename,
+                        file,
                     } => match result {
                         Ok(remote) => {
                             if target.exists() {
@@ -1483,7 +1477,7 @@ fn absorb_background_results_body(
                                             state.ignore_trailing_newline,
                                         );
                                         state.staged_diff_gist =
-                                            Some((gist_id.clone(), filename.clone()));
+                                            Some((file.gist_id.clone(), file.filename.clone()));
                                         state.enter_diff(diff, remote, target.clone(), target);
                                         if let Some(d) = state.diff_mut() {
                                             d.identical = identical;
@@ -1508,8 +1502,8 @@ fn absorb_background_results_body(
                                         record_pin_sync(
                                             state,
                                             &target,
-                                            &gist_id,
-                                            &filename,
+                                            &file.gist_id,
+                                            &file.filename,
                                             &remote,
                                             Some(crate::domain::SyncDirection::Download),
                                         );
@@ -1525,8 +1519,7 @@ fn absorb_background_results_body(
                     },
                     BgTaskOutcome::UploadPreview {
                         result,
-                        gist_id,
-                        filename,
+                        file,
                         local_path,
                         local_label,
                         gist_label,
@@ -1534,8 +1527,8 @@ fn absorb_background_results_body(
                         Ok(remote) => {
                             // Keep staged pin/list return; enter_confirm consumes it.
                             let action = PendingAction::Upload {
-                                gist_id,
-                                filename,
+                                gist_id: file.gist_id,
+                                filename: file.filename,
                                 local_path: local_path.clone(),
                             };
                             match state.init_upload_state(
@@ -1561,23 +1554,20 @@ fn absorb_background_results_body(
                         }
                         Err(error) => state.set_status(format!("fetch failed: {error}")),
                     },
-                    BgTaskOutcome::UploadReplace {
-                        result,
-                        gist_id,
-                        filename,
-                    } => match result {
+                    BgTaskOutcome::UploadReplace { result, file } => match result {
                         Ok(_) => {
-                            state
-                                .gist_content_cache
-                                .remove(&(gist_id.clone(), filename.clone()));
-                            state.set_status(format!("Uploaded {} to gist {}", filename, gist_id));
+                            state.gist_content_cache.remove(&file.cache_key());
+                            state.set_status(format!(
+                                "Uploaded {} to gist {}",
+                                file.filename, file.gist_id
+                            ));
                             if let Some(local_path) = state.upload_local_path() {
                                 let content = state.content_to_upload();
                                 record_pin_sync(
                                     state,
                                     &local_path,
-                                    &gist_id,
-                                    &filename,
+                                    &file.gist_id,
+                                    &file.filename,
                                     &content,
                                     Some(crate::domain::SyncDirection::Upload),
                                 );
@@ -1617,10 +1607,11 @@ fn absorb_background_results_body(
                     },
                     BgTaskOutcome::PreviewContent {
                         result,
-                        key,
+                        file,
                         preview_title,
                     } => match result {
                         Ok(content) => {
+                            let key = file.cache_key();
                             state
                                 .gist_content_cache
                                 .insert(key.clone(), content.clone());

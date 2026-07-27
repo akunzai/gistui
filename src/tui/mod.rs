@@ -1,5 +1,6 @@
 use crate::domain::{
-    group_gists, GistComment, GistFile, GistGroup, GistRevision, LocalCandidate, PinnedMapping,
+    group_gists, GistComment, GistFile, GistFileRef, GistGroup, GistRevision, LocalCandidate,
+    PinnedMapping,
 };
 use crate::ranking::{rank_gist_files, rank_local_files, MatchReason, RankedGistFile, RankedLocal};
 use anyhow::Result;
@@ -566,9 +567,7 @@ pub enum KeyOutcome {
     /// List-originated local↔gist diff.
     PreviewDiff {
         local_path: Option<PathBuf>,
-        gist_id: String,
-        filename: String,
-        raw_url: Option<String>,
+        file: GistFileRef,
         target: PathBuf,
         /// When true, unified diff is oriented local→gist (local focus).
         upload_orientation: bool,
@@ -581,9 +580,7 @@ pub enum KeyOutcome {
     },
     /// Download/fetch a selected gist file (may land on Diff/Confirm).
     DownloadGist {
-        gist_id: String,
-        filename: String,
-        raw_url: Option<String>,
+        file: GistFileRef,
         target: PathBuf,
     },
     Pin {
@@ -603,9 +600,7 @@ pub enum KeyOutcome {
     },
     UploadPreview {
         local_path: PathBuf,
-        gist_id: String,
-        filename: String,
-        raw_url: Option<String>,
+        file: GistFileRef,
         /// When true, keep pin-originated `diff_return`; when false, reset to List.
         from_pin_diff: bool,
     },
@@ -613,8 +608,7 @@ pub enum KeyOutcome {
     Upload,
     Create(bool),
     PreviewContent {
-        gist_id: String,
-        filename: String,
+        file: GistFileRef,
     },
     OpenBrowser {
         gist_id: String,
@@ -649,8 +643,7 @@ pub enum KeyOutcome {
         url: String,
     },
     RefreshPreview {
-        gist_id: String,
-        filename: String,
+        file: GistFileRef,
     },
     UnpinAtPin {
         index: usize,
@@ -2143,9 +2136,7 @@ impl AppState {
             return if has_same_name {
                 KeyOutcome::UploadPreview {
                     local_path,
-                    gist_id,
-                    filename: local_filename,
-                    raw_url,
+                    file: GistFileRef::new(gist_id, local_filename, raw_url),
                     from_pin_diff: true,
                 }
             } else {
@@ -2179,9 +2170,7 @@ impl AppState {
         if has_same_name {
             KeyOutcome::UploadPreview {
                 local_path,
-                gist_id,
-                filename: local_filename,
-                raw_url,
+                file: GistFileRef::new(gist_id, local_filename, raw_url),
                 from_pin_diff: false,
             }
         } else {

@@ -450,10 +450,9 @@ fn detail_enter_previews_cursor_file_including_tenth() {
     assert!(matches!(
         outcome,
         KeyOutcome::PreviewContent {
-            ref gist_id,
-            ref filename,
+            file: ref f,
             ..
-        } if gist_id == "g1" && filename == "f9.txt"
+        } if f.gist_id == "g1" && f.filename == "f9.txt"
     ));
     assert!(state
         .pending_return
@@ -515,10 +514,9 @@ fn detail_number_key_requests_file_preview() {
     assert!(matches!(
         outcome,
         KeyOutcome::PreviewContent {
-            ref gist_id,
-            ref filename,
+            file: ref f,
             ..
-        } if gist_id == "g1" && filename == "a.txt"
+        } if f.gist_id == "g1" && f.filename == "a.txt"
     ));
     assert!(state
         .pending_return
@@ -5776,10 +5774,9 @@ fn gist_detail_file_click_selects_and_double_previews() {
     assert!(matches!(
         out,
         KeyOutcome::PreviewContent {
-            ref gist_id,
-            ref filename,
+            file: ref f,
             ..
-        } if gist_id == "g1" && filename == "b.txt"
+        } if f.gist_id == "g1" && f.filename == "b.txt"
     ));
 }
 
