@@ -438,13 +438,6 @@ pub(super) fn load_initial_comments(gist_id: &str) -> Result<crate::tui::Initial
     })
 }
 
-/// The pin currently selected in the Pins screen, if any.
-pub(super) fn selected_pin(state: &AppState) -> Option<crate::domain::PinnedMapping> {
-    state
-        .selected_pin_index()
-        .and_then(|i| state.pinned.get(i).cloned())
-}
-
 /// Resolve a pin's absolute local path against cwd.
 pub(super) fn pin_local_abs(state: &AppState, m: &crate::domain::PinnedMapping) -> PathBuf {
     if m.local_path.is_absolute() {
@@ -601,12 +594,8 @@ pub(super) fn record_pin_sync(
 
 /// Builds the `--- local` / `+++ gist` diff header labels showing each side's filename and
 /// last-modified time, plus the gist's id.
-pub(super) fn open_browser(state: &mut AppState) {
-    let gist_id = state.context_gist_id();
-    let Some(gist_id) = gist_id else {
-        return;
-    };
-    let plan = crate::actions::open_browser_command(&gist_id);
+pub(super) fn open_browser_gist(state: &mut AppState, gist_id: &str) {
+    let plan = crate::actions::open_browser_command(gist_id);
     // Fire-and-forget on a detached thread: `gh gist view --web` resolves the URL and shells
     // out to the OS opener, which can stall the event loop for a perceptible window if run
     // inline. A launch failure is rare and self-evident (no browser appears), so we report
@@ -617,27 +606,17 @@ pub(super) fn open_browser(state: &mut AppState) {
     state.set_status(format!("Opening gist {gist_id} in the browser…"));
 }
 
-pub(super) fn open_repo_url(state: &mut AppState) {
-    let url = env!("CARGO_PKG_REPOSITORY");
+pub(super) fn open_url(state: &mut AppState, url: &str, status: &str) {
     let plan = crate::actions::open_url_command(url);
     std::thread::spawn(move || {
         let _ = crate::actions::execute_command(&plan);
     });
-    state.set_status("Opening GitHub repository in the browser…");
+    state.set_status(status);
 }
 
-/// Copies the context gist's web URL to the system clipboard. On the Preview screen the
-/// URL comes from the previewed file's gist; elsewhere from the current selection.
-pub(super) fn copy_gist_url(state: &mut AppState) {
-    let gist_id = match state.preview() {
-        Some(p) => p.gist_key.as_ref().map(|(id, _)| id.clone()),
-        None => state.context_gist_id(),
-    };
-    let Some(gist_id) = gist_id else {
-        state.set_status("no gist selected to copy");
-        return;
-    };
-    let url = crate::actions::gist_web_url(&gist_id);
+/// Copy a gist's web URL (payload already resolved at key time — issue #244).
+pub(super) fn copy_gist_url_id(state: &mut AppState, gist_id: &str) {
+    let url = crate::actions::gist_web_url(gist_id);
     match crate::actions::copy_to_clipboard(&url) {
         Ok(_) => state.set_status(format!("Copied URL to clipboard: {url}")),
         Err(error) => state.set_status(format!("copy failed: {error}")),
@@ -707,17 +686,15 @@ pub(super) fn editor_command(editor: &str) -> Option<(String, Vec<String>)> {
     Some((program, args))
 }
 
-/// Opens the selected local file in `$VISUAL`/`$EDITOR` (default `vi`). A terminal editor
-/// needs the full terminal, so the TUI leaves raw mode / the alternate screen for the
-/// duration and restores afterwards. `$EDITOR` may include flags (e.g. `code --wait`); a
-/// wait flag is added automatically for known GUI editors (see [`editor_command`]).
-pub(super) fn edit_local(
+/// Opens `path` in `$VISUAL`/`$EDITOR` (default `vi`). A terminal editor needs the full
+/// terminal, so the TUI leaves raw mode / the alternate screen for the duration and restores
+/// afterwards. `$EDITOR` may include flags (e.g. `code --wait`); a wait flag is added
+/// automatically for known GUI editors (see [`editor_command`]).
+pub(super) fn edit_local_path(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
+    path: &std::path::Path,
 ) -> Result<()> {
-    let Some(local) = state.selected_local() else {
-        return Ok(());
-    };
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "vi".to_string());
@@ -733,7 +710,7 @@ pub(super) fn edit_local(
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     let result = std::process::Command::new(program)
         .args(&args)
-        .arg(&local.path)
+        .arg(path)
         .status();
     enable_raw_mode()?;
     execute!(terminal.backend_mut(), EnterAlternateScreen)?;
@@ -743,10 +720,7 @@ pub(super) fn edit_local(
     terminal.clear()?;
 
     match result {
-        Ok(_) => state.set_status(format!(
-            "Edited {}",
-            crate::config::display_path(&local.path)
-        )),
+        Ok(_) => state.set_status(format!("Edited {}", crate::config::display_path(path))),
         Err(error) => state.set_status(format!("editor failed: {error}")),
     }
     Ok(())
@@ -1071,13 +1045,16 @@ pub(super) fn sync_mouse_capture(
     Ok(())
 }
 
-pub(super) fn pin_selected(state: &mut AppState) {
-    let (Some(local), Some(gist)) = (state.selected_local(), state.selected_gist()) else {
-        return;
-    };
+pub(super) fn pin_paths(
+    state: &mut AppState,
+    local_path: &std::path::Path,
+    gist_id: &str,
+    filename: &str,
+) {
+    let gist = GistFile::for_sync(gist_id.to_string(), filename.to_string(), None);
     let result = crate::config::config_path().and_then(|path| {
         let config = crate::config::load_config(&path)?;
-        crate::actions::pin_mapping(&path, config, &local.path, &gist.file, None, None)
+        crate::actions::pin_mapping(&path, config, local_path, &gist, None, None)
     });
     match result {
         Ok(config) => {
@@ -1085,23 +1062,16 @@ pub(super) fn pin_selected(state: &mut AppState) {
             state.skip_dirs = config.skip_dirs;
             state.scan_depth = config.scan_depth;
             state.mark_pin_sync_cache_dirty();
-            state.set_status(format!(
-                "Pinned {} <-> {}",
-                local.path.display(),
-                gist.file.filename
-            ));
+            state.set_status(format!("Pinned {} <-> {}", local_path.display(), filename));
         }
         Err(error) => state.set_status(format!("pin failed: {error}")),
     }
 }
 
-pub(super) fn unpin_selected(state: &mut AppState) {
-    let Some(local) = state.selected_local() else {
-        return;
-    };
+pub(super) fn unpin_path(state: &mut AppState, local_path: &std::path::Path) {
     let result = crate::config::config_path().and_then(|path| {
         let config = crate::config::load_config(&path)?;
-        crate::actions::unpin_mapping(&path, config, &local.path)
+        crate::actions::unpin_mapping(&path, config, local_path)
     });
     match result {
         Ok(config) => {
@@ -1111,17 +1081,17 @@ pub(super) fn unpin_selected(state: &mut AppState) {
             state.mark_pin_sync_cache_dirty();
             state.set_status(format!(
                 "Unpinned {}",
-                crate::config::display_path(&local.path)
+                crate::config::display_path(local_path)
             ));
         }
         Err(error) => state.set_status(format!("unpin failed: {error}")),
     }
 }
 
-pub(super) fn unpin_at_pin_index(state: &mut AppState) {
-    let Some(idx) = state.selected_pin_index() else {
+pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
+    if idx >= state.pinned.len() {
         return;
-    };
+    }
     let mapping = state.pinned[idx].clone();
     let label = crate::config::display_path(&mapping.local_path);
     let result = crate::config::config_path().and_then(|path| {
@@ -1143,10 +1113,6 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState) {
         }
         Err(error) => state.set_status(format!("unpin failed: {error}")),
     }
-}
-
-pub(super) fn upload_local_filename(local: &std::path::Path) -> Option<String> {
-    local.file_name().and_then(|n| n.to_str()).map(String::from)
 }
 
 /// The background-work receivers `run_loop` drains each iteration, bundled so the

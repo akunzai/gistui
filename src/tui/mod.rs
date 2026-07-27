@@ -557,73 +557,163 @@ impl GistTypeFilter {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Pure key/mouse intent returned by [`AppState::handle_key`]. IO-bearing variants carry
+/// the snapshot needed to execute so dispatch does not re-resolve selection (issue #244).
+/// Not `Copy` — payloads own small strings/paths.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum KeyOutcome {
     None,
     Quit,
-    PreviewDiff,
+    /// List-originated local↔gist diff.
+    PreviewDiff {
+        local_path: Option<PathBuf>,
+        gist_id: String,
+        filename: String,
+        raw_url: Option<String>,
+        target: PathBuf,
+        /// When true, unified diff is oriented local→gist (local focus).
+        upload_orientation: bool,
+    },
+    /// Download using the open Diff payload (no re-resolve).
     Download,
-    DownloadGist,
-    Pin,
-    Unpin,
-    UploadAdd,
-    UploadPreview,
+    /// Download/fetch a selected gist file (may land on Diff/Confirm).
+    DownloadGist {
+        gist_id: String,
+        filename: String,
+        raw_url: Option<String>,
+        target: PathBuf,
+    },
+    Pin {
+        local_path: PathBuf,
+        gist_id: String,
+        filename: String,
+    },
+    Unpin {
+        local_path: PathBuf,
+        gist_id: String,
+        filename: String,
+    },
+    UploadAdd {
+        local_path: PathBuf,
+        gist_id: String,
+        filename: String,
+    },
+    UploadPreview {
+        local_path: PathBuf,
+        gist_id: String,
+        filename: String,
+        raw_url: Option<String>,
+        /// When true, keep pin-originated `diff_return`; when false, reset to List.
+        from_pin_diff: bool,
+    },
+    /// Confirm-owned upload execute.
     Upload,
     Create(bool),
-    PreviewContent,
-    OpenBrowser,
-    EditLocal,
+    PreviewContent {
+        gist_id: String,
+        filename: String,
+    },
+    OpenBrowser {
+        gist_id: String,
+    },
+    EditLocal {
+        path: PathBuf,
+    },
     EditUpload,
     ExecuteDelete,
     ExecuteRemoveFile,
-    /// Open the selected gist's detail screen (comments load when the Comments tab is opened).
-    OpenGistDetail,
-    /// Fetch comments for the gist shown on `Screen::GistDetail` (lazy, on Comments tab).
-    FetchComments,
-    LoadOlderComments,
-    /// Analyse the selected Gist-manager gist's revision count, then ask to confirm a compaction.
-    CompactGist,
-    /// Run the confirmed compaction (clone → squash → force-push) on the pending gist.
+    OpenGistDetail {
+        gist_id: String,
+    },
+    FetchComments {
+        gist_id: String,
+    },
+    LoadOlderComments {
+        gist_id: String,
+        page: u32,
+    },
+    CompactGist {
+        gist_id: String,
+        label: String,
+    },
     ExecuteCompactGist,
-    ApplyDescription,
+    ApplyDescription {
+        gist_id: String,
+        description: String,
+    },
     RefreshLocals,
-    OpenRepoUrl,
-    RefreshPreview,
-    UnpinAtPin,
-    /// Smart-sync the selected Pins-screen pair (direction from mtime).
-    SyncPinAuto,
-    /// Force push the selected Pins-screen pair (upload local → gist).
-    SyncPinPush,
-    /// Force pull the selected Pins-screen pair (download gist → local).
-    SyncPinPull,
-    /// Smart-sync the selected local↔gist pair from the List screen (if pinned).
-    SyncSelectedPair,
-    /// Diff the selected pinned pair (read-only, lands on Screen::Diff; q/Esc returns to Pins).
-    PreviewPinDiff,
-    /// Persist the diff-context toggle (`diff_show_full`) to config after pressing `c`.
+    OpenRepoUrl {
+        url: String,
+    },
+    RefreshPreview {
+        gist_id: String,
+        filename: String,
+    },
+    UnpinAtPin {
+        index: usize,
+    },
+    SyncPinAuto {
+        index: usize,
+    },
+    SyncPinPush {
+        index: usize,
+    },
+    SyncPinPull {
+        index: usize,
+    },
+    SyncSelectedPair {
+        local_path: PathBuf,
+        gist_id: String,
+        filename: String,
+    },
+    PreviewPinDiff {
+        index: usize,
+    },
     PersistDiffContext,
-    /// Copy the context gist's web URL to the system clipboard (`y`).
-    CopyGistUrl,
-    /// Copy the previewed file content to the system clipboard (`Y`, Preview screen).
+    CopyGistUrl {
+        gist_id: String,
+    },
     CopyPreviewContent,
-    /// Toggle the colour theme between dark and light and persist to config (`T`, global).
     ThemeToggle,
-    /// Persist settings changed on [`Screen::Config`] (creates config.toml only after a change).
     PersistSettings,
-    /// Fetch the revision list for the gist opened on `Screen::Revisions`.
-    FetchRevisions,
-    /// Diff the target file: parent revision → selected revision (incremental).
-    RevisionDiffIncremental,
-    /// Diff the target file: selected revision vs current head.
-    RevisionDiff,
-    /// Fetch revision + head content and stage a restore confirm.
-    RestoreRevisionPreview,
-    /// Apply a confirmed single-file revision restore (`PATCH`).
+    FetchRevisions {
+        gist_id: String,
+    },
+    RevisionDiffIncremental {
+        gist_id: String,
+        filename: String,
+        child_version: String,
+        parent_version: Option<String>,
+        old_label: String,
+        new_label: String,
+        owner_login: String,
+    },
+    RevisionDiff {
+        gist_id: String,
+        filename: String,
+        version: String,
+        old_label: String,
+        new_label: String,
+        raw_url: Option<String>,
+        owner_login: String,
+    },
+    RestoreRevisionPreview {
+        gist_id: String,
+        filename: String,
+        version: String,
+        version_label: String,
+        raw_url: Option<String>,
+        owner_login: String,
+    },
     ExecuteRestoreRevision,
-    /// Star or unstar the context gist (`*`).
-    ToggleGistStar,
-    /// Fork the context gist into the authenticated account (`F`).
-    ForkGist,
+    ToggleGistStar {
+        gist_id: String,
+        /// True when the next action should star (currently unstarred).
+        starring: bool,
+    },
+    ForkGist {
+        gist_id: String,
+    },
 }
 
 /// A clickable list pane recorded by `render` for the current frame.
@@ -963,10 +1053,6 @@ pub struct AppState {
     /// How this binary was installed — resolved once at startup so the update hint can show
     /// the right upgrade command without per-frame IO.
     pub install_method: crate::upgrade::InstallMethod,
-    /// A `(gist_id, filename)` explicitly chosen for preview (e.g. a number key in the detail
-    /// view), taken by the `PreviewContent` IO step; when `None` it falls back to the selected
-    /// gist file on the list. Keeps `handle_key` pure: it records the intent, `run_loop` fetches.
-    pub preview_request: Option<(String, String)>,
     /// Staged return path for the next preview open (copied into [`PreviewState::return_screen`]
     /// when Preview is entered). Live Esc path while Preview is open lives on the payload.
     pub preview_return: Screen,
@@ -2203,8 +2289,8 @@ impl AppState {
             }
         }
         if self.is_pin_diff_context() {
-            let Some(local_filename) = self
-                .preview_local()
+            let local_path = self.preview_local();
+            let Some(local_filename) = local_path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .map(String::from)
@@ -2212,15 +2298,26 @@ impl AppState {
                 self.status = Some("local file has no name".into());
                 return KeyOutcome::None;
             };
-            let gist_id = self.download_gist_id().unwrap_or_default();
+            let gist_id = self.download_gist_id().unwrap_or_default().to_string();
+            let raw_url = self.gist_file_raw_url(&gist_id, &local_filename);
             let has_same_name = self
                 .gists
                 .iter()
                 .any(|g| g.gist_id == gist_id && g.filename == local_filename);
             return if has_same_name {
-                KeyOutcome::UploadPreview
+                KeyOutcome::UploadPreview {
+                    local_path,
+                    gist_id,
+                    filename: local_filename,
+                    raw_url,
+                    from_pin_diff: true,
+                }
             } else {
-                KeyOutcome::UploadAdd
+                KeyOutcome::UploadAdd {
+                    local_path,
+                    gist_id,
+                    filename: local_filename,
+                }
             };
         }
         let (Some(local), Some(gist)) = (self.selected_local(), self.selected_gist()) else {
@@ -2236,15 +2333,27 @@ impl AppState {
             self.status = Some("local file has no name".into());
             return KeyOutcome::None;
         };
+        let local_path = local.path.clone();
         let gist_id = gist.file.gist_id.clone();
+        let raw_url = gist.file.raw_url.clone();
         let has_same_name = self
             .gists
             .iter()
             .any(|g| g.gist_id == gist_id && g.filename == local_filename);
         if has_same_name {
-            KeyOutcome::UploadPreview
+            KeyOutcome::UploadPreview {
+                local_path,
+                gist_id,
+                filename: local_filename,
+                raw_url,
+                from_pin_diff: false,
+            }
         } else {
-            KeyOutcome::UploadAdd
+            KeyOutcome::UploadAdd {
+                local_path,
+                gist_id,
+                filename: local_filename,
+            }
         }
     }
 
@@ -2552,7 +2661,6 @@ pub fn initial_state() -> AppState {
         update_available: None,
         install_method: crate::upgrade::InstallMethod::Standalone,
         preview_return: Screen::List,
-        preview_request: None,
         // Bound the in-memory preview cache so browsing many/large gists can't grow unbounded;
         // evicted entries are simply re-fetched on demand.
         gist_content_cache: crate::lru::LruCache::new(64),

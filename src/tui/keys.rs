@@ -1,3 +1,4 @@
+use super::bg::revision_version_label;
 use super::*;
 use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -638,12 +639,35 @@ impl AppState {
                         return KeyOutcome::None;
                     }
                 }
-                return KeyOutcome::PreviewPinDiff;
+                let Some(index) = self.selected_pin_index() else {
+                    return KeyOutcome::None;
+                };
+                return KeyOutcome::PreviewPinDiff { index };
             }
-            KeyCode::Char('x') if !self.pinned.is_empty() => return KeyOutcome::UnpinAtPin,
-            KeyCode::Char('s') if !self.pinned.is_empty() => return KeyOutcome::SyncPinAuto,
-            KeyCode::Char('u') if !self.pinned.is_empty() => return KeyOutcome::SyncPinPush,
-            KeyCode::Char('d') if !self.pinned.is_empty() => return KeyOutcome::SyncPinPull,
+            KeyCode::Char('x') if !self.pinned.is_empty() => {
+                let Some(index) = self.selected_pin_index() else {
+                    return KeyOutcome::None;
+                };
+                return KeyOutcome::UnpinAtPin { index };
+            }
+            KeyCode::Char('s') if !self.pinned.is_empty() => {
+                let Some(index) = self.selected_pin_index() else {
+                    return KeyOutcome::None;
+                };
+                return KeyOutcome::SyncPinAuto { index };
+            }
+            KeyCode::Char('u') if !self.pinned.is_empty() => {
+                let Some(index) = self.selected_pin_index() else {
+                    return KeyOutcome::None;
+                };
+                return KeyOutcome::SyncPinPush { index };
+            }
+            KeyCode::Char('d') if !self.pinned.is_empty() => {
+                let Some(index) = self.selected_pin_index() else {
+                    return KeyOutcome::None;
+                };
+                return KeyOutcome::SyncPinPull { index };
+            }
             KeyCode::Char('o') => {
                 if let Some(pins) = self.pins_mut() {
                     pins.sort = pins.sort.next();
@@ -723,17 +747,34 @@ impl AppState {
             }
             KeyCode::Char('*') => return self.star_toggle_intent(),
             KeyCode::Enter if index < groups_len => {
-                return KeyOutcome::OpenGistDetail;
+                let Some(group) = self.selected_group() else {
+                    return KeyOutcome::None;
+                };
+                return KeyOutcome::OpenGistDetail {
+                    gist_id: group.id.clone(),
+                };
             }
-            KeyCode::Char('o') if index < groups_len => return KeyOutcome::OpenBrowser,
-            KeyCode::Char('y') if index < groups_len => return KeyOutcome::CopyGistUrl,
+            KeyCode::Char('o') if index < groups_len => {
+                let Some(gist_id) = self.context_gist_id() else {
+                    return KeyOutcome::None;
+                };
+                return KeyOutcome::OpenBrowser { gist_id };
+            }
+            KeyCode::Char('y') if index < groups_len => {
+                let Some(gist_id) = self.context_gist_id() else {
+                    return KeyOutcome::None;
+                };
+                return KeyOutcome::CopyGistUrl { gist_id };
+            }
             KeyCode::Char('H') if index < groups_len => {
                 let ret = match &self.screen {
                     Screen::Gists(g) => Screen::Gists(g.clone()),
                     _ => Screen::Gists(Box::default()),
                 };
                 if self.open_revisions(ret) {
-                    return KeyOutcome::FetchRevisions;
+                    if let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) {
+                        return KeyOutcome::FetchRevisions { gist_id };
+                    }
                 }
             }
             KeyCode::Char('?') => self.open_help(),
@@ -751,7 +792,19 @@ impl AppState {
                     self.editing_description = false;
                     self.description_input.clear();
                 }
-                KeyCode::Enter => return KeyOutcome::ApplyDescription,
+                KeyCode::Enter => {
+                    let Some(gist_id) = self
+                        .detail()
+                        .and_then(|d| d.gist_id.clone())
+                        .or_else(|| self.selected_group().map(|g| g.id.clone()))
+                    else {
+                        return KeyOutcome::None;
+                    };
+                    return KeyOutcome::ApplyDescription {
+                        gist_id,
+                        description: self.description_input.to_string(),
+                    };
+                }
                 _ => {
                     self.description_input.apply_edit(code);
                 }
@@ -766,12 +819,24 @@ impl AppState {
                     .unwrap_or_else(|| Screen::Gists(Box::default()));
                 self.screen = ret;
             }
-            KeyCode::Char('o') => return KeyOutcome::OpenBrowser,
-            KeyCode::Char('y') => return KeyOutcome::CopyGistUrl,
+            KeyCode::Char('o') => {
+                let Some(gist_id) = self.context_gist_id() else {
+                    return KeyOutcome::None;
+                };
+                return KeyOutcome::OpenBrowser { gist_id };
+            }
+            KeyCode::Char('y') => {
+                let Some(gist_id) = self.context_gist_id() else {
+                    return KeyOutcome::None;
+                };
+                return KeyOutcome::CopyGistUrl { gist_id };
+            }
             KeyCode::Char('H') => {
                 let ret = self.park_gist_detail_screen();
                 if self.open_revisions(ret) {
-                    return KeyOutcome::FetchRevisions;
+                    if let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) {
+                        return KeyOutcome::FetchRevisions { gist_id };
+                    }
                 }
             }
             KeyCode::Char('e') => {
@@ -797,7 +862,17 @@ impl AppState {
                 if let Some(d) = self.detail_mut() {
                     d.compact_return_screen = parked;
                 }
-                return KeyOutcome::CompactGist;
+                let label = self
+                    .group_by_id(&id)
+                    .map(|g| {
+                        if g.description.trim().is_empty() {
+                            g.id
+                        } else {
+                            g.description
+                        }
+                    })
+                    .unwrap_or_else(|| id.clone());
+                return KeyOutcome::CompactGist { gist_id: id, label };
             }
             KeyCode::Char('*') => return self.star_toggle_intent(),
             KeyCode::Char('F') => return self.fork_intent(),
@@ -816,7 +891,9 @@ impl AppState {
                 let fetch =
                     d.focus == DetailFocus::Comments && d.comments.is_none() && !d.comments_loading;
                 if fetch {
-                    return KeyOutcome::FetchComments;
+                    if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
+                        return KeyOutcome::FetchComments { gist_id };
+                    }
                 }
             }
             // X deletes the whole gist (y/n confirm). Reuses the shared Delete confirm path,
@@ -855,9 +932,8 @@ impl AppState {
                         if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
                             return KeyOutcome::None;
                         }
-                        self.preview_request = Some((gist_id, filename));
                         self.preview_return = self.park_gist_detail_screen();
-                        return KeyOutcome::PreviewContent;
+                        return KeyOutcome::PreviewContent { gist_id, filename };
                     }
                 }
             }
@@ -867,7 +943,15 @@ impl AppState {
                     .is_some_and(|d| d.focus == DetailFocus::Comments) =>
             {
                 if self.can_load_older_comments() {
-                    return KeyOutcome::LoadOlderComments;
+                    if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
+                        let page = self
+                            .detail()
+                            .map(|d| d.comments_loaded_oldest_page.saturating_sub(1))
+                            .unwrap_or(0);
+                        if page > 0 {
+                            return KeyOutcome::LoadOlderComments { gist_id, page };
+                        }
+                    }
                 }
             }
             KeyCode::Char('?') => self.open_help(),
@@ -891,26 +975,12 @@ impl AppState {
                 self.screen = ret;
             }
             KeyCode::Enter if entries_len > 0 => {
-                if let Some(rev) = self.revision() {
-                    if let (Some(id), file) = (rev.gist_id.clone(), rev.target_file.clone()) {
-                        if self.block_if_non_previewable_gist_file(&id, &file) {
-                            return KeyOutcome::None;
-                        }
-                    }
-                }
-                return KeyOutcome::RevisionDiffIncremental;
+                return self.revision_diff_incremental_intent();
             }
             KeyCode::Char('D')
                 if entries_len > 0 && self.revision().is_some_and(|r| r.index > 0) =>
             {
-                if let Some(rev) = self.revision() {
-                    if let (Some(id), file) = (rev.gist_id.clone(), rev.target_file.clone()) {
-                        if self.block_if_non_previewable_gist_file(&id, &file) {
-                            return KeyOutcome::None;
-                        }
-                    }
-                }
-                return KeyOutcome::RevisionDiff;
+                return self.revision_diff_intent();
             }
             KeyCode::Char('D') if entries_len > 0 => {
                 self.set_status("already at current revision");
@@ -918,12 +988,7 @@ impl AppState {
             KeyCode::Char('r')
                 if entries_len > 1 && self.revision().is_some_and(|r| r.index > 0) =>
             {
-                if let Some(id) = self.revision().and_then(|r| r.gist_id.clone()) {
-                    if !self.gist_is_owned(&id) {
-                        return KeyOutcome::None;
-                    }
-                }
-                return KeyOutcome::RestoreRevisionPreview;
+                return self.restore_revision_preview_intent();
             }
             KeyCode::Char('r') if entries_len <= 1 => {
                 self.set_status("only one revision — nothing to restore");
@@ -1146,12 +1211,111 @@ impl AppState {
                 if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
                     return KeyOutcome::None;
                 }
-                self.preview_request = Some((gist_id, filename));
                 self.preview_return = self.park_gist_detail_screen();
-                return KeyOutcome::PreviewContent;
+                return KeyOutcome::PreviewContent { gist_id, filename };
             }
         }
         KeyOutcome::None
+    }
+
+    fn revision_diff_incremental_intent(&mut self) -> KeyOutcome {
+        let Some(rev) = self.revision() else {
+            return KeyOutcome::None;
+        };
+        let Some(gist_id) = rev.gist_id.clone() else {
+            return KeyOutcome::None;
+        };
+        let filename = rev.target_file.clone();
+        let index = rev.index;
+        let parent = rev
+            .entries
+            .as_ref()
+            .and_then(|entries| entries.get(index + 1).cloned());
+        let Some(child) = self.selected_revision().cloned() else {
+            return KeyOutcome::None;
+        };
+        if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
+            return KeyOutcome::None;
+        }
+        let child_version = child.version.clone();
+        let child_label = revision_version_label(&child);
+        let (parent_version, old_label) = match parent {
+            Some(parent) => {
+                let label = revision_version_label(&parent);
+                (Some(parent.version), format!("revision {label}"))
+            }
+            None => (None, "(initial)".into()),
+        };
+        let new_label = format!("revision {child_label}");
+        let owner_login = self.gist_owner_login(&gist_id);
+        KeyOutcome::RevisionDiffIncremental {
+            gist_id,
+            filename,
+            child_version,
+            parent_version,
+            old_label,
+            new_label,
+            owner_login,
+        }
+    }
+
+    fn revision_diff_intent(&mut self) -> KeyOutcome {
+        let Some(rev) = self.revision() else {
+            return KeyOutcome::None;
+        };
+        let Some(gist_id) = rev.gist_id.clone() else {
+            return KeyOutcome::None;
+        };
+        let filename = rev.target_file.clone();
+        let Some(revision) = self.selected_revision().cloned() else {
+            return KeyOutcome::None;
+        };
+        if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
+            return KeyOutcome::None;
+        }
+        let version = revision.version.clone();
+        let version_label = revision_version_label(&revision);
+        let old_label = format!("revision {version_label}");
+        let new_label = format!("current {filename}");
+        let raw_url = self.gist_file_raw_url(&gist_id, &filename);
+        let owner_login = self.gist_owner_login(&gist_id);
+        KeyOutcome::RevisionDiff {
+            gist_id,
+            filename,
+            version,
+            old_label,
+            new_label,
+            raw_url,
+            owner_login,
+        }
+    }
+
+    fn restore_revision_preview_intent(&mut self) -> KeyOutcome {
+        let Some(rev) = self.revision() else {
+            return KeyOutcome::None;
+        };
+        let Some(gist_id) = rev.gist_id.clone() else {
+            return KeyOutcome::None;
+        };
+        if !self.gist_is_owned(&gist_id) {
+            return KeyOutcome::None;
+        }
+        let filename = rev.target_file.clone();
+        let Some(revision) = self.selected_revision().cloned() else {
+            return KeyOutcome::None;
+        };
+        let version = revision.version.clone();
+        let version_label = revision_version_label(&revision);
+        let raw_url = self.gist_file_raw_url(&gist_id, &filename);
+        let owner_login = self.gist_owner_login(&gist_id);
+        KeyOutcome::RestoreRevisionPreview {
+            gist_id,
+            filename,
+            version,
+            version_label,
+            raw_url,
+            owner_login,
+        }
     }
 
     /// Switch the GistDetail tab if `col`/`row` lands on a tab header. Returns the outcome
@@ -1177,7 +1341,9 @@ impl AppState {
                     false
                 };
                 if fetch {
-                    return Some(KeyOutcome::FetchComments);
+                    if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
+                        return Some(KeyOutcome::FetchComments { gist_id });
+                    }
                 }
                 return Some(KeyOutcome::None);
             }
@@ -1201,7 +1367,15 @@ impl AppState {
         }
         let rect = layout.comments_load_older?;
         if point_in(rect, col, row) && self.can_load_older_comments() {
-            return Some(KeyOutcome::LoadOlderComments);
+            if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
+                let page = self
+                    .detail()
+                    .map(|d| d.comments_loaded_oldest_page.saturating_sub(1))
+                    .unwrap_or(0);
+                if page > 0 {
+                    return Some(KeyOutcome::LoadOlderComments { gist_id, page });
+                }
+            }
         }
         None
     }
@@ -1262,7 +1436,9 @@ impl AppState {
                 // GitHub repo link click opens it in the browser.
                 if let Some(rect) = layout.repo_link {
                     if point_in(rect, col, row) {
-                        return KeyOutcome::OpenRepoUrl;
+                        return KeyOutcome::OpenRepoUrl {
+                            url: env!("CARGO_PKG_REPOSITORY").to_string(),
+                        };
                     }
                 }
                 // Top-bar (G)ists / (P)ins / (C)onfig / (?)Help — same effect as pressing
@@ -1330,9 +1506,26 @@ impl AppState {
                 self.preview_return = Screen::List;
                 self.screen = ret;
             }
-            KeyCode::Char('R') => return KeyOutcome::RefreshPreview,
+            KeyCode::Char('R') => {
+                let Some(p) = self.preview() else {
+                    return KeyOutcome::None;
+                };
+                let Some((gist_id, filename)) = p.gist_key.clone() else {
+                    return KeyOutcome::None;
+                };
+                return KeyOutcome::RefreshPreview { gist_id, filename };
+            }
             KeyCode::Char('w') => self.preview_wrap = !self.preview_wrap,
-            KeyCode::Char('y') => return KeyOutcome::CopyGistUrl,
+            KeyCode::Char('y') => {
+                let gist_id = self
+                    .preview()
+                    .and_then(|p| p.gist_key.as_ref().map(|(id, _)| id.clone()))
+                    .or_else(|| self.context_gist_id());
+                let Some(gist_id) = gist_id else {
+                    return KeyOutcome::None;
+                };
+                return KeyOutcome::CopyGistUrl { gist_id };
+            }
             KeyCode::Char('Y') => return KeyOutcome::CopyPreviewContent,
             _ => {}
         }
@@ -1469,26 +1662,45 @@ impl AppState {
                 return KeyOutcome::RefreshLocals;
             }
             KeyCode::Char('/') => self.filtering = true,
-            KeyCode::Char('y') => return KeyOutcome::CopyGistUrl,
+            KeyCode::Char('y') => {
+                let Some(gist_id) = self.context_gist_id() else {
+                    return KeyOutcome::None;
+                };
+                return KeyOutcome::CopyGistUrl { gist_id };
+            }
             KeyCode::Char('?') => self.open_help(),
             KeyCode::Char('P') => self.open_pins(),
             KeyCode::Char('C') => self.open_config(),
-            KeyCode::Char('S') => return KeyOutcome::SyncSelectedPair,
+            KeyCode::Char('S') => {
+                let (Some(local), Some(gist)) = (self.selected_local(), self.selected_gist())
+                else {
+                    return KeyOutcome::None;
+                };
+                return KeyOutcome::SyncSelectedPair {
+                    local_path: local.path.clone(),
+                    gist_id: gist.file.gist_id.clone(),
+                    filename: gist.file.filename.clone(),
+                };
+            }
             KeyCode::Char('g') => self.open_gist_manager(),
             KeyCode::Char('H') => {
                 let (_, ranked) = self.list_pane_snapshots();
                 if ranked.get(self.gist_index).is_none() {
                     self.status = Some("select a gist file to view revision history".into());
                 } else if self.open_revisions(Screen::List) {
-                    return KeyOutcome::FetchRevisions;
+                    if let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) {
+                        return KeyOutcome::FetchRevisions { gist_id };
+                    }
                 } else {
                     self.status = Some("select a gist file to view revision history".into());
                 }
             }
             KeyCode::Char('e') => {
                 let (locals, _) = self.list_pane_snapshots();
-                if locals.get(self.local_index).is_some() {
-                    return KeyOutcome::EditLocal;
+                if let Some(local) = locals.get(self.local_index) {
+                    return KeyOutcome::EditLocal {
+                        path: local.candidate.path.clone(),
+                    };
                 }
                 self.status = Some("select a local file to edit".into());
             }
@@ -1502,12 +1714,21 @@ impl AppState {
                     return KeyOutcome::None;
                 }
                 self.preview_return = Screen::List;
-                return KeyOutcome::PreviewContent;
+                return KeyOutcome::PreviewContent {
+                    gist_id: gist.file.gist_id.clone(),
+                    filename: gist.file.filename.clone(),
+                };
             }
             KeyCode::Char('d') if self.focus == FocusPane::Gist => {
                 let (_, ranked) = self.list_pane_snapshots();
-                if ranked.get(self.gist_index).is_some() {
-                    return KeyOutcome::DownloadGist;
+                if let Some(gist) = ranked.get(self.gist_index) {
+                    let filename = gist.file.filename.clone();
+                    return KeyOutcome::DownloadGist {
+                        gist_id: gist.file.gist_id.clone(),
+                        filename: filename.clone(),
+                        raw_url: gist.file.raw_url.clone(),
+                        target: self.cwd.join(&filename),
+                    };
                 }
             }
             // Enter works from either pane: it diffs the selected local file against the
@@ -1528,7 +1749,15 @@ impl AppState {
                 ) {
                     return KeyOutcome::None;
                 }
-                return KeyOutcome::PreviewDiff;
+                let filename = gist.file.filename.clone();
+                return KeyOutcome::PreviewDiff {
+                    local_path,
+                    gist_id: gist.file.gist_id.clone(),
+                    filename: filename.clone(),
+                    raw_url: gist.file.raw_url.clone(),
+                    target: self.cwd.join(&filename),
+                    upload_orientation: self.focus == FocusPane::Local,
+                };
             }
             KeyCode::Char('p') => return self.pin_toggle_intent(),
             KeyCode::Char('u') => return self.upload_intent(),
@@ -1703,27 +1932,36 @@ impl AppState {
             self.status = Some("select a local file and a gist to pin".into());
             return KeyOutcome::None;
         };
+        let local_path = local.path.clone();
+        let gist_id = gist.file.gist_id.clone();
+        let filename = gist.file.filename.clone();
         let already = self.pinned.iter().any(|m| {
-            m.local_path == local.path
-                && m.gist_id == gist.file.gist_id
-                && m.gist_filename == gist.file.filename
+            m.local_path == local_path && m.gist_id == gist_id && m.gist_filename == filename
         });
         if already {
-            KeyOutcome::Unpin
-        } else if self.block_if_foreign_gist(&gist.file.gist_id, true) {
+            KeyOutcome::Unpin {
+                local_path,
+                gist_id,
+                filename,
+            }
+        } else if self.block_if_foreign_gist(&gist_id, true) {
             KeyOutcome::None
         } else {
-            KeyOutcome::Pin
+            KeyOutcome::Pin {
+                local_path,
+                gist_id,
+                filename,
+            }
         }
     }
 
     fn star_toggle_intent(&mut self) -> KeyOutcome {
-        if self.context_gist_id().is_some() {
-            KeyOutcome::ToggleGistStar
-        } else {
+        let Some(gist_id) = self.context_gist_id() else {
             self.set_status("select a gist first");
-            KeyOutcome::None
-        }
+            return KeyOutcome::None;
+        };
+        let starring = !self.gist_is_starred(&gist_id);
+        KeyOutcome::ToggleGistStar { gist_id, starring }
     }
 
     fn fork_intent(&mut self) -> KeyOutcome {
@@ -1735,7 +1973,7 @@ impl AppState {
             self.set_status("already yours — no fork needed");
             KeyOutcome::None
         } else {
-            KeyOutcome::ForkGist
+            KeyOutcome::ForkGist { gist_id }
         }
     }
 

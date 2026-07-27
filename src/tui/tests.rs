@@ -392,7 +392,7 @@ fn enter_on_gist_opens_detail() {
     let mut state = state_with_gists();
     state.screen = Screen::Gists(Box::default());
     let outcome = state.handle_key(KeyCode::Enter);
-    assert!(matches!(outcome, KeyOutcome::OpenGistDetail));
+    assert!(matches!(outcome, KeyOutcome::OpenGistDetail { .. }));
 }
 
 #[test]
@@ -410,7 +410,7 @@ fn detail_tab_toggles_focus() {
     detail_mut(&mut state).gist_id = Some("g1".into());
     assert_eq!(detail_ref(&state).focus, DetailFocus::Files);
     let outcome = state.handle_key(KeyCode::Tab);
-    assert!(matches!(outcome, KeyOutcome::FetchComments));
+    assert!(matches!(outcome, KeyOutcome::FetchComments { .. }));
     assert_eq!(detail_ref(&state).focus, DetailFocus::Comments);
     let outcome = state.handle_key(KeyCode::Tab);
     assert!(matches!(outcome, KeyOutcome::None));
@@ -467,8 +467,14 @@ fn detail_enter_previews_cursor_file_including_tenth() {
     detail_mut(&mut state).focus = DetailFocus::Files;
     detail_mut(&mut state).file_cursor = 9; // the 10th file — unreachable via 1-9
     let outcome = state.handle_key(KeyCode::Enter);
-    assert!(matches!(outcome, KeyOutcome::PreviewContent));
-    assert_eq!(state.preview_request, Some(("g1".into(), "f9.txt".into())));
+    assert!(matches!(
+        outcome,
+        KeyOutcome::PreviewContent {
+            ref gist_id,
+            ref filename,
+            ..
+        } if gist_id == "g1" && filename == "f9.txt"
+    ));
     assert!(state.preview_return.is_gist_detail());
 }
 
@@ -480,7 +486,6 @@ fn detail_enter_in_comments_focus_is_noop() {
     detail_mut(&mut state).focus = DetailFocus::Comments;
     let outcome = state.handle_key(KeyCode::Enter);
     assert!(matches!(outcome, KeyOutcome::None));
-    assert_eq!(state.preview_request, None);
 }
 
 #[test]
@@ -509,7 +514,7 @@ fn detail_c_triggers_compaction_and_records_origin() {
     state.screen = Screen::GistDetail(Box::default());
     detail_mut(&mut state).gist_id = Some("g1".into());
     let outcome = state.handle_key(KeyCode::Char('c'));
-    assert!(matches!(outcome, KeyOutcome::CompactGist));
+    assert!(matches!(outcome, KeyOutcome::CompactGist { .. }));
     assert!(detail_ref(&state).compact_return_screen.is_gist_detail());
 }
 
@@ -519,8 +524,14 @@ fn detail_number_key_requests_file_preview() {
     state.screen = Screen::GistDetail(Box::default());
     detail_mut(&mut state).gist_id = Some("g1".into());
     let outcome = state.handle_key(KeyCode::Char('1'));
-    assert!(matches!(outcome, KeyOutcome::PreviewContent));
-    assert_eq!(state.preview_request, Some(("g1".into(), "a.txt".into())));
+    assert!(matches!(
+        outcome,
+        KeyOutcome::PreviewContent {
+            ref gist_id,
+            ref filename,
+            ..
+        } if gist_id == "g1" && filename == "a.txt"
+    ));
     assert!(state.preview_return.is_gist_detail());
 }
 
@@ -532,7 +543,6 @@ fn detail_number_key_out_of_range_is_ignored() {
     // Only two files exist; pressing 5 must do nothing (no fetch requested).
     let outcome = state.handle_key(KeyCode::Char('5'));
     assert!(matches!(outcome, KeyOutcome::None));
-    assert_eq!(state.preview_request, None);
 }
 
 #[test]
@@ -649,10 +659,10 @@ fn star_key_in_detail_returns_toggle_intent() {
     let mut state = state_with_gists();
     state.screen = Screen::GistDetail(Box::default());
     detail_mut(&mut state).gist_id = Some("g1".into());
-    assert_eq!(
+    assert!(matches!(
         state.handle_key(KeyCode::Char('*')),
-        KeyOutcome::ToggleGistStar
-    );
+        KeyOutcome::ToggleGistStar { .. }
+    ));
 }
 
 #[test]
@@ -1192,10 +1202,10 @@ fn confirm_screen_scrolls_diff() {
 #[test]
 fn space_on_selected_gist_returns_preview_content() {
     let mut state = state_with_two_gists();
-    assert_eq!(
+    assert!(matches!(
         state.handle_key(KeyCode::Char(' ')),
-        KeyOutcome::PreviewContent
-    );
+        KeyOutcome::PreviewContent { .. }
+    ));
 }
 
 #[test]
@@ -1850,7 +1860,10 @@ fn enter_with_no_local_but_gist_selected_returns_preview() {
     }];
     state.focus = FocusPane::Gist;
     assert!(state.locals.is_empty());
-    assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::PreviewDiff);
+    assert!(matches!(
+        state.handle_key(KeyCode::Enter),
+        KeyOutcome::PreviewDiff { .. }
+    ));
 }
 
 #[test]
@@ -2160,14 +2173,20 @@ fn back_to_list_clears_preview() {
 #[test]
 fn enter_in_gist_focus_with_selection_returns_preview() {
     let mut state = state_with_selection();
-    assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::PreviewDiff);
+    assert!(matches!(
+        state.handle_key(KeyCode::Enter),
+        KeyOutcome::PreviewDiff { .. }
+    ));
 }
 
 #[test]
 fn enter_in_local_focus_previews_top_gist() {
     let mut state = state_with_selection();
     state.focus = FocusPane::Local;
-    assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::PreviewDiff);
+    assert!(matches!(
+        state.handle_key(KeyCode::Enter),
+        KeyOutcome::PreviewDiff { .. }
+    ));
 }
 
 #[test]
@@ -2185,10 +2204,10 @@ fn enter_with_no_gists_is_noop_in_local_focus() {
 #[test]
 fn d_in_gist_focus_returns_download_gist() {
     let mut state = state_with_selection();
-    assert_eq!(
+    assert!(matches!(
         state.handle_key(KeyCode::Char('d')),
-        KeyOutcome::DownloadGist
-    );
+        KeyOutcome::DownloadGist { .. }
+    ));
 }
 
 #[test]
@@ -2443,7 +2462,10 @@ fn d_in_diff_on_existing_sets_download_pending() {
 #[test]
 fn p_pins_unpinned_pair_then_unpins() {
     let mut state = state_with_selection();
-    assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::Pin);
+    assert!(matches!(
+        state.handle_key(KeyCode::Char('p')),
+        KeyOutcome::Pin { .. }
+    ));
     state.pinned = vec![PinnedMapping {
         local_path: PathBuf::from("/tmp/settings.json"),
         gist_id: "a".into(),
@@ -2451,7 +2473,10 @@ fn p_pins_unpinned_pair_then_unpins() {
         direction: None,
         last_seen_hash: None,
     }];
-    assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::Unpin);
+    assert!(matches!(
+        state.handle_key(KeyCode::Char('p')),
+        KeyOutcome::Unpin { .. }
+    ));
 }
 
 #[test]
@@ -2485,7 +2510,10 @@ fn u_adds_when_gist_lacks_filename() {
         node_id: None,
     }];
     state.focus = FocusPane::Gist;
-    assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::UploadAdd);
+    assert!(matches!(
+        state.handle_key(KeyCode::Char('u')),
+        KeyOutcome::UploadAdd { .. }
+    ));
 }
 
 #[test]
@@ -2513,10 +2541,10 @@ fn u_previews_when_gist_has_same_filename() {
         node_id: None,
     }];
     state.focus = FocusPane::Gist;
-    assert_eq!(
+    assert!(matches!(
         state.handle_key(KeyCode::Char('u')),
-        KeyOutcome::UploadPreview
-    );
+        KeyOutcome::UploadPreview { .. }
+    ));
 }
 
 #[test]
@@ -2529,10 +2557,10 @@ fn u_without_selection_is_noop() {
 fn o_in_gist_view_opens_browser() {
     let mut state = state_with_two_gists();
     state.screen = Screen::Gists(Box::default());
-    assert_eq!(
+    assert!(matches!(
         state.handle_key(KeyCode::Char('o')),
-        KeyOutcome::OpenBrowser
-    );
+        KeyOutcome::OpenBrowser { .. }
+    ));
 }
 
 #[test]
@@ -2545,32 +2573,35 @@ fn o_on_main_list_is_noop_now_that_browser_moved_to_gist_view() {
 #[test]
 fn y_copies_gist_url_on_list_gists_and_detail() {
     let mut list = state_with_two_gists();
-    assert_eq!(list.handle_key(KeyCode::Char('y')), KeyOutcome::CopyGistUrl);
+    assert!(matches!(
+        list.handle_key(KeyCode::Char('y')),
+        KeyOutcome::CopyGistUrl { .. }
+    ));
 
     let mut gists = state_with_two_gists();
     gists.screen = Screen::Gists(Box::default());
-    assert_eq!(
+    assert!(matches!(
         gists.handle_key(KeyCode::Char('y')),
-        KeyOutcome::CopyGistUrl
-    );
+        KeyOutcome::CopyGistUrl { .. }
+    ));
 
     let mut detail = state_with_gists();
     detail.screen = Screen::GistDetail(Box::default());
     detail_mut(&mut detail).gist_id = Some("g1".into());
-    assert_eq!(
+    assert!(matches!(
         detail.handle_key(KeyCode::Char('y')),
-        KeyOutcome::CopyGistUrl
-    );
+        KeyOutcome::CopyGistUrl { .. }
+    ));
 }
 
 #[test]
 fn preview_y_copies_url_and_capital_y_copies_content() {
     let mut state = state_with_gists();
     state.screen = Screen::Preview(Box::default());
-    assert_eq!(
+    assert!(matches!(
         state.handle_key(KeyCode::Char('y')),
-        KeyOutcome::CopyGistUrl
-    );
+        KeyOutcome::CopyGistUrl { .. }
+    ));
     assert_eq!(
         state.handle_key(KeyCode::Char('Y')),
         KeyOutcome::CopyPreviewContent
@@ -2584,10 +2615,10 @@ fn c_in_detail_requests_compaction_not_gist_manager() {
     assert_eq!(state.handle_key(KeyCode::Char('c')), KeyOutcome::None);
     state.screen = Screen::GistDetail(Box::default());
     detail_mut(&mut state).gist_id = Some("a".into());
-    assert_eq!(
+    assert!(matches!(
         state.handle_key(KeyCode::Char('c')),
-        KeyOutcome::CompactGist
-    );
+        KeyOutcome::CompactGist { .. }
+    ));
     // `c` on the main list is not a compaction trigger.
     let mut list = state_with_two_gists();
     assert_eq!(list.handle_key(KeyCode::Char('c')), KeyOutcome::None);
@@ -2635,7 +2666,10 @@ fn e_edits_local_with_file_selected() {
         pinned: false,
         modified: None,
     }];
-    assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::EditLocal);
+    assert!(matches!(
+        state.handle_key(KeyCode::Char('e')),
+        KeyOutcome::EditLocal { .. }
+    ));
 }
 
 #[test]
@@ -2670,7 +2704,10 @@ fn u_in_diff_screen_returns_upload_intent() {
     }];
     state.screen = Screen::Diff(Box::default());
     // The gist has no "config" file -> case B -> add directly.
-    assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::UploadAdd);
+    assert!(matches!(
+        state.handle_key(KeyCode::Char('u')),
+        KeyOutcome::UploadAdd { .. }
+    ));
 }
 
 #[test]
@@ -3258,10 +3295,10 @@ fn detail_e_edits_description_with_prefill_and_enter_applies() {
     assert_eq!(state.description_input, "My Ghostty config");
     state.handle_key(KeyCode::Char('!'));
     assert_eq!(state.description_input, "My Ghostty config!");
-    assert_eq!(
+    assert!(matches!(
         state.handle_key(KeyCode::Enter),
-        KeyOutcome::ApplyDescription
-    );
+        KeyOutcome::ApplyDescription { .. }
+    ));
 }
 
 #[test]
@@ -3585,19 +3622,22 @@ fn pins_screen_sync_keys_emit_outcomes() {
         direction: None,
         last_seen_hash: None,
     }];
-    assert_eq!(
+    assert!(matches!(
         state.handle_key(KeyCode::Char('s')),
-        KeyOutcome::SyncPinAuto
-    );
-    assert_eq!(
+        KeyOutcome::SyncPinAuto { .. }
+    ));
+    assert!(matches!(
         state.handle_key(KeyCode::Char('u')),
-        KeyOutcome::SyncPinPush
-    );
-    assert_eq!(
+        KeyOutcome::SyncPinPush { .. }
+    ));
+    assert!(matches!(
         state.handle_key(KeyCode::Char('d')),
-        KeyOutcome::SyncPinPull
-    );
-    assert_eq!(state.handle_key(KeyCode::Char('x')), KeyOutcome::UnpinAtPin);
+        KeyOutcome::SyncPinPull { .. }
+    ));
+    assert!(matches!(
+        state.handle_key(KeyCode::Char('x')),
+        KeyOutcome::UnpinAtPin { .. }
+    ));
 }
 
 #[test]
@@ -3611,7 +3651,10 @@ fn pins_screen_enter_emits_preview_pin_diff() {
         direction: None,
         last_seen_hash: None,
     }];
-    assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::PreviewPinDiff);
+    assert!(matches!(
+        state.handle_key(KeyCode::Enter),
+        KeyOutcome::PreviewPinDiff { .. }
+    ));
 }
 
 fn pins_state_with_long_home_path() -> AppState {
@@ -3902,10 +3945,10 @@ fn list_screen_capital_s_syncs_selected_pair() {
 
         node_id: None,
     }];
-    assert_eq!(
+    assert!(matches!(
         state.handle_key(KeyCode::Char('S')),
-        KeyOutcome::SyncSelectedPair
-    );
+        KeyOutcome::SyncSelectedPair { .. }
+    ));
 }
 
 #[test]
@@ -4395,7 +4438,7 @@ fn capital_h_from_list_opens_revisions_for_selected_gist_file() {
     state.focus = FocusPane::Gist;
     state.gist_index = 0;
     let outcome = state.handle_key(KeyCode::Char('H'));
-    assert_eq!(outcome, KeyOutcome::FetchRevisions);
+    assert!(matches!(outcome, KeyOutcome::FetchRevisions { .. }));
     assert!(state.screen.is_revisions());
     assert_eq!(revision_ref(&state).gist_id.as_deref(), Some("a"));
     assert_eq!(revision_ref(&state).target_file, "settings.json");
@@ -4409,7 +4452,7 @@ fn capital_h_from_gist_detail_opens_revisions_and_fetches() {
     detail_mut(&mut state).gist_id = Some("g1".into());
     detail_mut(&mut state).file_cursor = 1;
     let outcome = state.handle_key(KeyCode::Char('H'));
-    assert_eq!(outcome, KeyOutcome::FetchRevisions);
+    assert!(matches!(outcome, KeyOutcome::FetchRevisions { .. }));
     assert!(state.screen.is_revisions());
     assert_eq!(revision_ref(&state).gist_id.as_deref(), Some("g1"));
     assert_eq!(revision_ref(&state).target_file, "b.txt");
@@ -4442,6 +4485,8 @@ fn revisions_r_on_head_is_blocked() {
 fn revisions_capital_d_on_current_shows_status() {
     let mut state = state_with_gists();
     state.screen = Screen::Revisions(Box::default());
+    revision_mut(&mut state).gist_id = Some("g1".into());
+    revision_mut(&mut state).target_file = "a.txt".into();
     revision_mut(&mut state).index = 0;
     revision_mut(&mut state).entries = Some(vec![
         crate::domain::GistRevision {
@@ -4468,16 +4513,18 @@ fn revisions_capital_d_on_current_shows_status() {
     assert_eq!(state.handle_key(KeyCode::Char('D')), KeyOutcome::None);
     assert_eq!(state.status.as_deref(), Some("already at current revision"));
     revision_mut(&mut state).index = 1;
-    assert_eq!(
+    assert!(matches!(
         state.handle_key(KeyCode::Char('D')),
-        KeyOutcome::RevisionDiff
-    );
+        KeyOutcome::RevisionDiff { .. }
+    ));
 }
 
 #[test]
 fn revisions_enter_triggers_incremental_diff() {
     let mut state = state_with_gists();
     state.screen = Screen::Revisions(Box::default());
+    revision_mut(&mut state).gist_id = Some("g1".into());
+    revision_mut(&mut state).target_file = "a.txt".into();
     revision_mut(&mut state).index = 0;
     revision_mut(&mut state).entries = Some(vec![
         crate::domain::GistRevision {
@@ -4501,15 +4548,15 @@ fn revisions_enter_triggers_incremental_diff() {
             },
         },
     ]);
-    assert_eq!(
+    assert!(matches!(
         state.handle_key(KeyCode::Enter),
-        KeyOutcome::RevisionDiffIncremental
-    );
+        KeyOutcome::RevisionDiffIncremental { .. }
+    ));
     revision_mut(&mut state).index = 1;
-    assert_eq!(
+    assert!(matches!(
         state.handle_key(KeyCode::Enter),
-        KeyOutcome::RevisionDiffIncremental
-    );
+        KeyOutcome::RevisionDiffIncremental { .. }
+    ));
 }
 
 #[test]
@@ -4776,7 +4823,7 @@ fn repo_link_click_opens_repo_url_regardless_of_which_screen_set_the_rect() {
         ..Default::default()
     };
     let out = state.handle_mouse(MouseInput::Click { col: 10, row: 10 }, &layout);
-    assert_eq!(out, KeyOutcome::OpenRepoUrl);
+    assert!(matches!(out, KeyOutcome::OpenRepoUrl { .. }));
 }
 
 #[test]
@@ -5079,10 +5126,10 @@ fn star_key_returns_toggle_intent() {
         node_id: None,
     }];
     state.gist_index = 0;
-    assert_eq!(
+    assert!(matches!(
         state.handle_key(KeyCode::Char('*')),
-        KeyOutcome::ToggleGistStar
-    );
+        KeyOutcome::ToggleGistStar { .. }
+    ));
 }
 
 #[test]
@@ -5145,7 +5192,10 @@ fn fork_key_returns_fork_intent_for_foreign_gist_in_detail() {
 
         node_id: None,
     }];
-    assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::ForkGist);
+    assert!(matches!(
+        state.handle_key(KeyCode::Char('F')),
+        KeyOutcome::ForkGist { .. }
+    ));
 }
 
 #[test]
@@ -5445,7 +5495,7 @@ fn list_double_click_opens_diff() {
     let out = state.handle_mouse(MouseInput::DoubleClick { col: 25, row: 1 }, &layout);
     assert_eq!(state.focus, FocusPane::Gist);
     assert_eq!(state.gist_index, 0);
-    assert_eq!(out, KeyOutcome::PreviewDiff);
+    assert!(matches!(out, KeyOutcome::PreviewDiff { .. }));
 }
 
 #[test]
@@ -5608,7 +5658,7 @@ fn gists_click_selects_and_double_click_matches_enter() {
     let key_out = by_key.handle_key(KeyCode::Enter);
     let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
     assert_eq!(by_mouse, key_out);
-    assert_eq!(by_mouse, KeyOutcome::OpenGistDetail);
+    assert!(matches!(by_mouse, KeyOutcome::OpenGistDetail { .. }));
 }
 
 #[test]
@@ -5635,6 +5685,8 @@ fn pins_click_selects_and_double_click_matches_enter() {
 fn revisions_click_selects_and_double_click_matches_enter() {
     let mut state = state_with_gists();
     state.screen = Screen::Revisions(Box::default());
+    revision_mut(&mut state).gist_id = Some("g1".into());
+    revision_mut(&mut state).target_file = "a.txt".into();
     revision_mut(&mut state).index = 0;
     revision_mut(&mut state).entries = Some(vec![
         crate::domain::GistRevision {
@@ -5673,7 +5725,10 @@ fn revisions_click_selects_and_double_click_matches_enter() {
     let key_out = by_key.handle_key(KeyCode::Enter);
     let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
     assert_eq!(by_mouse, key_out);
-    assert_eq!(by_mouse, KeyOutcome::RevisionDiffIncremental);
+    assert!(matches!(
+        by_mouse,
+        KeyOutcome::RevisionDiffIncremental { .. }
+    ));
 }
 
 #[test]
@@ -5722,8 +5777,14 @@ fn gist_detail_file_click_selects_and_double_previews() {
     assert_eq!(detail_ref(&state).file_cursor, 1);
     // Double-click previews that file (there is no Enter for files).
     let out = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
-    assert_eq!(out, KeyOutcome::PreviewContent);
-    assert_eq!(state.preview_request, Some(("g1".into(), "b.txt".into())));
+    assert!(matches!(
+        out,
+        KeyOutcome::PreviewContent {
+            ref gist_id,
+            ref filename,
+            ..
+        } if gist_id == "g1" && filename == "b.txt"
+    ));
 }
 
 #[test]
@@ -5741,7 +5802,7 @@ fn gist_detail_tab_click_switches_focus() {
     // Click the Comments tab: switches focus and (comments unloaded) requests a fetch.
     let out = state.handle_mouse(MouseInput::Click { col: 14, row: 2 }, &layout);
     assert_eq!(detail_ref(&state).focus, DetailFocus::Comments);
-    assert_eq!(out, KeyOutcome::FetchComments);
+    assert!(matches!(out, KeyOutcome::FetchComments { .. }));
     // Click the Files tab back.
     let out = state.handle_mouse(MouseInput::Click { col: 4, row: 2 }, &layout);
     assert_eq!(detail_ref(&state).focus, DetailFocus::Files);
@@ -5897,7 +5958,7 @@ fn m_key_loads_older_when_available() {
         }),
     );
     let out = s.handle_key(KeyCode::Char('m'));
-    assert!(matches!(out, KeyOutcome::LoadOlderComments));
+    assert!(matches!(out, KeyOutcome::LoadOlderComments { .. }));
 }
 
 #[test]
