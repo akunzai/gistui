@@ -48,10 +48,12 @@ pub enum ScreenVm {
     Palette(PaletteVm),
 }
 
-/// Command palette / context menu overlay (#250). Background is painted from `origin_screen`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Command palette / context menu overlay (#250). `background` is the already-built ViewModel
+/// for the screen underneath (issue #272) — `None` for a Confirm-origin (still unpainted, #277)
+/// or Palette-origin (unreachable: the palette can't be opened while itself active).
+#[derive(Debug, Clone, PartialEq)]
 pub struct PaletteVm {
-    pub origin_screen: Screen,
+    pub background: Option<Box<ScreenVm>>,
     pub title: &'static str,
     pub has_query: bool,
     pub selected: usize,
@@ -375,9 +377,10 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
     ViewModel { chrome, screen }
 }
 
-/// Palette overlay body — origin background is painted separately from `origin_screen`.
+/// Palette overlay body, plus the ViewModel for whatever screen it's covering (issue #272).
 pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
     let p = state.palette().cloned().unwrap_or_default();
+    let background = build_background_screen_vm(state, &p.origin_screen).map(Box::new);
     let has_query = p.mode == PaletteMode::Command;
     let title = match p.mode {
         PaletteMode::Menu => "Menu",
@@ -399,7 +402,7 @@ pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
         .unwrap_or(1)
         .max(1);
     PaletteVm {
-        origin_screen: p.origin_screen,
+        background,
         title,
         has_query,
         selected: p.selected,
@@ -407,6 +410,27 @@ pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
         key_width,
         mode: p.mode,
         anchor: p.anchor,
+    }
+}
+
+/// ViewModel for the screen a palette is covering, by its origin's tag. `state`'s accessors
+/// (`config()`/`help()`/etc., #242) already resolve through a palette-parked payload, so these
+/// build fns are called directly rather than on `p.origin_screen` itself.
+///
+/// `None` for Confirm (blank background preserved as-is, tracked separately in #277) and Palette
+/// (unreachable — the palette can't be opened while itself active).
+fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<ScreenVm> {
+    match origin {
+        Screen::List => Some(ScreenVm::List(build_list_vm(state))),
+        Screen::Gists(_) => Some(ScreenVm::Gists(build_gists_vm(state))),
+        Screen::GistDetail(_) => Some(ScreenVm::GistDetail(build_gist_detail_vm(state))),
+        Screen::Revisions(_) => Some(ScreenVm::Revisions(build_revisions_vm(state))),
+        Screen::Config(_) => Some(ScreenVm::Config(build_config_vm(state))),
+        Screen::Diff(_) => Some(ScreenVm::Diff(build_diff_vm(state))),
+        Screen::Preview(_) => Some(ScreenVm::Preview(build_preview_vm(state))),
+        Screen::Pins(_) => Some(ScreenVm::Pins(build_pins_vm(state))),
+        Screen::Help(_) => Some(ScreenVm::Help(build_help_vm(state))),
+        Screen::Confirm(_) | Screen::Palette(_) => None,
     }
 }
 
@@ -1670,12 +1694,35 @@ mod tests {
         match build_view_model(&state).screen {
             ScreenVm::Palette(p) => {
                 assert_eq!(p.title, "Menu");
-                assert_eq!(p.origin_screen, Screen::List);
+                match p.background.as_deref() {
+                    Some(ScreenVm::List(_)) => {}
+                    other => panic!("expected List background, got {other:?}"),
+                }
                 assert_eq!(p.items.len(), 1);
                 assert_eq!(p.items[0].label, "download");
                 assert!(p.items[0].enabled);
                 assert_eq!(p.anchor, Some((10, 5)));
             }
+            other => panic!("expected Palette, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn palette_vm_background_stays_blank_over_confirm() {
+        let mut state = initial_state();
+        state.enter_confirm(
+            PendingAction::Upload {
+                gist_id: "g1".into(),
+                filename: "notes.txt".into(),
+                local_path: PathBuf::from("notes.txt"),
+            },
+            String::new(),
+        );
+        // `;` (menu) has no items over Confirm and won't open (palette.rs:60-66); Ctrl+P
+        // (command palette) always opens because it also carries the cross-screen items.
+        state.open_palette_command();
+        match build_view_model(&state).screen {
+            ScreenVm::Palette(p) => assert!(p.background.is_none()),
             other => panic!("expected Palette, got {other:?}"),
         }
     }

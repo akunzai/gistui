@@ -22,33 +22,42 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
     // Pure presentation seam (issues #241 / #250): every screen paints from the view model.
     // Pin sync IO is never done here — only cache reads.
     let vm = super::build_view_model(state);
-    match &vm.screen {
-        super::ScreenVm::List(list) => render_list_vm(frame, state, list, &vm.chrome, layout),
-        super::ScreenVm::Gists(gists) => render_gists_vm(frame, state, gists, &vm.chrome, layout),
-        super::ScreenVm::GistDetail(detail) => {
-            render_gist_detail_vm(frame, state, detail, &vm.chrome, layout)
-        }
-        super::ScreenVm::Revisions(revs) => {
-            render_revisions_vm(frame, state, revs, &vm.chrome, layout)
-        }
-        super::ScreenVm::Config(config) => {
-            render_config_vm(frame, state, config, &vm.chrome, layout)
-        }
-        super::ScreenVm::Diff(diff) => render_diff_vm(frame, state, diff, &vm.chrome, layout),
-        super::ScreenVm::Preview(preview) => {
-            render_preview_vm(frame, state, preview, &vm.chrome, layout)
-        }
-        super::ScreenVm::Pins(pins) => render_pins_vm(frame, state, pins, &vm.chrome, layout),
-        super::ScreenVm::Confirm(confirm) => {
-            render_confirm_vm(frame, state, confirm, &vm.chrome, layout)
-        }
-        super::ScreenVm::Help(help) => render_help_vm(frame, state, help, &vm.chrome, layout),
-        super::ScreenVm::Palette(palette) => {
-            render_palette_vm(frame, state, palette, &vm.chrome, layout)
-        }
-    }
+    render_screen_vm(frame, state, &vm.screen, &vm.chrome, layout);
     if let Some(ref msg) = vm.chrome.bg_task_msg {
         render_loading_overlay(frame, msg, vm.chrome.spinner_frame, &state.theme);
+    }
+}
+
+/// Paints one `ScreenVm`. Shared by `render()` (the primary per-frame path) and
+/// `render_palette_vm` (the palette's already-built background, issue #272) — one seam, two
+/// real callers, so a new `Screen` variant only needs wiring here once.
+fn render_screen_vm(
+    frame: &mut Frame,
+    state: &AppState,
+    screen: &super::ScreenVm,
+    chrome: &super::view_model::ChromeVm,
+    layout: &mut MouseLayout,
+) {
+    match screen {
+        super::ScreenVm::List(list) => render_list_vm(frame, state, list, chrome, layout),
+        super::ScreenVm::Gists(gists) => render_gists_vm(frame, state, gists, chrome, layout),
+        super::ScreenVm::GistDetail(detail) => {
+            render_gist_detail_vm(frame, state, detail, chrome, layout)
+        }
+        super::ScreenVm::Revisions(revs) => render_revisions_vm(frame, state, revs, chrome, layout),
+        super::ScreenVm::Config(config) => render_config_vm(frame, state, config, chrome, layout),
+        super::ScreenVm::Diff(diff) => render_diff_vm(frame, state, diff, chrome, layout),
+        super::ScreenVm::Preview(preview) => {
+            render_preview_vm(frame, state, preview, chrome, layout)
+        }
+        super::ScreenVm::Pins(pins) => render_pins_vm(frame, state, pins, chrome, layout),
+        super::ScreenVm::Confirm(confirm) => {
+            render_confirm_vm(frame, state, confirm, chrome, layout)
+        }
+        super::ScreenVm::Help(help) => render_help_vm(frame, state, help, chrome, layout),
+        super::ScreenVm::Palette(palette) => {
+            render_palette_vm(frame, state, palette, chrome, layout)
+        }
     }
 }
 
@@ -368,12 +377,6 @@ pub(super) fn about_topic_lines_plain(state: &AppState) -> Vec<String> {
     lines
 }
 
-pub(super) fn render_config(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    let chrome = super::view_model::build_chrome(state);
-    let config = super::view_model::build_config_vm(state);
-    render_config_vm(frame, state, &config, &chrome, layout);
-}
-
 fn render_config_vm(
     frame: &mut Frame,
     state: &AppState,
@@ -425,13 +428,6 @@ fn render_config_vm(
             chunks[1],
         );
     }
-}
-
-pub(super) fn render_help(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    // Build Help body directly so Palette-over-Help still paints (screen is Palette).
-    let chrome = super::view_model::build_chrome(state);
-    let help = super::view_model::build_help_vm(state);
-    render_help_vm(frame, state, &help, &chrome, layout);
 }
 
 fn render_help_vm(
@@ -552,12 +548,6 @@ fn preview_line_spans(
     }
 }
 
-pub(super) fn render_preview(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    let chrome = super::view_model::build_chrome(state);
-    let preview = super::view_model::build_preview_vm(state);
-    render_preview_vm(frame, state, &preview, &chrome, layout);
-}
-
 fn render_preview_vm(
     frame: &mut Frame,
     state: &AppState,
@@ -626,13 +616,6 @@ fn render_preview_vm(
     if chrome.mouse_enabled {
         layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }
-}
-
-pub(super) fn render_pins(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    // Build Pins body directly so Palette-over-Pins still paints (screen is Palette).
-    let chrome = super::view_model::build_chrome(state);
-    let pins = super::view_model::build_pins_vm(state);
-    render_pins_vm(frame, state, &pins, &chrome, layout);
 }
 
 fn render_pins_vm(
@@ -817,13 +800,6 @@ pub(super) fn gist_group_row_label(
     )
 }
 
-pub(super) fn render_gists(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    // Build body directly so Palette-over-Gists still paints (screen is Palette).
-    let chrome = super::view_model::build_chrome(state);
-    let gists = super::view_model::build_gists_vm(state);
-    render_gists_vm(frame, state, &gists, &chrome, layout);
-}
-
 fn render_gists_vm(
     frame: &mut Frame,
     state: &AppState,
@@ -989,12 +965,6 @@ pub(super) fn revision_row_label(
         sha,
         current
     )
-}
-
-pub(super) fn render_revisions(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    let chrome = super::view_model::build_chrome(state);
-    let revs = super::view_model::build_revisions_vm(state);
-    render_revisions_vm(frame, state, &revs, &chrome, layout);
 }
 
 fn render_revisions_vm(
@@ -1377,13 +1347,6 @@ pub(super) fn detail_focus_tabs_line(focus: DetailFocus, theme: &Theme) -> Line<
     Line::from(spans)
 }
 
-pub(super) fn render_gist_detail(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    // Build body directly so Palette-over-GistDetail still paints (screen is Palette).
-    let chrome = super::view_model::build_chrome(state);
-    let detail = super::view_model::build_gist_detail_vm(state);
-    render_gist_detail_vm(frame, state, &detail, &chrome, layout);
-}
-
 fn render_gist_detail_vm(
     frame: &mut Frame,
     state: &AppState,
@@ -1714,13 +1677,6 @@ pub(super) fn input_line(prefix: &str, input: &TextInput, suffix: &str) -> Line<
         spans.push(Span::raw(suffix.to_string()));
     }
     Line::from(spans)
-}
-
-pub(super) fn render_list(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    // Build List body directly so Palette-over-List still paints (screen is Palette).
-    let chrome = super::view_model::build_chrome(state);
-    let list = super::view_model::build_list_vm(state);
-    render_list_vm(frame, state, &list, &chrome, layout);
 }
 
 fn list_pane_items(
@@ -2393,12 +2349,6 @@ pub(super) fn diff_footer(state: &AppState) -> String {
     }
 }
 
-pub(super) fn render_diff(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    let chrome = super::view_model::build_chrome(state);
-    let diff = super::view_model::build_diff_vm(state);
-    render_diff_vm(frame, state, &diff, &chrome, layout);
-}
-
 fn render_diff_vm(
     frame: &mut Frame,
     state: &AppState,
@@ -2617,17 +2567,8 @@ fn render_palette_vm(
     layout: &mut MouseLayout,
 ) {
     let mut bg_layout = MouseLayout::default();
-    match palette.origin_screen {
-        Screen::List => render_list(frame, state, &mut bg_layout),
-        Screen::Diff(_) => render_diff(frame, state, &mut bg_layout),
-        Screen::Preview(_) => render_preview(frame, state, &mut bg_layout),
-        Screen::Help(_) => render_help(frame, state, &mut bg_layout),
-        Screen::Pins(_) => render_pins(frame, state, &mut bg_layout),
-        Screen::Gists(_) => render_gists(frame, state, &mut bg_layout),
-        Screen::GistDetail(_) => render_gist_detail(frame, state, &mut bg_layout),
-        Screen::Revisions(_) => render_revisions(frame, state, &mut bg_layout),
-        Screen::Config(_) => render_config(frame, state, &mut bg_layout),
-        Screen::Confirm(_) | Screen::Palette(_) => {}
+    if let Some(background) = &palette.background {
+        render_screen_vm(frame, state, background, chrome, &mut bg_layout);
     }
 
     let area = frame.area();
