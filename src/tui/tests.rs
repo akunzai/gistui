@@ -162,7 +162,7 @@ fn state_with_gists() -> AppState {
             node_id: None,
         },
     ];
-    gists_mut(&mut state).index = 0;
+    gists_mut(&mut state).cursor.index = 0;
     state
 }
 
@@ -691,7 +691,7 @@ fn context_gist_id_uses_detail_id_on_detail_screen() {
 fn context_gist_id_uses_group_cursor_on_gists_screen() {
     let mut state = state_with_gists();
     state.screen = Screen::Gists(Box::default());
-    gists_mut(&mut state).index = 0;
+    gists_mut(&mut state).cursor.index = 0;
     assert_eq!(
         state.context_gist_id(),
         state.selected_group().map(|g| g.id)
@@ -3272,7 +3272,7 @@ fn g_opens_gist_view_landing_on_the_selected_files_gist() {
     state.gist_index = 1;
     assert_eq!(state.handle_key(KeyCode::Char('g')), KeyOutcome::None);
     assert!(state.screen.is_gists());
-    assert_eq!(gists_ref(&state).index, 1);
+    assert_eq!(gists_ref(&state).cursor.index, 1);
     assert_eq!(state.selected_group().unwrap().id, "b");
 }
 
@@ -3507,14 +3507,14 @@ fn gist_view_s_cycles_sort_updated_then_created() {
 fn gist_view_left_right_scrolls_horizontally() {
     let mut state = state_with_two_gists();
     state.screen = Screen::Gists(Box::default());
-    assert_eq!(gists_ref(&state).hscroll, 0);
+    assert_eq!(gists_ref(&state).cursor.hscroll, 0);
     state.handle_key(KeyCode::Right);
-    assert_eq!(gists_ref(&state).hscroll, 1);
+    assert_eq!(gists_ref(&state).cursor.hscroll, 1);
     state.handle_key(KeyCode::Left);
-    assert_eq!(gists_ref(&state).hscroll, 0);
+    assert_eq!(gists_ref(&state).cursor.hscroll, 0);
     // Left at the origin saturates at 0.
     state.handle_key(KeyCode::Left);
-    assert_eq!(gists_ref(&state).hscroll, 0);
+    assert_eq!(gists_ref(&state).cursor.hscroll, 0);
 }
 
 #[test]
@@ -3667,7 +3667,7 @@ fn pins_state_with_long_home_path() -> AppState {
         direction: None,
         last_seen_hash: None,
     }];
-    pins_mut(&mut state).index = 0;
+    pins_mut(&mut state).cursor.index = 0;
     state
 }
 
@@ -3675,7 +3675,7 @@ fn pins_state_with_long_home_path() -> AppState {
 fn pins_hscroll_starts_at_zero() {
     let mut state = initial_state();
     state.screen = Screen::Pins(Box::default());
-    assert_eq!(pins_ref(&state).hscroll, 0);
+    assert_eq!(pins_ref(&state).cursor.hscroll, 0);
 }
 
 #[test]
@@ -3757,7 +3757,7 @@ fn pins_right_scrolls_then_clamps_at_a_bound() {
     let mut state = pins_state_with_long_home_path();
     state.handle_key(KeyCode::Right);
     assert_eq!(
-        pins_ref(&state).hscroll,
+        pins_ref(&state).cursor.hscroll,
         1,
         "Right should advance the scroll"
     );
@@ -3765,10 +3765,10 @@ fn pins_right_scrolls_then_clamps_at_a_bound() {
     for _ in 0..500 {
         state.handle_key(KeyCode::Right);
     }
-    let clamped = pins_ref(&state).hscroll;
+    let clamped = pins_ref(&state).cursor.hscroll;
     state.handle_key(KeyCode::Right);
     assert_eq!(
-        pins_ref(&state).hscroll,
+        pins_ref(&state).cursor.hscroll,
         clamped,
         "scroll must clamp at its max"
     );
@@ -3781,7 +3781,7 @@ fn pins_left_clamps_at_zero() {
     state.handle_key(KeyCode::Right);
     state.handle_key(KeyCode::Left);
     state.handle_key(KeyCode::Left);
-    assert_eq!(pins_ref(&state).hscroll, 0);
+    assert_eq!(pins_ref(&state).cursor.hscroll, 0);
 }
 
 #[test]
@@ -3795,10 +3795,10 @@ fn pins_hscroll_resets_when_selection_moves() {
         last_seen_hash: None,
     });
     state.handle_key(KeyCode::Right);
-    assert!(pins_ref(&state).hscroll > 0);
+    assert!(pins_ref(&state).cursor.hscroll > 0);
     state.handle_key(KeyCode::Down);
     assert_eq!(
-        pins_ref(&state).hscroll,
+        pins_ref(&state).cursor.hscroll,
         0,
         "moving selection resets hscroll"
     );
@@ -3808,11 +3808,11 @@ fn pins_hscroll_resets_when_selection_moves() {
 fn entering_pins_screen_resets_hscroll() {
     let mut state = pins_state_with_long_home_path();
     state.handle_key(KeyCode::Right);
-    assert!(pins_ref(&state).hscroll > 0);
+    assert!(pins_ref(&state).cursor.hscroll > 0);
     state.screen = Screen::List;
     state.handle_key(KeyCode::Char('P'));
     assert!(state.screen.is_pins());
-    assert_eq!(pins_ref(&state).hscroll, 0);
+    assert_eq!(pins_ref(&state).cursor.hscroll, 0);
 }
 
 #[test]
@@ -3832,7 +3832,7 @@ fn top_bar_gists_click_opens_gist_manager_from_any_screen() {
 fn top_bar_pins_click_opens_pins_from_any_screen() {
     let mut state = pins_state_with_long_home_path();
     state.handle_key(KeyCode::Right); // dirty the hscroll so the reset is observable
-    assert!(pins_ref(&state).hscroll > 0);
+    assert!(pins_ref(&state).cursor.hscroll > 0);
     state.screen = Screen::Preview(Box::default());
     let layout = MouseLayout {
         top_bar_pins: Some(Rect::new(20, 0, 6, 1)),
@@ -3840,7 +3840,7 @@ fn top_bar_pins_click_opens_pins_from_any_screen() {
     };
     let out = state.handle_mouse(MouseInput::Click { col: 22, row: 0 }, &layout);
     assert!(state.screen.is_pins());
-    assert_eq!(pins_ref(&state).hscroll, 0);
+    assert_eq!(pins_ref(&state).cursor.hscroll, 0);
     assert_eq!(out, KeyOutcome::None);
 }
 
@@ -4270,10 +4270,10 @@ fn gists_filter_navigates_while_typing() {
     gists_mut(&mut state).filtering = true;
 
     state.handle_key(KeyCode::Down);
-    assert_eq!(gists_ref(&state).index, 1);
+    assert_eq!(gists_ref(&state).cursor.index, 1);
     assert!(gists_ref(&state).filtering);
     state.handle_key(KeyCode::Up);
-    assert_eq!(gists_ref(&state).index, 0);
+    assert_eq!(gists_ref(&state).cursor.index, 0);
 }
 
 #[test]
@@ -4342,7 +4342,7 @@ fn selected_pin_index_maps_through_filter() {
         ("/cwd/gamma", "g3", "gamma"),
     ]);
     pins_mut(&mut state).filter_query = "gamma".into(); // only row 2 visible
-    pins_mut(&mut state).index = 0; // first (and only) visible row
+    pins_mut(&mut state).cursor.index = 0; // first (and only) visible row
     assert_eq!(state.selected_pin_index(), Some(2)); // TRUE index, not 0
 }
 
@@ -4355,7 +4355,7 @@ fn pins_down_clamps_to_filtered_count() {
     ]);
     pins_mut(&mut state).filter_query = "lua".into(); // 1 visible
     state.handle_key(KeyCode::Down);
-    assert_eq!(pins_ref(&state).index, 0); // clamped to the single filtered row
+    assert_eq!(pins_ref(&state).cursor.index, 0); // clamped to the single filtered row
 }
 
 #[test]
@@ -4365,7 +4365,7 @@ fn pins_filter_input_behaviors() {
 
     // live nav while typing
     state.handle_key(KeyCode::Down);
-    assert_eq!(pins_ref(&state).index, 1);
+    assert_eq!(pins_ref(&state).cursor.index, 1);
     assert!(pins_ref(&state).filtering);
 
     // Tab is a no-op (single pane)
@@ -4681,9 +4681,9 @@ fn pins_page_keys_jump_selection() {
         })
         .collect();
     state.handle_key_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
-    assert_eq!(pins_ref(&state).index, 10);
+    assert_eq!(pins_ref(&state).cursor.index, 10);
     state.handle_key(KeyCode::PageUp);
-    assert_eq!(pins_ref(&state).index, 0);
+    assert_eq!(pins_ref(&state).cursor.index, 0);
 }
 
 #[test]
@@ -4706,9 +4706,9 @@ fn gists_page_keys_jump_selection() {
         })
         .collect();
     state.handle_key(KeyCode::PageDown);
-    assert_eq!(gists_ref(&state).index, 10);
+    assert_eq!(gists_ref(&state).cursor.index, 10);
     state.handle_key(KeyCode::PageDown);
-    assert_eq!(gists_ref(&state).index, 11);
+    assert_eq!(gists_ref(&state).cursor.index, 11);
 }
 
 #[test]
@@ -5274,7 +5274,7 @@ fn fork_key_ignored_on_list_and_gist_manager() {
 
     state.screen = Screen::Gists(Box::default());
     gists_mut(&mut state).type_filter = GistTypeFilter::Starred;
-    gists_mut(&mut state).index = 0;
+    gists_mut(&mut state).cursor.index = 0;
     assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::None);
 }
 
@@ -5636,7 +5636,7 @@ fn wheel_step_help_index_moves_one() {
 #[test]
 fn gists_click_selects_and_double_click_matches_enter() {
     let mut state = gists_screen_state(); // 2 groups, Screen::Gists
-    gists_mut(&mut state).index = 0;
+    gists_mut(&mut state).cursor.index = 0;
     let hit = PaneHit {
         rect: Rect::new(0, 0, 40, 10),
         offset: 0,
@@ -5648,7 +5648,7 @@ fn gists_click_selects_and_double_click_matches_enter() {
     // Row 2 is the 2nd content row (border at row 0) -> idx 1.
     let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
     assert_eq!(out, KeyOutcome::None);
-    assert_eq!(gists_ref(&state).index, 1);
+    assert_eq!(gists_ref(&state).cursor.index, 1);
     // Double-click activates the same row, exactly as Enter would.
     let mut by_key = state.clone();
     let key_out = by_key.handle_key(KeyCode::Enter);
@@ -5670,7 +5670,7 @@ fn pins_click_selects_and_double_click_matches_enter() {
     };
     let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
     assert_eq!(out, KeyOutcome::None);
-    assert_eq!(pins_ref(&state).index, 1);
+    assert_eq!(pins_ref(&state).cursor.index, 1);
     let mut by_key = state.clone();
     let key_out = by_key.handle_key(KeyCode::Enter);
     let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);

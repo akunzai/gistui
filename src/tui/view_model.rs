@@ -801,12 +801,12 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
         empty,
         empty_message,
         rows,
-        selected: (!groups.is_empty()).then_some(gm.index),
+        selected: (!groups.is_empty()).then_some(gm.cursor.index),
         filtering: gm.filtering,
         footer_title,
         footer,
         footer_colored,
-        hscroll: gm.hscroll,
+        hscroll: gm.cursor.hscroll,
     }
 }
 
@@ -1021,13 +1021,13 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
         title,
         empty,
         rows,
-        selected: (!visible.is_empty()).then_some(pins.index),
+        selected: (!visible.is_empty()).then_some(pins.cursor.index),
         filtering: pins.filtering,
         filter_query: pins.filter_query.to_string(),
         footer_title,
         footer,
         footer_colored,
-        hscroll: pins.hscroll,
+        hscroll: pins.cursor.hscroll,
     }
 }
 

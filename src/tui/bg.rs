@@ -1087,9 +1087,9 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
             state.skip_dirs = config.skip_dirs;
             state.scan_depth = config.scan_depth;
             state.mark_pin_sync_cache_dirty();
-            let max = state.visible_pin_indices().len().saturating_sub(1);
+            let len = state.visible_pin_indices().len();
             if let Some(pins) = state.pins_mut() {
-                pins.index = pins.index.min(max);
+                pins.cursor.clamp_len(len);
             }
             refresh_locals(state);
             state.set_status(format!("Unpinned {label}"));
@@ -1270,12 +1270,8 @@ fn absorb_background_results_body(
                 state.gist_index = 0;
             }
             let count = state.visible_gist_groups().len();
-            if count > 0 {
-                if let Some(gm) = state.gist_manager_mut() {
-                    if gm.index >= count {
-                        gm.index = count - 1;
-                    }
-                }
+            if let Some(gm) = state.gist_manager_mut() {
+                gm.cursor.clamp_len(count);
             }
             let gist_ids: std::collections::HashSet<String> = state
                 .gists
