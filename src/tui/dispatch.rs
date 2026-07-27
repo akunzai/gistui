@@ -24,7 +24,7 @@ pub(super) fn dispatch_outcome(
             upload_orientation,
         } => {
             // List-originated diff returns to List on Esc.
-            state.diff_return = Screen::List;
+            state.pending_return = Some(Screen::List);
             let gist = GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone());
             let (local_label, gist_label) = diff_labels(local_path.as_deref(), &gist);
 
@@ -63,19 +63,13 @@ pub(super) fn dispatch_outcome(
             });
         }
         KeyOutcome::OpenGistDetail { gist_id } => {
-            let gists_return = match &state.screen {
-                Screen::Gists(g) => Screen::Gists(g.clone()),
-                _ => Screen::Gists(Box::default()),
-            };
-            state.screen = Screen::GistDetail(Box::new(DetailState {
+            state.enter(Screen::GistDetail(Box::new(DetailState {
                 gist_id: Some(gist_id),
-                return_screen: gists_return,
-                compact_return_screen: Screen::Gists(Box::default()),
                 focus: DetailFocus::Files,
                 file_cursor: 0,
                 scroll: 0,
                 ..DetailState::default()
-            }));
+            })));
             state.reset_comment_pagination();
         }
         KeyOutcome::FetchComments { gist_id } => {
@@ -154,7 +148,7 @@ pub(super) fn dispatch_outcome(
             filename,
         } => {
             if !state.is_pin_diff_context() {
-                state.diff_return = Screen::List;
+                state.pending_return = Some(Screen::List);
             }
             let action = PendingAction::Upload {
                 gist_id,
@@ -185,7 +179,7 @@ pub(super) fn dispatch_outcome(
             from_pin_diff,
         } => {
             if !from_pin_diff {
-                state.diff_return = Screen::List;
+                state.pending_return = Some(Screen::List);
             }
             let gist_file = state
                 .gists
@@ -250,12 +244,8 @@ pub(super) fn dispatch_outcome(
                 crate::actions::upload_add_command(&temp_file_path, &gist_id)
             };
 
-            let return_screen = state
-                .confirm()
-                .map(|c| c.return_screen.clone())
-                .unwrap_or_else(|| state.diff_return.clone());
-            state.back_to_list();
-            state.screen = return_screen;
+            state.staged_diff_gist = None;
+            state.leave();
             jobs.spawn_action(state, "Uploading…", move || {
                 let result = crate::actions::execute_command(&plan)
                     .map(|_| ())
@@ -314,8 +304,8 @@ pub(super) fn dispatch_outcome(
         }
         KeyOutcome::RefreshPreview { gist_id, filename } => {
             // Keep the current return path when reloading.
-            if let Some(p) = state.preview() {
-                state.preview_return = p.return_screen.clone();
+            if state.screen.is_preview() {
+                state.pending_return = state.nav_stack.last().cloned();
             }
             let key = (gist_id.clone(), filename.clone());
             state.gist_content_cache.remove(&key);
@@ -469,11 +459,7 @@ pub(super) fn dispatch_outcome(
         }
         KeyOutcome::PreviewPinDiff { index } => {
             if let Some(m) = state.pinned.get(index).cloned() {
-                if let Screen::Pins(p) = &state.screen {
-                    state.diff_return = Screen::Pins(p.clone());
-                } else {
-                    state.diff_return = Screen::Pins(Box::default());
-                }
+                park_pins_on_diff_return(state);
                 spawn_pin_diff(state, jobs, &m);
             }
         }

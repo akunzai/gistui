@@ -431,15 +431,15 @@ pub(super) fn pin_local_abs(state: &AppState, m: &crate::domain::PinnedMapping) 
     }
 }
 
-/// Park the current Pins payload on `diff_return` so pin diffs/confirm restore list state.
-fn park_pins_on_diff_return(state: &mut AppState) {
-    if let Screen::Pins(p) = &state.screen {
-        state.diff_return = Screen::Pins(p.clone());
-    } else if let Some(p) = state.pins() {
-        state.diff_return = Screen::Pins(Box::new(p.clone()));
-    } else {
-        state.diff_return = Screen::Pins(Box::default());
-    }
+/// Stage the current Pins payload as `pending_return` so the pin diff/confirm entered once this
+/// (async) flow's background fetch lands restores list state, not wherever the user has since
+/// navigated to.
+pub(super) fn park_pins_on_diff_return(state: &mut AppState) {
+    let pins = match &state.screen {
+        Screen::Pins(p) => p.as_ref().clone(),
+        _ => state.pins().cloned().unwrap_or_default(),
+    };
+    state.pending_return = Some(Screen::Pins(Box::new(pins)));
 }
 
 /// Spawn the push (upload local → gist) flow for a pin: lands in the existing
@@ -882,15 +882,6 @@ pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode)
             (Some(g), Some(f)) => Some((g.clone(), f.clone())),
             _ => None,
         });
-    // Prefer Confirm's nested Diff return (download overwrite gate) or Diff payload return.
-    let return_screen = match &state.screen {
-        Screen::Confirm(c) => match &c.return_screen {
-            Screen::Diff(d) => d.return_screen.clone(),
-            other => other.clone(),
-        },
-        Screen::Diff(d) => d.return_screen.clone(),
-        _ => state.diff_return.clone(),
-    };
     match crate::actions::execute_download(&target, &content, mode) {
         Ok(()) => {
             state.set_status(format!(
@@ -910,8 +901,16 @@ pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode)
                     Some(crate::domain::SyncDirection::Download),
                 );
             }
-            state.back_to_list();
-            state.screen = return_screen;
+            // Diff pairing identity lives on the payload; leaving drops it.
+            state.staged_diff_gist = None;
+            // Skip past the download overwrite gate's Confirm (if any) and its parked Diff to
+            // land on whatever was behind them.
+            if state.screen.is_confirm() {
+                state.leave();
+            }
+            if state.screen.is_diff() {
+                state.leave();
+            }
             refresh_locals(state);
         }
         Err(error) => {
@@ -1592,12 +1591,8 @@ fn absorb_background_results_body(
                             }
                             // Return to wherever this upload was initiated from (List, or Pins
                             // for a pin push) instead of always snapping to List.
-                            let return_screen = state
-                                .confirm()
-                                .map(|c| c.return_screen.clone())
-                                .unwrap_or_else(|| state.diff_return.clone());
-                            state.back_to_list();
-                            state.screen = return_screen;
+                            state.staged_diff_gist = None;
+                            state.leave();
                             channels.request_gist_fetch(state);
                         }
                         Err(error) => {
@@ -1679,11 +1674,8 @@ fn absorb_background_results_body(
                             "\"{label}\" already has a single revision — nothing to compact"
                         )),
                         Ok(count) => {
-                            // Park compact restore target so Confirm cancel/execute restore it.
-                            state.diff_return = state
-                                .detail()
-                                .map(|d| d.compact_return_screen.clone())
-                                .unwrap_or_else(|| state.park_gist_detail_screen());
+                            // `pending_return` was staged at the 'c' keypress (keys.rs); `enter`
+                            // (inside `enter_confirm`) consumes it as the Confirm cancel path.
                             state.enter_confirm(
                                 PendingAction::CompactGist {
                                     gist_id: gist_id.clone(),
@@ -1756,10 +1748,8 @@ fn absorb_background_results_body(
                                 state.ignore_trailing_newline,
                             );
                             let identical = old_content == new_content;
-                            // Park revision payload so Esc restores list cursor/entries.
-                            if let Screen::Revisions(rev) = &state.screen {
-                                state.diff_return = Screen::Revisions(rev.clone());
-                            }
+                            // `enter_diff` (via `enter`) parks the live Revisions screen so Esc
+                            // restores list cursor/entries.
                             state.enter_diff(diff, String::new(), PathBuf::new(), PathBuf::new());
                             if let Some(d) = state.diff_mut() {
                                 d.identical = identical;
@@ -1788,10 +1778,8 @@ fn absorb_background_results_body(
                                 &current_content,
                                 state.ignore_trailing_newline,
                             );
-                            // Park revisions list so cancel restores cursor/entries.
-                            if let Screen::Revisions(rev) = &state.screen {
-                                state.diff_return = Screen::Revisions(rev.clone());
-                            }
+                            // `enter_confirm` (via `enter`) parks the live Revisions screen so
+                            // cancel restores cursor/entries.
                             state.enter_confirm(
                                 PendingAction::RestoreRevision {
                                     gist_id,
@@ -1841,19 +1829,18 @@ fn absorb_background_results_body(
                             state.set_status(format!(
                                 "Restored {filename} from old revision (new revision created)"
                             ));
-                            // Return to revisions list (prefer payload on Confirm return).
-                            let mut rev = match state.confirm().map(|c| &c.return_screen) {
-                                Some(Screen::Revisions(r)) => r.as_ref().clone(),
-                                _ => match &state.diff_return {
-                                    Screen::Revisions(r) => r.as_ref().clone(),
-                                    _ => state.revision().cloned().unwrap_or_default(),
-                                },
-                            };
-                            let gist_id = rev.gist_id.clone();
-                            rev.index = 0;
-                            rev.entries = None;
-                            rev.fetch_error = None;
-                            state.screen = Screen::Revisions(Box::new(rev));
+                            // Return to the revisions list `enter_confirm` parked when the
+                            // restore confirm was entered.
+                            state.leave();
+                            if !state.screen.is_revisions() {
+                                state.screen = Screen::Revisions(Box::default());
+                            }
+                            let gist_id = state.revision_mut().and_then(|rev| {
+                                rev.index = 0;
+                                rev.entries = None;
+                                rev.fetch_error = None;
+                                rev.gist_id.clone()
+                            });
                             channels.request_gist_fetch(state);
                             if let Some(gist_id) = gist_id {
                                 channels.spawn_action(state, "Loading revisions…", move || {

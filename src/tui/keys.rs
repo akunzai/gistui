@@ -103,21 +103,19 @@ impl AppState {
 
     /// Open the Help screen on the topic for the current screen, remembering where to return.
     /// A no-op while already on Help — otherwise the top bar's `(?)Help` click (reachable from
-    /// any screen, including Help itself) would overwrite `return_screen` with `Screen::Help`,
+    /// any screen, including Help itself) would push `Screen::Help` onto its own nav_stack,
     /// trapping Esc/`?`/the close button in Help with no keyboard way out.
     pub(crate) fn open_help(&mut self) {
         if self.screen.is_help() {
             return;
         }
-        let return_screen = self.screen.clone();
-        let topic = HelpTopic::for_screen(&return_screen);
-        self.screen = Screen::Help(Box::new(HelpState {
-            return_screen,
+        let topic = HelpTopic::for_screen(&self.screen);
+        self.enter(Screen::Help(Box::new(HelpState {
             topic,
             index_open: false,
             scroll: 0,
             index_sel: 0,
-        }));
+        })));
     }
 
     /// Open the flat Settings screen (`C` or palette). Opening alone does not write config.
@@ -125,11 +123,7 @@ impl AppState {
         if self.screen.is_config() {
             return;
         }
-        let return_screen = self.screen.clone();
-        self.screen = Screen::Config(Box::new(ConfigState {
-            index: 0,
-            return_screen,
-        }));
+        self.enter(Screen::Config(Box::new(ConfigState { index: 0 })));
     }
 
     /// Value string shown for a Config field row.
@@ -231,11 +225,7 @@ impl AppState {
         let n = ConfigField::ALL.len();
         match code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                let ret = match &self.screen {
-                    Screen::Config(c) => c.return_screen.clone(),
-                    _ => Screen::List,
-                };
-                self.screen = ret;
+                self.leave();
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if let Some(c) = self.config_mut() {
@@ -562,11 +552,7 @@ impl AppState {
             }
         }
         if leave {
-            let ret = match &self.screen {
-                Screen::Help(h) => h.return_screen.clone(),
-                _ => Screen::List,
-            };
-            self.screen = ret;
+            self.leave();
         }
         KeyOutcome::None
     }
@@ -767,11 +753,7 @@ impl AppState {
                 return KeyOutcome::CopyGistUrl { gist_id };
             }
             KeyCode::Char('H') if index < groups_len => {
-                let ret = match &self.screen {
-                    Screen::Gists(g) => Screen::Gists(g.clone()),
-                    _ => Screen::Gists(Box::default()),
-                };
-                if self.open_revisions(ret) {
+                if self.open_revisions() {
                     if let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) {
                         return KeyOutcome::FetchRevisions { gist_id };
                     }
@@ -813,11 +795,7 @@ impl AppState {
         }
         match code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                let ret = self
-                    .detail()
-                    .map(|d| d.return_screen.clone())
-                    .unwrap_or_else(|| Screen::Gists(Box::default()));
-                self.screen = ret;
+                self.leave();
             }
             KeyCode::Char('o') => {
                 let Some(gist_id) = self.context_gist_id() else {
@@ -832,8 +810,7 @@ impl AppState {
                 return KeyOutcome::CopyGistUrl { gist_id };
             }
             KeyCode::Char('H') => {
-                let ret = self.park_gist_detail_screen();
-                if self.open_revisions(ret) {
+                if self.open_revisions() {
                     if let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) {
                         return KeyOutcome::FetchRevisions { gist_id };
                     }
@@ -858,10 +835,7 @@ impl AppState {
                 if !self.gist_is_owned(&id) {
                     return KeyOutcome::None;
                 }
-                let parked = self.park_gist_detail_screen();
-                if let Some(d) = self.detail_mut() {
-                    d.compact_return_screen = parked;
-                }
+                self.pending_return = Some(self.park_gist_detail_screen());
                 let label = self
                     .group_by_id(&id)
                     .map(|g| {
@@ -910,8 +884,6 @@ impl AppState {
                     } else {
                         group.description.clone()
                     };
-                    // Park detail so cancel can restore; staged into Confirm.return_screen.
-                    self.diff_return = self.park_gist_detail_screen();
                     let text = format!(
                         "Delete gist {} ({} file(s)): {label}.\n\nThis permanently removes the entire gist and all its files.",
                         group.id, group.file_count
@@ -932,7 +904,7 @@ impl AppState {
                         if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
                             return KeyOutcome::None;
                         }
-                        self.preview_return = self.park_gist_detail_screen();
+                        self.pending_return = Some(self.park_gist_detail_screen());
                         return KeyOutcome::PreviewContent { gist_id, filename };
                     }
                 }
@@ -968,11 +940,7 @@ impl AppState {
             .unwrap_or(0);
         match code {
             KeyCode::Char('q') | KeyCode::Esc => {
-                let ret = self
-                    .revision()
-                    .map(|r| r.return_screen.clone())
-                    .unwrap_or(Screen::List);
-                self.screen = ret;
+                self.leave();
             }
             KeyCode::Enter if entries_len > 0 => {
                 return self.revision_diff_incremental_intent();
@@ -1211,7 +1179,7 @@ impl AppState {
                 if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
                     return KeyOutcome::None;
                 }
-                self.preview_return = self.park_gist_detail_screen();
+                self.pending_return = Some(self.park_gist_detail_screen());
                 return KeyOutcome::PreviewContent { gist_id, filename };
             }
         }
@@ -1499,12 +1467,7 @@ impl AppState {
             // In the preview, q and Esc return to wherever it was launched from (the list, or
             // the gist detail view) — never an accidental app exit.
             KeyCode::Char('q') | KeyCode::Esc => {
-                let ret = self
-                    .preview()
-                    .map(|p| p.return_screen.clone())
-                    .unwrap_or(Screen::List);
-                self.preview_return = Screen::List;
-                self.screen = ret;
+                self.leave();
             }
             KeyCode::Char('R') => {
                 let Some(p) = self.preview() else {
@@ -1687,7 +1650,7 @@ impl AppState {
                 let (_, ranked) = self.list_pane_snapshots();
                 if ranked.get(self.gist_index).is_none() {
                     self.status = Some("select a gist file to view revision history".into());
-                } else if self.open_revisions(Screen::List) {
+                } else if self.open_revisions() {
                     if let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) {
                         return KeyOutcome::FetchRevisions { gist_id };
                     }
@@ -1713,7 +1676,7 @@ impl AppState {
                 {
                     return KeyOutcome::None;
                 }
-                self.preview_return = Screen::List;
+                self.pending_return = Some(Screen::List);
                 return KeyOutcome::PreviewContent {
                     gist_id: gist.file.gist_id.clone(),
                     filename: gist.file.filename.clone(),
@@ -2001,7 +1964,7 @@ impl AppState {
         } else {
             gist.file.description.clone()
         };
-        self.diff_return = Screen::List;
+        self.pending_return = Some(Screen::List);
         let text = format!(
             "Remove file \"{filename}\" from gist {gist_id} ({label}).\n\nThe other files in this gist are kept. This cannot be undone."
         );
@@ -2025,7 +1988,7 @@ impl AppState {
         };
         self.editing_description = true;
         self.description_input.clear();
-        self.diff_return = Screen::List;
+        self.pending_return = Some(Screen::List);
         self.enter_confirm(
             PendingAction::Create {
                 local_path: local.path.clone(),
@@ -2039,14 +2002,12 @@ impl AppState {
 
     fn handle_key_diff(&mut self, code: KeyCode) -> KeyOutcome {
         match code {
-            // In the diff, q and Esc return to the payload return path (List, Pins, …).
+            // In the diff, q and Esc return to wherever `enter()` recorded (List, Pins, …).
             KeyCode::Char('q') | KeyCode::Esc => {
-                let ret = self
-                    .diff()
-                    .map(|d| d.return_screen.clone())
-                    .unwrap_or(Screen::List);
-                self.back_to_list();
-                self.screen = ret;
+                // Diff pairing identity lives on the payload; leaving drops it (not a full
+                // `back_to_list()` — that would also discard the rest of `nav_stack`).
+                self.staged_diff_gist = None;
+                self.leave();
             }
             // Identical files have nothing to sync, so download/upload are not offered.
             // Revision-history diffs are read-only (no local file pairing).

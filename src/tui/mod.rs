@@ -276,7 +276,6 @@ impl ConfigField {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ConfigState {
     pub index: usize,
-    pub return_screen: Screen,
 }
 
 /// A help topic — one per key-dense area, plus `About` (version/repo/update info, not tied
@@ -831,8 +830,6 @@ pub struct RevisionState {
     pub hscroll: u16,
     /// File within the gist that preview/diff/restore target.
     pub target_file: String,
-    /// Where `q`/`Esc` returns from `Screen::Revisions`.
-    pub return_screen: Screen,
     /// Error from the commits-list fetch, if any.
     pub fetch_error: Option<String>,
 }
@@ -841,8 +838,6 @@ pub struct RevisionState {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct HelpState {
     pub scroll: u16,
-    /// Screen to return to when leaving Help (mirrors `preview_return` / `diff_return`).
-    pub return_screen: Screen,
     /// The topic shown in the Help screen's topic view.
     pub topic: HelpTopic,
     /// When true the Help screen shows the topic index instead of a topic body.
@@ -871,8 +866,6 @@ pub struct PreviewState {
     pub hscroll: u16,
     /// `(gist_id, filename)` for refresh / copy-url context.
     pub gist_key: Option<(String, String)>,
-    /// Where `q`/`Esc` returns (List, GistDetail payload, etc.).
-    pub return_screen: Screen,
 }
 
 /// Unified-diff view — carried on [`Screen::Diff`] (issue #242).
@@ -883,8 +876,6 @@ pub struct DiffState {
     pub text: String,
     pub scroll: u16,
     pub hscroll: u16,
-    /// Where `q`/`Esc` returns (List, Pins, Revisions, …).
-    pub return_screen: Screen,
     /// Remote file body (download source content).
     pub remote_content: String,
     /// Local path paired in the diff (empty for revision-only comparisons).
@@ -907,8 +898,6 @@ pub struct ConfirmState {
     pub text: String,
     pub scroll: u16,
     pub hscroll: u16,
-    /// Where cancel lands (may be [`Screen::Diff`] after a download overwrite gate).
-    pub return_screen: Screen,
 }
 
 impl Default for ConfirmState {
@@ -918,7 +907,6 @@ impl Default for ConfirmState {
             text: String::new(),
             scroll: 0,
             hscroll: 0,
-            return_screen: Screen::List,
         }
     }
 }
@@ -939,7 +927,7 @@ pub struct GistsManagerState {
 /// Gist-detail screen state — carried on [`Screen::GistDetail`] (issue #242). Data only —
 /// the detail/comment methods stay on `AppState`. The `comments_*` count/paging fields keep
 /// their prefix so they don't collide with the `comments` Vec.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DetailState {
     /// The gist currently shown; also guards stale comment responses.
     pub gist_id: Option<String>,
@@ -963,30 +951,6 @@ pub struct DetailState {
     pub focus: DetailFocus,
     /// Cursor index into the detail gist's files when `focus == Files`.
     pub file_cursor: usize,
-    /// Where `q`/`Esc` returns from detail (usually [`Screen::Gists`] with its payload).
-    pub return_screen: Screen,
-    /// Screen to return to after a compaction confirm is cancelled/finished (Gists or GistDetail).
-    pub compact_return_screen: Screen,
-}
-
-impl Default for DetailState {
-    fn default() -> Self {
-        Self {
-            gist_id: None,
-            comments: None,
-            comments_loading: false,
-            comments_error: None,
-            comments_total: None,
-            comments_loaded_oldest_page: 0,
-            comments_loading_more: false,
-            comments_scroll_to_bottom: false,
-            scroll: 0,
-            focus: DetailFocus::default(),
-            file_cursor: 0,
-            return_screen: Screen::Gists(Box::default()),
-            compact_return_screen: Screen::Gists(Box::default()),
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -1057,9 +1021,6 @@ pub struct AppState {
     /// How this binary was installed — resolved once at startup so the update hint can show
     /// the right upgrade command without per-frame IO.
     pub install_method: crate::upgrade::InstallMethod,
-    /// Staged return path for the next preview open (copied into [`PreviewState::return_screen`]
-    /// when Preview is entered). Live Esc path while Preview is open lives on the payload.
-    pub preview_return: Screen,
     pub gist_content_cache: crate::lru::LruCache<(String, String), String>,
     pub local_recursive: bool,
     pub skip_dirs: Vec<String>,
@@ -1083,10 +1044,15 @@ pub struct AppState {
     /// Staged pin/pull gist identity for the next [`Self::enter_diff`] (consumed into
     /// [`DiffState`]). Live identity while Diff/Confirm is open lives on the payload.
     pub staged_diff_gist: Option<(String, String)>,
-    /// Staged return path for the next Diff/Confirm open (copied into the payload by
-    /// [`Self::enter_diff`] / [`Self::enter_confirm`]). Live Esc path while Diff/Confirm is
-    /// open lives on the payload (issue #242).
-    pub diff_return: Screen,
+    /// Navigation history (issue #271): every [`Self::enter`] pushes the screen being left;
+    /// every [`Self::leave`] pops back to it. Flat — a screen's own return path never lives on
+    /// its payload.
+    pub nav_stack: Vec<Screen>,
+    /// Staged return target for a screen entered asynchronously (issue #271): set at the
+    /// triggering keypress (before the background fetch that will eventually call
+    /// [`Self::enter`] completes), since `self.screen` may have changed by the time that
+    /// happens. [`Self::enter`] consumes it in place of the live screen when present.
+    pub pending_return: Option<Screen>,
     /// Monotonic tick advanced once per event-loop iteration (~150ms); drives the in-progress
     /// spinner animation. Wraps freely — only its value modulo the frame count is observed.
     pub spinner_frame: usize,
@@ -1153,13 +1119,35 @@ fn unranked_locals(locals: &[LocalCandidate]) -> Vec<RankedLocal> {
 }
 
 impl AppState {
+    /// Finds the nearest screen (current, then Palette's origin if the overlay is open, then
+    /// `nav_stack` from most to least recent) matching `tag` (issue #271). Replaces the
+    /// hand-nested "walk return_screen" chains each payload accessor used to write for itself —
+    /// a payload's return path no longer lives on its own struct, so there's nothing left to
+    /// walk except the shared history.
+    fn find_screen(&self, tag: fn(&Screen) -> bool) -> Option<&Screen> {
+        let start = match &self.screen {
+            Screen::Palette(p) => &p.origin_screen,
+            s => s,
+        };
+        std::iter::once(start)
+            .chain(self.nav_stack.iter().rev())
+            .find(|s| tag(s))
+    }
+
+    fn find_screen_mut(&mut self, tag: fn(&Screen) -> bool) -> Option<&mut Screen> {
+        let start = match &mut self.screen {
+            Screen::Palette(p) => &mut p.origin_screen,
+            s => s,
+        };
+        std::iter::once(start)
+            .chain(self.nav_stack.iter_mut().rev())
+            .find(|s| tag(s))
+    }
+
     /// Help payload when Help is active, or when the palette is open over Help (issue #242).
     pub fn help(&self) -> Option<&HelpState> {
-        match &self.screen {
-            Screen::Help(h) => Some(h.as_ref()),
-            Screen::Palette(p) => p.origin_screen.help_state(),
-            _ => None,
-        }
+        self.find_screen(Screen::is_help)
+            .and_then(Screen::help_state)
     }
 
     /// Mutable help payload when Help is the active screen (not via palette origin).
@@ -1169,188 +1157,60 @@ impl AppState {
 
     /// Config payload when Settings is active, or when the palette is open over Config.
     pub fn config(&self) -> Option<&ConfigState> {
-        match &self.screen {
-            Screen::Config(c) => Some(c.as_ref()),
-            Screen::Palette(p) => p.origin_screen.config_state(),
-            _ => None,
-        }
+        self.find_screen(Screen::is_config)
+            .and_then(Screen::config_state)
     }
 
     pub fn config_mut(&mut self) -> Option<&mut ConfigState> {
         self.screen.config_state_mut()
     }
 
-    /// Revision payload when Revisions is active, parked on Diff/Confirm return, or under
-    /// palette origin (issue #242).
+    /// Revision payload when Revisions is active, parked on the Diff/Confirm/Preview return
+    /// path, or under palette origin (issue #242).
     pub fn revision(&self) -> Option<&RevisionState> {
-        match &self.screen {
-            Screen::Revisions(r) => Some(r.as_ref()),
-            Screen::Diff(d) => d.return_screen.revision_state(),
-            Screen::Confirm(c) => Self::nav_return_of_confirm(c).revision_state(),
-            Screen::Preview(p) => p.return_screen.revision_state(),
-            Screen::Palette(p) => p.origin_screen.revision_state(),
-            _ => None,
-        }
+        self.find_screen(Screen::is_revisions)
+            .and_then(Screen::revision_state)
     }
 
     pub fn revision_mut(&mut self) -> Option<&mut RevisionState> {
-        match &mut self.screen {
-            Screen::Revisions(r) => Some(r.as_mut()),
-            Screen::Diff(d) => d.return_screen.revision_state_mut(),
-            Screen::Confirm(c) => match &mut c.return_screen {
-                Screen::Diff(d) => d.return_screen.revision_state_mut(),
-                other => other.revision_state_mut(),
-            },
-            Screen::Preview(p) => p.return_screen.revision_state_mut(),
-            _ => None,
-        }
+        self.find_screen_mut(Screen::is_revisions)
+            .and_then(Screen::revision_state_mut)
     }
 
-    /// Pins payload when Pins is active, parked on Diff/Confirm return, or under palette
-    /// origin (issue #242).
+    /// Pins payload when Pins is active, parked on the Diff/Confirm/Preview return path, or
+    /// under palette origin (issue #242).
     pub fn pins(&self) -> Option<&PinsState> {
-        match &self.screen {
-            Screen::Pins(p) => Some(p.as_ref()),
-            Screen::Diff(d) => d.return_screen.pins_state(),
-            Screen::Confirm(c) => Self::nav_return_of_confirm(c).pins_state(),
-            Screen::Preview(p) => p.return_screen.pins_state(),
-            Screen::Palette(p) => p.origin_screen.pins_state(),
-            _ => None,
-        }
+        self.find_screen(Screen::is_pins)
+            .and_then(Screen::pins_state)
     }
 
     pub fn pins_mut(&mut self) -> Option<&mut PinsState> {
-        match &mut self.screen {
-            Screen::Pins(p) => Some(p.as_mut()),
-            Screen::Diff(d) => d.return_screen.pins_state_mut(),
-            Screen::Confirm(c) => match &mut c.return_screen {
-                Screen::Diff(d) => d.return_screen.pins_state_mut(),
-                other => other.pins_state_mut(),
-            },
-            Screen::Preview(p) => p.return_screen.pins_state_mut(),
-            _ => None,
-        }
+        self.find_screen_mut(Screen::is_pins)
+            .and_then(Screen::pins_state_mut)
     }
 
-    /// Nested Diff cancel path: Confirm may park `Screen::Diff` so download-n restores Diff.
-    fn nav_return_of_confirm(c: &ConfirmState) -> &Screen {
-        match &c.return_screen {
-            Screen::Diff(d) => &d.return_screen,
-            other => other,
-        }
-    }
-
-    /// Gist-manager payload when Gists is active, parked on detail/revision return paths, or
+    /// Gist-manager payload when Gists is active, parked on a detail/revision return path, or
     /// under palette origin (issue #242).
     pub fn gist_manager(&self) -> Option<&GistsManagerState> {
-        match &self.screen {
-            Screen::Gists(g) => Some(g.as_ref()),
-            Screen::GistDetail(d) => d.return_screen.gists_state(),
-            Screen::Revisions(r) => r.return_screen.gists_state(),
-            Screen::Palette(p) => match &p.origin_screen {
-                Screen::Gists(g) => Some(g.as_ref()),
-                Screen::GistDetail(d) => d.return_screen.gists_state(),
-                Screen::Revisions(r) => r.return_screen.gists_state(),
-                _ => None,
-            },
-            Screen::Help(h) => h.return_screen.gists_state().or_else(|| {
-                h.return_screen
-                    .detail_state()
-                    .and_then(|d| d.return_screen.gists_state())
-            }),
-            Screen::Config(c) => c.return_screen.gists_state().or_else(|| {
-                c.return_screen
-                    .detail_state()
-                    .and_then(|d| d.return_screen.gists_state())
-            }),
-            Screen::Preview(p) => p
-                .return_screen
-                .detail_state()
-                .and_then(|d| d.return_screen.gists_state())
-                .or_else(|| p.return_screen.gists_state()),
-            Screen::Diff(d) => match &d.return_screen {
-                Screen::Gists(g) => Some(g.as_ref()),
-                Screen::GistDetail(det) => det.return_screen.gists_state(),
-                Screen::Revisions(r) => r.return_screen.gists_state(),
-                _ => None,
-            },
-            Screen::Confirm(c) => match Self::nav_return_of_confirm(c) {
-                Screen::Gists(g) => Some(g.as_ref()),
-                Screen::GistDetail(d) => d.return_screen.gists_state(),
-                Screen::Revisions(r) => r.return_screen.gists_state(),
-                _ => None,
-            },
-            _ => None,
-        }
+        self.find_screen(Screen::is_gists)
+            .and_then(Screen::gists_state)
     }
 
     pub fn gist_manager_mut(&mut self) -> Option<&mut GistsManagerState> {
-        match &mut self.screen {
-            Screen::Gists(g) => Some(g.as_mut()),
-            Screen::GistDetail(d) => d.return_screen.gists_state_mut(),
-            Screen::Revisions(r) => r.return_screen.gists_state_mut(),
-            Screen::Palette(p) => match &mut p.origin_screen {
-                Screen::Gists(g) => Some(g.as_mut()),
-                Screen::GistDetail(d) => d.return_screen.gists_state_mut(),
-                Screen::Revisions(r) => r.return_screen.gists_state_mut(),
-                _ => None,
-            },
-            Screen::Preview(p) => match &mut p.return_screen {
-                Screen::Gists(g) => Some(g.as_mut()),
-                Screen::GistDetail(d) => d.return_screen.gists_state_mut(),
-                _ => None,
-            },
-            Screen::Diff(d) => match &mut d.return_screen {
-                Screen::Gists(g) => Some(g.as_mut()),
-                Screen::GistDetail(det) => det.return_screen.gists_state_mut(),
-                Screen::Revisions(r) => r.return_screen.gists_state_mut(),
-                _ => None,
-            },
-            Screen::Confirm(c) => match &mut c.return_screen {
-                Screen::Diff(d) => match &mut d.return_screen {
-                    Screen::Gists(g) => Some(g.as_mut()),
-                    Screen::GistDetail(det) => det.return_screen.gists_state_mut(),
-                    Screen::Revisions(r) => r.return_screen.gists_state_mut(),
-                    _ => None,
-                },
-                Screen::Gists(g) => Some(g.as_mut()),
-                Screen::GistDetail(d) => d.return_screen.gists_state_mut(),
-                Screen::Revisions(r) => r.return_screen.gists_state_mut(),
-                _ => None,
-            },
-            _ => None,
-        }
+        self.find_screen_mut(Screen::is_gists)
+            .and_then(Screen::gists_state_mut)
     }
 
-    /// Detail payload when GistDetail is active, parked on preview/revision/diff/confirm
-    /// return, palette origin, or help/config return (issue #242).
+    /// Detail payload when GistDetail is active, parked on a preview/revision/diff/confirm
+    /// return path, palette origin, or help/config return (issue #242).
     pub fn detail(&self) -> Option<&DetailState> {
-        match &self.screen {
-            Screen::GistDetail(d) => Some(d.as_ref()),
-            Screen::Preview(p) => p.return_screen.detail_state(),
-            Screen::Revisions(r) => r.return_screen.detail_state(),
-            Screen::Palette(p) => p.origin_screen.detail_state(),
-            Screen::Help(h) => h.return_screen.detail_state(),
-            Screen::Config(c) => c.return_screen.detail_state(),
-            Screen::Diff(d) => d.return_screen.detail_state(),
-            Screen::Confirm(c) => Self::nav_return_of_confirm(c).detail_state(),
-            _ => None,
-        }
+        self.find_screen(Screen::is_gist_detail)
+            .and_then(Screen::detail_state)
     }
 
     pub fn detail_mut(&mut self) -> Option<&mut DetailState> {
-        match &mut self.screen {
-            Screen::GistDetail(d) => Some(d.as_mut()),
-            Screen::Preview(p) => p.return_screen.detail_state_mut(),
-            Screen::Revisions(r) => r.return_screen.detail_state_mut(),
-            Screen::Palette(p) => p.origin_screen.detail_state_mut(),
-            Screen::Diff(d) => d.return_screen.detail_state_mut(),
-            Screen::Confirm(c) => match &mut c.return_screen {
-                Screen::Diff(d) => d.return_screen.detail_state_mut(),
-                other => other.detail_state_mut(),
-            },
-            _ => None,
-        }
+        self.find_screen_mut(Screen::is_gist_detail)
+            .and_then(Screen::detail_state_mut)
     }
 
     /// Palette payload when the overlay is open (issue #242).
@@ -1364,21 +1224,31 @@ impl AppState {
 
     /// Preview payload when Preview is active, or under palette origin (issue #242).
     pub fn preview(&self) -> Option<&PreviewState> {
-        match &self.screen {
-            Screen::Preview(p) => Some(p.as_ref()),
-            Screen::Palette(p) => p.origin_screen.preview_state(),
-            Screen::Help(h) => h.return_screen.preview_state(),
-            Screen::Config(c) => c.return_screen.preview_state(),
-            _ => None,
-        }
+        self.find_screen(Screen::is_preview)
+            .and_then(Screen::preview_state)
     }
 
     pub fn preview_mut(&mut self) -> Option<&mut PreviewState> {
-        match &mut self.screen {
-            Screen::Preview(p) => Some(p.as_mut()),
-            Screen::Palette(p) => p.origin_screen.preview_state_mut(),
-            _ => None,
-        }
+        self.find_screen_mut(Screen::is_preview)
+            .and_then(Screen::preview_state_mut)
+    }
+
+    /// Navigate to `new_screen`, remembering how to get back (issue #271). The screen being
+    /// left is pushed onto [`Self::nav_stack`] — or, if a [`Self::pending_return`] was staged
+    /// (an async entry: the triggering keypress ran before `self.screen` necessarily still
+    /// matched what the user meant), that staged screen is pushed instead and the live one is
+    /// discarded.
+    pub fn enter(&mut self, new_screen: Screen) {
+        let live = std::mem::replace(&mut self.screen, new_screen);
+        let prev = self.pending_return.take().unwrap_or(live);
+        self.nav_stack.push(prev);
+    }
+
+    /// Leave the current screen, restoring whatever [`Self::enter`] pushed for it. Falls back
+    /// to [`Screen::List`] if the stack is empty (defensive: every real transition goes through
+    /// [`Self::enter`], but a few call sites still assign `self.screen` directly).
+    pub fn leave(&mut self) {
+        self.screen = self.nav_stack.pop().unwrap_or_default();
     }
 
     /// Enter full-screen content preview with the given body and gist identity.
@@ -1388,57 +1258,37 @@ impl AppState {
         text: String,
         gist_key: Option<(String, String)>,
     ) {
-        let return_screen = std::mem::replace(&mut self.preview_return, Screen::List);
         self.status = None;
-        self.screen = Screen::Preview(Box::new(PreviewState {
+        self.enter(Screen::Preview(Box::new(PreviewState {
             title,
             text,
             scroll: 0,
             hscroll: 0,
             gist_key,
-            return_screen,
-        }));
+        })));
     }
 
-    /// Diff payload when Diff is active, under Confirm cancel path (`Screen::Diff`), or
-    /// palette origin (issue #242).
+    /// Diff payload when Diff is active, parked on the Confirm cancel path, or palette origin
+    /// (issue #242).
     pub fn diff(&self) -> Option<&DiffState> {
-        match &self.screen {
-            Screen::Diff(d) => Some(d.as_ref()),
-            Screen::Confirm(c) => c.return_screen.diff_state(),
-            Screen::Palette(p) => p.origin_screen.diff_state(),
-            Screen::Help(h) => h.return_screen.diff_state(),
-            Screen::Config(c) => c.return_screen.diff_state(),
-            _ => None,
-        }
+        self.find_screen(Screen::is_diff)
+            .and_then(Screen::diff_state)
     }
 
     pub fn diff_mut(&mut self) -> Option<&mut DiffState> {
-        match &mut self.screen {
-            Screen::Diff(d) => Some(d.as_mut()),
-            Screen::Confirm(c) => c.return_screen.diff_state_mut(),
-            Screen::Palette(p) => p.origin_screen.diff_state_mut(),
-            _ => None,
-        }
+        self.find_screen_mut(Screen::is_diff)
+            .and_then(Screen::diff_state_mut)
     }
 
-    /// Confirm payload when Confirm is active (issue #242).
+    /// Confirm payload when Confirm is active, or under palette origin (issue #242).
     pub fn confirm(&self) -> Option<&ConfirmState> {
-        match &self.screen {
-            Screen::Confirm(c) => Some(c.as_ref()),
-            Screen::Palette(p) => p.origin_screen.confirm_state(),
-            Screen::Help(h) => h.return_screen.confirm_state(),
-            Screen::Config(c) => c.return_screen.confirm_state(),
-            _ => None,
-        }
+        self.find_screen(Screen::is_confirm)
+            .and_then(Screen::confirm_state)
     }
 
     pub fn confirm_mut(&mut self) -> Option<&mut ConfirmState> {
-        match &mut self.screen {
-            Screen::Confirm(c) => Some(c.as_mut()),
-            Screen::Palette(p) => p.origin_screen.confirm_state_mut(),
-            _ => None,
-        }
+        self.find_screen_mut(Screen::is_confirm)
+            .and_then(Screen::confirm_state_mut)
     }
 
     /// Pending action while Confirm is open.
@@ -1479,17 +1329,16 @@ impl AppState {
         }
     }
 
-    /// Open Confirm with background `text` and the staged [`Self::diff_return`] as cancel path.
+    /// Open Confirm with background `text`. Cancel path is whatever [`Self::enter`] captures —
+    /// the staged [`Self::pending_return`] if this follows an async fetch, else the live screen.
     pub fn enter_confirm(&mut self, action: PendingAction, text: String) {
-        let return_screen = std::mem::replace(&mut self.diff_return, Screen::List);
         self.status = None;
-        self.screen = Screen::Confirm(Box::new(ConfirmState {
+        self.enter(Screen::Confirm(Box::new(ConfirmState {
             action,
             text,
             scroll: 0,
             hscroll: 0,
-            return_screen,
-        }));
+        })));
     }
 
     /// Open Confirm from the active Diff (download overwrite gate). Cancel restores Diff.
@@ -1498,13 +1347,16 @@ impl AppState {
             return;
         };
         self.status = None;
+        let (text, scroll, hscroll) = (d.text.clone(), d.scroll, d.hscroll);
+        // Park full Diff (pairing + identity) so cancel/download IO still have it; not a
+        // `pending_return` case (synchronous — `d` came straight off `self.screen`), so push it
+        // directly rather than going through `enter()`.
+        self.nav_stack.push(Screen::Diff(d));
         self.screen = Screen::Confirm(Box::new(ConfirmState {
             action,
-            text: d.text.clone(),
-            scroll: d.scroll,
-            hscroll: d.hscroll,
-            // Park full Diff (pairing + identity) so cancel/download IO still have it.
-            return_screen: Screen::Diff(d),
+            text,
+            scroll,
+            hscroll,
         }));
     }
 
@@ -1513,50 +1365,26 @@ impl AppState {
         let Screen::Confirm(c) = std::mem::replace(&mut self.screen, Screen::List) else {
             return;
         };
-        let ConfirmState {
-            text,
-            scroll,
-            hscroll,
-            return_screen,
-            ..
-        } = *c;
-        if let Screen::Diff(mut d) = return_screen {
-            d.text = text;
-            d.scroll = scroll;
-            d.hscroll = hscroll;
-            self.screen = Screen::Diff(d);
-        } else {
-            self.screen = return_screen;
+        self.leave();
+        if let Screen::Diff(ref mut d) = self.screen {
+            d.text = c.text;
+            d.scroll = c.scroll;
+            d.hscroll = c.hscroll;
         }
     }
 
-    /// Leave Confirm restoring `return_screen` from the payload (upload/compact/etc.).
+    /// Leave Confirm restoring whatever [`Self::enter`] parked for it (upload/compact/etc.).
     pub fn cancel_confirm(&mut self) {
-        let Screen::Confirm(c) = std::mem::replace(&mut self.screen, Screen::List) else {
-            self.screen = Screen::List;
-            return;
-        };
-        self.screen = c.return_screen;
+        self.leave();
     }
 
-    /// Snapshot the current detail payload as a restore `Screen` (for preview/compact/etc.).
+    /// Snapshot the live GistDetail payload as a `Screen`, to stage into
+    /// [`Self::pending_return`] before an async fetch (preview/revisions/compact) that will
+    /// eventually call [`Self::enter`] once its result lands. Every caller is itself part of
+    /// GistDetail's own key handling, so `self.screen` is always `Screen::GistDetail` here.
     fn park_gist_detail_screen(&self) -> Screen {
-        match &self.screen {
-            Screen::GistDetail(d) => {
-                let mut parked = d.as_ref().clone();
-                // Avoid deep nested compact-return clones when re-parking.
-                parked.compact_return_screen = Screen::Gists(Box::default());
-                Screen::GistDetail(Box::new(parked))
-            }
-            _ => self
-                .detail()
-                .map(|d| {
-                    let mut parked = d.clone();
-                    parked.compact_return_screen = Screen::Gists(Box::default());
-                    Screen::GistDetail(Box::new(parked))
-                })
-                .unwrap_or_else(|| Screen::GistDetail(Box::default())),
-        }
+        debug_assert!(self.screen.is_gist_detail());
+        self.screen.clone()
     }
 
     pub fn upload_local_path(&self) -> Option<std::path::PathBuf> {
@@ -2153,16 +1981,16 @@ impl AppState {
     }
 
     /// Look up a gist group by id (unaffected by filtering); used by detail + confirm background.
-    /// Open `Screen::Revisions` for the gist on `return_screen`. Returns false when no gist
-    /// is selected or the gist has no files.
-    pub fn open_revisions(&mut self, return_screen: Screen) -> bool {
+    /// Open `Screen::Revisions` for the gist on the current screen (List, GistDetail, or Gists).
+    /// Returns false when no gist is selected or the gist has no files.
+    pub fn open_revisions(&mut self) -> bool {
         // Snapshot the selected gist once for the List path; it feeds both `gist_id` and
         // `target_file` below, avoiding a second `ranked_gists` recompute (perf-1, #154).
-        let selected_list_gist = match return_screen {
+        let selected_list_gist = match self.screen {
             Screen::List => self.selected_gist(),
             _ => None,
         };
-        let gist_id = match &return_screen {
+        let gist_id = match &self.screen {
             Screen::List => selected_list_gist.as_ref().map(|g| g.file.gist_id.clone()),
             Screen::GistDetail(d) => d.gist_id.clone(),
             Screen::Gists(_) => self.selected_group().map(|g| g.id.clone()),
@@ -2172,7 +2000,7 @@ impl AppState {
             return false;
         };
         let filenames = self.gist_filenames(&gist_id);
-        let target_file = match &return_screen {
+        let target_file = match &self.screen {
             Screen::List => selected_list_gist
                 .as_ref()
                 .map(|g| g.file.filename.clone())
@@ -2187,15 +2015,14 @@ impl AppState {
         let Some(target_file) = target_file else {
             return false;
         };
-        self.screen = Screen::Revisions(Box::new(RevisionState {
+        self.enter(Screen::Revisions(Box::new(RevisionState {
             gist_id: Some(gist_id),
             target_file,
-            return_screen,
             index: 0,
             hscroll: 0,
             entries: None,
             fetch_error: None,
-        }));
+        })));
         true
     }
 
@@ -2227,9 +2054,12 @@ impl AppState {
     }
 
     /// True when the diff view supports local↔gist download/upload (`d`/`u`). Revision-history
-    /// diffs (returning to `Screen::Revisions`) are read-only comparisons.
+    /// diffs (returning to `Screen::Revisions`) are read-only comparisons. Checks the top of
+    /// `nav_stack` directly (not [`Self::diff`]'s deep search) — this only makes sense while
+    /// Diff is the live screen, so it's the immediate parent, not wherever else Diff might be
+    /// parked.
     pub fn diff_allows_sync(&self) -> bool {
-        !self.diff().is_some_and(|d| d.return_screen.is_revisions())
+        !self.nav_stack.last().is_some_and(Screen::is_revisions)
     }
 
     /// Footer label for the revision-history target file, including `(n/total)` when multi-file.
@@ -2426,53 +2256,22 @@ impl AppState {
         local: PathBuf,
         target: PathBuf,
     ) {
-        let return_screen = std::mem::replace(&mut self.diff_return, Screen::List);
         let (gist_id, gist_filename) = match self.staged_diff_gist.take() {
             Some((id, name)) => (Some(id), Some(name)),
             None => (None, None),
         };
         self.status = None;
-        self.screen = Screen::Diff(Box::new(DiffState {
+        self.enter(Screen::Diff(Box::new(DiffState {
             text: diff_text,
             scroll: 0,
             hscroll: 0,
-            return_screen,
             remote_content: remote,
             local_path: local,
             download_target: target,
             identical: false,
             gist_id,
             gist_filename,
-        }));
-    }
-
-    /// Enter Diff with explicit return path (does not consume staged `diff_return`).
-    pub fn enter_diff_returning(
-        &mut self,
-        diff_text: String,
-        remote: String,
-        local: PathBuf,
-        target: PathBuf,
-        return_screen: Screen,
-    ) {
-        self.diff_return = Screen::List;
-        let (gist_id, gist_filename) = match self.staged_diff_gist.take() {
-            Some((id, name)) => (Some(id), Some(name)),
-            None => (None, None),
-        };
-        self.status = None;
-        self.screen = Screen::Diff(Box::new(DiffState {
-            text: diff_text,
-            scroll: 0,
-            hscroll: 0,
-            return_screen,
-            remote_content: remote,
-            local_path: local,
-            download_target: target,
-            identical: false,
-            gist_id,
-            gist_filename,
-        }));
+        })));
     }
 
     /// True while a Diff payload is live (active Diff or parked under Confirm).
@@ -2513,7 +2312,10 @@ impl AppState {
         self.screen = Screen::List;
         // Diff pairing identity lives on the payload; leaving drops it.
         self.staged_diff_gist = None;
-        self.diff_return = Screen::List;
+        self.pending_return = None;
+        // A hard reset, not a `leave()` — nothing on the stack corresponds to List, so discard
+        // it rather than let stale entries resurface on some later, unrelated `leave()`.
+        self.nav_stack.clear();
     }
 
     pub fn set_status(&mut self, message: impl Into<String>) {
@@ -2664,7 +2466,6 @@ pub fn initial_state() -> AppState {
         no_update_check_cli: false,
         update_available: None,
         install_method: crate::upgrade::InstallMethod::Standalone,
-        preview_return: Screen::List,
         // Bound the in-memory preview cache so browsing many/large gists can't grow unbounded;
         // evicted entries are simply re-fetched on demand.
         gist_content_cache: crate::lru::LruCache::new(64),
@@ -2681,7 +2482,8 @@ pub fn initial_state() -> AppState {
         quit_armed: false,
         upload: UploadState::default(),
         staged_diff_gist: None,
-        diff_return: Screen::List,
+        nav_stack: Vec::new(),
+        pending_return: None,
         spinner_frame: 0,
         gist_comment_counts: std::collections::HashMap::new(),
         gist_fork_counts: std::collections::HashMap::new(),

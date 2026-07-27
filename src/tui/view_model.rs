@@ -1611,10 +1611,7 @@ mod tests {
     #[test]
     fn config_vm_rows_and_status() {
         let mut state = initial_state();
-        state.screen = Screen::Config(Box::new(ConfigState {
-            index: 1,
-            ..ConfigState::default()
-        }));
+        state.screen = Screen::Config(Box::new(ConfigState { index: 1 }));
         state.status = Some("Theme saved".into());
         match build_view_model(&state).screen {
             ScreenVm::Config(c) => {
