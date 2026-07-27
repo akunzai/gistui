@@ -19,9 +19,6 @@ fn config_mut(state: &mut AppState) -> &mut ConfigState {
     }
     state.config_mut().expect("expected Screen::Config")
 }
-fn config_ref(state: &AppState) -> &ConfigState {
-    state.config().expect("expected Screen::Config")
-}
 fn revision_mut(state: &mut AppState) -> &mut RevisionState {
     if !state.screen.is_revisions() {
         state.screen = Screen::Revisions(Box::default());
@@ -63,37 +60,20 @@ fn preview_ref(state: &AppState) -> &PreviewState {
 }
 
 /// Open Confirm with the given action (keeps existing body text when already on Diff/Confirm).
-/// Consumes staged `diff_return` as the cancel path when present (test convenience matching
-/// production `enter_confirm`).
+/// Mirrors production `enter_confirm`/`enter_confirm_from_diff`: a staged `pending_return`
+/// becomes the cancel path (via `AppState::enter`) when present, otherwise the live screen does.
 fn set_pending(state: &mut AppState, action: PendingAction) {
-    let staged = std::mem::replace(&mut state.diff_return, Screen::List);
     if state.screen.is_confirm() {
         if let Some(c) = state.confirm_mut() {
             c.action = action;
-            if matches!(c.return_screen, Screen::List) && !matches!(staged, Screen::List) {
-                c.return_screen = staged;
-            } else if !matches!(staged, Screen::List) {
-                // keep existing confirm return; re-stage unused
-                state.diff_return = staged;
-            }
         }
         return;
     }
-    let (text, scroll, hscroll, return_screen) = match &state.screen {
-        Screen::Diff(d) => {
-            // Keep staged for other uses; Diff cancel path embeds Diff.
-            state.diff_return = staged;
-            (d.text.clone(), d.scroll, d.hscroll, Screen::Diff(d.clone()))
-        }
-        _ => (String::new(), 0, 0, staged),
-    };
-    state.screen = Screen::Confirm(Box::new(ConfirmState {
-        action,
-        text,
-        scroll,
-        hscroll,
-        return_screen,
-    }));
+    if state.screen.is_diff() {
+        state.enter_confirm_from_diff(action);
+        return;
+    }
+    state.enter_confirm(action, String::new());
 }
 
 fn clear_pending(state: &mut AppState) {
@@ -475,7 +455,10 @@ fn detail_enter_previews_cursor_file_including_tenth() {
             ..
         } if gist_id == "g1" && filename == "f9.txt"
     ));
-    assert!(state.preview_return.is_gist_detail());
+    assert!(state
+        .pending_return
+        .as_ref()
+        .is_some_and(Screen::is_gist_detail));
 }
 
 #[test]
@@ -491,6 +474,8 @@ fn detail_enter_in_comments_focus_is_noop() {
 #[test]
 fn detail_q_returns_to_gists() {
     let mut state = state_with_gists();
+    // Mirrors what `enter()` does when GistDetail is opened from Gists (OpenGistDetail).
+    state.nav_stack.push(Screen::Gists(Box::default()));
     state.screen = Screen::GistDetail(Box::default());
     state.handle_key(KeyCode::Char('q'));
     assert!(state.screen.is_gists());
@@ -515,7 +500,10 @@ fn detail_c_triggers_compaction_and_records_origin() {
     detail_mut(&mut state).gist_id = Some("g1".into());
     let outcome = state.handle_key(KeyCode::Char('c'));
     assert!(matches!(outcome, KeyOutcome::CompactGist { .. }));
-    assert!(detail_ref(&state).compact_return_screen.is_gist_detail());
+    assert!(state
+        .pending_return
+        .as_ref()
+        .is_some_and(Screen::is_gist_detail));
 }
 
 #[test]
@@ -532,7 +520,10 @@ fn detail_number_key_requests_file_preview() {
             ..
         } if gist_id == "g1" && filename == "a.txt"
     ));
-    assert!(state.preview_return.is_gist_detail());
+    assert!(state
+        .pending_return
+        .as_ref()
+        .is_some_and(Screen::is_gist_detail));
 }
 
 #[test]
@@ -599,14 +590,12 @@ fn detail_x_requests_gist_delete_confirm() {
 #[test]
 fn preview_q_returns_to_launch_screen() {
     let mut state = state_with_gists();
-    state.screen = Screen::Preview(Box::new(PreviewState {
-        return_screen: Screen::GistDetail(Box::default()),
-        ..PreviewState::default()
-    }));
+    state.nav_stack.push(Screen::GistDetail(Box::default()));
+    state.screen = Screen::Preview(Box::default());
     state.handle_key(KeyCode::Char('q'));
     assert!(state.screen.is_gist_detail());
-    // Staging field reset so a later list-launched preview returns to the list.
-    assert_eq!(state.preview_return, Screen::List);
+    // nav_stack is now drained, so a later list-launched preview isn't left pointing here.
+    assert!(state.nav_stack.is_empty());
 }
 
 #[test]
@@ -1296,7 +1285,7 @@ fn question_opens_contextual_help_from_list() {
     state.handle_key(KeyCode::Char('?'));
     assert!(state.screen.is_help());
     assert_eq!(help_ref(&state).topic, HelpTopic::List);
-    assert_eq!(help_ref(&state).return_screen, Screen::List);
+    assert_eq!(state.nav_stack.last(), Some(&Screen::List));
     assert!(!help_ref(&state).index_open);
     // Arrow keys scroll help
     state.handle_key(KeyCode::Down);
@@ -2637,8 +2626,8 @@ fn c_in_detail_requests_compaction_not_gist_manager() {
 #[test]
 fn compact_confirm_y_executes_and_n_returns_to_gist_manager() {
     let mut state = state_with_two_gists();
-    // CompactAnalyze parks the restore target before Confirm opens (staged diff_return).
-    state.diff_return = Screen::Gists(Box::default());
+    // CompactAnalyze parks the restore target before Confirm opens (staged pending_return).
+    state.pending_return = Some(Screen::Gists(Box::default()));
     set_pending(
         &mut state,
         PendingAction::CompactGist {
@@ -2653,7 +2642,7 @@ fn compact_confirm_y_executes_and_n_returns_to_gist_manager() {
     );
 
     // Re-open confirm for the cancel path (y does not leave Confirm until IO runs).
-    state.diff_return = Screen::Gists(Box::default());
+    state.pending_return = Some(Screen::Gists(Box::default()));
     set_pending(
         &mut state,
         PendingAction::CompactGist {
@@ -2811,7 +2800,7 @@ fn confirm_upload_n_cancels_and_resets_watching() {
 #[test]
 fn confirm_upload_n_cancels_to_diff_return_screen() {
     let mut state = initial_state();
-    state.diff_return = Screen::Pins(Box::default());
+    state.pending_return = Some(Screen::Pins(Box::default()));
     set_pending(
         &mut state,
         PendingAction::Upload {
@@ -3865,7 +3854,7 @@ fn top_bar_config_click_opens_settings_from_any_screen() {
     };
     let out = state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
     assert!(state.screen.is_config());
-    assert!(config_ref(&state).return_screen.is_preview());
+    assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
     assert_eq!(out, KeyOutcome::None);
 }
 
@@ -3879,12 +3868,12 @@ fn top_bar_config_click_while_already_on_config_does_not_trap_keyboard_exit() {
     };
     state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
     assert!(state.screen.is_config());
-    assert!(config_ref(&state).return_screen.is_preview());
+    assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
 
     // Second click on Config while already there must not overwrite return_screen.
     let out = state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
     assert!(state.screen.is_config());
-    assert!(config_ref(&state).return_screen.is_preview());
+    assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
     assert_eq!(out, KeyOutcome::None);
 
     state.handle_key(KeyCode::Esc);
@@ -3901,7 +3890,7 @@ fn top_bar_help_click_opens_help_and_remembers_return_screen_from_any_screen() {
     };
     let out = state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
     assert!(state.screen.is_help());
-    assert!(help_ref(&state).return_screen.is_preview());
+    assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
     assert_eq!(out, KeyOutcome::None);
 }
 
@@ -3916,14 +3905,14 @@ fn top_bar_help_click_while_already_on_help_does_not_trap_keyboard_exit() {
     // First click opens Help from Preview, remembering Preview as the return screen.
     state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
     assert!(state.screen.is_help());
-    assert!(help_ref(&state).return_screen.is_preview());
+    assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
 
     // A second click on the same top-bar Help hotspot, now that Help is already open, must
     // be a no-op — it must not overwrite return_screen with Screen::Help, which would trap
     // Esc/`?`/the close button in Help with no keyboard way out.
     let out = state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
     assert!(state.screen.is_help());
-    assert!(help_ref(&state).return_screen.is_preview());
+    assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
     assert_eq!(out, KeyOutcome::None);
 
     // Esc must still return to the real origin screen, not stay stuck on Help.
@@ -4452,7 +4441,7 @@ fn capital_h_from_list_opens_revisions_for_selected_gist_file() {
     assert!(state.screen.is_revisions());
     assert_eq!(revision_ref(&state).gist_id.as_deref(), Some("a"));
     assert_eq!(revision_ref(&state).target_file, "settings.json");
-    assert_eq!(revision_ref(&state).return_screen, Screen::List);
+    assert_eq!(state.nav_stack.last(), Some(&Screen::List));
 }
 
 #[test]
@@ -4466,7 +4455,7 @@ fn capital_h_from_gist_detail_opens_revisions_and_fetches() {
     assert!(state.screen.is_revisions());
     assert_eq!(revision_ref(&state).gist_id.as_deref(), Some("g1"));
     assert_eq!(revision_ref(&state).target_file, "b.txt");
-    assert!(revision_ref(&state).return_screen.is_gist_detail());
+    assert!(state.nav_stack.last().is_some_and(Screen::is_gist_detail));
     assert!(revision_ref(&state).entries.is_none());
 }
 
@@ -4572,7 +4561,7 @@ fn revisions_enter_triggers_incremental_diff() {
 #[test]
 fn revision_diff_omits_download_upload() {
     let mut state = initial_state();
-    state.diff_return = Screen::Revisions(Box::default());
+    state.pending_return = Some(Screen::Revisions(Box::default()));
     state.enter_diff("diff".into(), String::new(), PathBuf::new(), PathBuf::new());
     let footer = diff_footer(&state);
     assert!(!footer.contains("download"));
@@ -4777,7 +4766,7 @@ fn question_mark_opens_contextual_help_from_pins() {
     state.handle_key(KeyCode::Char('?'));
     assert!(state.screen.is_help());
     assert_eq!(help_ref(&state).topic, HelpTopic::Pins);
-    assert!(help_ref(&state).return_screen.is_pins());
+    assert!(state.nav_stack.last().is_some_and(Screen::is_pins));
     assert!(!help_ref(&state).index_open);
 }
 
@@ -4840,7 +4829,7 @@ fn repo_link_click_opens_repo_url_regardless_of_which_screen_set_the_rect() {
 fn help_topic_view_esc_returns_to_origin() {
     let mut state = initial_state();
     state.screen = Screen::Help(Box::default());
-    help_mut(&mut state).return_screen = Screen::Gists(Box::default());
+    state.nav_stack.push(Screen::Gists(Box::default()));
     state.handle_key(KeyCode::Esc);
     assert!(state.screen.is_gists());
 }
@@ -4864,7 +4853,7 @@ fn help_index_esc_returns_to_origin() {
     let mut state = initial_state();
     state.screen = Screen::Help(Box::default());
     help_mut(&mut state).index_open = true;
-    help_mut(&mut state).return_screen = Screen::List;
+    state.nav_stack.push(Screen::List);
     state.handle_key(KeyCode::Esc);
     assert_eq!(state.screen, Screen::List);
     assert!(state.help().is_none());
@@ -4875,7 +4864,7 @@ fn help_index_question_mark_exits_help() {
     let mut state = initial_state();
     state.screen = Screen::Help(Box::default());
     help_mut(&mut state).index_open = true;
-    help_mut(&mut state).return_screen = Screen::Pins(Box::default());
+    state.nav_stack.push(Screen::Pins(Box::default()));
     state.handle_key(KeyCode::Char('?'));
     assert!(state.screen.is_pins());
     assert!(state.help().is_none());
@@ -5418,7 +5407,6 @@ fn scroll_up_moves_content_three_lines() {
 fn close_button_click_returns_from_help() {
     let mut state = state_with_gists();
     // Simulate entering Help (mirrors what open_help() does).
-    help_mut(&mut state).return_screen = Screen::List;
     state.screen = Screen::Help(Box::default());
     let layout = MouseLayout {
         close_button: Some(Rect::new(36, 0, 5, 1)),
@@ -5432,7 +5420,6 @@ fn close_button_click_returns_from_help() {
 #[test]
 fn close_button_click_outside_is_noop() {
     let mut state = state_with_gists();
-    help_mut(&mut state).return_screen = Screen::List;
     state.screen = Screen::Help(Box::default());
     let layout = MouseLayout {
         close_button: Some(Rect::new(36, 0, 5, 1)),
@@ -5533,7 +5520,6 @@ fn click_in_pane_blank_focuses_without_selecting() {
 #[test]
 fn click_off_list_screen_is_noop() {
     let mut state = state_with_gists();
-    help_mut(&mut state).return_screen = Screen::List;
     state.screen = Screen::Help(Box::default());
     let hit = PaneHit {
         rect: Rect::new(20, 0, 20, 10),
