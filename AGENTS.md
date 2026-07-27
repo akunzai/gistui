@@ -1,85 +1,83 @@
 # AGENTS.md
 
-`gistui` is a Rust 2021 TUI for managing GitHub Gists — browse/diff/download/upload/create/pin gists and pair them with files in the working directory, all through the GitHub CLI (`gh`).
+`gistui` is a Rust 2021 TUI for GitHub Gists (browse / diff / download / upload / create / pin) via `gh`.
 
-## Build / Test / Run
+## Commands
 
-The dev toolchain (Rust + components, `agg`, and `uv` for the demo's Python
-helpers) is pinned in [`mise.toml`](mise.toml). Run `mise install` once to
-provision it; `mise tasks` lists the wrappers. `gh` is **not** pinned — it is a
-user-provided runtime dependency. Plain `cargo` still works if you manage your
-own toolchain.
+Toolchain + task wrappers: [`mise.toml`](mise.toml) (`mise install` once; `gh` is a user runtime dep, not pinned).
 
 ```bash
-mise install            # provision the pinned toolchain (one-time)
-cargo run               # launch the TUI (needs a TTY)
-cargo run -- --check    # print gh readiness, then exit (no TUI)
-cargo test              # full suite; must NOT touch the network or require gh auth
-mise run demo-gif       # regenerate the README demo GIF; re-run after any UI change
-mise run demo-png       # regenerate the still PNG screenshots (website/*.png)
-mise run demo           # regenerate all demo media (demo-gif + demo-png)
+mise install            # pinned Rust/agg/uv
+cargo run               # TUI (needs TTY)
+cargo run -- --check    # gh readiness, no TUI
+cargo test              # no network / no gh auth
+mise run check          # verification gate (fmt + clippy -D warnings + test + check)
+mise run demo           # regenerate demo media (see @scripts/demo/README.md)
 ```
 
-The demo recording harness (`scripts/demo/`) drives the **real** binary in a pseudo-tty against a **fake `gh`** over fake data, then renders `website/demo.gif` with `agg`. Only the GIF is versioned (the cast is a throwaway intermediate). Edit `storyboard.json` to change what the demo shows; see `scripts/demo/README.md`.
+Single-test: `cargo test <name_filter>`.
 
-## Verification Gate (run before every commit)
+## Architecture (index)
 
-All four MUST pass — the project treats clippy warnings as errors. Run them
-together with `mise run check`, or individually:
+**Pure vs impure**, **Screen SM**, **Jobs**, **VM seam**, **pin-sync cache**, **teardown**: full jargon + rich refs in [`docs/agents/architecture.md`](docs/agents/architecture.md).
 
-```bash
-cargo fmt --check
-cargo test
-cargo check
-cargo clippy --all-targets -- -D warnings
-```
+Cheat sheet:
 
-If `cargo fmt --check` fails, run `cargo fmt` and confirm only formatting changed.
+| Seam | Rule |
+| --- | --- |
+| Pure modules | unit-tested; no FS/network |
+| Thin IO | `gh` / execute / `run_loop`+`bg` — not unit-tested by design |
+| Keys | `handle_key` pure → `KeyOutcome` → dispatch IO |
+| Jobs | single `Jobs` registry; gen supersession; absorb only in `run_loop` |
+| Paint | pure `ViewModel` each frame; paint = theme/layout only |
+| Screen | `Clone` not `Copy`; `List` unit tag; payloads + `nav_stack` for return |
 
-## Architecture
+Rich refs: `@src/tui/mod.rs` (`Screen`, `AppState`, `KeyOutcome`), `@src/tui/view_model.rs`, `@src/tui/bg.rs` (`Jobs`), `@src/actions.rs` (`DownloadMode`).
 
-Pure, testable domain logic is kept separate from impure shell/filesystem adapters:
+## Non-obvious constraints
 
-- Pure modules (unit-tested): `domain`, `config`, `ranking`, `local`, `diff`, the command-planning/guard parts of `actions`, and `tui::view_model` (`build_view_model`: `AppState` + pin-sync cache → presentation facts).
-- Thin IO boundaries (not unit-tested by design): `gh` (`gh` subprocess calls), the `actions` execute helpers, and the IO helper fns in `tui::run_loop` / `tui::bg` workers.
-- **Background jobs (issue #243):** `Jobs` is the single registry for spawn/absorb/cancel. Action jobs and local scans use generation supersession (issue #221); call sites use `jobs.spawn_action` / `request_*` rather than owning channel fields. `run_loop` only polls `jobs.absorb`.
-- `tui` is a screen state machine (`Screen::{List, Diff(payload), Confirm(payload), Preview(payload), Help(payload), Config(payload), Revisions(payload), Pins(payload), Gists(payload), GistDetail(payload), Palette(payload), …}`; `Gists` is the gist-level manager). **Screen is `Clone`, not `Copy`** — payload variants hold screen-local state (issue #242 complete). **List stays a unit tag**: dual-pane selection/filters/sorts are session-global on `AppState` (user story 19 — not everything is forced into `Screen`). Diff owns body/scroll/pairing paths/pin identity/return; Confirm owns pending action + background text + return; Preview owns title/body/scroll/return; staged root `diff_return` / `preview_return` / `staged_diff_gist` are consumed on enter only. Revision/pin payloads park on Diff/Confirm return; detail parks on preview/compact restore; palette origin lives on the palette payload; opening detail from Gists parks the Gists payload on `detail.return_screen` so Esc restores list state. `AppState::handle_key` is **pure** — it mutates state and returns a `KeyOutcome` intent (IO-bearing variants carry payloads — issue #244); `run_loop`/`dispatch_outcome` perform the IO. Keep new key logic in `handle_key` (testable) and new IO in dispatch helpers.
-- **View-model seam (issues #241 / #250):** each frame builds a pure `ViewModel` (`ChromeVm` + `ScreenVm`) at the draw entry for **every** screen (including Palette and Confirm with Diff/compact backgrounds). Paint helpers apply theme/layout only — no business rules or FS/network work.
-- **Pin sync presentation:** `refresh_pin_sync_cache` (impure: may stat/read/hash local files) fills `AppState::pin_sync_cache`. Refresh on enter/return to Pins, when the pin list changes, after successful pin sync absorb, or when the dirty flag / length mismatch requires it — **not** every frame and not from the pure builder. Action dispatch may call `compute_pin_sync_status` for a one-shot decision; paint uses only `cached_pin_sync_status` / the VM. While staying on Pins, external editor edits may leave badges temporarily stale until the next refresh (no mtime watch).
-- `run()` wraps `run_loop()` so terminal teardown (raw mode / alternate screen) ALWAYS runs, even on error — keep fallible startup/IO inside `run_loop`, never between `enable_raw_mode` and the teardown.
-
-## Non-Obvious Rules
-
-- Tests must never call the real `gh` or the network. `gh` JSON parsing is tested against fixtures in `tests/fixtures/gh/`; multi-step collect orchestrations take an injectable `CommandRunner` (`*_with` + `actions::test_support::SeqRunner`, issue #245); remaining IO functions are thin untested boundaries. End-to-end TUI exercising (driving the real binary, asserting on rendered frames) belongs to the `scripts/demo/` harness — which fakes `gh` and the working dir — not to the unit suite.
-- Downloads only write to `cwd/<gist-filename>`. The overwrite gate is **type-enforced** (issue #246): `execute_download` takes `DownloadMode::CreateNew` (refuses if the path exists) or `DownloadMode::Overwrite` (token only via `DownloadMode::overwrite_after_user_confirm()` after Confirm `y`). An existing target must never be written without that token — no boolean `true` bypass. Writing a path that does not yet exist uses `CreateNew` (no confirm).
-- No GitHub tokens are stored by the app, and gist *content* is never written to the config file (`~/.config/gistui/config.toml`, XDG-aware). The config holds only `pinned` mappings and `skip_dirs`. See `config.example.toml` for the annotated schema.
-- Use `frame.area()` (not `frame.size()`, which was removed in ratatui 0.28). The project now pins ratatui 0.30.
-- `Rect::inner` takes `Margin` by value (not `&Margin`) since ratatui 0.28.
+- **No live `gh`/network in tests.** Parse fixtures: `tests/fixtures/gh/`. Multi-step collect: injectable `CommandRunner` (`*_with` + `SeqRunner`, #245). E2E frames → `@scripts/demo/`, not the unit suite.
+- **Download overwrite is type-enforced** (#246): `DownloadMode::CreateNew` \| `Overwrite` (token only via `overwrite_after_user_confirm()` after Confirm `y`). Never a boolean bypass. Target: `cwd/<gist-filename>` only.
+- **Config is metadata-only**: `pinned` + `skip_dirs` (and UI prefs) — never gist *content* or GitHub tokens. Schema: `@config.example.toml`.
+- **ratatui 0.30**: `frame.area()` (not removed `frame.size()`); `Rect::inner` takes `Margin` by value.
 
 ## Conventions
 
-- Commit messages: Conventional Commits, in English (e.g. `feat:`, `docs:`, `fix:`).
-- Fold same-scope follow-up fixes into the original commit (amend) rather than adding `fix typo` / `review fix` commits.
-- Every PR MUST carry a release-note category label (`enhancement`, `bug`, `documentation`, `dependencies`, or `skip-changelog`) — GitHub groups auto-generated release notes by these via `.github/release.yml`.
-- When a change adds or alters a user-facing key, screen, or feature, update `README.md` (the Actions/keymap and Safety sections) and the `?` help text in `tui.rs` **in the same PR** — keep docs and behavior in lockstep.
-- Any user-facing feature or bug fix MUST add a concise bullet under the `## [Unreleased]` section of `CHANGELOG.md` **in the same PR**. Keep it one line, summarising the user-visible effect (GitHub Releases stays the authoritative, detailed source — see the file header). Changes labelled `skip-changelog` or purely internal (dependency bumps, refactors, test-only, typo fixes) do not need an entry.
-- Versioning (SemVer): stay on `0.x` while the keymap/feature surface is still evolving; only cut `1.0.0` once it has gone several releases without a breaking UX change. A release is a `vX.Y.Z` tag matching `Cargo.toml`, which triggers `.github/workflows/release.yml` to build and attach the platform binaries the README `install.sh` expects.
-- Release flow: bump `Cargo.toml` to the next version **when starting** the first new feature after a release — this keeps the in-development build distinct from the published one. Land changelog entries under `## [Unreleased]` during development (do **not** stamp a version or date on them yet). Only at the actual release does the `## [Unreleased]` heading get renamed to `## [X.Y.Z] — YYYY-MM-DD`; that is also when the `vX.Y.Z` tag is cut. So a version bump alone (no changelog version/date) is the normal mid-cycle state, not an oversight.
+Human contributor flow: [`CONTRIBUTING.md`](CONTRIBUTING.md). Release cut: [`RELEASING.md`](RELEASING.md).
 
-## Agent skills
+Agent-facing deltas (not fully restated in those docs):
 
-### Issue tracker
+- Conventional Commits (English); fold same-scope follow-ups via amend (no `fix typo` noise).
+- Every PR: one release-note label — `enhancement` \| `bug` \| `documentation` \| `dependencies` \| `skip-changelog` (see `.github/release.yml`).
+- User-facing key/screen/feature change → update `README.md` + `?` help in `tui` **same PR**.
+- User-visible fix/feature → one-line bullet under `CHANGELOG.md` `## [Unreleased]` **same PR** (skip for `skip-changelog` / pure internal).
+- Stay on `0.x` while keymap surface evolves. Mid-cycle: bump `Cargo.toml` on first post-release feature; keep changelog under `[Unreleased]` until the cut renames it and tags `vX.Y.Z`.
 
-Issues live in this repo's GitHub Issues (`akunzai/gistui`), driven via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+## Agent skills (lazy-load)
 
-### Triage labels
+- Issue tracker (`gh`): `@docs/agents/issue-tracker.md`
+- Triage labels: `@docs/agents/triage-labels.md`
+- Domain / ADR lazy layout: `@docs/agents/domain.md`
+- Architecture deep-dive: `@docs/agents/architecture.md`
 
-The five canonical triage roles, each label string equal to its name. See `docs/agents/triage-labels.md`.
+## Knowledge writeback
 
-### Domain docs
+When problem-solving surfaces **non-obvious** project knowledge (gotcha, env quirk, framework behavior, hidden config), the agent **must**:
 
-Single-context — `CONTEXT.md` + `docs/adr/` at the repo root, created lazily. See `docs/agents/domain.md`.
+1. **Distill** — one durable, context-tagged bullet (e.g. `[ratatui 0.30] …`), not a debug transcript.
+2. **Propose** — show the candidate snippet and ask: *“This insight may be worth preserving. Shall I add it to `AGENTS.md`?”*
+3. **Write only after explicit approval** — never silent writeback.
+4. **Route**:
+   - Durable architecture / seam rule → `@docs/agents/architecture.md` or a Rich Ref (type/test), not long prose here.
+   - Short gotcha → `## Lessons Learned` below (or `## Non-obvious constraints` if it is a standing gate).
+5. **Quality gates** (all required): non-derivable from code alone · not a drifting metric · not micromanagement · ≤ 2 bullets.
+6. **Active pruning**: `## Lessons Learned` max **5** entries. Over 5 → propose drop obsolete version-scoped gotchas or promote into types/tests/architecture docs.
+
+## Lessons Learned (actively pruned, max 5)
+
+<!-- Populated only via Knowledge writeback after user approval. -->
 
 ## Claude Code compatibility
 
-`CLAUDE.md` is a symbolic link to this `AGENTS.md`, so Claude Code and any AGENTS.md-aware assistant read the same project memory. Edit `AGENTS.md`; never edit `CLAUDE.md` directly.
+> [!NOTE]
+> `CLAUDE.md` is a symbolic link to `AGENTS.md`. Edit **only** `AGENTS.md`; do not edit or replace the symlink.
