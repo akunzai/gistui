@@ -459,7 +459,7 @@ fn pins_palette_items(state: &AppState) -> Vec<PaletteItem> {
 
 fn gists_palette_items(state: &AppState) -> Vec<PaletteItem> {
     let groups = state.visible_gist_groups();
-    let index = state.gist_manager().map(|g| g.index).unwrap_or(0);
+    let index = state.gist_manager().map(|g| g.cursor.index).unwrap_or(0);
     let has_sel = index < groups.len();
     vec![
         key_item("Enter", "Open gist detail", KeyCode::Enter, has_sel),

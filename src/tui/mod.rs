@@ -826,6 +826,8 @@ pub struct RevisionState {
     /// Fetched revision rows (`None` while the initial list fetch is in flight).
     pub entries: Option<Vec<GistRevision>>,
     /// Cursor into `entries` (0 = current head).
+    /// Not a [`ListCursor`]: Revisions does not reset hscroll on vertical move and does
+    /// not clamp Right to an hmax (issue #274 — out of scope).
     pub index: usize,
     pub hscroll: u16,
     /// File within the gist that preview/diff/restore target.
@@ -849,8 +851,8 @@ pub struct HelpState {
 /// Pins-screen state — carried on [`Screen::Pins`] (issue #242).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PinsState {
-    pub index: usize,
-    pub hscroll: u16,
+    /// Selection + row hscroll (shared Pins/Gists policy; issue #274).
+    pub cursor: ListCursor,
     pub filtering: bool,
     pub filter_query: TextInput,
     pub sort: PinSort,
@@ -916,8 +918,8 @@ impl Default for ConfirmState {
 /// `Vec`. Data only — methods stay on `AppState`.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GistsManagerState {
-    pub index: usize,
-    pub hscroll: u16,
+    /// Selection + row hscroll (shared Pins/Gists policy; issue #274).
+    pub cursor: ListCursor,
     pub sort: GistGroupSort,
     pub type_filter: GistTypeFilter,
     pub filtering: bool,
@@ -1820,7 +1822,7 @@ impl AppState {
 
     /// The gist highlighted in the gist-level view.
     pub fn selected_group(&self) -> Option<GistGroup> {
-        let idx = self.gist_manager().map(|g| g.index).unwrap_or(0);
+        let idx = self.gist_manager().map(|g| g.cursor.index).unwrap_or(0);
         self.visible_gist_groups().into_iter().nth(idx)
     }
 
@@ -1899,7 +1901,7 @@ impl AppState {
     /// The true `self.pinned` index of the currently selected Pins row (selection is a
     /// position within the filtered view).
     pub fn selected_pin_index(&self) -> Option<usize> {
-        let idx = self.pins().map(|p| p.index).unwrap_or(0);
+        let idx = self.pins().map(|p| p.cursor.index).unwrap_or(0);
         self.visible_pin_indices().get(idx).copied()
     }
 
@@ -2803,6 +2805,8 @@ use text::{comment_lines_count, hscroll_max_among, local_row_label};
 mod bg;
 mod dispatch;
 mod keys;
+mod list_cursor;
+pub(crate) use list_cursor::ListCursor;
 mod run_loop;
 use run_loop::run_loop;
 mod text_input;

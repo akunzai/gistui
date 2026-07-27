@@ -37,6 +37,19 @@ fn nav_action(code: KeyCode, modifiers: KeyModifiers) -> Option<NavAction> {
 /// keeps paging predictable without threading terminal size into the key logic.
 const PAGE_SCROLL: u16 = 10;
 
+/// Dispatch [`NavAction`] onto a Pins/Gists [`ListCursor`] (step from [`PAGE_SCROLL`]).
+fn apply_list_cursor_nav(cursor: &mut ListCursor, action: NavAction, len: usize, hmax: u16) {
+    let step = PAGE_SCROLL as usize;
+    match action {
+        NavAction::Down => cursor.down(len),
+        NavAction::Up => cursor.up(),
+        NavAction::Right => cursor.right(hmax),
+        NavAction::Left => cursor.left(),
+        NavAction::PageDown => cursor.page_down(len, step),
+        NavAction::PageUp => cursor.page_up(step),
+    }
+}
+
 /// `T` theme toggle accepts a plain capital key (Caps Lock) or Shift+T; reject Ctrl/Alt combos.
 fn theme_toggle_modifiers_ok(modifiers: KeyModifiers) -> bool {
     modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
@@ -271,85 +284,24 @@ impl AppState {
         {
             return false;
         }
-        // Pins: precompute len/hmax (immutable helpers) then mut the payload — cannot hold
-        // `&mut PinsState` from `match &mut self.screen` while calling those helpers.
+        // Pins/Gists: precompute len/hmax with &self, then mut ListCursor (issue #274).
+        // Cannot hold `&mut PinsState` from `match &mut self.screen` while calling helpers.
         if matches!(self.screen, Screen::Pins(_)) {
             let len = self.visible_pin_indices().len();
             let hmax = self.pins_hscroll_max();
             let Some(pins) = self.pins_mut() else {
                 return false;
             };
-            match action {
-                NavAction::Down => {
-                    if pins.index + 1 < len {
-                        pins.index += 1;
-                        pins.hscroll = 0;
-                    }
-                }
-                NavAction::Up => {
-                    if pins.index > 0 {
-                        pins.index -= 1;
-                        pins.hscroll = 0;
-                    }
-                }
-                NavAction::Right => {
-                    pins.hscroll = (pins.hscroll + 1).min(hmax);
-                }
-                NavAction::Left => {
-                    pins.hscroll = pins.hscroll.saturating_sub(1);
-                }
-                NavAction::PageDown => {
-                    if len > 0 {
-                        let max = len - 1;
-                        pins.index = (pins.index + PAGE_SCROLL as usize).min(max);
-                        pins.hscroll = 0;
-                    }
-                }
-                NavAction::PageUp => {
-                    pins.index = pins.index.saturating_sub(PAGE_SCROLL as usize);
-                    pins.hscroll = 0;
-                }
-            }
+            apply_list_cursor_nav(&mut pins.cursor, action, len, hmax);
             return true;
         }
-        // Gists: same borrow pattern as Pins (visible groups / hscroll max need &self).
         if matches!(self.screen, Screen::Gists(_)) {
             let len = self.visible_gist_groups().len();
             let hmax = self.gists_hscroll_max();
             let Some(gm) = self.gist_manager_mut() else {
                 return false;
             };
-            match action {
-                NavAction::Down => {
-                    if gm.index + 1 < len {
-                        gm.index += 1;
-                        gm.hscroll = 0;
-                    }
-                }
-                NavAction::Up => {
-                    if gm.index > 0 {
-                        gm.index -= 1;
-                        gm.hscroll = 0;
-                    }
-                }
-                NavAction::Right => {
-                    gm.hscroll = (gm.hscroll + 1).min(hmax);
-                }
-                NavAction::Left => {
-                    gm.hscroll = gm.hscroll.saturating_sub(1);
-                }
-                NavAction::PageDown => {
-                    if len > 0 {
-                        let max = len - 1;
-                        gm.index = (gm.index + PAGE_SCROLL as usize).min(max);
-                        gm.hscroll = 0;
-                    }
-                }
-                NavAction::PageUp => {
-                    gm.index = gm.index.saturating_sub(PAGE_SCROLL as usize);
-                    gm.hscroll = 0;
-                }
-            }
+            apply_list_cursor_nav(&mut gm.cursor, action, len, hmax);
             return true;
         }
         match &mut self.screen {
@@ -567,23 +519,15 @@ impl AppState {
                 return KeyOutcome::None;
             };
             match code {
-                KeyCode::Up if pins.index > 0 => {
-                    pins.index -= 1;
-                    pins.hscroll = 0;
-                }
-                KeyCode::Up => {}
+                KeyCode::Up => pins.cursor.up(),
                 KeyCode::Down => {
                     // visible length needs self; re-fetch after borrow ends
                 }
                 _ => match apply_filter_edit(code, &mut pins.filter_query) {
-                    FilterKey::Edited => {
-                        pins.index = 0;
-                        pins.hscroll = 0;
-                    }
+                    FilterKey::Edited => pins.cursor.reset(),
                     FilterKey::Cleared => {
                         pins.filtering = false;
-                        pins.index = 0;
-                        pins.hscroll = 0;
+                        pins.cursor.reset();
                     }
                     FilterKey::Exited => pins.filtering = false,
                     FilterKey::Moved | FilterKey::Pass => {}
@@ -592,10 +536,7 @@ impl AppState {
             if code == KeyCode::Down {
                 let len = self.visible_pin_indices().len();
                 if let Some(pins) = self.pins_mut() {
-                    if pins.index + 1 < len {
-                        pins.index += 1;
-                        pins.hscroll = 0;
-                    }
+                    pins.cursor.down(len);
                 }
             }
             return KeyOutcome::None;
@@ -657,8 +598,7 @@ impl AppState {
             KeyCode::Char('o') => {
                 if let Some(pins) = self.pins_mut() {
                     pins.sort = pins.sort.next();
-                    pins.index = 0;
-                    pins.hscroll = 0;
+                    pins.cursor.reset();
                 }
             }
             KeyCode::Char('?') => self.open_help(),
@@ -675,23 +615,15 @@ impl AppState {
                 return KeyOutcome::None;
             };
             match code {
-                KeyCode::Up if gm.index > 0 => {
-                    gm.index -= 1;
-                    gm.hscroll = 0;
-                }
-                KeyCode::Up => {}
+                KeyCode::Up => gm.cursor.up(),
                 KeyCode::Down => {
                     // visible length needs self; re-fetch after borrow ends
                 }
                 _ => match apply_filter_edit(code, &mut gm.filter_query) {
-                    FilterKey::Edited => {
-                        gm.index = 0;
-                        gm.hscroll = 0;
-                    }
+                    FilterKey::Edited => gm.cursor.reset(),
                     FilterKey::Cleared => {
                         gm.filtering = false;
-                        gm.index = 0;
-                        gm.hscroll = 0;
+                        gm.cursor.reset();
                     }
                     FilterKey::Exited => gm.filtering = false,
                     FilterKey::Moved | FilterKey::Pass => {}
@@ -700,16 +632,13 @@ impl AppState {
             if code == KeyCode::Down {
                 let len = self.visible_gist_groups().len();
                 if let Some(gm) = self.gist_manager_mut() {
-                    if gm.index + 1 < len {
-                        gm.index += 1;
-                        gm.hscroll = 0;
-                    }
+                    gm.cursor.down(len);
                 }
             }
             return KeyOutcome::None;
         }
         let groups_len = self.visible_gist_groups().len();
-        let index = self.gist_manager().map(|g| g.index).unwrap_or(0);
+        let index = self.gist_manager().map(|g| g.cursor.index).unwrap_or(0);
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
             KeyCode::Char('/') => {
@@ -720,15 +649,13 @@ impl AppState {
             KeyCode::Char('s') => {
                 if let Some(gm) = self.gist_manager_mut() {
                     gm.sort = gm.sort.next();
-                    gm.index = 0;
-                    gm.hscroll = 0;
+                    gm.cursor.reset();
                 }
             }
             KeyCode::Char('v') => {
                 if let Some(gm) = self.gist_manager_mut() {
                     gm.type_filter = gm.type_filter.next();
-                    gm.index = 0;
-                    gm.hscroll = 0;
+                    gm.cursor.reset();
                 }
             }
             KeyCode::Char('*') => return self.star_toggle_intent(),
@@ -1071,8 +998,7 @@ impl AppState {
                         let count = self.visible_gist_groups().len();
                         if let Some(idx) = hit.index_at(row, count) {
                             if let Some(gm) = self.gist_manager_mut() {
-                                gm.index = idx;
-                                gm.hscroll = 0;
+                                gm.cursor.select(idx);
                                 return true;
                             }
                         }
@@ -1086,8 +1012,7 @@ impl AppState {
                         let count = self.visible_pin_indices().len();
                         if let Some(idx) = hit.index_at(row, count) {
                             if let Some(pins) = self.pins_mut() {
-                                pins.index = idx;
-                                pins.hscroll = 0;
+                                pins.cursor.select(idx);
                                 return true;
                             }
                         }
@@ -1867,9 +1792,10 @@ impl AppState {
         self.screen = Screen::Gists(Box::default());
         let groups = self.visible_gist_groups();
         if let Some(gm) = self.gist_manager_mut() {
-            gm.index = target
+            let idx = target
                 .and_then(|id| groups.iter().position(|g| g.id == id))
                 .unwrap_or(0);
+            gm.cursor.select(idx);
         }
     }
 
@@ -1877,8 +1803,7 @@ impl AppState {
     /// filtered-in position from a previous visit never lingers.
     pub(crate) fn open_pins(&mut self) {
         self.screen = Screen::Pins(Box::new(PinsState {
-            index: 0,
-            hscroll: 0,
+            cursor: ListCursor::default(),
             ..PinsState::default()
         }));
     }
