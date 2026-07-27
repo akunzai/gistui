@@ -17,19 +17,18 @@ pub(super) fn dispatch_outcome(
         KeyOutcome::Quit => return Ok(LoopFlow::Quit),
         KeyOutcome::PreviewDiff {
             local_path,
-            gist_id,
-            filename,
-            raw_url,
+            file,
             target,
             upload_orientation,
         } => {
             // List-originated diff returns to List on Esc.
             state.pending_return = Some(Screen::List);
-            let gist = GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone());
+            let gist = file.to_gist_file();
             let (local_label, gist_label) = diff_labels(local_path.as_deref(), &gist);
 
             jobs.spawn_action(state, "Loading diff…", move || {
-                let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
+                let result =
+                    fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
                 BgTaskOutcome::PreviewDiff {
                     result,
                     local_path,
@@ -41,24 +40,19 @@ pub(super) fn dispatch_outcome(
             });
         }
         KeyOutcome::Download { mode } => download(state, mode),
-        KeyOutcome::DownloadGist {
-            gist_id,
-            filename,
-            raw_url,
-            target,
-        } => {
-            let gist = GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone());
+        KeyOutcome::DownloadGist { file, target } => {
+            let gist = file.to_gist_file();
             let (local_label, gist_label) = diff_labels(Some(&target), &gist);
 
             jobs.spawn_action(state, "Downloading…", move || {
-                let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
+                let result =
+                    fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
                 BgTaskOutcome::DownloadSelected {
                     result,
                     target,
                     local_label,
                     gist_label,
-                    gist_id,
-                    filename,
+                    file,
                 }
             });
         }
@@ -173,9 +167,7 @@ pub(super) fn dispatch_outcome(
         }
         KeyOutcome::UploadPreview {
             local_path,
-            gist_id,
-            filename,
-            raw_url,
+            file,
             from_pin_diff,
         } => {
             if !from_pin_diff {
@@ -184,18 +176,22 @@ pub(super) fn dispatch_outcome(
             let gist_file = state
                 .gists
                 .iter()
-                .find(|g| g.gist_id == gist_id && g.filename == filename)
+                .find(|g| g.gist_id == file.gist_id && g.filename == file.filename)
                 .cloned()
-                .unwrap_or_else(|| GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url));
+                .unwrap_or_else(|| file.to_gist_file());
             let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
-            let raw_url = gist_file.raw_url.clone();
+            // Prefer list-row raw_url when present (may be richer than the outcome's ref).
+            let mut file = file;
+            if file.raw_url.is_none() {
+                file.raw_url = gist_file.raw_url.clone();
+            }
 
             jobs.spawn_action(state, "Loading diff…", move || {
-                let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
+                let result =
+                    fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
                 BgTaskOutcome::UploadPreview {
                     result,
-                    gist_id,
-                    filename,
+                    file,
                     local_path,
                     local_label,
                     gist_label,
@@ -235,11 +231,11 @@ pub(super) fn dispatch_outcome(
                 .iter()
                 .any(|g| g.gist_id == gist_id && g.filename == filename);
 
+            let file = crate::domain::GistFileRef::id_name(gist_id, filename);
             let plan = if has_same_name {
-                let target = GistFile::for_sync(gist_id.clone(), filename.clone(), None);
-                crate::actions::upload_command(&temp_file_path, &target)
+                crate::actions::upload_command(&temp_file_path, &file.to_gist_file())
             } else {
-                crate::actions::upload_add_command(&temp_file_path, &gist_id)
+                crate::actions::upload_add_command(&temp_file_path, &file.gist_id)
             };
 
             state.staged_diff_gist = None;
@@ -251,11 +247,7 @@ pub(super) fn dispatch_outcome(
 
                 drop(scratch);
 
-                BgTaskOutcome::UploadReplace {
-                    result,
-                    gist_id,
-                    filename,
-                }
+                BgTaskOutcome::UploadReplace { result, file }
             });
         }
         KeyOutcome::EditUpload => {
@@ -279,41 +271,46 @@ pub(super) fn dispatch_outcome(
                 }
             });
         }
-        KeyOutcome::PreviewContent { gist_id, filename } => {
-            let key = (gist_id.clone(), filename.clone());
+        KeyOutcome::PreviewContent { mut file } => {
+            let key = file.cache_key();
             if let Some(content) = state.gist_content_cache.get(&key).cloned() {
                 state.enter_preview(
-                    format!("Preview: {gist_id} / {filename}"),
+                    format!("Preview: {} / {}", file.gist_id, file.filename),
                     content,
                     Some(key),
                 );
             } else {
-                let raw_url = state.gist_file_raw_url(&gist_id, &filename);
-                let preview_title = format!("Preview: {gist_id} / {filename}");
+                if file.raw_url.is_none() {
+                    file.raw_url = state.gist_file_raw_url(&file.gist_id, &file.filename);
+                }
+                let preview_title = format!("Preview: {} / {}", file.gist_id, file.filename);
                 jobs.spawn_action(state, "Loading preview…", move || {
-                    let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
+                    let result =
+                        fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
                     BgTaskOutcome::PreviewContent {
                         result,
-                        key,
+                        file,
                         preview_title,
                     }
                 });
             }
         }
-        KeyOutcome::RefreshPreview { gist_id, filename } => {
+        KeyOutcome::RefreshPreview { mut file } => {
             // Keep the current return path when reloading.
             if state.screen.is_preview() {
                 state.pending_return = state.nav_stack.last().cloned();
             }
-            let key = (gist_id.clone(), filename.clone());
-            state.gist_content_cache.remove(&key);
-            let raw_url = state.gist_file_raw_url(&gist_id, &filename);
-            let preview_title = format!("Preview: {gist_id} / {filename}");
+            state.gist_content_cache.remove(&file.cache_key());
+            if file.raw_url.is_none() {
+                file.raw_url = state.gist_file_raw_url(&file.gist_id, &file.filename);
+            }
+            let preview_title = format!("Preview: {} / {}", file.gist_id, file.filename);
             jobs.spawn_action(state, "Loading preview…", move || {
-                let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
+                let result =
+                    fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
                 BgTaskOutcome::PreviewContent {
                     result,
-                    key,
+                    file,
                     preview_title,
                 }
             });

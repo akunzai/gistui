@@ -301,6 +301,51 @@ impl GistFile {
     }
 }
 
+/// Identity of one file inside a gist — the three fields a fetch/sync path needs,
+/// without list-row metadata on [`GistFile`] (issue #276).
+///
+/// Used on TUI `KeyOutcome` / `BgTaskOutcome` variants so dispatch does not re-split
+/// ad hoc `gist_id`/`filename`/`raw_url` bags. Labels and local paths stay outside.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GistFileRef {
+    pub gist_id: String,
+    pub filename: String,
+    pub raw_url: Option<String>,
+}
+
+impl GistFileRef {
+    pub fn new(
+        gist_id: impl Into<String>,
+        filename: impl Into<String>,
+        raw_url: Option<String>,
+    ) -> Self {
+        Self {
+            gist_id: gist_id.into(),
+            filename: filename.into(),
+            raw_url,
+        }
+    }
+
+    /// Identity without a raw URL (cache invalidation, upload replace, …).
+    pub fn id_name(gist_id: impl Into<String>, filename: impl Into<String>) -> Self {
+        Self::new(gist_id, filename, None)
+    }
+
+    /// Throwaway [`GistFile`] for plans / labels that still take a full row.
+    pub fn to_gist_file(&self) -> GistFile {
+        GistFile::for_sync(
+            self.gist_id.clone(),
+            self.filename.clone(),
+            self.raw_url.clone(),
+        )
+    }
+
+    /// Key for the gist content LRU: `(gist_id, filename)` only.
+    pub fn cache_key(&self) -> (String, String) {
+        (self.gist_id.clone(), self.filename.clone())
+    }
+}
+
 /// One entry from `gh api /gists/{id}/commits` — a gist revision (newest-first in the API).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GistRevision {
@@ -437,6 +482,23 @@ pub fn group_gists(files: &[GistFile]) -> Vec<GistGroup> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gist_file_ref_to_gist_file_matches_for_sync() {
+        let r = GistFileRef::new("abc", "a.txt", Some("https://raw/x".into()));
+        let g = r.to_gist_file();
+        assert_eq!(g.gist_id, "abc");
+        assert_eq!(g.filename, "a.txt");
+        assert_eq!(g.raw_url.as_deref(), Some("https://raw/x"));
+        assert!(g.description.is_empty());
+    }
+
+    #[test]
+    fn gist_file_ref_cache_key_is_id_and_filename() {
+        let r = GistFileRef::new("g1", "f.toml", Some("https://raw".into()));
+        assert_eq!(r.cache_key(), ("g1".into(), "f.toml".into()));
+        assert_eq!(GistFileRef::id_name("g1", "f.toml").raw_url, None);
+    }
 
     #[test]
     fn sync_status_from_mtime() {
