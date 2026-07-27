@@ -50,7 +50,7 @@ pub struct PaletteState {
 impl AppState {
     /// Whether a global palette opener (`;` / `Ctrl+p`) should be ignored right now.
     pub(crate) fn palette_blocked(&self) -> bool {
-        self.screen == Screen::Confirm
+        self.screen.is_confirm()
             || self.filtering
             || self.pins().is_some_and(|p| p.filtering)
             || self.gist_manager().is_some_and(|g| g.filtering)
@@ -322,11 +322,11 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
         Screen::Gists(_) => gists_palette_items(state),
         Screen::GistDetail(_) => detail_palette_items(state),
         Screen::Revisions(_) => revisions_palette_items(state),
-        Screen::Diff => diff_palette_items(state),
+        Screen::Diff(_) => diff_palette_items(state),
         Screen::Preview(_) => preview_palette_items(state),
         Screen::Help(_) => help_palette_items(),
         Screen::Config(_) => config_palette_items(),
-        Screen::Confirm | Screen::Palette(_) => Vec::new(),
+        Screen::Confirm(_) | Screen::Palette(_) => Vec::new(),
     };
     if mode == PaletteMode::Command {
         items.extend(cross_items());

@@ -365,10 +365,10 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::GistDetail(_) => ScreenVm::GistDetail(build_gist_detail_vm(state)),
         Screen::Revisions(_) => ScreenVm::Revisions(build_revisions_vm(state)),
         Screen::Config(_) => ScreenVm::Config(build_config_vm(state)),
-        Screen::Diff => ScreenVm::Diff(build_diff_vm(state)),
+        Screen::Diff(_) => ScreenVm::Diff(build_diff_vm(state)),
         Screen::Preview(_) => ScreenVm::Preview(build_preview_vm(state)),
         Screen::Pins(_) => ScreenVm::Pins(build_pins_vm(state)),
-        Screen::Confirm => ScreenVm::Confirm(build_confirm_vm(state)),
+        Screen::Confirm(_) => ScreenVm::Confirm(build_confirm_vm(state)),
         Screen::Help(_) => ScreenVm::Help(build_help_vm(state)),
         Screen::Palette(_) => ScreenVm::Palette(build_palette_vm(state)),
     };
@@ -446,9 +446,10 @@ fn file_ext(name: &str) -> Option<String> {
 
 /// Diff pane facts — also used as Confirm overwrite background (non-compact).
 pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
+    let text = state.diff_body_text();
     let body = match state.effective_diff_context() {
-        Some(radius) => crate::diff::collapse_context(&state.diff_text, radius),
-        None => state.diff_text.clone(),
+        Some(radius) => crate::diff::collapse_context(text, radius),
+        None => text.to_string(),
     };
     let ext = state
         .download_target
@@ -461,8 +462,8 @@ pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
         body,
         footer: diff_footer(state),
         wrap: state.diff_wrap,
-        scroll: state.diff_scroll,
-        hscroll: state.diff_hscroll,
+        scroll: state.diff_scroll(),
+        hscroll: state.diff_hscroll(),
         syntax_highlight: state.syntax_highlight,
         ext,
     }
@@ -1007,7 +1008,7 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
 
 pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
     let (title, border) = confirm_modal_style(state);
-    let kind = if matches!(state.pending_action, Some(PendingAction::Create { .. }))
+    let kind = if matches!(state.pending_action(), Some(PendingAction::Create { .. }))
         && state.editing_description
     {
         ConfirmModalKind::DescriptionInput {
@@ -1020,7 +1021,7 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
             text: confirm_prompt(state),
         }
     };
-    let background = match &state.pending_action {
+    let background = match state.pending_action() {
         Some(PendingAction::CompactGist { gist_id, .. }) => {
             match build_compact_gist_bg_vm(state, gist_id) {
                 Some(bg) => ConfirmBackgroundVm::CompactGist(bg),
@@ -1181,12 +1182,14 @@ mod tests {
     #[test]
     fn confirm_vm_prompt_identity() {
         let mut state = initial_state();
-        state.screen = Screen::Confirm;
-        state.pending_action = Some(PendingAction::Upload {
-            gist_id: "g1".into(),
-            filename: "notes.txt".into(),
-            local_path: PathBuf::from("notes.txt"),
-        });
+        state.enter_confirm(
+            PendingAction::Upload {
+                gist_id: "g1".into(),
+                filename: "notes.txt".into(),
+                local_path: PathBuf::from("notes.txt"),
+            },
+            String::new(),
+        );
         let vm = build_view_model(&state);
         match vm.screen {
             ScreenVm::Confirm(c) => {
@@ -1205,9 +1208,8 @@ mod tests {
     #[test]
     fn confirm_vm_overwrite_download() {
         let mut state = initial_state();
-        state.screen = Screen::Confirm;
-        state.pending_action = Some(PendingAction::Download);
         state.download_target = PathBuf::from("notes.txt");
+        state.enter_confirm(PendingAction::Download, String::new());
         let vm = build_view_model(&state);
         match vm.screen {
             ScreenVm::Confirm(c) => {
@@ -1601,10 +1603,14 @@ mod tests {
     #[test]
     fn diff_vm_title_footer_and_body() {
         let mut state = initial_state();
-        state.screen = Screen::Diff;
-        state.diff_text = "--- a\n+++ b\n-old\n+new\n".into();
         state.diff_identical = false;
         state.download_target = PathBuf::from("notes.txt");
+        state.enter_diff(
+            "--- a\n+++ b\n-old\n+new\n".into(),
+            String::new(),
+            PathBuf::new(),
+            PathBuf::from("notes.txt"),
+        );
         match build_view_model(&state).screen {
             ScreenVm::Diff(d) => {
                 assert!(d.title.contains("Diff") || d.title.contains("notes"));
@@ -1675,16 +1681,18 @@ mod tests {
         use crate::domain::GistFile;
 
         let mut state = initial_state();
-        state.screen = Screen::Confirm;
         state.gists = vec![GistFile {
             description: "pack".into(),
             ..GistFile::for_sync("g1".into(), "a.txt".into(), None)
         }];
-        state.pending_action = Some(PendingAction::CompactGist {
-            gist_id: "g1".into(),
-            label: "pack".into(),
-            count: 3,
-        });
+        state.enter_confirm(
+            PendingAction::CompactGist {
+                gist_id: "g1".into(),
+                label: "pack".into(),
+                count: 3,
+            },
+            String::new(),
+        );
         match build_view_model(&state).screen {
             ScreenVm::Confirm(c) => match c.background {
                 ConfirmBackgroundVm::CompactGist(bg) => {

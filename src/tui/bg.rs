@@ -476,11 +476,7 @@ pub(super) fn spawn_pin_push(
     let local_path = pin_local_abs(state, m);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
-    state.pending_action = Some(PendingAction::Upload {
-        gist_id: gist_id.clone(),
-        filename: filename.clone(),
-        local_path: local_path.clone(),
-    });
+    // Upload Confirm is opened when UploadPreview completes (staged return is Pins).
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
     let gist_file = GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone());
     let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
@@ -873,7 +869,7 @@ pub(super) fn edit_upload_buffer(
             gist_id,
             filename: gist_filename,
             ..
-        }) = state.pending_action.clone()
+        }) = state.pending_action().cloned()
         else {
             let _ = std::fs::remove_file(&temp_file_path);
             return Ok(());
@@ -925,7 +921,15 @@ pub(super) fn edit_upload_buffer(
 pub(super) fn download(state: &mut AppState) {
     let target = state.download_target.clone();
     let content = state.preview_remote.clone();
-    let return_screen = state.diff_return.clone();
+    // Prefer Confirm's nested Diff return (download overwrite gate) or Diff payload return.
+    let return_screen = match &state.screen {
+        Screen::Confirm(c) => match &c.return_screen {
+            Screen::Diff(d) => d.return_screen.clone(),
+            other => other.clone(),
+        },
+        Screen::Diff(d) => d.return_screen.clone(),
+        _ => state.diff_return.clone(),
+    };
     match crate::actions::execute_download(&target, &content, true) {
         Ok(()) => {
             state.set_status(format!(
@@ -954,7 +958,7 @@ pub(super) fn download(state: &mut AppState) {
         }
         Err(error) => {
             state.set_status(format!("download failed: {error}"));
-            state.screen = Screen::Diff;
+            state.cancel_confirm_to_diff();
         }
     }
 }
@@ -1475,11 +1479,12 @@ pub(super) fn absorb_background_results(
                         gist_label,
                     } => match result {
                         Ok(remote) => {
-                            state.pending_action = Some(PendingAction::Upload {
+                            // Keep staged pin/list return; enter_confirm consumes it.
+                            let action = PendingAction::Upload {
                                 gist_id,
                                 filename,
                                 local_path: local_path.clone(),
-                            });
+                            };
                             match state.init_upload_state(
                                 &local_path,
                                 Some(remote),
@@ -1487,13 +1492,13 @@ pub(super) fn absorb_background_results(
                                 gist_label,
                             ) {
                                 Ok(()) => {
-                                    state.diff_scroll = 0;
-                                    state.diff_hscroll = 0;
-                                    state.status = None;
-                                    state.screen = Screen::Confirm;
+                                    // init_upload_state writes via update_upload_diff only when
+                                    // Confirm is already open; open Confirm first with empty
+                                    // body, then rebuild the upload diff into the payload.
+                                    state.enter_confirm(action, String::new());
+                                    state.update_upload_diff();
                                 }
                                 Err(error) => {
-                                    state.pending_action = None;
                                     state.set_status(format!(
                                         "cannot read {}: {error}",
                                         crate::config::display_path(&local_path)
@@ -1526,7 +1531,10 @@ pub(super) fn absorb_background_results(
                             }
                             // Return to wherever this upload was initiated from (List, or Pins
                             // for a pin push) instead of always snapping to List.
-                            let return_screen = state.diff_return.clone();
+                            let return_screen = state
+                                .confirm()
+                                .map(|c| c.return_screen.clone())
+                                .unwrap_or_else(|| state.diff_return.clone());
                             state.back_to_list();
                             state.screen = return_screen;
                             state.loading = true;
@@ -1534,7 +1542,7 @@ pub(super) fn absorb_background_results(
                         }
                         Err(error) => {
                             state.set_status(format!("upload failed: {error}"));
-                            state.screen = Screen::Confirm;
+                            // Stay on Confirm payload if still open.
                         }
                     },
                     BgTaskOutcome::CreateGist {
@@ -1557,7 +1565,6 @@ pub(super) fn absorb_background_results(
                         Err(error) => {
                             state.set_status(format!("create failed: {error}"));
                             state.screen = Screen::List;
-                            state.pending_action = None;
                             state.description_input.clear();
                         }
                     },
@@ -1616,24 +1623,22 @@ pub(super) fn absorb_background_results(
                             "\"{label}\" already has a single revision — nothing to compact"
                         )),
                         Ok(count) => {
-                            state.diff_text = format!(
-                                "Compact gist {gist_id} (\"{label}\").\n\nIt has {count} revisions. Compacting clones it to a temp dir, squashes the history to a single commit, and force-pushes — the {} older revisions are gone for good.",
-                                count - 1
-                            );
-                            state.diff_scroll = 0;
-                            state.diff_hscroll = 0;
-                            state.pending_action = Some(PendingAction::CompactGist {
-                                gist_id,
-                                label,
-                                count,
-                            });
-                            // Park compact restore target (GistDetail/Gists payload) on
-                            // diff_return so Confirm cancel/execute can restore it.
+                            // Park compact restore target so Confirm cancel/execute restore it.
                             state.diff_return = state
                                 .detail()
                                 .map(|d| d.compact_return_screen.clone())
                                 .unwrap_or_else(|| state.park_gist_detail_screen());
-                            state.screen = Screen::Confirm;
+                            state.enter_confirm(
+                                PendingAction::CompactGist {
+                                    gist_id: gist_id.clone(),
+                                    label: label.clone(),
+                                    count,
+                                },
+                                format!(
+                                    "Compact gist {gist_id} (\"{label}\").\n\nIt has {count} revisions. Compacting clones it to a temp dir, squashes the history to a single commit, and force-pushes — the {} older revisions are gone for good.",
+                                    count - 1
+                                ),
+                            );
                         }
                         Err(error) => state.set_status(format!("revision check failed: {error}")),
                     },
@@ -1695,16 +1700,12 @@ pub(super) fn absorb_background_results(
                                 &new_content,
                                 state.ignore_trailing_newline,
                             );
-                            state.diff_text = diff;
-                            state.diff_scroll = 0;
-                            state.diff_hscroll = 0;
                             state.diff_identical = old_content == new_content;
                             // Park revision payload so Esc restores list cursor/entries.
                             if let Screen::Revisions(rev) = &state.screen {
                                 state.diff_return = Screen::Revisions(rev.clone());
                             }
-                            state.pending_action = None;
-                            state.screen = Screen::Diff;
+                            state.enter_diff(diff, String::new(), PathBuf::new(), PathBuf::new());
                         }
                         Err(error) => state.set_status(error),
                     },
@@ -1729,18 +1730,21 @@ pub(super) fn absorb_background_results(
                                 &current_content,
                                 state.ignore_trailing_newline,
                             );
-                            state.diff_text = diff;
-                            state.diff_scroll = 0;
-                            state.diff_hscroll = 0;
                             state.diff_identical = false;
-                            state.pending_action = Some(PendingAction::RestoreRevision {
-                                gist_id,
-                                filename,
-                                version,
-                                version_label,
-                                content: revision_content,
-                            });
-                            state.screen = Screen::Confirm;
+                            // Park revisions list so cancel restores cursor/entries.
+                            if let Screen::Revisions(rev) = &state.screen {
+                                state.diff_return = Screen::Revisions(rev.clone());
+                            }
+                            state.enter_confirm(
+                                PendingAction::RestoreRevision {
+                                    gist_id,
+                                    filename,
+                                    version,
+                                    version_label,
+                                    content: revision_content,
+                                },
+                                diff,
+                            );
                         }
                         Err(error) => state.set_status(error),
                     },
@@ -1782,11 +1786,13 @@ pub(super) fn absorb_background_results(
                             state.set_status(format!(
                                 "Restored {filename} from old revision (new revision created)"
                             ));
-                            state.pending_action = None;
-                            // Return to revisions list (prefer payload parked on diff_return).
-                            let mut rev = match &state.diff_return {
-                                Screen::Revisions(r) => r.as_ref().clone(),
-                                _ => state.revision().cloned().unwrap_or_default(),
+                            // Return to revisions list (prefer payload on Confirm return).
+                            let mut rev = match state.confirm().map(|c| &c.return_screen) {
+                                Some(Screen::Revisions(r)) => r.as_ref().clone(),
+                                _ => match &state.diff_return {
+                                    Screen::Revisions(r) => r.as_ref().clone(),
+                                    _ => state.revision().cloned().unwrap_or_default(),
+                                },
                             };
                             let gist_id = rev.gist_id.clone();
                             rev.index = 0;
@@ -1814,7 +1820,7 @@ pub(super) fn absorb_background_results(
                         }
                         Err(error) => {
                             state.set_status(format!("restore failed: {error}"));
-                            state.screen = Screen::Confirm;
+                            // Stay on Confirm payload if still open.
                         }
                     },
                 }
