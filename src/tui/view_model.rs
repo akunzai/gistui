@@ -451,10 +451,11 @@ pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
         Some(radius) => crate::diff::collapse_context(text, radius),
         None => text.to_string(),
     };
-    let ext = state
-        .download_target
+    let download_target = state.download_target();
+    let preview_local = state.preview_local();
+    let ext = download_target
         .file_name()
-        .or_else(|| state.preview_local.file_name())
+        .or_else(|| preview_local.file_name())
         .and_then(|n| n.to_str())
         .and_then(file_ext);
     DiffVm {
@@ -1208,8 +1209,13 @@ mod tests {
     #[test]
     fn confirm_vm_overwrite_download() {
         let mut state = initial_state();
-        state.download_target = PathBuf::from("notes.txt");
-        state.enter_confirm(PendingAction::Download, String::new());
+        state.enter_diff(
+            String::new(),
+            String::new(),
+            PathBuf::new(),
+            PathBuf::from("notes.txt"),
+        );
+        state.enter_confirm_from_diff(PendingAction::Download);
         let vm = build_view_model(&state);
         match vm.screen {
             ScreenVm::Confirm(c) => {
@@ -1603,8 +1609,6 @@ mod tests {
     #[test]
     fn diff_vm_title_footer_and_body() {
         let mut state = initial_state();
-        state.diff_identical = false;
-        state.download_target = PathBuf::from("notes.txt");
         state.enter_diff(
             "--- a\n+++ b\n-old\n+new\n".into(),
             String::new(),

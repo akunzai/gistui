@@ -585,7 +585,7 @@ fn revisions_palette_items(state: &AppState) -> Vec<PaletteItem> {
 }
 
 fn diff_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let sync = state.diff_allows_sync() && !state.diff_identical;
+    let sync = state.diff_allows_sync() && !state.diff_identical();
     vec![
         key_item("d", "Download", KeyCode::Char('d'), sync),
         key_item("u", "Upload", KeyCode::Char('u'), sync),

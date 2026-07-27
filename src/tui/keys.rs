@@ -1812,14 +1812,14 @@ impl AppState {
             }
             // Identical files have nothing to sync, so download/upload are not offered.
             // Revision-history diffs are read-only (no local file pairing).
-            KeyCode::Char('d') if self.diff_allows_sync() && !self.diff_identical => {
-                if self.download_target.exists() {
+            KeyCode::Char('d') if self.diff_allows_sync() && !self.diff_identical() => {
+                if self.download_target().exists() {
                     self.enter_confirm_from_diff(PendingAction::Download);
                 } else {
                     return KeyOutcome::Download;
                 }
             }
-            KeyCode::Char('u') if self.diff_allows_sync() && !self.diff_identical => {
+            KeyCode::Char('u') if self.diff_allows_sync() && !self.diff_identical() => {
                 return self.upload_intent();
             }
             // Toggle between the configured context radius and the full file; the line

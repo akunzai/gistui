@@ -782,7 +782,8 @@ pub struct PreviewState {
 }
 
 /// Unified-diff view — carried on [`Screen::Diff`] (issue #242).
-/// Owns body text and scroll so inactive Diff state cannot linger on the root.
+/// Owns body, scroll, pairing paths, and optional pin gist identity so inactive Diff
+/// state cannot linger on the root (including while parked under Confirm).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DiffState {
     pub text: String,
@@ -790,6 +791,17 @@ pub struct DiffState {
     pub hscroll: u16,
     /// Where `q`/`Esc` returns (List, Pins, Revisions, …).
     pub return_screen: Screen,
+    /// Remote file body (download source content).
+    pub remote_content: String,
+    /// Local path paired in the diff (empty for revision-only comparisons).
+    pub local_path: PathBuf,
+    /// Path a download would write to.
+    pub download_target: PathBuf,
+    /// True when local and remote content compare equal under config rules.
+    pub identical: bool,
+    /// Optional gist file identity (pin diffs / attributed pulls).
+    pub gist_id: Option<String>,
+    pub gist_filename: Option<String>,
 }
 
 /// Confirm modal — carried on [`Screen::Confirm`] (issue #242).
@@ -912,11 +924,9 @@ pub struct AppState {
     /// (the gist pane), so both panes can be filtered at once. Matched against the
     /// cwd-relative display label, i.e. the exact string shown in the local list.
     pub local_filter_query: TextInput,
-    pub diff_previewed: bool,
     /// Soft-wrap long lines in the diff view instead of horizontal scrolling (`w` toggles;
     /// session-scoped, mirrors `preview_wrap`).
     pub diff_wrap: bool,
-    pub diff_identical: bool,
     /// Unchanged context lines kept around each change in the diff view (from config).
     pub diff_context: u32,
     /// When true the diff view shows the full file; when false it collapses to
@@ -925,9 +935,6 @@ pub struct AppState {
     /// Treat a file-final-newline-only delta as no change in the diff view and the
     /// overwrite-confirm gate (from config; default `true`).
     pub ignore_trailing_newline: bool,
-    pub preview_remote: String,
-    pub preview_local: PathBuf,
-    pub download_target: PathBuf,
     pub cwd: PathBuf,
     pub status: Option<String>,
     pub loading: bool,
@@ -983,10 +990,9 @@ pub struct AppState {
     /// other key clears it. Prevents an accidental single-key exit.
     pub quit_armed: bool,
     pub upload: UploadState,
-    /// gist_id of the active download (set when entering the diff Confirm for a pull).
-    pub download_gist_id: Option<String>,
-    /// filename of the active download (set when entering the diff Confirm for a pull).
-    pub download_gist_filename: Option<String>,
+    /// Staged pin/pull gist identity for the next [`Self::enter_diff`] (consumed into
+    /// [`DiffState`]). Live identity while Diff/Confirm is open lives on the payload.
+    pub staged_diff_gist: Option<(String, String)>,
     /// Staged return path for the next Diff/Confirm open (copied into the payload by
     /// [`Self::enter_diff`] / [`Self::enter_confirm`]). Live Esc path while Diff/Confirm is
     /// open lives on the payload (issue #242).
@@ -1091,7 +1097,7 @@ impl AppState {
             Screen::Revisions(r) => Some(r.as_ref()),
             Screen::Diff(d) => d.return_screen.revision_state(),
             Screen::Confirm(c) => Self::nav_return_of_confirm(c).revision_state(),
-            Screen::Preview(_) => self.diff_return.revision_state(),
+            Screen::Preview(p) => p.return_screen.revision_state(),
             Screen::Palette(p) => p.origin_screen.revision_state(),
             _ => None,
         }
@@ -1105,7 +1111,7 @@ impl AppState {
                 Screen::Diff(d) => d.return_screen.revision_state_mut(),
                 other => other.revision_state_mut(),
             },
-            Screen::Preview(_) => self.diff_return.revision_state_mut(),
+            Screen::Preview(p) => p.return_screen.revision_state_mut(),
             _ => None,
         }
     }
@@ -1117,7 +1123,7 @@ impl AppState {
             Screen::Pins(p) => Some(p.as_ref()),
             Screen::Diff(d) => d.return_screen.pins_state(),
             Screen::Confirm(c) => Self::nav_return_of_confirm(c).pins_state(),
-            Screen::Preview(_) => self.diff_return.pins_state(),
+            Screen::Preview(p) => p.return_screen.pins_state(),
             Screen::Palette(p) => p.origin_screen.pins_state(),
             _ => None,
         }
@@ -1131,7 +1137,7 @@ impl AppState {
                 Screen::Diff(d) => d.return_screen.pins_state_mut(),
                 other => other.pins_state_mut(),
             },
-            Screen::Preview(_) => self.diff_return.pins_state_mut(),
+            Screen::Preview(p) => p.return_screen.pins_state_mut(),
             _ => None,
         }
     }
@@ -1401,24 +1407,14 @@ impl AppState {
         let Screen::Diff(d) = std::mem::replace(&mut self.screen, Screen::List) else {
             return;
         };
-        let DiffState {
-            text,
-            scroll,
-            hscroll,
-            return_screen,
-        } = *d;
         self.status = None;
         self.screen = Screen::Confirm(Box::new(ConfirmState {
             action,
-            text: text.clone(),
-            scroll,
-            hscroll,
-            return_screen: Screen::Diff(Box::new(DiffState {
-                text,
-                scroll,
-                hscroll,
-                return_screen,
-            })),
+            text: d.text.clone(),
+            scroll: d.scroll,
+            hscroll: d.hscroll,
+            // Park full Diff (pairing + identity) so cancel/download IO still have it.
+            return_screen: Screen::Diff(d),
         }));
     }
 
@@ -2143,10 +2139,7 @@ impl AppState {
     /// True when the diff view supports local↔gist download/upload (`d`/`u`). Revision-history
     /// diffs (returning to `Screen::Revisions`) are read-only comparisons.
     pub fn diff_allows_sync(&self) -> bool {
-        !matches!(
-            self.screen.diff_state().map(|d| &d.return_screen),
-            Some(Screen::Revisions(_))
-        ) && !self.diff_return.is_revisions()
+        !self.diff().is_some_and(|d| d.return_screen.is_revisions())
     }
 
     /// Footer label for the revision-history target file, including `(n/total)` when multi-file.
@@ -2196,13 +2189,11 @@ impl AppState {
     /// and gist, then branches on whether the gist already holds a file of the local name
     /// (case C: preview + confirm overwrite) or not (case B: add directly).
     /// True when we're in the diff screen launched from a Pins context (pin diff or pin pull).
-    /// In this state `preview_local` holds the pin's local file and `download_gist_id/filename`
-    /// hold the pin's gist identity, so upload/download should use those instead of the
-    /// Files-view selection which may point to a completely different pair.
+    /// In this state DiffState holds the pin's local path and gist identity, so upload/download
+    /// should use those instead of the Files-view selection which may point elsewhere.
     pub fn is_pin_diff_context(&self) -> bool {
-        self.screen.is_diff()
-            && !self.preview_local.as_os_str().is_empty()
-            && self.download_gist_id.is_some()
+        self.diff()
+            .is_some_and(|d| !d.local_path.as_os_str().is_empty() && d.gist_id.is_some())
     }
 
     fn upload_intent(&mut self) -> KeyOutcome {
@@ -2213,7 +2204,7 @@ impl AppState {
         }
         if self.is_pin_diff_context() {
             let Some(local_filename) = self
-                .preview_local
+                .preview_local()
                 .file_name()
                 .and_then(|n| n.to_str())
                 .map(String::from)
@@ -2221,7 +2212,7 @@ impl AppState {
                 self.status = Some("local file has no name".into());
                 return KeyOutcome::None;
             };
-            let gist_id = self.download_gist_id.as_deref().unwrap_or_default();
+            let gist_id = self.download_gist_id().unwrap_or_default();
             let has_same_name = self
                 .gists
                 .iter()
@@ -2323,17 +2314,22 @@ impl AppState {
         target: PathBuf,
     ) {
         let return_screen = std::mem::replace(&mut self.diff_return, Screen::List);
-        self.preview_remote = remote;
-        self.preview_local = local;
-        self.download_target = target;
-        self.diff_previewed = true;
-        self.diff_identical = false;
+        let (gist_id, gist_filename) = match self.staged_diff_gist.take() {
+            Some((id, name)) => (Some(id), Some(name)),
+            None => (None, None),
+        };
         self.status = None;
         self.screen = Screen::Diff(Box::new(DiffState {
             text: diff_text,
             scroll: 0,
             hscroll: 0,
             return_screen,
+            remote_content: remote,
+            local_path: local,
+            download_target: target,
+            identical: false,
+            gist_id,
+            gist_filename,
         }));
     }
 
@@ -2347,31 +2343,63 @@ impl AppState {
         return_screen: Screen,
     ) {
         self.diff_return = Screen::List;
-        self.preview_remote = remote;
-        self.preview_local = local;
-        self.download_target = target;
-        self.diff_previewed = true;
-        self.diff_identical = false;
+        let (gist_id, gist_filename) = match self.staged_diff_gist.take() {
+            Some((id, name)) => (Some(id), Some(name)),
+            None => (None, None),
+        };
         self.status = None;
         self.screen = Screen::Diff(Box::new(DiffState {
             text: diff_text,
             scroll: 0,
             hscroll: 0,
             return_screen,
+            remote_content: remote,
+            local_path: local,
+            download_target: target,
+            identical: false,
+            gist_id,
+            gist_filename,
         }));
+    }
+
+    /// True while a Diff payload is live (active Diff or parked under Confirm).
+    pub fn diff_previewed(&self) -> bool {
+        self.diff().is_some()
+    }
+
+    /// Local/remote content compare equal under the open Diff (or parked Diff).
+    pub fn diff_identical(&self) -> bool {
+        self.diff().is_some_and(|d| d.identical)
+    }
+
+    pub fn download_target(&self) -> PathBuf {
+        self.diff()
+            .map(|d| d.download_target.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn preview_local(&self) -> PathBuf {
+        self.diff()
+            .map(|d| d.local_path.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn preview_remote(&self) -> &str {
+        self.diff().map(|d| d.remote_content.as_str()).unwrap_or("")
+    }
+
+    pub fn download_gist_id(&self) -> Option<&str> {
+        self.diff().and_then(|d| d.gist_id.as_deref())
+    }
+
+    pub fn download_gist_filename(&self) -> Option<&str> {
+        self.diff().and_then(|d| d.gist_filename.as_deref())
     }
 
     pub fn back_to_list(&mut self) {
         self.screen = Screen::List;
-        self.preview_remote.clear();
-        self.preview_local = PathBuf::new();
-        self.download_target = PathBuf::new();
-        // Clear the pull's pinned-pair identity so a later non-pinned download
-        // can't be mis-attributed to a pin via a stale gist id/filename.
-        self.download_gist_id = None;
-        self.download_gist_filename = None;
-        self.diff_identical = false;
-        self.diff_previewed = false;
+        // Diff pairing identity lives on the payload; leaving drops it.
+        self.staged_diff_gist = None;
         self.diff_return = Screen::List;
     }
 
@@ -2506,15 +2534,10 @@ pub fn initial_state() -> AppState {
         filtering: false,
         filter_query: TextInput::default(),
         local_filter_query: TextInput::default(),
-        diff_previewed: false,
         diff_wrap: false,
-        diff_identical: false,
         diff_context: 3,
         diff_show_full: false,
         ignore_trailing_newline: true,
-        preview_remote: String::new(),
-        preview_local: PathBuf::new(),
-        download_target: PathBuf::new(),
         cwd: PathBuf::from("."),
         status: None,
         loading: false,
@@ -2545,8 +2568,7 @@ pub fn initial_state() -> AppState {
         bg_task_generation: 0,
         quit_armed: false,
         upload: UploadState::default(),
-        download_gist_id: None,
-        download_gist_filename: None,
+        staged_diff_gist: None,
         diff_return: Screen::List,
         spinner_frame: 0,
         gist_comment_counts: std::collections::HashMap::new(),

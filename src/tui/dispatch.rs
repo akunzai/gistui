@@ -186,10 +186,10 @@ pub(super) fn dispatch_outcome(
         KeyOutcome::Unpin => unpin_selected(state),
         KeyOutcome::UploadAdd => {
             let (local_path, gist_id) = if state.is_pin_diff_context() {
-                let Some(gist_id) = state.download_gist_id.clone() else {
+                let Some(gist_id) = state.download_gist_id().map(str::to_string) else {
                     return Ok(LoopFlow::Proceed);
                 };
-                (state.preview_local.clone(), gist_id)
+                (state.preview_local(), gist_id)
             } else {
                 // List-originated upload: reset any leftover Pins origin from an earlier
                 // pin push (mirrors KeyOutcome::PreviewDiff's own reset).
@@ -229,11 +229,14 @@ pub(super) fn dispatch_outcome(
         }
         KeyOutcome::UploadPreview => {
             let (local_path, gist_id, gist_file) = if state.is_pin_diff_context() {
-                let Some(gist_id) = state.download_gist_id.clone() else {
+                let Some(gist_id) = state.download_gist_id().map(str::to_string) else {
                     return Ok(LoopFlow::Proceed);
                 };
-                let local_path = state.preview_local.clone();
-                let filename = state.download_gist_filename.clone().unwrap_or_default();
+                let local_path = state.preview_local();
+                let filename = state
+                    .download_gist_filename()
+                    .unwrap_or_default()
+                    .to_string();
                 let gist_file = state
                     .gists
                     .iter()

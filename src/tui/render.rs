@@ -2154,23 +2154,20 @@ pub(super) fn diff_title(state: &AppState) -> String {
             format!("Remove {filename} from gist {gist_id}")
         }
         _ => {
-            let label = if state.diff_identical {
+            let label = if state.diff_identical() {
                 "Diff (identical)"
             } else {
                 "Diff"
             };
-            if state.preview_local.as_os_str().is_empty()
-                || state.preview_local == state.download_target
-            {
-                format!(
-                    "{label} → {}",
-                    crate::config::display_path(&state.download_target)
-                )
+            let local = state.preview_local();
+            let target = state.download_target();
+            if local.as_os_str().is_empty() || local == target {
+                format!("{label} → {}", crate::config::display_path(&target))
             } else {
                 format!(
                     "{label}: {} → {}",
-                    crate::config::display_path(&state.preview_local),
-                    crate::config::display_path(&state.download_target)
+                    crate::config::display_path(&local),
+                    crate::config::display_path(&target)
                 )
             }
         }
@@ -2266,7 +2263,7 @@ pub(super) fn confirm_prompt(state: &AppState) -> String {
         }
         _ => format!(
             "Overwrite {}? (y/n)",
-            crate::config::display_path(&state.download_target)
+            crate::config::display_path(&state.download_target())
         ),
     }
 }
@@ -2384,12 +2381,12 @@ pub(super) fn diff_footer(state: &AppState) -> String {
     };
     let back = "Esc/q back";
     if !state.diff_allows_sync() {
-        if state.diff_identical {
+        if state.diff_identical() {
             format!("Files are identical  ·  {scroll}  ·  {wrap}  ·  {context}  ·  {back}")
         } else {
             format!("{scroll}  ·  {wrap}  ·  {context}  ·  {back}")
         }
-    } else if state.diff_identical {
+    } else if state.diff_identical() {
         format!("Files are identical — nothing to sync  ·  {scroll}  ·  {wrap}  ·  {context}  ·  {back}")
     } else {
         format!("{scroll}  ·  d download  ·  u upload  ·  {wrap}  ·  {context}  ·  {back}")

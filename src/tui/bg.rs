@@ -529,11 +529,8 @@ pub(super) fn spawn_pin_diff(
     let local_abs = pin_local_abs(state, m);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
-    // Record the pin's identity so that `d`/`u` in the diff screen can attribute
-    // the action to this pin (record_pin_sync) and use the correct local file
-    // instead of the Files-view selection (is_pin_diff_context check).
-    state.download_gist_id = Some(gist_id.clone());
-    state.download_gist_filename = Some(filename.clone());
+    // Stage pin identity so enter_diff copies it onto DiffState (is_pin_diff_context).
+    state.staged_diff_gist = Some((gist_id.clone(), filename.clone()));
     // Pull the real `updated_at` from the loaded gists so the diff header shows the
     // gist mtime (matching the Pins list) instead of "unknown".
     let updated_at = state
@@ -919,8 +916,14 @@ pub(super) fn edit_upload_buffer(
 }
 
 pub(super) fn download(state: &mut AppState) {
-    let target = state.download_target.clone();
-    let content = state.preview_remote.clone();
+    let target = state.download_target();
+    let content = state.preview_remote().to_string();
+    let pin_key = state
+        .diff()
+        .and_then(|d| match (&d.gist_id, &d.gist_filename) {
+            (Some(g), Some(f)) => Some((g.clone(), f.clone())),
+            _ => None,
+        });
     // Prefer Confirm's nested Diff return (download overwrite gate) or Diff payload return.
     let return_screen = match &state.screen {
         Screen::Confirm(c) => match &c.return_screen {
@@ -939,10 +942,7 @@ pub(super) fn download(state: &mut AppState) {
                     .unwrap_or(target.as_os_str())
                     .to_string_lossy()
             ));
-            if let (Some(gid), Some(fname)) = (
-                state.download_gist_id.clone(),
-                state.download_gist_filename.clone(),
-            ) {
+            if let Some((gid, fname)) = pin_key {
                 record_pin_sync(
                     state,
                     &target,
@@ -1380,7 +1380,9 @@ pub(super) fn absorb_background_results(
                                         local_path.unwrap_or_default(),
                                         target,
                                     );
-                                    state.diff_identical = identical;
+                                    if let Some(d) = state.diff_mut() {
+                                        d.identical = identical;
+                                    }
                                     // A pin diff that turns out identical confirms the cached
                                     // last_seen_hash is (still) accurate — refresh it for free
                                     // using the content we already fetched, so the Pins list's
@@ -1390,11 +1392,14 @@ pub(super) fn absorb_background_results(
                                     // trailing-newline-normalized `identical` comparison), so
                                     // this matches the raw-byte hashing compute_pin_sync_status does.
                                     if identical {
-                                        if let (Some(gid), Some(fname)) = (
-                                            state.download_gist_id.clone(),
-                                            state.download_gist_filename.clone(),
-                                        ) {
-                                            let local_abs = state.preview_local.clone();
+                                        let pin = state.diff().and_then(|d| {
+                                            Some((
+                                                d.gist_id.clone()?,
+                                                d.gist_filename.clone()?,
+                                                d.local_path.clone(),
+                                            ))
+                                        });
+                                        if let Some((gid, fname, local_abs)) = pin {
                                             record_pin_sync(
                                                 state,
                                                 &local_abs,
@@ -1435,10 +1440,12 @@ pub(super) fn absorb_background_results(
                                             &remote,
                                             state.ignore_trailing_newline,
                                         );
-                                        state.download_gist_id = Some(gist_id);
-                                        state.download_gist_filename = Some(filename);
+                                        state.staged_diff_gist =
+                                            Some((gist_id.clone(), filename.clone()));
                                         state.enter_diff(diff, remote, target.clone(), target);
-                                        state.diff_identical = identical;
+                                        if let Some(d) = state.diff_mut() {
+                                            d.identical = identical;
+                                        }
                                     }
                                     Err(error) => state.set_status(error),
                                 }
@@ -1700,12 +1707,15 @@ pub(super) fn absorb_background_results(
                                 &new_content,
                                 state.ignore_trailing_newline,
                             );
-                            state.diff_identical = old_content == new_content;
+                            let identical = old_content == new_content;
                             // Park revision payload so Esc restores list cursor/entries.
                             if let Screen::Revisions(rev) = &state.screen {
                                 state.diff_return = Screen::Revisions(rev.clone());
                             }
                             state.enter_diff(diff, String::new(), PathBuf::new(), PathBuf::new());
+                            if let Some(d) = state.diff_mut() {
+                                d.identical = identical;
+                            }
                         }
                         Err(error) => state.set_status(error),
                     },
@@ -1730,7 +1740,6 @@ pub(super) fn absorb_background_results(
                                 &current_content,
                                 state.ignore_trailing_newline,
                             );
-                            state.diff_identical = false;
                             // Park revisions list so cancel restores cursor/entries.
                             if let Screen::Revisions(rev) = &state.screen {
                                 state.diff_return = Screen::Revisions(rev.clone());
