@@ -7,6 +7,7 @@ pub mod gh;
 pub mod local;
 pub mod lru;
 pub mod ranking;
+pub mod temp_dir;
 pub mod tui;
 pub mod update_check;
 pub mod upgrade;
