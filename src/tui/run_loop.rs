@@ -1,9 +1,8 @@
 //! Terminal event loop: draw, poll input, absorb background results, dispatch key outcomes.
 //! Heavy IO helpers live in [`super::bg`] and [`super::dispatch`] (issue #225).
+//! Background work is owned by the [`Jobs`] registry (issue #243).
 
-use super::bg::{
-    absorb_background_results, spawn_gist_fetch, spawn_update_check, BgChannels, LoopFlow,
-};
+use super::bg::{spawn_update_check, Jobs, LoopFlow};
 use super::dispatch::dispatch_outcome;
 use super::*;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, MouseButton, MouseEventKind};
@@ -38,16 +37,7 @@ pub(super) fn run_loop(
             update_rx = Some(spawn_update_check());
         }
     }
-    let mut channels = BgChannels {
-        update: update_rx,
-        gist: Some(spawn_gist_fetch()),
-        fork: None,
-        star: None,
-        fork_meta: None,
-        local: None,
-        upload_edit_watch: None,
-        bg: None,
-    };
+    let mut jobs = Jobs::startup(update_rx, true);
     // Pins presentation cache: refresh on enter/return to Pins (or Pins-as-palette-bg) and
     // whenever the dirty flag is set — never every frame while already on Pins (#241).
     let mut pin_sync_screen_active = false;
@@ -79,7 +69,7 @@ pub(super) fn run_loop(
         // in-progress states (scanning/loading/working) animate even with no input.
         state.spinner_frame = state.spinner_frame.wrapping_add(1);
 
-        match absorb_background_results(&mut state, &mut channels, &update_check_path)? {
+        match jobs.absorb(&mut state, &update_check_path)? {
             LoopFlow::Quit => break,
             LoopFlow::SkipIteration => continue,
             LoopFlow::Proceed => {}
@@ -100,11 +90,7 @@ pub(super) fn run_loop(
                 }
                 if state.bg_task_msg.is_some() {
                     if key.code == KeyCode::Esc {
-                        // Drop the receiver and bump generation so a late worker
-                        // completion cannot mutate state (issue #221).
-                        state.invalidate_bg_task();
-                        channels.bg = None;
-                        state.set_status("Cancelled");
+                        jobs.cancel_action(&mut state);
                     }
                     continue;
                 }
@@ -141,7 +127,7 @@ pub(super) fn run_loop(
             }
             _ => KeyOutcome::None,
         };
-        if let LoopFlow::Quit = dispatch_outcome(outcome, &mut state, terminal, &mut channels)? {
+        if let LoopFlow::Quit = dispatch_outcome(outcome, &mut state, terminal, &mut jobs)? {
             break;
         }
     }

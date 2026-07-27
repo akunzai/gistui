@@ -1,5 +1,6 @@
-//! Background workers, channels, and absorb of async results for the TUI event loop.
-//! Extracted from `run_loop` (issue #225) so spawn/absorb stays separate from key IO dispatch.
+//! Background workers and the **job registry** (`Jobs`) for the TUI event loop.
+//! Extracted from `run_loop` (issue #225); deepened into a single spawn/absorb API
+//! so call sites do not own parallel channel fields by hand (issue #243).
 
 use super::*;
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -373,9 +374,9 @@ pub(super) fn spawn_fork_metadata_fetch(
 }
 
 /// Background local-scan result stamped with the generation active at spawn time.
-pub(super) type LocalScanRx = Option<std::sync::mpsc::Receiver<(u64, Vec<LocalCandidate>)>>;
+type LocalScanRx = Option<std::sync::mpsc::Receiver<(u64, Vec<LocalCandidate>)>>;
 
-pub(super) fn spawn_local_scan(
+fn spawn_local_scan(
     generation: u64,
     cwd: std::path::PathBuf,
     pinned: Vec<crate::domain::PinnedMapping>,
@@ -395,24 +396,7 @@ pub(super) fn spawn_local_scan(
 }
 
 /// Background per-action outcome stamped with the generation active at spawn time.
-pub(super) type BgRx = Option<std::sync::mpsc::Receiver<(u64, BgTaskOutcome)>>;
-
-/// Run `work` on a background thread, wiring its result channel into `bg_rx` and setting
-/// the in-progress `bg_task_msg` the main loop renders. The worker's returned
-/// [`BgTaskOutcome`] is sent back stamped with a generation id so cancelled or
-/// superseded results can be ignored (issue #221).
-pub(super) fn spawn_bg<F>(state: &mut AppState, bg_rx: &mut BgRx, msg: impl Into<String>, work: F)
-where
-    F: FnOnce() -> BgTaskOutcome + Send + 'static,
-{
-    let generation = state.begin_bg_task();
-    state.bg_task_msg = Some(msg.into());
-    let (tx, rx) = std::sync::mpsc::channel();
-    *bg_rx = Some(rx);
-    std::thread::spawn(move || {
-        let _ = tx.send((generation, work()));
-    });
-}
+type ActionRx = Option<std::sync::mpsc::Receiver<(u64, BgTaskOutcome)>>;
 
 /// Initial newest-first comment load: probe the total, then fetch the newest page.
 /// Thin IO boundary (network) — not unit-tested.
@@ -462,7 +446,7 @@ fn park_pins_on_diff_return(state: &mut AppState) {
 /// upload `Screen::Confirm` diff.
 pub(super) fn spawn_pin_push(
     state: &mut AppState,
-    bg_rx: &mut BgRx,
+    jobs: &mut Jobs,
     m: &crate::domain::PinnedMapping,
 ) {
     park_pins_on_diff_return(state);
@@ -473,7 +457,7 @@ pub(super) fn spawn_pin_push(
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
     let gist_file = GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone());
     let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
-    spawn_bg(state, bg_rx, "Loading diff…", move || {
+    jobs.spawn_action(state, "Loading diff…", move || {
         let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
         BgTaskOutcome::UploadPreview {
             result,
@@ -490,7 +474,7 @@ pub(super) fn spawn_pin_push(
 /// download `Screen::Confirm` diff when the local file exists.
 pub(super) fn spawn_pin_pull(
     state: &mut AppState,
-    bg_rx: &mut BgRx,
+    jobs: &mut Jobs,
     m: &crate::domain::PinnedMapping,
 ) {
     park_pins_on_diff_return(state);
@@ -500,7 +484,7 @@ pub(super) fn spawn_pin_pull(
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
     let gist_file = GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone());
     let (local_label, gist_label) = diff_labels(Some(&target), &gist_file);
-    spawn_bg(state, bg_rx, "Downloading…", move || {
+    jobs.spawn_action(state, "Downloading…", move || {
         let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
         BgTaskOutcome::DownloadSelected {
             result,
@@ -516,7 +500,7 @@ pub(super) fn spawn_pin_pull(
 /// Spawn a read-only diff (gist vs local) for a pin, landing on `Screen::Diff`.
 pub(super) fn spawn_pin_diff(
     state: &mut AppState,
-    bg_rx: &mut BgRx,
+    jobs: &mut Jobs,
     m: &crate::domain::PinnedMapping,
 ) {
     let local_abs = pin_local_abs(state, m);
@@ -539,7 +523,7 @@ pub(super) fn spawn_pin_diff(
     };
     let (local_label, gist_label) = diff_labels(Some(&local_abs), &gist_file);
     let target = local_abs.clone();
-    spawn_bg(state, bg_rx, "Loading diff…", move || {
+    jobs.spawn_action(state, "Loading diff…", move || {
         let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
         BgTaskOutcome::PreviewDiff {
             result,
@@ -801,7 +785,7 @@ pub(super) fn spawn_upload_edit_watch(
 pub(super) fn edit_upload_buffer(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut AppState,
-    channels: &mut BgChannels,
+    jobs: &mut Jobs,
 ) -> Result<()> {
     let Some(local_path) = state.upload_local_path() else {
         return Ok(());
@@ -845,7 +829,7 @@ pub(super) fn edit_upload_buffer(
             let _ = std::fs::remove_file(&temp_file_path);
             return Ok(());
         };
-        channels.upload_edit_watch = Some(spawn_upload_edit_watch(
+        jobs.set_upload_edit_watch(spawn_upload_edit_watch(
             program,
             args,
             temp_file_path,
@@ -1115,21 +1099,32 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
     }
 }
 
-/// The background-work receivers `run_loop` drains each iteration, bundled so the
-/// extracted loop steps take one `&mut BgChannels` instead of separate `&mut` parameters.
-pub(super) struct BgChannels {
-    pub(super) update: Option<std::sync::mpsc::Receiver<crate::update_check::UpdateCheckOutcome>>,
-    pub(super) gist: Option<std::sync::mpsc::Receiver<GistFetchResult>>,
-    pub(super) fork: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>>,
-    pub(super) star: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>>,
-    pub(super) fork_meta: Option<std::sync::mpsc::Receiver<ForkMetaResult>>,
-    pub(super) local: LocalScanRx,
+/// Background job registry (issue #243).
+///
+/// Call sites start work via methods on this type; the event loop only polls
+/// [`Jobs::absorb`]. Receivers stay private so new job kinds extend the registry
+/// in one place.
+///
+/// # Generation / supersession
+///
+/// - **Action jobs** ([`Jobs::spawn_action`] / Esc via [`Jobs::cancel_action`]): each
+///   spawn stamps `AppState::bg_task_generation`. Only matching generations apply;
+///   cancel bumps the generation and drops the receiver (issue #221).
+/// - **Local scans** ([`Jobs::request_local_scan`]): stamp `AppState::local_scan_generation`.
+/// - **One-shot slots** (gist list, fork/star counts, update check, fork meta): a new
+///   spawn replaces the receiver; there is no multi-generation queue for these.
+pub(super) struct Jobs {
+    update: Option<std::sync::mpsc::Receiver<crate::update_check::UpdateCheckOutcome>>,
+    gist: Option<std::sync::mpsc::Receiver<GistFetchResult>>,
+    fork: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>>,
+    star: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>>,
+    fork_meta: Option<std::sync::mpsc::Receiver<ForkMetaResult>>,
+    local: LocalScanRx,
     /// Streams `UploadEditWatchEvent`s while a GUI editor has the upload-redact temp file
-    /// open (see `spawn_upload_edit_watch`). Unlike the other fields above (one-shot
-    /// results), this channel can carry multiple `ContentChanged` events before its
-    /// terminal `EditorClosed`/`ReadError` — drained in a loop in `absorb_background_results`.
-    pub(super) upload_edit_watch: Option<std::sync::mpsc::Receiver<UploadEditWatchEvent>>,
-    pub(super) bg: BgRx,
+    /// open (see `spawn_upload_edit_watch`). Unlike one-shot slots, this channel can carry
+    /// multiple `ContentChanged` events before its terminal `EditorClosed`/`ReadError`.
+    upload_edit_watch: Option<std::sync::mpsc::Receiver<UploadEditWatchEvent>>,
+    action: ActionRx,
 }
 
 pub(super) enum LoopFlow {
@@ -1138,9 +1133,98 @@ pub(super) enum LoopFlow {
     Quit,
 }
 
-pub(super) fn absorb_background_results(
+impl Jobs {
+    /// Startup registry: optional update-check receiver and initial gist list fetch.
+    pub(super) fn startup(
+        update: Option<std::sync::mpsc::Receiver<crate::update_check::UpdateCheckOutcome>>,
+        fetch_gists: bool,
+    ) -> Self {
+        Self {
+            update,
+            gist: fetch_gists.then(spawn_gist_fetch),
+            fork: None,
+            star: None,
+            fork_meta: None,
+            local: None,
+            upload_edit_watch: None,
+            action: None,
+        }
+    }
+
+    /// Run `work` on a background thread. Sets `bg_task_msg` and stamps the result with
+    /// the current action-job generation (issue #221).
+    pub(super) fn spawn_action<F>(&mut self, state: &mut AppState, msg: impl Into<String>, work: F)
+    where
+        F: FnOnce() -> BgTaskOutcome + Send + 'static,
+    {
+        let generation = state.begin_bg_task();
+        state.bg_task_msg = Some(msg.into());
+        let (tx, rx) = std::sync::mpsc::channel();
+        self.action = Some(rx);
+        std::thread::spawn(move || {
+            let _ = tx.send((generation, work()));
+        });
+    }
+
+    /// Esc cancel: drop the action receiver and invalidate generation so a late completion
+    /// cannot mutate state.
+    pub(super) fn cancel_action(&mut self, state: &mut AppState) {
+        state.invalidate_bg_task();
+        self.action = None;
+        state.set_status("Cancelled");
+    }
+
+    /// Replace any in-flight gist list fetch with a new one (also sets `state.loading`).
+    pub(super) fn request_gist_fetch(&mut self, state: &mut AppState) {
+        state.loading = true;
+        self.gist = Some(spawn_gist_fetch());
+    }
+
+    /// Start a local file scan stamped with a new generation.
+    pub(super) fn request_local_scan(&mut self, state: &mut AppState) {
+        let generation = state.begin_local_scan();
+        state.set_status("Scanning files…");
+        state.local_scanning = true;
+        self.local = Some(spawn_local_scan(
+            generation,
+            state.cwd.clone(),
+            state.pinned.clone(),
+            state.local_recursive,
+            state.skip_dirs.clone(),
+            state.scan_depth,
+        ));
+    }
+
+    pub(super) fn set_upload_edit_watch(
+        &mut self,
+        rx: std::sync::mpsc::Receiver<UploadEditWatchEvent>,
+    ) {
+        self.upload_edit_watch = Some(rx);
+    }
+
+    /// Poll ready job completions and apply them to `state`.
+    pub(super) fn absorb(
+        &mut self,
+        state: &mut AppState,
+        update_check_path: &Option<std::path::PathBuf>,
+    ) -> Result<LoopFlow> {
+        self.absorb_inner(state, update_check_path)
+    }
+
+    fn absorb_inner(
+        &mut self,
+        state: &mut AppState,
+        update_check_path: &Option<std::path::PathBuf>,
+    ) -> Result<LoopFlow> {
+        // Bridge: absorb body still uses `channels` naming via local alias.
+        let channels = self;
+        absorb_background_results_body(state, channels, update_check_path)
+    }
+}
+
+fn absorb_background_results_body(
     state: &mut AppState,
-    channels: &mut BgChannels,
+    channels: &mut Jobs,
     update_check_path: &Option<std::path::PathBuf>,
 ) -> Result<LoopFlow> {
     // Absorb the background gist list once it arrives.
@@ -1305,9 +1389,9 @@ pub(super) fn absorb_background_results(
     }
 
     // Absorb a completed background per-action task (ignore stale generations — issue #221).
-    if let Some(ref rx) = channels.bg {
+    if let Some(ref rx) = channels.action {
         if let Ok((generation, outcome)) = rx.try_recv() {
-            channels.bg = None;
+            channels.action = None;
             if state.is_current_bg_generation(generation) {
                 state.bg_task_msg = None;
                 match outcome {
@@ -1510,8 +1594,7 @@ pub(super) fn absorb_background_results(
                                 .unwrap_or_else(|| state.diff_return.clone());
                             state.back_to_list();
                             state.screen = return_screen;
-                            state.loading = true;
-                            channels.gist = Some(spawn_gist_fetch());
+                            channels.request_gist_fetch(state);
                         }
                         Err(error) => {
                             state.set_status(format!("upload failed: {error}"));
@@ -1532,8 +1615,7 @@ pub(super) fn absorb_background_results(
                             ));
                             state.description_input.clear();
                             state.back_to_list();
-                            state.loading = true;
-                            channels.gist = Some(spawn_gist_fetch());
+                            channels.request_gist_fetch(state);
                         }
                         Err(error) => {
                             state.set_status(format!("create failed: {error}"));
@@ -1557,8 +1639,7 @@ pub(super) fn absorb_background_results(
                     BgTaskOutcome::DeleteGist { result, gist_id } => match result {
                         Ok(_) => {
                             state.set_status(format!("Deleted gist {gist_id}"));
-                            state.loading = true;
-                            channels.gist = Some(spawn_gist_fetch());
+                            channels.request_gist_fetch(state);
                         }
                         Err(error) => state.set_status(format!("delete failed: {error}")),
                     },
@@ -1572,16 +1653,14 @@ pub(super) fn absorb_background_results(
                                 .gist_content_cache
                                 .remove(&(gist_id.clone(), filename.clone()));
                             state.set_status(format!("Removed {filename} from gist {gist_id}"));
-                            state.loading = true;
-                            channels.gist = Some(spawn_gist_fetch());
+                            channels.request_gist_fetch(state);
                         }
                         Err(error) => state.set_status(format!("remove failed: {error}")),
                     },
                     BgTaskOutcome::ApplyDescription { result, gist_id } => match result {
                         Ok(_) => {
                             state.set_status(format!("Updated description for gist {gist_id}"));
-                            state.loading = true;
-                            channels.gist = Some(spawn_gist_fetch());
+                            channels.request_gist_fetch(state);
                         }
                         Err(error) => {
                             state.set_status(format!("description update failed: {error}"))
@@ -1624,8 +1703,7 @@ pub(super) fn absorb_background_results(
                             state.set_status(format!(
                                 "Compacted \"{label}\" ({count} → 1 revision)"
                             ));
-                            state.loading = true;
-                            channels.gist = Some(spawn_gist_fetch());
+                            channels.request_gist_fetch(state);
                         }
                         Err(error) => state.set_status(format!("compact failed: {error}")),
                     },
@@ -1736,16 +1814,14 @@ pub(super) fn absorb_background_results(
                                 state.starred_gist_ids.remove(&gist_id);
                                 state.set_status(format!("unstarred {gist_id}"));
                             }
-                            state.loading = true;
-                            channels.gist = Some(spawn_gist_fetch());
+                            channels.request_gist_fetch(state);
                         }
                         Err(error) => state.set_status(format!("star toggle failed: {error}")),
                     },
                     BgTaskOutcome::ForkGist { result, gist_id } => match result {
                         Ok(()) => {
                             state.set_status(format!("forked {gist_id} into your account"));
-                            state.loading = true;
-                            channels.gist = Some(spawn_gist_fetch());
+                            channels.request_gist_fetch(state);
                         }
                         Err(error) => state.set_status(format!("fork failed: {error}")),
                     },
@@ -1774,23 +1850,17 @@ pub(super) fn absorb_background_results(
                             rev.entries = None;
                             rev.fetch_error = None;
                             state.screen = Screen::Revisions(Box::new(rev));
-                            state.loading = true;
-                            channels.gist = Some(spawn_gist_fetch());
+                            channels.request_gist_fetch(state);
                             if let Some(gist_id) = gist_id {
-                                spawn_bg(
-                                    state,
-                                    &mut channels.bg,
-                                    "Loading revisions…",
-                                    move || {
-                                        let result = crate::gh::fetch_gist_commits_json(&gist_id)
-                                            .map_err(|e| e.to_string())
-                                            .and_then(|raw| {
-                                                crate::gh::parse_gist_commits_json(&raw)
-                                                    .map_err(|e| e.to_string())
-                                            });
-                                        BgTaskOutcome::RevisionsFetched { gist_id, result }
-                                    },
-                                );
+                                channels.spawn_action(state, "Loading revisions…", move || {
+                                    let result = crate::gh::fetch_gist_commits_json(&gist_id)
+                                        .map_err(|e| e.to_string())
+                                        .and_then(|raw| {
+                                            crate::gh::parse_gist_commits_json(&raw)
+                                                .map_err(|e| e.to_string())
+                                        });
+                                    BgTaskOutcome::RevisionsFetched { gist_id, result }
+                                });
                             }
                         }
                         Err(error) => {
