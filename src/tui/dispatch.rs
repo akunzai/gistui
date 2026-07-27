@@ -11,7 +11,7 @@ pub(super) fn dispatch_outcome(
     outcome: KeyOutcome,
     state: &mut AppState,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    channels: &mut BgChannels,
+    jobs: &mut Jobs,
 ) -> Result<LoopFlow> {
     match outcome {
         KeyOutcome::Quit => return Ok(LoopFlow::Quit),
@@ -28,7 +28,7 @@ pub(super) fn dispatch_outcome(
             let gist = GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone());
             let (local_label, gist_label) = diff_labels(local_path.as_deref(), &gist);
 
-            spawn_bg(state, &mut channels.bg, "Loading diff…", move || {
+            jobs.spawn_action(state, "Loading diff…", move || {
                 let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
                 BgTaskOutcome::PreviewDiff {
                     result,
@@ -50,7 +50,7 @@ pub(super) fn dispatch_outcome(
             let gist = GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone());
             let (local_label, gist_label) = diff_labels(Some(&target), &gist);
 
-            spawn_bg(state, &mut channels.bg, "Downloading…", move || {
+            jobs.spawn_action(state, "Downloading…", move || {
                 let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
                 BgTaskOutcome::DownloadSelected {
                     result,
@@ -89,7 +89,7 @@ pub(super) fn dispatch_outcome(
                 d.comments_loading = true;
             }
             let fetch_id = gist_id.clone();
-            spawn_bg(state, &mut channels.bg, "Loading comments…", move || {
+            jobs.spawn_action(state, "Loading comments…", move || {
                 let result = load_initial_comments(&fetch_id);
                 BgTaskOutcome::CommentsInitialLoaded {
                     gist_id: fetch_id,
@@ -105,48 +105,38 @@ pub(super) fn dispatch_outcome(
                 d.comments_loading_more = true;
             }
             let fetch_id = gist_id.clone();
-            spawn_bg(
-                state,
-                &mut channels.bg,
-                "Loading older comments…",
-                move || {
-                    let result = crate::gh::fetch_gist_comments_page(
-                        &fetch_id,
-                        page,
-                        crate::gh::COMMENTS_PAGE_SIZE,
-                    )
-                    .map_err(|e| e.to_string())
-                    .and_then(|raw| {
-                        crate::gh::parse_gist_comments_json(&raw).map_err(|e| e.to_string())
-                    });
-                    BgTaskOutcome::CommentsOlderLoaded {
-                        gist_id: fetch_id,
-                        result,
-                    }
-                },
-            );
+            jobs.spawn_action(state, "Loading older comments…", move || {
+                let result = crate::gh::fetch_gist_comments_page(
+                    &fetch_id,
+                    page,
+                    crate::gh::COMMENTS_PAGE_SIZE,
+                )
+                .map_err(|e| e.to_string())
+                .and_then(|raw| {
+                    crate::gh::parse_gist_comments_json(&raw).map_err(|e| e.to_string())
+                });
+                BgTaskOutcome::CommentsOlderLoaded {
+                    gist_id: fetch_id,
+                    result,
+                }
+            });
         }
         KeyOutcome::CompactGist { gist_id, label } => {
-            spawn_bg(
-                state,
-                &mut channels.bg,
-                "Checking revisions…",
-                move || {
-                    let result = crate::actions::execute_command(
-                        &crate::actions::gist_revision_count_command(&gist_id),
-                    )
-                    .map_err(|e| e.to_string())
-                    .and_then(|out| {
-                        crate::actions::parse_revision_count(&out)
-                            .ok_or_else(|| "could not parse revision count".to_string())
-                    });
-                    BgTaskOutcome::CompactAnalyze {
-                        result,
-                        gist_id,
-                        label,
-                    }
-                },
-            );
+            jobs.spawn_action(state, "Checking revisions…", move || {
+                let result = crate::actions::execute_command(
+                    &crate::actions::gist_revision_count_command(&gist_id),
+                )
+                .map_err(|e| e.to_string())
+                .and_then(|out| {
+                    crate::actions::parse_revision_count(&out)
+                        .ok_or_else(|| "could not parse revision count".to_string())
+                });
+                BgTaskOutcome::CompactAnalyze {
+                    result,
+                    gist_id,
+                    label,
+                }
+            });
         }
         KeyOutcome::Pin {
             local_path,
@@ -206,7 +196,7 @@ pub(super) fn dispatch_outcome(
             let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
             let raw_url = gist_file.raw_url.clone();
 
-            spawn_bg(state, &mut channels.bg, "Loading diff…", move || {
+            jobs.spawn_action(state, "Loading diff…", move || {
                 let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
                 BgTaskOutcome::UploadPreview {
                     result,
@@ -266,7 +256,7 @@ pub(super) fn dispatch_outcome(
                 .unwrap_or_else(|| state.diff_return.clone());
             state.back_to_list();
             state.screen = return_screen;
-            spawn_bg(state, &mut channels.bg, "Uploading…", move || {
+            jobs.spawn_action(state, "Uploading…", move || {
                 let result = crate::actions::execute_command(&plan)
                     .map(|_| ())
                     .map_err(|e| e.to_string());
@@ -281,7 +271,7 @@ pub(super) fn dispatch_outcome(
             });
         }
         KeyOutcome::EditUpload => {
-            edit_upload_buffer(terminal, state, channels)?;
+            edit_upload_buffer(terminal, state, jobs)?;
         }
         KeyOutcome::Create(public) => {
             let Some(PendingAction::Create { local_path }) = state.pending_action().cloned() else {
@@ -290,7 +280,7 @@ pub(super) fn dispatch_outcome(
             let description = state.description_input.to_string();
             let plan = crate::actions::create_command(&local_path, public, &description);
 
-            spawn_bg(state, &mut channels.bg, "Creating gist…", move || {
+            jobs.spawn_action(state, "Creating gist…", move || {
                 let result = crate::actions::execute_command(&plan)
                     .map(|_| ())
                     .map_err(|e| e.to_string());
@@ -312,7 +302,7 @@ pub(super) fn dispatch_outcome(
             } else {
                 let raw_url = state.gist_file_raw_url(&gist_id, &filename);
                 let preview_title = format!("Preview: {gist_id} / {filename}");
-                spawn_bg(state, &mut channels.bg, "Loading preview…", move || {
+                jobs.spawn_action(state, "Loading preview…", move || {
                     let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
                     BgTaskOutcome::PreviewContent {
                         result,
@@ -331,7 +321,7 @@ pub(super) fn dispatch_outcome(
             state.gist_content_cache.remove(&key);
             let raw_url = state.gist_file_raw_url(&gist_id, &filename);
             let preview_title = format!("Preview: {gist_id} / {filename}");
-            spawn_bg(state, &mut channels.bg, "Loading preview…", move || {
+            jobs.spawn_action(state, "Loading preview…", move || {
                 let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
                 BgTaskOutcome::PreviewContent {
                     result,
@@ -355,7 +345,7 @@ pub(super) fn dispatch_outcome(
             let plan = crate::actions::delete_command(&gist_id);
             state.back_to_list();
 
-            spawn_bg(state, &mut channels.bg, "Deleting gist…", move || {
+            jobs.spawn_action(state, "Deleting gist…", move || {
                 let result = crate::actions::execute_command(&plan)
                     .map(|_| ())
                     .map_err(|e| e.to_string());
@@ -372,7 +362,7 @@ pub(super) fn dispatch_outcome(
             let plan = crate::actions::remove_file_command(&gist_id, &filename);
             state.back_to_list();
 
-            spawn_bg(state, &mut channels.bg, "Removing file…", move || {
+            jobs.spawn_action(state, "Removing file…", move || {
                 let result = crate::actions::execute_command(&plan)
                     .map(|_| ())
                     .map_err(|e| e.to_string());
@@ -394,20 +384,15 @@ pub(super) fn dispatch_outcome(
             };
             state.cancel_confirm();
 
-            spawn_bg(
-                state,
-                &mut channels.bg,
-                "Compacting revisions…",
-                move || {
-                    let result =
-                        crate::actions::execute_compact_gist(&gist_id).map_err(|e| e.to_string());
-                    BgTaskOutcome::CompactGist {
-                        result,
-                        label,
-                        count,
-                    }
-                },
-            );
+            jobs.spawn_action(state, "Compacting revisions…", move || {
+                let result =
+                    crate::actions::execute_compact_gist(&gist_id).map_err(|e| e.to_string());
+                BgTaskOutcome::CompactGist {
+                    result,
+                    label,
+                    count,
+                }
+            });
         }
         KeyOutcome::ApplyDescription {
             gist_id,
@@ -417,30 +402,15 @@ pub(super) fn dispatch_outcome(
             state.editing_description = false;
             state.description_input.clear();
 
-            spawn_bg(
-                state,
-                &mut channels.bg,
-                "Updating description…",
-                move || {
-                    let result = crate::actions::execute_command(&plan)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string());
-                    BgTaskOutcome::ApplyDescription { result, gist_id }
-                },
-            );
+            jobs.spawn_action(state, "Updating description…", move || {
+                let result = crate::actions::execute_command(&plan)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                BgTaskOutcome::ApplyDescription { result, gist_id }
+            });
         }
         KeyOutcome::RefreshLocals => {
-            let generation = state.begin_local_scan();
-            state.set_status("Scanning files…");
-            state.local_scanning = true;
-            channels.local = Some(spawn_local_scan(
-                generation,
-                state.cwd.clone(),
-                state.pinned.clone(),
-                state.local_recursive,
-                state.skip_dirs.clone(),
-                state.scan_depth,
-            ));
+            jobs.request_local_scan(state);
         }
         KeyOutcome::UnpinAtPin { index } => unpin_at_pin_index(state, index),
         KeyOutcome::SyncSelectedPair {
@@ -460,8 +430,8 @@ pub(super) fn dispatch_outcome(
             };
             let m = state.pinned[idx].clone();
             match state.compute_pin_sync_status(idx) {
-                crate::domain::SyncStatus::Push => spawn_pin_push(state, &mut channels.bg, &m),
-                crate::domain::SyncStatus::Pull => spawn_pin_pull(state, &mut channels.bg, &m),
+                crate::domain::SyncStatus::Push => spawn_pin_push(state, jobs, &m),
+                crate::domain::SyncStatus::Pull => spawn_pin_pull(state, jobs, &m),
                 crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
                 crate::domain::SyncStatus::Missing => {
                     state.set_status("local file is missing — use d to pull it back")
@@ -473,12 +443,12 @@ pub(super) fn dispatch_outcome(
         }
         KeyOutcome::SyncPinPush { index } => {
             if let Some(m) = state.pinned.get(index).cloned() {
-                spawn_pin_push(state, &mut channels.bg, &m);
+                spawn_pin_push(state, jobs, &m);
             }
         }
         KeyOutcome::SyncPinPull { index } => {
             if let Some(m) = state.pinned.get(index).cloned() {
-                spawn_pin_pull(state, &mut channels.bg, &m);
+                spawn_pin_pull(state, jobs, &m);
             }
         }
         KeyOutcome::SyncPinAuto { index } => {
@@ -487,8 +457,8 @@ pub(super) fn dispatch_outcome(
             };
             match state.compute_pin_sync_status(index) {
                 crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
-                crate::domain::SyncStatus::Pull => spawn_pin_pull(state, &mut channels.bg, &m),
-                crate::domain::SyncStatus::Push => spawn_pin_push(state, &mut channels.bg, &m),
+                crate::domain::SyncStatus::Pull => spawn_pin_pull(state, jobs, &m),
+                crate::domain::SyncStatus::Push => spawn_pin_push(state, jobs, &m),
                 crate::domain::SyncStatus::Missing => {
                     state.set_status("local file is missing — use d to pull it back")
                 }
@@ -504,7 +474,7 @@ pub(super) fn dispatch_outcome(
                 } else {
                     state.diff_return = Screen::Pins(Box::default());
                 }
-                spawn_pin_diff(state, &mut channels.bg, &m);
+                spawn_pin_diff(state, jobs, &m);
             }
         }
         KeyOutcome::PersistDiffContext => persist_diff_context(state),
@@ -514,7 +484,7 @@ pub(super) fn dispatch_outcome(
         }
         KeyOutcome::ThemeToggle => persist_theme(state),
         KeyOutcome::FetchRevisions { gist_id } => {
-            spawn_bg(state, &mut channels.bg, "Loading revisions…", move || {
+            jobs.spawn_action(state, "Loading revisions…", move || {
                 let result = crate::gh::fetch_gist_commits_json(&gist_id)
                     .map_err(|e| e.to_string())
                     .and_then(|raw| {
@@ -532,7 +502,7 @@ pub(super) fn dispatch_outcome(
             new_label,
             owner_login,
         } => {
-            spawn_bg(state, &mut channels.bg, "Loading diff…", move || {
+            jobs.spawn_action(state, "Loading diff…", move || {
                 let result = fetch_revision_incremental_pair(
                     &gist_id,
                     &child_version,
@@ -556,7 +526,7 @@ pub(super) fn dispatch_outcome(
             raw_url,
             owner_login,
         } => {
-            spawn_bg(state, &mut channels.bg, "Loading diff…", move || {
+            jobs.spawn_action(state, "Loading diff…", move || {
                 let result = fetch_revision_pair(
                     &gist_id,
                     &version,
@@ -581,7 +551,7 @@ pub(super) fn dispatch_outcome(
             raw_url,
             owner_login,
         } => {
-            spawn_bg(state, &mut channels.bg, "Loading revision…", move || {
+            jobs.spawn_action(state, "Loading revision…", move || {
                 let result = fetch_revision_pair_for_restore(
                     &gist_id,
                     &version,
@@ -625,22 +595,17 @@ pub(super) fn dispatch_outcome(
                 return Ok(LoopFlow::Proceed);
             }
             let plan = crate::actions::restore_revision_command(&gist_id, &json_path);
-            spawn_bg(
-                state,
-                &mut channels.bg,
-                "Restoring revision…",
-                move || {
-                    let result = crate::actions::execute_command(&plan)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string());
-                    let _ = std::fs::remove_dir_all(&temp_dir);
-                    BgTaskOutcome::RestoreRevisionDone {
-                        result,
-                        gist_id,
-                        filename,
-                    }
-                },
-            );
+            jobs.spawn_action(state, "Restoring revision…", move || {
+                let result = crate::actions::execute_command(&plan)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string());
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                BgTaskOutcome::RestoreRevisionDone {
+                    result,
+                    gist_id,
+                    filename,
+                }
+            });
         }
         KeyOutcome::ToggleGistStar { gist_id, starring } => {
             let plan = if starring {
@@ -653,7 +618,7 @@ pub(super) fn dispatch_outcome(
             } else {
                 "Unstarring…"
             };
-            spawn_bg(state, &mut channels.bg, msg, move || {
+            jobs.spawn_action(state, msg, move || {
                 let result = crate::actions::execute_command(&plan)
                     .map(|_| ())
                     .map_err(|e| e.to_string());
@@ -670,7 +635,7 @@ pub(super) fn dispatch_outcome(
                 return Ok(LoopFlow::Proceed);
             }
             let plan = crate::actions::fork_gist_command(&gist_id);
-            spawn_bg(state, &mut channels.bg, "Forking…", move || {
+            jobs.spawn_action(state, "Forking…", move || {
                 let result = crate::actions::execute_command(&plan)
                     .map(|_| ())
                     .map_err(|e| e.to_string());
