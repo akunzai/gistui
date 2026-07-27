@@ -42,8 +42,8 @@ the `gh` CLI on `PATH` at runtime (`gh` is not vendored). Optionally shrink it w
 
 ## Architecture
 
-See [AGENTS.md](AGENTS.md) for the full architecture guide, non-obvious rules, and conventions
-(coding agents should read `AGENTS.md` / `CLAUDE.md` first).
+Coding agents: read [`AGENTS.md`](AGENTS.md) first (index), then
+[`docs/agents/architecture.md`](docs/agents/architecture.md) for the deep-dive.
 
 Key points:
 
