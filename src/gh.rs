@@ -491,13 +491,21 @@ pub fn fetch_gist_fork_of_id_with(
 pub fn collect_owned_fork_of_ids(
     owned_ids: HashSet<String>,
 ) -> Result<HashMap<String, Option<String>>, String> {
+    collect_owned_fork_of_ids_with(&SystemRunner, owned_ids)
+}
+
+/// Injectable variant of [`collect_owned_fork_of_ids`] (issue #245).
+pub fn collect_owned_fork_of_ids_with(
+    runner: &dyn CommandRunner,
+    owned_ids: HashSet<String>,
+) -> Result<HashMap<String, Option<String>>, String> {
     // Surface a failure of the single fork-detection query — a transient error or expired
     // token would otherwise leave every owned fork undetected with no hint why the `forked`
     // filter is empty. Per-gist `fork_of` lookups stay best-effort (one bad gist is skipped).
-    let fork_ids = fetch_forked_gist_ids_graphql().map_err(|e| e.to_string())?;
+    let fork_ids = fetch_forked_gist_ids_graphql_with(runner).map_err(|e| e.to_string())?;
     let mut out = HashMap::new();
     for id in fork_ids.intersection(&owned_ids) {
-        if let Ok(fork_of) = fetch_gist_fork_of_id(id) {
+        if let Ok(fork_of) = fetch_gist_fork_of_id_with(runner, id) {
             out.insert(id.clone(), fork_of);
         }
     }
@@ -520,6 +528,16 @@ pub fn collect_gist_fork_counts(
     starred_raw: Option<&str>,
     gist_ids: impl IntoIterator<Item = String>,
 ) -> HashMap<String, u32> {
+    collect_gist_fork_counts_with(&SystemRunner, owned_raw, starred_raw, gist_ids)
+}
+
+/// Injectable variant of [`collect_gist_fork_counts`] (issue #245).
+pub fn collect_gist_fork_counts_with(
+    runner: &dyn CommandRunner,
+    owned_raw: Option<&str>,
+    starred_raw: Option<&str>,
+    gist_ids: impl IntoIterator<Item = String>,
+) -> HashMap<String, u32> {
     let mut counts = owned_raw
         .and_then(|raw| parse_gist_fork_counts(raw).ok())
         .unwrap_or_default();
@@ -532,7 +550,7 @@ pub fn collect_gist_fork_counts(
         if counts.get(&id).copied().unwrap_or(0) > 0 {
             continue;
         }
-        if let Ok(n) = fetch_gist_fork_count(&id) {
+        if let Ok(n) = fetch_gist_fork_count_with(runner, &id) {
             if n > 0 {
                 counts.insert(id, n);
             }
@@ -1190,103 +1208,148 @@ mod tests {
 
     #[test]
     fn fetch_revision_file_falls_back_when_revision_api_fails() {
-        use crate::actions::{CommandOutput, CommandPlan, CommandRunner};
-        use std::cell::RefCell;
-
-        struct SeqRunner {
-            outputs: RefCell<Vec<CommandOutput>>,
-            calls: RefCell<Vec<CommandPlan>>,
-            next: RefCell<usize>,
-        }
-
-        impl CommandRunner for SeqRunner {
-            fn run(&self, plan: &CommandPlan) -> Result<CommandOutput> {
-                self.calls.borrow_mut().push(plan.clone());
-                let i = *self.next.borrow();
-                *self.next.borrow_mut() = i + 1;
-                self.outputs
-                    .borrow()
-                    .get(i)
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("no output for call {i}"))
-            }
-        }
+        use crate::actions::test_support::SeqRunner;
+        use crate::actions::CommandOutput;
 
         let url = build_gist_revision_raw_url("karpathy", "g1", "sha1", "f.md");
-        let runner = SeqRunner {
-            outputs: RefCell::new(vec![
-                CommandOutput {
-                    success: false,
-                    stdout: String::new(),
-                    stderr: "HTTP 502".into(),
-                },
-                CommandOutput {
-                    success: true,
-                    stdout: "revision body".into(),
-                    stderr: String::new(),
-                },
-            ]),
-            calls: RefCell::new(Vec::new()),
-            next: RefCell::new(0),
-        };
+        let runner = SeqRunner::new(vec![
+            CommandOutput {
+                success: false,
+                stdout: String::new(),
+                stderr: "HTTP 502".into(),
+            },
+            CommandOutput {
+                success: true,
+                stdout: "revision body".into(),
+                stderr: String::new(),
+            },
+        ]);
 
         let content = fetch_revision_file_with(&runner, "g1", "sha1", "f.md", "karpathy").unwrap();
         assert_eq!(
             content,
             RevisionFileContent::Present("revision body".into())
         );
-        let calls = runner.calls.borrow();
+        let calls = runner.calls();
         assert_eq!(calls[0], gist_revision_plan("g1", "sha1"));
         assert_eq!(calls[1], raw_url_fetch_plan(&url));
     }
 
     #[test]
     fn fetch_gist_file_content_falls_back_to_raw_url() {
-        use crate::actions::{CommandOutput, CommandPlan, CommandRunner};
-        use std::cell::RefCell;
-
-        struct SeqRunner {
-            outputs: RefCell<Vec<CommandOutput>>,
-            calls: RefCell<Vec<CommandPlan>>,
-            next: RefCell<usize>,
-        }
-
-        impl CommandRunner for SeqRunner {
-            fn run(&self, plan: &CommandPlan) -> Result<CommandOutput> {
-                self.calls.borrow_mut().push(plan.clone());
-                let i = *self.next.borrow();
-                *self.next.borrow_mut() = i + 1;
-                self.outputs
-                    .borrow()
-                    .get(i)
-                    .cloned()
-                    .ok_or_else(|| anyhow::anyhow!("no output for call {i}"))
-            }
-        }
+        use crate::actions::test_support::SeqRunner;
+        use crate::actions::CommandOutput;
 
         let url = "https://gist.githubusercontent.com/u/id/raw/hash/file.md";
-        let runner = SeqRunner {
-            outputs: RefCell::new(vec![
-                CommandOutput {
-                    success: false,
-                    stdout: String::new(),
-                    stderr: "HTTP 502".into(),
-                },
-                CommandOutput {
-                    success: true,
-                    stdout: "big content".into(),
-                    stderr: String::new(),
-                },
-            ]),
-            calls: RefCell::new(Vec::new()),
-            next: RefCell::new(0),
-        };
+        let runner = SeqRunner::new(vec![
+            CommandOutput {
+                success: false,
+                stdout: String::new(),
+                stderr: "HTTP 502".into(),
+            },
+            CommandOutput {
+                success: true,
+                stdout: "big content".into(),
+                stderr: String::new(),
+            },
+        ]);
 
         let content = fetch_gist_file_content_with(&runner, "id", "file.md", Some(url)).unwrap();
         assert_eq!(content, "big content");
-        let calls = runner.calls.borrow();
+        let calls = runner.calls();
         assert_eq!(calls[0], gist_view_plan("id", "file.md"));
         assert_eq!(calls[1], raw_url_fetch_plan(url));
+    }
+
+    #[test]
+    fn collect_gist_fork_counts_with_probes_zero_entries() {
+        use crate::actions::test_support::SeqRunner;
+        use crate::actions::CommandOutput;
+
+        // List raw has no per-id fork arrays → every id is probed via /forks.
+        let list_raw =
+            r#"[{"id":"abc123","files":{},"comments":0},{"id":"def456","files":{},"comments":0}]"#;
+        let runner = SeqRunner::new(vec![
+            CommandOutput {
+                success: true,
+                stdout: r#"[{"id":"f1"},{"id":"f2"}]"#.into(),
+                stderr: String::new(),
+            },
+            CommandOutput {
+                success: true,
+                stdout: "[]".into(),
+                stderr: String::new(),
+            },
+        ]);
+        let counts = collect_gist_fork_counts_with(
+            &runner,
+            Some(list_raw),
+            None,
+            ["abc123".into(), "def456".into()],
+        );
+        assert_eq!(counts.get("abc123").copied(), Some(2));
+        // Probe returned empty forks → count stays 0 (from list parse or absent).
+        assert_eq!(counts.get("def456").copied().unwrap_or(0), 0);
+        let calls = runner.calls();
+        assert_eq!(calls[0], gist_forks_plan("abc123"));
+        assert_eq!(calls[1], gist_forks_plan("def456"));
+    }
+
+    #[test]
+    fn collect_owned_fork_of_ids_with_maps_owned_forks() {
+        use crate::actions::test_support::SeqRunner;
+        use crate::actions::CommandOutput;
+
+        // GraphQL: g1 is a fork; g2 is not. Then GET /gists/g1 for fork_of.
+        let graphql = r#"{
+            "data": {
+                "viewer": {
+                    "gists": {
+                        "nodes": [
+                            {"name": "g1", "isFork": true},
+                            {"name": "g2", "isFork": false}
+                        ],
+                        "pageInfo": {"hasNextPage": false, "endCursor": null}
+                    }
+                }
+            }
+        }"#;
+        let detail = r#"{"id":"g1","description":"","public":false,"updated_at":"","created_at":"","files":{},"fork_of":{"id":"upstream1"}}"#;
+        let runner = SeqRunner::new(vec![
+            CommandOutput {
+                success: true,
+                stdout: graphql.into(),
+                stderr: String::new(),
+            },
+            CommandOutput {
+                success: true,
+                stdout: detail.into(),
+                stderr: String::new(),
+            },
+        ]);
+        let owned = HashSet::from(["g1".into(), "g2".into(), "g3".into()]);
+        let map = collect_owned_fork_of_ids_with(&runner, owned).unwrap();
+        assert_eq!(map.get("g1").cloned(), Some(Some("upstream1".into())));
+        assert!(!map.contains_key("g2"));
+        assert!(!map.contains_key("g3"));
+        let calls = runner.calls();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[1], gist_detail_plan("g1"));
+    }
+
+    #[test]
+    fn collect_owned_fork_of_ids_with_surfaces_graphql_failure() {
+        use crate::actions::test_support::SeqRunner;
+        use crate::actions::CommandOutput;
+
+        let runner = SeqRunner::new(vec![CommandOutput {
+            success: false,
+            stdout: String::new(),
+            stderr: "HTTP 401".into(),
+        }]);
+        let err =
+            collect_owned_fork_of_ids_with(&runner, HashSet::from(["g1".into()])).unwrap_err();
+        assert!(err.contains("401") || err.contains("HTTP"));
     }
 
     #[test]

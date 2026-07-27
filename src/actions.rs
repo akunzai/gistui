@@ -94,6 +94,48 @@ pub fn run_command(runner: &dyn CommandRunner, plan: &CommandPlan) -> Result<Str
     Ok(output.stdout)
 }
 
+/// Shared sequential fake runner for unit tests (issue #245). Feeds scripted
+/// [`CommandOutput`]s in order and records every [`CommandPlan`] for assertions.
+#[cfg(test)]
+pub mod test_support {
+    use super::{CommandOutput, CommandPlan, CommandRunner};
+    use anyhow::{anyhow, Result};
+    use std::cell::RefCell;
+
+    pub struct SeqRunner {
+        outputs: RefCell<Vec<CommandOutput>>,
+        calls: RefCell<Vec<CommandPlan>>,
+        next: RefCell<usize>,
+    }
+
+    impl SeqRunner {
+        pub fn new(outputs: Vec<CommandOutput>) -> Self {
+            Self {
+                outputs: RefCell::new(outputs),
+                calls: RefCell::new(Vec::new()),
+                next: RefCell::new(0),
+            }
+        }
+
+        pub fn calls(&self) -> Vec<CommandPlan> {
+            self.calls.borrow().clone()
+        }
+    }
+
+    impl CommandRunner for SeqRunner {
+        fn run(&self, plan: &CommandPlan) -> Result<CommandOutput> {
+            self.calls.borrow_mut().push(plan.clone());
+            let i = *self.next.borrow();
+            *self.next.borrow_mut() = i + 1;
+            self.outputs
+                .borrow()
+                .get(i)
+                .cloned()
+                .ok_or_else(|| anyhow!("no output for call {i}"))
+        }
+    }
+}
+
 pub fn upload_command(local_path: &Path, target: &GistFile) -> CommandPlan {
     CommandPlan {
         program: "gh".into(),
