@@ -1221,6 +1221,19 @@ impl Jobs {
     }
 }
 
+/// Receive at most one value from a one-shot job channel, clearing `slot` once a value
+/// arrives. A disconnected sender is treated the same as an empty channel (no value yet):
+/// `slot` is left in place and the caller tries again next tick.
+///
+/// Only covers channels that receive a single unstamped result (`gist`, `fork`, `star`,
+/// `fork_meta`, `update`). The generation-stamped channels (`local`, `action`) and the
+/// multi-message `upload_edit_watch` drain have different shapes and stay hand-rolled.
+fn poll_channel<T>(slot: &mut Option<std::sync::mpsc::Receiver<T>>) -> Option<T> {
+    let value = slot.as_ref()?.try_recv().ok()?;
+    *slot = None;
+    Some(value)
+}
+
 fn absorb_background_results_body(
     state: &mut AppState,
     channels: &mut Jobs,
@@ -1228,91 +1241,78 @@ fn absorb_background_results_body(
 ) -> Result<LoopFlow> {
     // Absorb the background gist list once it arrives.
     if state.loading {
-        if let Some(ref rx) = channels.gist {
-            if let Ok((
-                gists,
-                starred,
-                starred_ids,
-                user_login,
-                comment_counts,
-                owned_raw,
-                starred_raw,
-            )) = rx.try_recv()
-            {
-                persist_gist_cache_from_state_fields(
-                    &gists,
-                    &starred,
-                    &starred_ids,
-                    &user_login,
-                    &comment_counts,
-                    &state.gist_fork_counts,
-                    &state.gist_star_counts,
-                );
-                state.gists = gists;
-                state.starred_gists = starred;
-                state.starred_gist_ids = starred_ids;
-                state.current_user_login = user_login;
-                state.gist_comment_counts = comment_counts;
-                state.loading = false;
-                if state.gist_index >= state.ranked_gists().len() {
-                    state.gist_index = 0;
-                }
-                let count = state.visible_gist_groups().len();
-                if count > 0 {
-                    if let Some(gm) = state.gist_manager_mut() {
-                        if gm.index >= count {
-                            gm.index = count - 1;
-                        }
+        if let Some((
+            gists,
+            starred,
+            starred_ids,
+            user_login,
+            comment_counts,
+            owned_raw,
+            starred_raw,
+        )) = poll_channel(&mut channels.gist)
+        {
+            persist_gist_cache_from_state_fields(
+                &gists,
+                &starred,
+                &starred_ids,
+                &user_login,
+                &comment_counts,
+                &state.gist_fork_counts,
+                &state.gist_star_counts,
+            );
+            state.gists = gists;
+            state.starred_gists = starred;
+            state.starred_gist_ids = starred_ids;
+            state.current_user_login = user_login;
+            state.gist_comment_counts = comment_counts;
+            state.loading = false;
+            if state.gist_index >= state.ranked_gists().len() {
+                state.gist_index = 0;
+            }
+            let count = state.visible_gist_groups().len();
+            if count > 0 {
+                if let Some(gm) = state.gist_manager_mut() {
+                    if gm.index >= count {
+                        gm.index = count - 1;
                     }
                 }
-                channels.gist = None;
-                let gist_ids: std::collections::HashSet<String> = state
-                    .gists
-                    .iter()
-                    .chain(state.starred_gists.iter())
-                    .map(|g| g.gist_id.clone())
-                    .collect();
-                channels.fork = Some(spawn_fork_count_fetch(
-                    owned_raw,
-                    starred_raw,
-                    gist_ids.clone(),
-                ));
-                channels.fork_meta = Some(spawn_fork_metadata_fetch(
-                    state.gists.iter().map(|g| g.gist_id.clone()).collect(),
-                ));
-                let node_ids =
-                    crate::gh::merge_gist_node_id_maps(&state.gists, &state.starred_gists);
-                channels.star = Some(spawn_star_count_fetch(node_ids));
             }
+            let gist_ids: std::collections::HashSet<String> = state
+                .gists
+                .iter()
+                .chain(state.starred_gists.iter())
+                .map(|g| g.gist_id.clone())
+                .collect();
+            channels.fork = Some(spawn_fork_count_fetch(
+                owned_raw,
+                starred_raw,
+                gist_ids.clone(),
+            ));
+            channels.fork_meta = Some(spawn_fork_metadata_fetch(
+                state.gists.iter().map(|g| g.gist_id.clone()).collect(),
+            ));
+            let node_ids = crate::gh::merge_gist_node_id_maps(&state.gists, &state.starred_gists);
+            channels.star = Some(spawn_star_count_fetch(node_ids));
         }
     }
 
-    if let Some(ref rx) = channels.fork {
-        if let Ok(fork_counts) = rx.try_recv() {
-            state.gist_fork_counts = fork_counts;
-            persist_gist_cache_from_state(state);
-            channels.fork = None;
-        }
+    if let Some(fork_counts) = poll_channel(&mut channels.fork) {
+        state.gist_fork_counts = fork_counts;
+        persist_gist_cache_from_state(state);
     }
 
-    if let Some(ref rx) = channels.star {
-        if let Ok(star_counts) = rx.try_recv() {
-            state.gist_star_counts = star_counts;
-            persist_gist_cache_from_state(state);
-            channels.star = None;
-        }
+    if let Some(star_counts) = poll_channel(&mut channels.star) {
+        state.gist_star_counts = star_counts;
+        persist_gist_cache_from_state(state);
     }
 
-    if let Some(ref rx) = channels.fork_meta {
-        if let Ok(result) = rx.try_recv() {
-            match result {
-                Ok(fork_of) => {
-                    crate::gh::apply_fork_of_ids(&mut state.gists, &fork_of);
-                    persist_gist_cache_from_state(state);
-                }
-                Err(error) => state.set_status(format!("fork detection unavailable: {error}")),
+    if let Some(result) = poll_channel(&mut channels.fork_meta) {
+        match result {
+            Ok(fork_of) => {
+                crate::gh::apply_fork_of_ids(&mut state.gists, &fork_of);
+                persist_gist_cache_from_state(state);
             }
-            channels.fork_meta = None;
+            Err(error) => state.set_status(format!("fork detection unavailable: {error}")),
         }
     }
 
@@ -1331,37 +1331,34 @@ fn absorb_background_results_body(
 
     // Absorb the background update-check result: show the hint and persist the throttle.
     // Failed checks are silent and not recorded, so they retry on the next launch.
-    if let Some(ref rx) = channels.update {
-        if let Ok(outcome) = rx.try_recv() {
-            channels.update = None;
-            let now = crate::update_check::now_secs();
-            match outcome {
-                crate::update_check::UpdateCheckOutcome::Newer(version) => {
-                    if let Some(ref path) = update_check_path {
-                        crate::update_check::save_state(
-                            path,
-                            &crate::update_check::UpdateCheckState {
-                                last_check: now,
-                                latest_seen: version.clone(),
-                            },
-                        );
-                    }
-                    state.update_available = Some(version);
+    if let Some(outcome) = poll_channel(&mut channels.update) {
+        let now = crate::update_check::now_secs();
+        match outcome {
+            crate::update_check::UpdateCheckOutcome::Newer(version) => {
+                if let Some(ref path) = update_check_path {
+                    crate::update_check::save_state(
+                        path,
+                        &crate::update_check::UpdateCheckState {
+                            last_check: now,
+                            latest_seen: version.clone(),
+                        },
+                    );
                 }
-                crate::update_check::UpdateCheckOutcome::UpToDate => {
-                    if let Some(ref path) = update_check_path {
-                        crate::update_check::save_state(
-                            path,
-                            &crate::update_check::UpdateCheckState {
-                                last_check: now,
-                                latest_seen: String::new(),
-                            },
-                        );
-                    }
-                    state.update_available = None;
-                }
-                crate::update_check::UpdateCheckOutcome::Failed => {}
+                state.update_available = Some(version);
             }
+            crate::update_check::UpdateCheckOutcome::UpToDate => {
+                if let Some(ref path) = update_check_path {
+                    crate::update_check::save_state(
+                        path,
+                        &crate::update_check::UpdateCheckState {
+                            last_check: now,
+                            latest_seen: String::new(),
+                        },
+                    );
+                }
+                state.update_available = None;
+            }
+            crate::update_check::UpdateCheckOutcome::Failed => {}
         }
     }
 
@@ -1864,4 +1861,42 @@ fn absorb_background_results_body(
         }
     }
     Ok(LoopFlow::Proceed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::poll_channel;
+    use std::sync::mpsc;
+
+    #[test]
+    fn returns_none_and_leaves_slot_when_empty() {
+        let (_tx, rx) = mpsc::channel::<i32>();
+        let mut slot = Some(rx);
+        assert_eq!(poll_channel(&mut slot), None);
+        assert!(slot.is_some());
+    }
+
+    #[test]
+    fn returns_value_and_clears_slot_when_received() {
+        let (tx, rx) = mpsc::channel::<i32>();
+        tx.send(42).unwrap();
+        let mut slot = Some(rx);
+        assert_eq!(poll_channel(&mut slot), Some(42));
+        assert!(slot.is_none());
+    }
+
+    #[test]
+    fn treats_disconnected_sender_like_empty() {
+        let (tx, rx) = mpsc::channel::<i32>();
+        drop(tx);
+        let mut slot = Some(rx);
+        assert_eq!(poll_channel(&mut slot), None);
+        assert!(slot.is_some());
+    }
+
+    #[test]
+    fn returns_none_when_slot_already_empty() {
+        let mut slot: Option<mpsc::Receiver<i32>> = None;
+        assert_eq!(poll_channel(&mut slot), None);
+    }
 }
