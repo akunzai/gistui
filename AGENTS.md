@@ -60,6 +60,23 @@ Agent-facing deltas (not fully restated in those docs):
 - Domain / ADR lazy layout: `@docs/agents/domain.md`
 - Architecture deep-dive: `@docs/agents/architecture.md`
 
+## Knowledge writeback
+
+When problem-solving surfaces **non-obvious** project knowledge (gotcha, env quirk, framework behavior, hidden config), the agent **must**:
+
+1. **Distill** — one durable, context-tagged bullet (e.g. `[ratatui 0.30] …`), not a debug transcript.
+2. **Propose** — show the candidate snippet and ask: *“This insight may be worth preserving. Shall I add it to `AGENTS.md`?”*
+3. **Write only after explicit approval** — never silent writeback.
+4. **Route**:
+   - Durable architecture / seam rule → `@docs/agents/architecture.md` or a Rich Ref (type/test), not long prose here.
+   - Short gotcha → `## Lessons Learned` below (or `## Non-obvious constraints` if it is a standing gate).
+5. **Quality gates** (all required): non-derivable from code alone · not a drifting metric · not micromanagement · ≤ 2 bullets.
+6. **Active pruning**: `## Lessons Learned` max **5** entries. Over 5 → propose drop obsolete version-scoped gotchas or promote into types/tests/architecture docs.
+
+## Lessons Learned (actively pruned, max 5)
+
+<!-- Populated only via Knowledge writeback after user approval. -->
+
 ## Claude Code compatibility
 
 > [!NOTE]
