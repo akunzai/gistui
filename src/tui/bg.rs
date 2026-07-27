@@ -873,7 +873,7 @@ pub(super) fn edit_upload_buffer(
     Ok(())
 }
 
-pub(super) fn download(state: &mut AppState) {
+pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode) {
     let target = state.download_target();
     let content = state.preview_remote().to_string();
     let pin_key = state
@@ -891,7 +891,7 @@ pub(super) fn download(state: &mut AppState) {
         Screen::Diff(d) => d.return_screen.clone(),
         _ => state.diff_return.clone(),
     };
-    match crate::actions::execute_download(&target, &content, true) {
+    match crate::actions::execute_download(&target, &content, mode) {
         Ok(()) => {
             state.set_status(format!(
                 "Downloaded {}",
@@ -1500,7 +1500,11 @@ fn absorb_background_results_body(
                                     Err(error) => state.set_status(error),
                                 }
                             } else {
-                                match crate::actions::execute_download(&target, &remote, false) {
+                                match crate::actions::execute_download(
+                                    &target,
+                                    &remote,
+                                    crate::actions::DownloadMode::CreateNew,
+                                ) {
                                     Ok(()) => {
                                         state.set_status(format!(
                                             "Downloaded {}",

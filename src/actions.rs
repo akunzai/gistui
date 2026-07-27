@@ -6,46 +6,36 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PendingAction {
-    Upload {
-        local_path: PathBuf,
-        target: GistFile,
-    },
-    Download {
-        source: GistFile,
-        local_path: PathBuf,
-    },
-    Create {
-        local_path: PathBuf,
-        filename: String,
-        public: bool,
-    },
-    Delete {
-        gist_id: String,
-        label: String,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfirmedAction {
-    pub action: PendingAction,
-}
-
-pub fn confirm_action(
-    action: Option<PendingAction>,
-    diff_previewed: bool,
-) -> Option<ConfirmedAction> {
-    if diff_previewed {
-        action.map(|action| ConfirmedAction { action })
-    } else {
-        None
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommandPlan {
     pub program: String,
     pub args: Vec<String>,
+}
+
+/// Capability token: target may be overwritten. Private field so callers cannot
+/// forge it with a bare `true` — only [`DownloadMode::overwrite_after_user_confirm`]
+/// constructs one (issue #246).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OverwriteConfirmed {
+    _private: (),
+}
+
+/// How [`execute_download`] may write the target path.
+///
+/// - [`DownloadMode::CreateNew`]: refuse if the path already exists.
+/// - [`DownloadMode::Overwrite`]: allowed only with a token minted after the user
+///   confirmed overwrite (diff → Confirm → `y`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DownloadMode {
+    CreateNew,
+    Overwrite(OverwriteConfirmed),
+}
+
+impl DownloadMode {
+    /// Mint overwrite permission after the user accepts the Confirm dialog.
+    /// This is the only supported producer of [`OverwriteConfirmed`].
+    pub const fn overwrite_after_user_confirm() -> Self {
+        Self::Overwrite(OverwriteConfirmed { _private: () })
+    }
 }
 
 /// The captured result of running a [`CommandPlan`], independent of how it was
@@ -545,12 +535,19 @@ fn copy_via(plan: &CommandPlan, text: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn execute_download(local_path: &Path, content: &str, overwrite_confirmed: bool) -> Result<()> {
-    if local_path.exists() && !overwrite_confirmed {
-        bail!(
-            "refusing to overwrite {} without confirmation",
-            local_path.display()
-        );
+/// Write `content` to `local_path`.
+///
+/// Existing targets require [`DownloadMode::Overwrite`] (user confirmed after diff).
+/// New paths use [`DownloadMode::CreateNew`] with no confirm token.
+pub fn execute_download(local_path: &Path, content: &str, mode: DownloadMode) -> Result<()> {
+    match mode {
+        DownloadMode::CreateNew if local_path.exists() => {
+            bail!(
+                "refusing to overwrite {} without confirmation",
+                local_path.display()
+            );
+        }
+        DownloadMode::CreateNew | DownloadMode::Overwrite(_) => {}
     }
     if let Some(parent) = local_path.parent() {
         fs::create_dir_all(parent)?;
@@ -660,31 +657,6 @@ mod tests {
 
             node_id: None,
         }
-    }
-
-    #[test]
-    fn cannot_confirm_without_diff_preview() {
-        let action = PendingAction::Upload {
-            local_path: PathBuf::from("/tmp/settings.json"),
-            target: gist_file(),
-        };
-
-        assert_eq!(confirm_action(Some(action), false), None);
-    }
-
-    #[test]
-    fn can_confirm_after_diff_preview() {
-        let action = PendingAction::Download {
-            source: gist_file(),
-            local_path: PathBuf::from("/tmp/settings.json"),
-        };
-
-        assert!(confirm_action(Some(action), true).is_some());
-    }
-
-    #[test]
-    fn no_action_yields_none_even_after_preview() {
-        assert_eq!(confirm_action(None, true), None);
     }
 
     #[test]
@@ -962,12 +934,12 @@ mod tests {
     }
 
     #[test]
-    fn download_refuses_unconfirmed_overwrite() {
+    fn download_refuses_create_new_when_target_exists() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         std::fs::write(&path, "old").unwrap();
 
-        let err = execute_download(&path, "new", false).unwrap_err();
+        let err = execute_download(&path, "new", DownloadMode::CreateNew).unwrap_err();
         assert!(err.to_string().contains("refusing to overwrite"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
     }
@@ -978,17 +950,26 @@ mod tests {
         // creating any missing parent directories along the way.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested/dir/settings.json");
-        execute_download(&path, "hello", false).unwrap();
+        execute_download(&path, "hello", DownloadMode::CreateNew).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
     }
 
     #[test]
-    fn download_overwrites_existing_when_confirmed() {
+    fn download_overwrites_existing_when_token_present() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         std::fs::write(&path, "old").unwrap();
-        execute_download(&path, "new", true).unwrap();
+        execute_download(&path, "new", DownloadMode::overwrite_after_user_confirm()).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
+    }
+
+    #[test]
+    fn overwrite_confirmed_is_not_a_public_bool_field() {
+        // Structural: DownloadMode::Overwrite requires OverwriteConfirmed; the only
+        // public mint is overwrite_after_user_confirm (no `true` flag).
+        let mode = DownloadMode::overwrite_after_user_confirm();
+        assert!(matches!(mode, DownloadMode::Overwrite(_)));
+        assert!(matches!(DownloadMode::CreateNew, DownloadMode::CreateNew));
     }
 
     #[test]

@@ -575,7 +575,11 @@ pub enum KeyOutcome {
         upload_orientation: bool,
     },
     /// Download using the open Diff payload (no re-resolve).
-    Download,
+    /// `mode` is [`DownloadMode::CreateNew`] when the target is missing, or
+    /// [`DownloadMode::overwrite_after_user_confirm`] after Confirm `y` (issue #246).
+    Download {
+        mode: crate::actions::DownloadMode,
+    },
     /// Download/fetch a selected gist file (may land on Diff/Confirm).
     DownloadGist {
         gist_id: String,

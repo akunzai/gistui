@@ -2323,7 +2323,12 @@ fn d_in_diff_downloads_when_file_absent() {
     let missing = dir.path().join("does-not-exist.json");
     let mut state = initial_state();
     state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/local"), missing);
-    assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::Download);
+    assert!(matches!(
+        state.handle_key(KeyCode::Char('d')),
+        KeyOutcome::Download {
+            mode: crate::actions::DownloadMode::CreateNew
+        }
+    ));
 }
 
 #[test]
@@ -2352,7 +2357,12 @@ fn confirm_y_returns_download() {
         PathBuf::from("/tmp/x"),
     );
     set_pending(&mut state, PendingAction::Download);
-    assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::Download);
+    assert!(matches!(
+        state.handle_key(KeyCode::Char('y')),
+        KeyOutcome::Download {
+            mode: crate::actions::DownloadMode::Overwrite(_)
+        }
+    ));
 }
 
 #[test]
