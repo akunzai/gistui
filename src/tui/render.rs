@@ -2623,7 +2623,7 @@ fn render_palette_vm(
     match palette.origin_screen {
         Screen::List => render_list(frame, state, &mut bg_layout),
         Screen::Diff => render_diff(frame, state, &mut bg_layout),
-        Screen::Preview => render_preview(frame, state, &mut bg_layout),
+        Screen::Preview(_) => render_preview(frame, state, &mut bg_layout),
         Screen::Help(_) => render_help(frame, state, &mut bg_layout),
         Screen::Pins(_) => render_pins(frame, state, &mut bg_layout),
         Screen::Gists(_) => render_gists(frame, state, &mut bg_layout),

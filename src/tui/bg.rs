@@ -636,9 +636,9 @@ pub(super) fn open_repo_url(state: &mut AppState) {
 /// Copies the context gist's web URL to the system clipboard. On the Preview screen the
 /// URL comes from the previewed file's gist; elsewhere from the current selection.
 pub(super) fn copy_gist_url(state: &mut AppState) {
-    let gist_id = match &state.screen {
-        Screen::Preview => state.preview_gist_key.as_ref().map(|(id, _)| id.clone()),
-        _ => state.context_gist_id(),
+    let gist_id = match state.preview() {
+        Some(p) => p.gist_key.as_ref().map(|(id, _)| id.clone()),
+        None => state.context_gist_id(),
     };
     let Some(gist_id) = gist_id else {
         state.set_status("no gist selected to copy");
@@ -654,12 +654,16 @@ pub(super) fn copy_gist_url(state: &mut AppState) {
 /// Copies the full previewed file content (the text shown on `Screen::Preview`) to the
 /// system clipboard.
 pub(super) fn copy_preview_content(state: &mut AppState) {
-    if state.diff_text.is_empty() {
+    let Some(text) = state.preview().map(|p| p.text.clone()) else {
+        state.set_status("no content to copy");
+        return;
+    };
+    if text.is_empty() {
         state.set_status("no content to copy");
         return;
     }
-    let bytes = state.diff_text.len();
-    match crate::actions::copy_to_clipboard(&state.diff_text) {
+    let bytes = text.len();
+    match crate::actions::copy_to_clipboard(&text) {
         Ok(_) => state.set_status(format!("Copied {bytes} bytes to clipboard")),
         Err(error) => state.set_status(format!("copy failed: {error}")),
     }
@@ -1566,13 +1570,7 @@ pub(super) fn absorb_background_results(
                             state
                                 .gist_content_cache
                                 .insert(key.clone(), content.clone());
-                            state.preview_title = preview_title;
-                            state.preview_gist_key = Some(key);
-                            state.diff_text = content;
-                            state.diff_scroll = 0;
-                            state.diff_hscroll = 0;
-                            state.status = None;
-                            state.screen = Screen::Preview;
+                            state.enter_preview(preview_title, content, Some(key));
                         }
                         Err(error) => state.set_status(format!("fetch failed: {error}")),
                     },

@@ -366,7 +366,7 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::Revisions(_) => ScreenVm::Revisions(build_revisions_vm(state)),
         Screen::Config(_) => ScreenVm::Config(build_config_vm(state)),
         Screen::Diff => ScreenVm::Diff(build_diff_vm(state)),
-        Screen::Preview => ScreenVm::Preview(build_preview_vm(state)),
+        Screen::Preview(_) => ScreenVm::Preview(build_preview_vm(state)),
         Screen::Pins(_) => ScreenVm::Pins(build_pins_vm(state)),
         Screen::Confirm => ScreenVm::Confirm(build_confirm_vm(state)),
         Screen::Help(_) => ScreenVm::Help(build_help_vm(state)),
@@ -470,24 +470,25 @@ pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
 
 /// Preview body — usable under Palette-over-Preview as well.
 pub(crate) fn build_preview_vm(state: &AppState) -> PreviewVm {
+    let p = state.preview().cloned().unwrap_or_default();
     let hints = if state.preview_wrap {
         "↑↓ PgUp/Dn scroll  ·  w wrap [on]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
     } else {
         "↑↓←→ PgUp/Dn scroll  ·  w wrap [off]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
     };
     let (footer, footer_colored) = footer_with_status(state.status.as_deref(), hints);
-    let ext = state
-        .preview_gist_key
+    let ext = p
+        .gist_key
         .as_ref()
         .and_then(|(_, filename)| file_ext(filename));
     PreviewVm {
-        title: state.preview_title.clone(),
-        body: state.diff_text.clone(),
+        title: p.title,
+        body: p.text,
         footer,
         footer_colored,
         wrap: state.preview_wrap,
-        scroll: state.diff_scroll,
-        hscroll: state.diff_hscroll,
+        scroll: p.scroll,
+        hscroll: p.hscroll,
         syntax_highlight: state.syntax_highlight,
         ext,
     }
@@ -1618,10 +1619,11 @@ mod tests {
     #[test]
     fn preview_vm_title_and_status_footer() {
         let mut state = initial_state();
-        state.screen = Screen::Preview;
-        state.preview_title = "gist: notes.txt".into();
-        state.diff_text = "hello preview\n".into();
-        state.preview_gist_key = Some(("g1".into(), "notes.rs".into()));
+        state.enter_preview(
+            "gist: notes.txt".into(),
+            "hello preview\n".into(),
+            Some(("g1".into(), "notes.rs".into())),
+        );
         state.status = Some("refresh failed".into());
         match build_view_model(&state).screen {
             ScreenVm::Preview(p) => {

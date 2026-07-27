@@ -58,6 +58,9 @@ fn detail_mut(state: &mut AppState) -> &mut DetailState {
 fn detail_ref(state: &AppState) -> &DetailState {
     state.detail().expect("expected Screen::GistDetail")
 }
+fn preview_ref(state: &AppState) -> &PreviewState {
+    state.preview().expect("expected Screen::Preview")
+}
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
@@ -456,7 +459,7 @@ fn detail_number_key_out_of_range_is_ignored() {
 #[test]
 fn preview_w_toggles_line_wrapping() {
     let mut state = initial_state();
-    state.screen = Screen::Preview;
+    state.screen = Screen::Preview(Box::default());
     assert!(!state.preview_wrap);
     state.handle_key(KeyCode::Char('w'));
     assert!(state.preview_wrap);
@@ -507,11 +510,13 @@ fn detail_x_requests_gist_delete_confirm() {
 #[test]
 fn preview_q_returns_to_launch_screen() {
     let mut state = state_with_gists();
-    state.screen = Screen::Preview;
-    state.preview_return = Screen::GistDetail(Box::default());
+    state.screen = Screen::Preview(Box::new(PreviewState {
+        return_screen: Screen::GistDetail(Box::default()),
+        ..PreviewState::default()
+    }));
     state.handle_key(KeyCode::Char('q'));
     assert!(state.screen.is_gist_detail());
-    // Reset so a later list-launched preview returns to the list.
+    // Staging field reset so a later list-launched preview returns to the list.
     assert_eq!(state.preview_return, Screen::List);
 }
 
@@ -542,7 +547,7 @@ fn pins_key_clears_lingering_status_for_one_shot_display() {
 #[test]
 fn preview_key_clears_lingering_status_for_one_shot_display() {
     let mut state = initial_state();
-    state.screen = Screen::Preview;
+    state.screen = Screen::Preview(Box::default());
     state.status = Some("fetch failed: boom".into());
     state.handle_key(KeyCode::Down); // any key
     assert_eq!(state.status, None);
@@ -1148,43 +1153,43 @@ fn space_without_gist_is_noop() {
 #[test]
 fn esc_in_preview_returns_to_list_and_clears() {
     let mut state = initial_state();
-    state.screen = Screen::Preview;
-    state.diff_text = "raw content".into();
-    state.preview_title = "Preview: a / x".into();
+    state.enter_preview(
+        "Preview: a / x".into(),
+        "raw content".into(),
+        Some(("a".into(), "x".into())),
+    );
     assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
     assert_eq!(state.screen, Screen::List);
-    assert!(state.diff_text.is_empty());
-    assert!(state.preview_title.is_empty());
+    assert!(state.preview().is_none());
 }
 
 #[test]
 fn preview_scrolls_with_arrows() {
     let mut state = initial_state();
-    state.screen = Screen::Preview;
-    state.diff_text = "l1\nl2\nl3".into();
+    state.enter_preview("t".into(), "l1\nl2\nl3".into(), None);
     state.handle_key(KeyCode::Down);
-    assert_eq!(state.diff_scroll, 1);
+    assert_eq!(preview_ref(&state).scroll, 1);
     state.handle_key(KeyCode::Up);
-    assert_eq!(state.diff_scroll, 0);
+    assert_eq!(preview_ref(&state).scroll, 0);
 }
 
 #[test]
 fn page_keys_jump_by_ten_clamped_to_bounds() {
     let mut state = initial_state();
-    state.screen = Screen::Preview;
     // 30 lines → bottom is line 29 (count - 1).
-    state.diff_text = (0..30)
+    let text = (0..30)
         .map(|i| format!("l{i}"))
         .collect::<Vec<_>>()
         .join("\n");
+    state.enter_preview("t".into(), text, None);
     state.handle_key(KeyCode::PageDown);
-    assert_eq!(state.diff_scroll, 10);
+    assert_eq!(preview_ref(&state).scroll, 10);
     // A second page-down would reach 20; a third clamps at the 29-line bottom, not 30.
     state.handle_key(KeyCode::PageDown);
     state.handle_key(KeyCode::PageDown);
-    assert_eq!(state.diff_scroll, 29);
+    assert_eq!(preview_ref(&state).scroll, 29);
     state.handle_key(KeyCode::PageUp);
-    assert_eq!(state.diff_scroll, 19);
+    assert_eq!(preview_ref(&state).scroll, 19);
 }
 
 #[test]
@@ -2463,7 +2468,7 @@ fn y_copies_gist_url_on_list_gists_and_detail() {
 #[test]
 fn preview_y_copies_url_and_capital_y_copies_content() {
     let mut state = state_with_gists();
-    state.screen = Screen::Preview;
+    state.screen = Screen::Preview(Box::default());
     assert_eq!(
         state.handle_key(KeyCode::Char('y')),
         KeyOutcome::CopyGistUrl
@@ -3615,7 +3620,7 @@ fn entering_pins_screen_resets_hscroll() {
 #[test]
 fn top_bar_gists_click_opens_gist_manager_from_any_screen() {
     let mut state = state_with_gists();
-    state.screen = Screen::Preview; // arbitrary screen that has no 'g' binding of its own
+    state.screen = Screen::Preview(Box::default()); // arbitrary screen that has no 'g' binding of its own
     let layout = MouseLayout {
         top_bar_gists: Some(Rect::new(10, 0, 7, 1)),
         ..Default::default()
@@ -3630,7 +3635,7 @@ fn top_bar_pins_click_opens_pins_from_any_screen() {
     let mut state = pins_state_with_long_home_path();
     state.handle_key(KeyCode::Right); // dirty the hscroll so the reset is observable
     assert!(pins_ref(&state).hscroll > 0);
-    state.screen = Screen::Preview;
+    state.screen = Screen::Preview(Box::default());
     let layout = MouseLayout {
         top_bar_pins: Some(Rect::new(20, 0, 6, 1)),
         ..Default::default()
@@ -3644,57 +3649,57 @@ fn top_bar_pins_click_opens_pins_from_any_screen() {
 #[test]
 fn top_bar_config_click_opens_settings_from_any_screen() {
     let mut state = state_with_gists();
-    state.screen = Screen::Preview;
+    state.screen = Screen::Preview(Box::default());
     let layout = MouseLayout {
         top_bar_config: Some(Rect::new(28, 0, 8, 1)),
         ..Default::default()
     };
     let out = state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
     assert!(state.screen.is_config());
-    assert_eq!(config_ref(&state).return_screen, Screen::Preview);
+    assert!(config_ref(&state).return_screen.is_preview());
     assert_eq!(out, KeyOutcome::None);
 }
 
 #[test]
 fn top_bar_config_click_while_already_on_config_does_not_trap_keyboard_exit() {
     let mut state = state_with_gists();
-    state.screen = Screen::Preview;
+    state.screen = Screen::Preview(Box::default());
     let layout = MouseLayout {
         top_bar_config: Some(Rect::new(28, 0, 8, 1)),
         ..Default::default()
     };
     state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
     assert!(state.screen.is_config());
-    assert_eq!(config_ref(&state).return_screen, Screen::Preview);
+    assert!(config_ref(&state).return_screen.is_preview());
 
     // Second click on Config while already there must not overwrite return_screen.
     let out = state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
     assert!(state.screen.is_config());
-    assert_eq!(config_ref(&state).return_screen, Screen::Preview);
+    assert!(config_ref(&state).return_screen.is_preview());
     assert_eq!(out, KeyOutcome::None);
 
     state.handle_key(KeyCode::Esc);
-    assert_eq!(state.screen, Screen::Preview);
+    assert!(state.screen.is_preview());
 }
 
 #[test]
 fn top_bar_help_click_opens_help_and_remembers_return_screen_from_any_screen() {
     let mut state = state_with_gists();
-    state.screen = Screen::Preview;
+    state.screen = Screen::Preview(Box::default());
     let layout = MouseLayout {
         top_bar_help: Some(Rect::new(30, 0, 7, 1)),
         ..Default::default()
     };
     let out = state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
     assert!(state.screen.is_help());
-    assert_eq!(help_ref(&state).return_screen, Screen::Preview);
+    assert!(help_ref(&state).return_screen.is_preview());
     assert_eq!(out, KeyOutcome::None);
 }
 
 #[test]
 fn top_bar_help_click_while_already_on_help_does_not_trap_keyboard_exit() {
     let mut state = state_with_gists();
-    state.screen = Screen::Preview;
+    state.screen = Screen::Preview(Box::default());
     let layout = MouseLayout {
         top_bar_help: Some(Rect::new(30, 0, 7, 1)),
         ..Default::default()
@@ -3702,19 +3707,19 @@ fn top_bar_help_click_while_already_on_help_does_not_trap_keyboard_exit() {
     // First click opens Help from Preview, remembering Preview as the return screen.
     state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
     assert!(state.screen.is_help());
-    assert_eq!(help_ref(&state).return_screen, Screen::Preview);
+    assert!(help_ref(&state).return_screen.is_preview());
 
     // A second click on the same top-bar Help hotspot, now that Help is already open, must
     // be a no-op — it must not overwrite return_screen with Screen::Help, which would trap
     // Esc/`?`/the close button in Help with no keyboard way out.
     let out = state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
     assert!(state.screen.is_help());
-    assert_eq!(help_ref(&state).return_screen, Screen::Preview);
+    assert!(help_ref(&state).return_screen.is_preview());
     assert_eq!(out, KeyOutcome::None);
 
     // Esc must still return to the real origin screen, not stay stuck on Help.
     state.handle_key(KeyCode::Esc);
-    assert_eq!(state.screen, Screen::Preview);
+    assert!(state.screen.is_preview());
 }
 
 #[test]

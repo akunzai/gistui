@@ -88,7 +88,7 @@ impl AppState {
             Screen::List => self.handle_key_list(code),
             Screen::Diff => self.handle_key_diff(code),
             Screen::Confirm => self.handle_key_confirm(code),
-            Screen::Preview => self.handle_key_preview(code),
+            Screen::Preview(_) => self.handle_key_preview(code),
             Screen::Help(_) => self.handle_key_help(code),
             Screen::Pins(_) => self.handle_key_pins(code),
             Screen::Gists(_) => self.handle_key_gists(code),
@@ -478,7 +478,7 @@ impl AppState {
                 true
             }
             // Diff, Preview and Confirm all scroll the same diff/preview buffer identically.
-            Screen::Diff | Screen::Preview | Screen::Confirm => {
+            Screen::Diff | Screen::Preview(_) | Screen::Confirm => {
                 match action {
                     NavAction::Down => self.scroll_diff_down(),
                     NavAction::Up => self.scroll_diff_up(),
@@ -508,7 +508,7 @@ impl AppState {
             | Screen::Gists(_)
             | Screen::GistDetail(_)
             | Screen::Revisions(_)
-            | Screen::Preview => self.status = None,
+            | Screen::Preview(_) => self.status = None,
             _ => {}
         }
     }
@@ -975,7 +975,7 @@ impl AppState {
     /// panning. Help body also scrolls three; the Help topic index is a list (one row).
     fn wheel_step(&self) -> usize {
         match &self.screen {
-            Screen::Diff | Screen::Preview | Screen::Confirm => 3,
+            Screen::Diff | Screen::Preview(_) | Screen::Confirm => 3,
             // GistDetail: the comments body scrolls like content (3 lines); the file list
             // steps one file at a time.
             Screen::GistDetail(_)
@@ -1319,13 +1319,14 @@ impl AppState {
         self.status = None;
         match code {
             // In the preview, q and Esc return to wherever it was launched from (the list, or
-            // the gist detail view) — never an accidental app exit. Reset to List afterwards.
+            // the gist detail view) — never an accidental app exit.
             KeyCode::Char('q') | KeyCode::Esc => {
-                self.screen = self.preview_return.clone();
+                let ret = self
+                    .preview()
+                    .map(|p| p.return_screen.clone())
+                    .unwrap_or(Screen::List);
                 self.preview_return = Screen::List;
-                self.diff_text.clear();
-                self.preview_title.clear();
-                self.preview_gist_key = None;
+                self.screen = ret;
             }
             KeyCode::Char('R') => return KeyOutcome::RefreshPreview,
             KeyCode::Char('w') => self.preview_wrap = !self.preview_wrap,
