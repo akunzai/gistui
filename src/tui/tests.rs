@@ -1488,8 +1488,13 @@ fn minimal_hint_shows_menu_and_palette_shortcuts() {
 fn confirm_prompt_covers_each_pending_action() {
     let mut state = initial_state();
 
-    state.download_target = PathBuf::from("notes.txt");
-    set_pending(&mut state, PendingAction::Download);
+    state.enter_diff(
+        String::new(),
+        String::new(),
+        PathBuf::new(),
+        PathBuf::from("notes.txt"),
+    );
+    state.enter_confirm_from_diff(PendingAction::Download);
     assert_eq!(confirm_prompt(&state), "Overwrite notes.txt? (y/n)");
     assert_eq!(confirm_modal_style(&state), ("Overwrite", Color::Red));
 
@@ -2127,10 +2132,10 @@ fn enter_diff_sets_diff_screen() {
         PathBuf::from("/tmp/cwd/x"),
     );
     assert!(state.screen.is_diff());
-    assert!(state.diff_previewed);
-    assert_eq!(state.preview_remote, "remote body");
-    assert_eq!(state.preview_local, PathBuf::from("/tmp/x"));
-    assert_eq!(state.download_target, PathBuf::from("/tmp/cwd/x"));
+    assert!(state.diff_previewed());
+    assert_eq!(state.preview_remote(), "remote body");
+    assert_eq!(state.preview_local(), PathBuf::from("/tmp/x"));
+    assert_eq!(state.download_target(), PathBuf::from("/tmp/cwd/x"));
     assert_eq!(state.diff_scroll(), 0);
 }
 
@@ -2145,11 +2150,11 @@ fn back_to_list_clears_preview() {
     );
     state.back_to_list();
     assert_eq!(state.screen, Screen::List);
-    assert!(!state.diff_previewed);
+    assert!(!state.diff_previewed());
     assert!(state.diff_body_text().is_empty());
-    assert!(state.preview_remote.is_empty());
-    assert_eq!(state.preview_local, PathBuf::new());
-    assert_eq!(state.download_target, PathBuf::new());
+    assert!(state.preview_remote().is_empty());
+    assert_eq!(state.preview_local(), PathBuf::new());
+    assert_eq!(state.download_target(), PathBuf::new());
 }
 
 #[test]
@@ -2248,7 +2253,9 @@ fn identical_diff_disables_download_and_upload() {
         PathBuf::from("/tmp/x"),
         PathBuf::from("/tmp/x"),
     );
-    state.diff_identical = true;
+    if let Some(d) = state.diff_mut() {
+        d.identical = true;
+    }
     assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
     assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::None);
     // Scrolling and leaving still work.
@@ -2288,7 +2295,7 @@ fn esc_in_diff_returns_to_list() {
     );
     assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
     assert_eq!(state.screen, Screen::List);
-    assert!(!state.diff_previewed);
+    assert!(!state.diff_previewed());
 }
 
 #[test]
@@ -3646,9 +3653,12 @@ fn create_diff_title_shortens_home_path() {
 fn diff_view_title_shortens_single_home_path() {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
     let mut state = initial_state();
-    clear_pending(&mut state);
-    state.preview_local = PathBuf::new();
-    state.download_target = home.join("notes.txt");
+    state.enter_diff(
+        String::new(),
+        String::new(),
+        PathBuf::new(),
+        home.join("notes.txt"),
+    );
     assert_eq!(diff_title(&state), "Diff → ~/notes.txt");
 }
 
@@ -3656,9 +3666,12 @@ fn diff_view_title_shortens_single_home_path() {
 fn diff_view_title_shortens_both_home_paths() {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
     let mut state = initial_state();
-    clear_pending(&mut state);
-    state.preview_local = home.join("src").join("a.txt");
-    state.download_target = home.join("b.txt");
+    state.enter_diff(
+        String::new(),
+        String::new(),
+        home.join("src").join("a.txt"),
+        home.join("b.txt"),
+    );
     assert_eq!(diff_title(&state), "Diff: ~/src/a.txt → ~/b.txt");
 }
 
@@ -4502,9 +4515,8 @@ fn revisions_enter_triggers_incremental_diff() {
 #[test]
 fn revision_diff_omits_download_upload() {
     let mut state = initial_state();
-    state.screen = Screen::Diff(Box::default());
     state.diff_return = Screen::Revisions(Box::default());
-    state.diff_identical = false;
+    state.enter_diff("diff".into(), String::new(), PathBuf::new(), PathBuf::new());
     let footer = diff_footer(&state);
     assert!(!footer.contains("download"));
     assert!(!footer.contains("upload"));
