@@ -1,5 +1,5 @@
 use super::{
-    keys::{list_guard, point_in, revisions_guard},
+    keys::{list_guard, point_in},
     *,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -324,7 +324,7 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
         Screen::Pins(_) => super::screens::pins::pins_palette_items(state),
         Screen::Gists(_) => super::screens::gists::gists_palette_items(state),
         Screen::GistDetail(_) => super::screens::detail::detail_palette_items(state),
-        Screen::Revisions(_) => revisions_palette_items(state),
+        Screen::Revisions(_) => super::screens::revisions::revisions_palette_items(state),
         Screen::Diff(_) => super::screens::diff::diff_palette_items(state),
         Screen::Preview(_) => super::screens::preview::preview_palette_items(state),
         Screen::Help(_) => super::screens::help::help_palette_items(),
@@ -426,42 +426,6 @@ fn list_palette_items(state: &AppState) -> Vec<PaletteItem> {
         key_item("t", "Toggle description / id", KeyCode::Char('t'), true),
         key_item("v", "Cycle gist visibility", KeyCode::Char('v'), true),
         key_item("s", "Cycle pane sort", KeyCode::Char('s'), true),
-        key_item("?", "Help", KeyCode::Char('?'), true),
-    ]
-}
-
-fn revisions_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let g = |code| revisions_guard(state, code);
-    vec![
-        key_item(
-            "Enter",
-            "Diff parent → revision",
-            KeyCode::Enter,
-            g(KeyCode::Enter),
-        ),
-        key_item(
-            "D",
-            "Diff revision vs head",
-            KeyCode::Char('D'),
-            g(KeyCode::Char('D')),
-        ),
-        key_item(
-            "r",
-            "Restore revision",
-            KeyCode::Char('r'),
-            g(KeyCode::Char('r')),
-        ),
-        // The palette *is* gated through `revisions_guard` here, unlike the real handler's
-        // own `F` arm (which stays unconditional — see the comment on that case in
-        // `revisions_guard`): cycling the target file doesn't need the revision list loaded,
-        // so `revisions_guard`'s `F` case checks file count, not `has_entries` (issue #288).
-        key_item(
-            "F",
-            "Cycle target file",
-            KeyCode::Char('F'),
-            g(KeyCode::Char('F')),
-        ),
-        key_item("q", "Back", KeyCode::Char('q'), true),
         key_item("?", "Help", KeyCode::Char('?'), true),
     ]
 }

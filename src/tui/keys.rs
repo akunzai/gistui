@@ -1,4 +1,3 @@
-use super::bg::revision_version_label;
 use super::*;
 use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -360,51 +359,6 @@ impl AppState {
         }
     }
 
-    fn handle_key_revisions(&mut self, code: KeyCode) -> KeyOutcome {
-        self.status = None;
-        let entries_len = self
-            .revision()
-            .and_then(|r| r.entries.as_ref().map(|e| e.len()))
-            .unwrap_or(0);
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => {
-                self.leave();
-            }
-            KeyCode::Enter if revisions_guard(self, code) => {
-                return self.revision_diff_incremental_intent();
-            }
-            KeyCode::Char('D') if revisions_guard(self, code) => {
-                return self.revision_diff_intent();
-            }
-            // Distinct from `revisions_guard`'s `D` case only by omitting the `previewable`
-            // check, so a non-previewable file off-head still gets this precise message
-            // instead of falling to the (misleading, head-only) fallback below it.
-            KeyCode::Char('D')
-                if entries_len > 0 && self.revision().is_some_and(|r| r.index > 0) =>
-            {
-                return self.revision_diff_intent();
-            }
-            KeyCode::Char('D') if entries_len > 0 => {
-                self.set_status("already at current revision");
-            }
-            KeyCode::Char('r') if revisions_guard(self, code) => {
-                return self.restore_revision_preview_intent();
-            }
-            KeyCode::Char('r') if entries_len <= 1 => {
-                self.set_status("only one revision — nothing to restore");
-            }
-            KeyCode::Char('r') if self.revision().is_some_and(|r| r.index == 0) => {
-                self.set_status("already at current revision");
-            }
-            KeyCode::Char('F') if !self.cycle_revision_target_file() => {
-                self.set_status("only one file in this gist");
-            }
-            KeyCode::Char('?') => self.open_help(),
-            _ => {}
-        }
-        KeyOutcome::None
-    }
-
     /// Move within the focused detail pane: scroll comments, or move the file cursor
     /// (clamped to the gist's file count). `delta` is signed rows.
     fn detail_nav(&mut self, delta: i32) {
@@ -442,6 +396,7 @@ impl AppState {
     /// panning. Help body also scrolls three; the Help topic index is a list (one row).
     fn wheel_step(&self) -> usize {
         match &self.screen {
+            Screen::Revisions(_) => super::screens::revisions::wheel_step(),
             Screen::Gists(_) => super::screens::gists::wheel_step(),
             Screen::Pins(_) => super::screens::pins::wheel_step(),
             Screen::Config(_) => super::screens::config::wheel_step(),
@@ -595,106 +550,6 @@ impl AppState {
                 self.preview_detail_file(cursor)
             }
             _ => self.handle_key_with(KeyCode::Enter, KeyModifiers::NONE),
-        }
-    }
-
-    fn revision_diff_incremental_intent(&mut self) -> KeyOutcome {
-        let Some(rev) = self.revision() else {
-            return KeyOutcome::None;
-        };
-        let Some(gist_id) = rev.gist_id.clone() else {
-            return KeyOutcome::None;
-        };
-        let filename = rev.target_file.clone();
-        let index = rev.index;
-        let parent = rev
-            .entries
-            .as_ref()
-            .and_then(|entries| entries.get(index + 1).cloned());
-        let Some(child) = self.selected_revision().cloned() else {
-            return KeyOutcome::None;
-        };
-        if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
-            return KeyOutcome::None;
-        }
-        let child_version = child.version.clone();
-        let child_label = revision_version_label(&child);
-        let (parent_version, old_label) = match parent {
-            Some(parent) => {
-                let label = revision_version_label(&parent);
-                (Some(parent.version), format!("revision {label}"))
-            }
-            None => (None, "(initial)".into()),
-        };
-        let new_label = format!("revision {child_label}");
-        let owner_login = self.gist_owner_login(&gist_id);
-        KeyOutcome::RevisionDiffIncremental {
-            gist_id,
-            filename,
-            child_version,
-            parent_version,
-            old_label,
-            new_label,
-            owner_login,
-        }
-    }
-
-    fn revision_diff_intent(&mut self) -> KeyOutcome {
-        let Some(rev) = self.revision() else {
-            return KeyOutcome::None;
-        };
-        let Some(gist_id) = rev.gist_id.clone() else {
-            return KeyOutcome::None;
-        };
-        let filename = rev.target_file.clone();
-        let Some(revision) = self.selected_revision().cloned() else {
-            return KeyOutcome::None;
-        };
-        if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
-            return KeyOutcome::None;
-        }
-        let version = revision.version.clone();
-        let version_label = revision_version_label(&revision);
-        let old_label = format!("revision {version_label}");
-        let new_label = format!("current {filename}");
-        let raw_url = self.gist_file_raw_url(&gist_id, &filename);
-        let owner_login = self.gist_owner_login(&gist_id);
-        KeyOutcome::RevisionDiff {
-            gist_id,
-            filename,
-            version,
-            old_label,
-            new_label,
-            raw_url,
-            owner_login,
-        }
-    }
-
-    fn restore_revision_preview_intent(&mut self) -> KeyOutcome {
-        let Some(rev) = self.revision() else {
-            return KeyOutcome::None;
-        };
-        let Some(gist_id) = rev.gist_id.clone() else {
-            return KeyOutcome::None;
-        };
-        if !self.gist_is_owned(&gist_id) {
-            return KeyOutcome::None;
-        }
-        let filename = rev.target_file.clone();
-        let Some(revision) = self.selected_revision().cloned() else {
-            return KeyOutcome::None;
-        };
-        let version = revision.version.clone();
-        let version_label = revision_version_label(&revision);
-        let raw_url = self.gist_file_raw_url(&gist_id, &filename);
-        let owner_login = self.gist_owner_login(&gist_id);
-        KeyOutcome::RestoreRevisionPreview {
-            gist_id,
-            filename,
-            version,
-            version_label,
-            raw_url,
-            owner_login,
         }
     }
 
@@ -959,38 +814,6 @@ pub(crate) fn diff_pair_previewable(
         }
     }
     true
-}
-
-pub(crate) fn revisions_guard(state: &AppState, code: KeyCode) -> bool {
-    let rev = state.revision();
-    let entries_len = rev
-        .and_then(|r| r.entries.as_ref().map(|e| e.len()))
-        .unwrap_or(0);
-    let has_entries = entries_len > 0;
-    let not_head = rev.is_some_and(|r| r.index > 0);
-    let gist_id = rev.and_then(|r| r.gist_id.clone());
-    let owned = gist_id
-        .as_deref()
-        .map(|id| state.gist_is_owned(id))
-        .unwrap_or(false);
-    let file = rev.map(|r| r.target_file.clone()).unwrap_or_default();
-    let previewable = gist_id
-        .as_ref()
-        .is_some_and(|id| state.gist_file_is_text_previewable(id, &file));
-    match code {
-        KeyCode::Enter => has_entries && previewable,
-        KeyCode::Char('D') => has_entries && not_head && previewable,
-        KeyCode::Char('r') => entries_len > 1 && not_head && owned,
-        // Cycling the target file only needs the gist to have more than one file — it does
-        // not depend on the revision list having loaded (`cycle_revision_target_file` never
-        // checks `entries`). Issue #288: previously the palette gated this on `has_entries`
-        // with no functional reason; unified on the handler's broader condition instead of
-        // narrowing the handler to match the palette.
-        KeyCode::Char('F') => gist_id
-            .as_deref()
-            .is_some_and(|id| state.gist_filenames(id).len() > 1),
-        _ => false,
-    }
 }
 
 pub(crate) fn list_guard(state: &AppState, code: KeyCode) -> bool {

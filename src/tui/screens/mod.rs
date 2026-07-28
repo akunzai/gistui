@@ -11,3 +11,4 @@ pub(crate) mod gists;
 pub(crate) mod help;
 pub(crate) mod pins;
 pub(crate) mod preview;
+pub(crate) mod revisions;

@@ -4,9 +4,8 @@
 //! Builders never touch the filesystem or network (issues #241 / #250).
 
 use super::render::{
-    count_label, gist_info_line, gist_row_label, is_json_file, marked_row_text, revision_row_label,
-    row_mark, spinner_glyph, unix_now, RowMark, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX,
-    MINIMAL_HINT,
+    count_label, gist_info_line, gist_row_label, is_json_file, marked_row_text, row_mark,
+    spinner_glyph, unix_now, RowMark, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX, MINIMAL_HINT,
 };
 use super::{
     AppState, DetailFocus, FocusPane, GistView, PaletteMode, PendingAction, Screen, TextInput,
@@ -370,7 +369,9 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::GistDetail(_) => {
             ScreenVm::GistDetail(super::screens::detail::build_gist_detail_vm(state))
         }
-        Screen::Revisions(_) => ScreenVm::Revisions(build_revisions_vm(state)),
+        Screen::Revisions(_) => {
+            ScreenVm::Revisions(super::screens::revisions::build_revisions_vm(state))
+        }
         Screen::Config(_) => ScreenVm::Config(super::screens::config::build_config_vm(state)),
         Screen::Diff(_) => ScreenVm::Diff(super::screens::diff::build_diff_vm(state)),
         Screen::Preview(_) => ScreenVm::Preview(super::screens::preview::build_preview_vm(state)),
@@ -434,7 +435,9 @@ fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<Scree
         Screen::GistDetail(_) => Some(ScreenVm::GistDetail(
             super::screens::detail::build_gist_detail_vm(state),
         )),
-        Screen::Revisions(_) => Some(ScreenVm::Revisions(build_revisions_vm(state))),
+        Screen::Revisions(_) => Some(ScreenVm::Revisions(
+            super::screens::revisions::build_revisions_vm(state),
+        )),
         Screen::Config(_) => Some(ScreenVm::Config(super::screens::config::build_config_vm(
             state,
         ))),
@@ -480,69 +483,6 @@ pub(crate) fn file_ext(name: &str) -> Option<String> {
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
-}
-
-/// Revisions body — usable under Palette-over-Revisions as well.
-pub(crate) fn build_revisions_vm(state: &AppState) -> RevisionsVm {
-    let rev = state.revision().cloned().unwrap_or_default();
-    let (footer, footer_colored) = if let Some(message) = &state.status {
-        (message.clone(), false)
-    } else if rev.entries.is_none() {
-        ("Loading revisions…".to_string(), false)
-    } else if let Some(err) = &rev.fetch_error {
-        (err.clone(), false)
-    } else {
-        let file = state.revision_target_file_label();
-        (format!("file={file}"), false)
-    };
-
-    let gist_id = rev.gist_id.as_deref().unwrap_or("");
-    let label = state
-        .group_by_id(gist_id)
-        .map(|g| {
-            if g.description.trim().is_empty() {
-                g.id.clone()
-            } else {
-                g.description.clone()
-            }
-        })
-        .unwrap_or_else(|| gist_id.to_string());
-
-    let now = unix_now();
-    let (empty, empty_message, rows, selected) = match &rev.entries {
-        None => (
-            RevisionsEmptyKind::Loading,
-            Some("  ⏳ Loading revisions…".into()),
-            Vec::new(),
-            None,
-        ),
-        Some(entries) if entries.is_empty() => (
-            RevisionsEmptyKind::NoRevisions,
-            Some("  📭 No revisions found".into()),
-            Vec::new(),
-            None,
-        ),
-        Some(entries) => {
-            let rows = entries
-                .iter()
-                .enumerate()
-                .map(|(i, r)| revision_row_label(r, i, now))
-                .collect();
-            (RevisionsEmptyKind::HasRows, None, rows, Some(rev.index))
-        }
-    };
-
-    let count = rows.len();
-    RevisionsVm {
-        title: format!("Revisions: {label} {}", count_label(count, count)),
-        empty,
-        empty_message,
-        rows,
-        selected,
-        footer,
-        footer_colored,
-        hscroll: rev.hscroll,
-    }
 }
 
 /// Full gist file-list row as painted — [`gist_row_label`] plus `★ ` when the gist is starred.

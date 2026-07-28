@@ -46,7 +46,9 @@ fn render_screen_vm(
         super::ScreenVm::GistDetail(detail) => {
             super::screens::detail::render_gist_detail_vm(frame, state, detail, chrome, layout)
         }
-        super::ScreenVm::Revisions(revs) => render_revisions_vm(frame, state, revs, chrome, layout),
+        super::ScreenVm::Revisions(revs) => {
+            super::screens::revisions::render_revisions_vm(frame, state, revs, chrome, layout)
+        }
         super::ScreenVm::Config(config) => {
             super::screens::config::render_config_vm(frame, state, config, chrome, layout)
         }
@@ -296,100 +298,6 @@ pub(super) fn gist_info_line(
         "{star_seg}{owner_seg}{vis} · {counts_seg}created {created} · updated {updated} · {fork_seg}{}",
         group.id
     )
-}
-
-pub(super) fn revision_row_label(
-    rev: &crate::domain::GistRevision,
-    index: usize,
-    now: u64,
-) -> String {
-    let age = crate::domain::parse_rfc3339_to_unix(&rev.committed_at)
-        .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
-        .unwrap_or_else(|| "?".into());
-    let delta = format!(
-        "+{}/-{}",
-        rev.change_status.additions, rev.change_status.deletions
-    );
-    let sha = crate::domain::short_sha(&rev.version);
-    let current = if index == 0 { " (current)" } else { "" };
-    format!(
-        "#{}  {} ago  {}  {}  {}{}",
-        index + 1,
-        age,
-        delta,
-        rev.user,
-        sha,
-        current
-    )
-}
-
-fn render_revisions_vm(
-    frame: &mut Frame,
-    state: &AppState,
-    revs: &super::view_model::RevisionsVm,
-    chrome: &super::view_model::ChromeVm,
-    layout: &mut MouseLayout,
-) {
-    let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
-    let footer_lines = wrap_line_count(&revs.footer, area.width.saturating_sub(2)).max(1);
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(footer_lines)])
-        .split(area);
-
-    let items: Vec<ListItem> = match revs.empty {
-        super::view_model::RevisionsEmptyKind::HasRows => revs
-            .rows
-            .iter()
-            .map(|row| ListItem::new(hscroll_str(row, revs.hscroll)))
-            .collect(),
-        _ => {
-            let msg = revs.empty_message.clone().unwrap_or_else(|| "  ".into());
-            vec![ListItem::new(msg).style(Style::default().fg(state.theme.dim))]
-        }
-    };
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(revs.title.clone())
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(state.theme.accent))
-                .style(state.theme.base_style())
-                .padding(Padding::horizontal(1)),
-        )
-        .style(state.theme.base_style())
-        .highlight_style(
-            Style::default()
-                .bg(state.theme.accent)
-                .fg(state.theme.fg_on_accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▶ ");
-
-    let mut list_state = ListState::default();
-    list_state.select(revs.selected);
-    frame.render_stateful_widget(list, chunks[0], &mut list_state);
-    if chrome.mouse_enabled {
-        layout.list = Some(PaneHit {
-            rect: chunks[0],
-            offset: list_state.offset(),
-        });
-    }
-    render_footer(
-        frame,
-        chunks[1],
-        "",
-        &revs.footer,
-        revs.footer_colored,
-        &state.theme,
-        layout,
-    );
-    if chrome.mouse_enabled {
-        layout.close_button = Some(render_close_button(frame, area, &state.theme));
-    }
 }
 
 /// Current Unix time in seconds (saturating to 0 before the epoch); used for relative-age labels.
