@@ -2780,3 +2780,119 @@ pub(super) fn preview_diff_text(
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    /// Concatenates every cell's symbol in row-major order (no separators) — enough to assert
+    /// a known label/title landed somewhere in the frame without pinning exact coordinates.
+    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer.content().iter().map(|c| c.symbol()).collect()
+    }
+
+    /// Builds a real `ScreenVm` from `state` (same seam `render()` uses) and paints it through
+    /// `render_screen_vm` — the dispatch under test. Panics (e.g. an unreachable match arm, an
+    /// out-of-bounds slice on empty data) fail the test; the returned buffer text lets callers
+    /// additionally assert on painted content.
+    fn render_state(state: &AppState) -> String {
+        let backend = TestBackend::new(100, 40);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let vm = super::super::build_view_model(state);
+        let mut layout = MouseLayout::default();
+        terminal
+            .draw(|frame| render_screen_vm(frame, state, &vm.screen, &vm.chrome, &mut layout))
+            .unwrap();
+        buffer_text(terminal.backend().buffer())
+    }
+
+    #[test]
+    fn render_screen_vm_list_paints_top_bar() {
+        let state = initial_state();
+        let text = render_state(&state);
+        assert!(text.contains("gistui"));
+        assert!(text.contains("(G)ists"));
+        assert!(text.contains("(P)ins"));
+        assert!(text.contains("(C)onfig"));
+        assert!(text.contains("(?)Help"));
+    }
+
+    #[test]
+    fn render_screen_vm_gists_does_not_panic() {
+        let mut state = initial_state();
+        state.screen = Screen::Gists(Box::default());
+        render_state(&state);
+    }
+
+    #[test]
+    fn render_screen_vm_gist_detail_does_not_panic() {
+        let mut state = initial_state();
+        state.screen = Screen::GistDetail(Box::default());
+        render_state(&state);
+    }
+
+    #[test]
+    fn render_screen_vm_revisions_does_not_panic() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::default());
+        render_state(&state);
+    }
+
+    #[test]
+    fn render_screen_vm_config_paints_settings_panel() {
+        let mut state = initial_state();
+        state.screen = Screen::Config(Box::default());
+        let text = render_state(&state);
+        assert!(text.contains("Settings"));
+    }
+
+    #[test]
+    fn render_screen_vm_diff_does_not_panic() {
+        let mut state = initial_state();
+        state.screen = Screen::Diff(Box::default());
+        render_state(&state);
+    }
+
+    #[test]
+    fn render_screen_vm_preview_does_not_panic() {
+        let mut state = initial_state();
+        state.screen = Screen::Preview(Box::default());
+        render_state(&state);
+    }
+
+    #[test]
+    fn render_screen_vm_pins_paints_empty_state_message() {
+        let mut state = initial_state();
+        state.screen = Screen::Pins(Box::default());
+        let text = render_state(&state);
+        assert!(text.contains("No pinned mappings found"));
+    }
+
+    #[test]
+    fn render_screen_vm_confirm_paints_without_top_bar() {
+        let mut state = initial_state();
+        state.screen = Screen::Confirm(Box::default());
+        let text = render_state(&state);
+        // Confirm is the one screen that skips the persistent top bar (full-bleed modal).
+        assert!(!text.contains("gistui"));
+    }
+
+    #[test]
+    fn render_screen_vm_help_does_not_panic() {
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        render_state(&state);
+    }
+
+    #[test]
+    fn render_screen_vm_palette_paints_menu_title_over_background() {
+        let mut state = initial_state();
+        state.open_palette_menu(None);
+        assert!(state.screen.is_palette());
+        let text = render_state(&state);
+        assert!(text.contains("Menu"));
+        // The origin screen (List) still paints as the palette's background.
+        assert!(text.contains("gistui"));
+    }
+}
