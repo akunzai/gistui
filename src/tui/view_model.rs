@@ -5,8 +5,8 @@
 
 use super::render::{
     count_label, footer_with_status, gist_group_row_label, gist_info_line, gist_row_label,
-    is_json_file, marked_row_text, pin_row_label, revision_row_label, row_mark, spinner_glyph,
-    unix_now, RowMark, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX, MINIMAL_HINT,
+    is_json_file, marked_row_text, revision_row_label, row_mark, spinner_glyph, unix_now, RowMark,
+    CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX, MINIMAL_HINT,
 };
 use super::{
     AppState, DetailFocus, FocusPane, GistView, PaletteMode, PendingAction, Screen, TextInput,
@@ -372,7 +372,7 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::Config(_) => ScreenVm::Config(super::screens::config::build_config_vm(state)),
         Screen::Diff(_) => ScreenVm::Diff(super::screens::diff::build_diff_vm(state)),
         Screen::Preview(_) => ScreenVm::Preview(super::screens::preview::build_preview_vm(state)),
-        Screen::Pins(_) => ScreenVm::Pins(build_pins_vm(state)),
+        Screen::Pins(_) => ScreenVm::Pins(super::screens::pins::build_pins_vm(state)),
         Screen::Confirm(_) => ScreenVm::Confirm(build_confirm_vm(state)),
         Screen::Help(_) => ScreenVm::Help(super::screens::help::build_help_vm(state)),
         Screen::Palette(_) => ScreenVm::Palette(build_palette_vm(state)),
@@ -436,7 +436,7 @@ fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<Scree
         Screen::Preview(_) => Some(ScreenVm::Preview(
             super::screens::preview::build_preview_vm(state),
         )),
-        Screen::Pins(_) => Some(ScreenVm::Pins(build_pins_vm(state))),
+        Screen::Pins(_) => Some(ScreenVm::Pins(super::screens::pins::build_pins_vm(state))),
         Screen::Help(_) => Some(ScreenVm::Help(super::screens::help::build_help_vm(state))),
         Screen::Confirm(_) | Screen::Palette(_) => None,
     }
@@ -890,89 +890,6 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
         local_hscroll: state.local_hscroll,
         gist_hscroll: state.gist_hscroll,
         footer,
-    }
-}
-
-/// Pins body only — usable under Palette-over-Pins as well.
-pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
-    let pins = state.pins().cloned().unwrap_or_default();
-    let (footer_title, footer, footer_colored) = if pins.filtering {
-        (
-            "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
-            format!("/{}_", pins.filter_query),
-            false,
-        )
-    } else {
-        let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
-        (String::new(), footer, colored)
-    };
-
-    let visible = state.visible_pin_indices();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
-    let (empty, rows) = if state.pinned.is_empty() {
-        (PinsEmptyKind::NoMappings, Vec::new())
-    } else if visible.is_empty() {
-        (PinsEmptyKind::NoFilterMatch, Vec::new())
-    } else {
-        let rows = visible
-            .iter()
-            .map(|&i| {
-                let m = &state.pinned[i];
-                let entry = state.cached_pin_sync_entry(i);
-                let status = entry.status;
-                let age = |ts: Option<u64>| {
-                    ts.map(|t| crate::domain::humanize_age(now - t as i64))
-                        .unwrap_or_else(|| "?".to_string())
-                };
-                let local_age = if status == SyncStatus::Missing {
-                    "missing".to_string()
-                } else {
-                    age(entry.local_ts)
-                };
-                let label = pin_row_label(
-                    status.icon(),
-                    &m.local_path,
-                    &m.gist_id,
-                    &m.gist_filename,
-                    &local_age,
-                    &age(entry.remote_ts),
-                );
-                PinRowVm {
-                    pin_index: i,
-                    status,
-                    label,
-                }
-            })
-            .collect();
-        (PinsEmptyKind::HasRows, rows)
-    };
-
-    let mut title = format!(
-        "Pinned Mappings {}",
-        count_label(visible.len(), state.pinned.len())
-    );
-    if !pins.filter_query.is_empty() {
-        title.push_str(&format!(" · /{}", pins.filter_query));
-    }
-    if pins.sort != crate::tui::PinSort::Default {
-        title.push_str(&format!(" · sort:{}", pins.sort.label()));
-    }
-
-    PinsVm {
-        title,
-        empty,
-        rows,
-        selected: (!visible.is_empty()).then_some(pins.cursor.index),
-        filtering: pins.filtering,
-        filter_query: pins.filter_query.to_string(),
-        footer_title,
-        footer,
-        footer_colored,
-        hscroll: pins.cursor.hscroll,
     }
 }
 

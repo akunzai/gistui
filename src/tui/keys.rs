@@ -360,87 +360,6 @@ impl AppState {
         }
     }
 
-    fn handle_key_pins(&mut self, code: KeyCode) -> KeyOutcome {
-        // One-shot: any key dismisses a lingering sync status; the run_loop IO helper for this
-        // key may set a fresh one afterwards (e.g. "already in sync").
-        self.status = None;
-        // Inline text filter: live-navigate with arrows; Tab is a no-op (single pane).
-        if self.pins().is_some_and(|p| p.filtering) {
-            let Some(pins) = self.pins_mut() else {
-                return KeyOutcome::None;
-            };
-            match code {
-                KeyCode::Up => pins.cursor.up(),
-                KeyCode::Down => {
-                    // visible length needs self; re-fetch after borrow ends
-                }
-                _ => match apply_filter_edit(code, &mut pins.filter_query) {
-                    FilterKey::Edited => pins.cursor.reset(),
-                    FilterKey::Cleared => {
-                        pins.filtering = false;
-                        pins.cursor.reset();
-                    }
-                    FilterKey::Exited => pins.filtering = false,
-                    FilterKey::Moved | FilterKey::Pass => {}
-                },
-            }
-            if code == KeyCode::Down {
-                let len = self.visible_pin_indices().len();
-                if let Some(pins) = self.pins_mut() {
-                    pins.cursor.down(len);
-                }
-            }
-            return KeyOutcome::None;
-        }
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
-            KeyCode::Char('/') => {
-                if let Some(pins) = self.pins_mut() {
-                    pins.filtering = true;
-                }
-            }
-            KeyCode::Enter if pins_guard(self, code) => {
-                let Some(index) = self.selected_pin_index() else {
-                    return KeyOutcome::None;
-                };
-                return KeyOutcome::PreviewPinDiff { index };
-            }
-            KeyCode::Char('x') if pins_guard(self, code) => {
-                let Some(index) = self.selected_pin_index() else {
-                    return KeyOutcome::None;
-                };
-                return KeyOutcome::UnpinAtPin { index };
-            }
-            KeyCode::Char('s') if pins_guard(self, code) => {
-                let Some(index) = self.selected_pin_index() else {
-                    return KeyOutcome::None;
-                };
-                return KeyOutcome::SyncPinAuto { index };
-            }
-            KeyCode::Char('u') if pins_guard(self, code) => {
-                let Some(index) = self.selected_pin_index() else {
-                    return KeyOutcome::None;
-                };
-                return KeyOutcome::SyncPinPush { index };
-            }
-            KeyCode::Char('d') if pins_guard(self, code) => {
-                let Some(index) = self.selected_pin_index() else {
-                    return KeyOutcome::None;
-                };
-                return KeyOutcome::SyncPinPull { index };
-            }
-            KeyCode::Char('o') => {
-                if let Some(pins) = self.pins_mut() {
-                    pins.sort = pins.sort.next();
-                    pins.cursor.reset();
-                }
-            }
-            KeyCode::Char('?') => self.open_help(),
-            _ => {}
-        }
-        KeyOutcome::None
-    }
-
     fn handle_key_gists(&mut self, code: KeyCode) -> KeyOutcome {
         self.status = None;
         // Inline text filter: live-navigate with arrows; Tab is a no-op (single pane).
@@ -764,6 +683,7 @@ impl AppState {
     /// panning. Help body also scrolls three; the Help topic index is a list (one row).
     fn wheel_step(&self) -> usize {
         match &self.screen {
+            Screen::Pins(_) => super::screens::pins::wheel_step(),
             Screen::Config(_) => super::screens::config::wheel_step(),
             Screen::Preview(_) => super::screens::preview::wheel_step(),
             Screen::Diff(_) => super::screens::diff::wheel_step(),
@@ -1219,7 +1139,7 @@ impl AppState {
 
 /// Outcome of applying one key to a filter query's text (the shared edit transitions
 /// for every inline filter input). Nav keys (Up/Down) and Tab are handled by the caller.
-enum FilterKey {
+pub(crate) enum FilterKey {
     /// Query text changed (char appended or backspace popped a char); caller resets
     /// the affected pane's selection index + horizontal scroll.
     Edited,
@@ -1236,7 +1156,7 @@ enum FilterKey {
 /// Apply one key to `query` and report the transition. Pure: only mutates `query`.
 /// Text editing (insert/delete/cursor movement) is delegated to [`TextInput`]; this
 /// only owns the filter-specific Esc/Enter/empty-Backspace exit policy.
-fn apply_filter_edit(code: KeyCode, query: &mut TextInput) -> FilterKey {
+pub(crate) fn apply_filter_edit(code: KeyCode, query: &mut TextInput) -> FilterKey {
     match code {
         KeyCode::Esc => {
             query.clear();
@@ -1253,6 +1173,29 @@ fn apply_filter_edit(code: KeyCode, query: &mut TextInput) -> FilterKey {
     }
 }
 
+/// Common keyboard navigation helper for single-pane inline text filters (`Pins` and `Gists`).
+pub(crate) fn handle_inline_filter_key(
+    code: KeyCode,
+    cursor: &mut crate::tui::list_cursor::ListCursor,
+    filter_query: &mut TextInput,
+    filtering: &mut bool,
+    visible_len: usize,
+) {
+    match code {
+        KeyCode::Up => cursor.up(),
+        KeyCode::Down => cursor.down(visible_len),
+        _ => match apply_filter_edit(code, filter_query) {
+            FilterKey::Edited => cursor.reset(),
+            FilterKey::Cleared => {
+                *filtering = false;
+                cursor.reset();
+            }
+            FilterKey::Exited => *filtering = false,
+            FilterKey::Moved | FilterKey::Pass => {}
+        },
+    }
+}
+
 // ── Palette/handler shared guards (issue #288) ──────────────────────────────────────────
 //
 // One `<screen>_guard(state, code) -> bool` per screen with non-trivial (data-dependent) key
@@ -1264,7 +1207,7 @@ fn apply_filter_edit(code: KeyCode, query: &mut TextInput) -> FilterKey {
 
 /// Whether a diff between `gist_id`/`filename` and the (optional) local file at `local_path`
 /// is previewable — the gist file is text and, when a local pairing exists, so is it.
-fn diff_pair_previewable(
+pub(crate) fn diff_pair_previewable(
     state: &AppState,
     gist_id: &str,
     filename: &str,
@@ -1281,26 +1224,6 @@ fn diff_pair_previewable(
         }
     }
     true
-}
-
-pub(crate) fn pins_guard(state: &AppState, code: KeyCode) -> bool {
-    let has_pin = !state.pinned.is_empty() && state.selected_pin_index().is_some();
-    match code {
-        KeyCode::Enter => {
-            has_pin
-                && state.selected_pin_index().is_some_and(|idx| {
-                    let pin = &state.pinned[idx];
-                    diff_pair_previewable(
-                        state,
-                        &pin.gist_id,
-                        &pin.gist_filename,
-                        Some(pin.local_path.as_path()),
-                    )
-                })
-        }
-        KeyCode::Char('x' | 's' | 'u' | 'd') => has_pin,
-        _ => false,
-    }
 }
 
 pub(crate) fn gists_guard(state: &AppState, code: KeyCode) -> bool {

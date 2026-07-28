@@ -7,4 +7,5 @@
 pub(crate) mod config;
 pub(crate) mod diff;
 pub(crate) mod help;
+pub(crate) mod pins;
 pub(crate) mod preview;

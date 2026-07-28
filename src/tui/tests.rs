@@ -3753,14 +3753,14 @@ fn create_confirm_prompt_shortens_home_path() {
 #[test]
 fn pin_row_label_shows_home_as_tilde() {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
-    let label = pin_row_label(
-        "✓",
-        &home.join("code/gistui"),
-        "abc123",
-        "notes.txt",
-        "2h",
-        "3h",
-    );
+    let label = pin_row_label(PinLabelParams {
+        icon: "✓",
+        local_path: &home.join("code/gistui"),
+        gist_id: "abc123",
+        gist_filename: "notes.txt",
+        local_age: "2h",
+        gist_age: "3h",
+    });
     assert!(
         label.contains("~/code/gistui"),
         "expected ~ home in label, got {label}"

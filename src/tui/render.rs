@@ -54,7 +54,9 @@ fn render_screen_vm(
         super::ScreenVm::Preview(preview) => {
             super::screens::preview::render_preview_vm(frame, state, preview, chrome, layout)
         }
-        super::ScreenVm::Pins(pins) => render_pins_vm(frame, state, pins, chrome, layout),
+        super::ScreenVm::Pins(pins) => {
+            super::screens::pins::render_pins_vm(frame, state, pins, chrome, layout)
+        }
         super::ScreenVm::Confirm(confirm) => {
             render_confirm_vm(frame, state, confirm, chrome, layout)
         }
@@ -163,110 +165,6 @@ pub(super) fn count_label(shown: usize, total: usize) -> String {
         format!("({shown}/{total})")
     } else {
         format!("({total})")
-    }
-}
-
-fn render_pins_vm(
-    frame: &mut Frame,
-    state: &AppState,
-    pins: &super::view_model::PinsVm,
-    chrome: &super::view_model::ChromeVm,
-    layout: &mut MouseLayout,
-) {
-    let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
-    // Sync feedback (e.g. "already in sync") is carried in the Pins VM footer (see #72 / #241).
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(3),
-            Constraint::Length(footer_height(&pins.footer, area.width, &pins.footer_title)),
-        ])
-        .split(area);
-
-    let items: Vec<ListItem> = match pins.empty {
-        super::view_model::PinsEmptyKind::NoMappings => {
-            vec![
-                ListItem::new("  📌 No pinned mappings found (use p to pin a pair)")
-                    .style(Style::default().fg(state.theme.dim)),
-            ]
-        }
-        super::view_model::PinsEmptyKind::NoFilterMatch => {
-            vec![ListItem::new("  🔍 No pins match the filter")
-                .style(Style::default().fg(state.theme.dim))]
-        }
-        super::view_model::PinsEmptyKind::HasRows => pins
-            .rows
-            .iter()
-            .map(|row| {
-                let item = ListItem::new(hscroll_str(&row.label, pins.hscroll));
-                if row.status == crate::domain::SyncStatus::Missing {
-                    item.style(Style::default().fg(state.theme.del_color))
-                } else {
-                    item
-                }
-            })
-            .collect(),
-    };
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(pins.title.clone())
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(state.theme.accent))
-                .style(state.theme.base_style())
-                .padding(Padding::horizontal(1)),
-        )
-        .style(state.theme.base_style())
-        .highlight_style(
-            Style::default()
-                .bg(state.theme.accent)
-                .fg(state.theme.fg_on_accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▶ ");
-
-    let mut list_state = ListState::default();
-    list_state.select(pins.selected);
-    frame.render_stateful_widget(list, chunks[0], &mut list_state);
-    if chrome.mouse_enabled {
-        layout.list = Some(PaneHit {
-            rect: chunks[0],
-            offset: list_state.offset(),
-        });
-    }
-
-    if pins.filtering {
-        render_footer_line(
-            frame,
-            chunks[1],
-            &pins.footer_title,
-            input_line(
-                "/",
-                &state
-                    .pins()
-                    .expect("filtering PinsVm implies Screen::Pins payload")
-                    .filter_query,
-                "",
-            ),
-            &state.theme,
-            layout,
-        );
-    } else {
-        render_footer(
-            frame,
-            chunks[1],
-            &pins.footer_title,
-            &pins.footer,
-            pins.footer_colored,
-            &state.theme,
-            layout,
-        );
-    }
-    if chrome.mouse_enabled {
-        layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }
 }
 
@@ -966,28 +864,6 @@ fn render_gist_detail_vm(
 }
 
 pub(super) use super::text::hscroll_str;
-
-/// Builds a single Pins-screen row. The local path is rendered with `display_path`
-/// (home → `~`) so it stays readable; the full row is horizontally scrollable. Pure so
-/// the path-shortening is unit-testable without a frame.
-pub(super) fn pin_row_label(
-    icon: &str,
-    local_path: &std::path::Path,
-    gist_id: &str,
-    gist_filename: &str,
-    local_age: &str,
-    gist_age: &str,
-) -> String {
-    format!(
-        "{}  {}  ↔  {} / {}   (local {} · gist {})",
-        icon,
-        crate::config::display_path(local_path),
-        gist_id,
-        gist_filename,
-        local_age,
-        gist_age,
-    )
-}
 
 /// How a file-list row should be flagged: 📌 = an existing pinned pair; same-name = bold; else none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
