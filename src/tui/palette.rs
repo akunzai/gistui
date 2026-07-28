@@ -1,9 +1,4 @@
-use super::{
-    keys::{
-        detail_guard, diff_guard, gists_guard, list_guard, pins_guard, point_in, revisions_guard,
-    },
-    *,
-};
+use super::{keys::point_in, *};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 /// Menu = context-filtered actions near the click; Command = full list + fuzzy query.
@@ -119,7 +114,7 @@ impl AppState {
         matched.into_iter().map(|(item, _)| item).collect()
     }
 
-    fn palette_clamp_selection(&mut self) {
+    pub(crate) fn palette_clamp_selection(&mut self) {
         let len = self.palette_visible_items().len();
         if let Some(p) = self.palette_mut() {
             if len == 0 {
@@ -127,121 +122,6 @@ impl AppState {
             } else if p.selected >= len {
                 p.selected = len - 1;
             }
-        }
-    }
-
-    pub(crate) fn handle_key_palette(
-        &mut self,
-        code: KeyCode,
-        _modifiers: KeyModifiers,
-    ) -> KeyOutcome {
-        let mode = self.palette().map(|p| p.mode).unwrap_or_default();
-        if mode == PaletteMode::Command {
-            match code {
-                KeyCode::Esc => {
-                    self.close_palette();
-                    return KeyOutcome::None;
-                }
-                KeyCode::Up => {
-                    if let Some(p) = self.palette_mut() {
-                        p.selected = p.selected.saturating_sub(1);
-                    }
-                    return KeyOutcome::None;
-                }
-                KeyCode::Down => {
-                    let len = self.palette_visible_items().len();
-                    if let Some(p) = self.palette_mut() {
-                        if len > 0 && p.selected + 1 < len {
-                            p.selected += 1;
-                        }
-                    }
-                    return KeyOutcome::None;
-                }
-                KeyCode::Enter => return self.execute_palette_selection(),
-                _ => {
-                    if let Some(p) = self.palette_mut() {
-                        if let EditResult::Changed = p.query.apply_edit(code) {
-                            p.selected = 0;
-                        }
-                    }
-                    self.palette_clamp_selection();
-                    return KeyOutcome::None;
-                }
-            }
-        }
-
-        // Menu mode: no query box — arrows pick a row, Enter runs it, Esc closes.
-        match code {
-            KeyCode::Esc | KeyCode::Char(';') => {
-                self.close_palette();
-                KeyOutcome::None
-            }
-            KeyCode::Up => {
-                if let Some(p) = self.palette_mut() {
-                    p.selected = p.selected.saturating_sub(1);
-                }
-                KeyOutcome::None
-            }
-            KeyCode::Down => {
-                let len = self.palette_visible_items().len();
-                if let Some(p) = self.palette_mut() {
-                    if len > 0 && p.selected + 1 < len {
-                        p.selected += 1;
-                    }
-                }
-                KeyOutcome::None
-            }
-            KeyCode::Enter => self.execute_palette_selection(),
-            _ => KeyOutcome::None,
-        }
-    }
-
-    fn execute_palette_selection(&mut self) -> KeyOutcome {
-        let selected = self.palette().map(|p| p.selected).unwrap_or(0);
-        let item = self
-            .palette_visible_items()
-            .get(selected)
-            .map(|i| (*i).clone());
-        let Some(item) = item else {
-            return KeyOutcome::None;
-        };
-        if !item.enabled {
-            return KeyOutcome::None;
-        }
-        let exec = item.exec;
-        let origin = self
-            .palette()
-            .map(|p| p.origin_screen.clone())
-            .unwrap_or(Screen::List);
-        self.close_palette();
-        self.screen = origin;
-        match exec {
-            PaletteExec::Key(code, modifiers) => self.handle_key_with(code, modifiers),
-            PaletteExec::Cross(CrossAction::GoToGists) => {
-                self.open_gist_manager();
-                KeyOutcome::None
-            }
-            PaletteExec::Cross(CrossAction::GoToPins) => {
-                self.open_pins();
-                KeyOutcome::None
-            }
-            PaletteExec::Cross(CrossAction::OpenHelp) => {
-                self.open_help();
-                KeyOutcome::None
-            }
-            PaletteExec::Cross(CrossAction::OpenConfig) => {
-                self.open_config();
-                KeyOutcome::None
-            }
-            PaletteExec::Cross(CrossAction::ToggleTheme) => {
-                self.theme_choice = match self.theme_choice {
-                    crate::config::ThemeChoice::Dark => crate::config::ThemeChoice::Light,
-                    crate::config::ThemeChoice::Light => crate::config::ThemeChoice::Dark,
-                };
-                self.theme = Theme::for_choice(self.theme_choice);
-                KeyOutcome::ThemeToggle
-            }
-            PaletteExec::Cross(CrossAction::Quit) => KeyOutcome::Quit,
         }
     }
 
@@ -274,7 +154,7 @@ fn palette_item(key: &str, label: &str, exec: PaletteExec, enabled: bool) -> Pal
     }
 }
 
-fn key_item(key: &str, label: &str, code: KeyCode, enabled: bool) -> PaletteItem {
+pub(super) fn key_item(key: &str, label: &str, code: KeyCode, enabled: bool) -> PaletteItem {
     palette_item(
         key,
         label,
@@ -322,311 +202,22 @@ fn cross_items() -> Vec<PaletteItem> {
 
 fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> Vec<PaletteItem> {
     let mut items = match screen {
-        Screen::List => list_palette_items(state),
-        Screen::Pins(_) => pins_palette_items(state),
-        Screen::Gists(_) => gists_palette_items(state),
-        Screen::GistDetail(_) => detail_palette_items(state),
-        Screen::Revisions(_) => revisions_palette_items(state),
-        Screen::Diff(_) => diff_palette_items(state),
-        Screen::Preview(_) => preview_palette_items(state),
-        Screen::Help(_) => help_palette_items(),
-        Screen::Config(_) => config_palette_items(),
-        Screen::Confirm(_) | Screen::Palette(_) => Vec::new(),
+        Screen::List => super::screens::list::list_palette_items(state),
+        Screen::Pins(_) => super::screens::pins::pins_palette_items(state),
+        Screen::Gists(_) => super::screens::gists::gists_palette_items(state),
+        Screen::GistDetail(_) => super::screens::detail::detail_palette_items(state),
+        Screen::Revisions(_) => super::screens::revisions::revisions_palette_items(state),
+        Screen::Diff(_) => super::screens::diff::diff_palette_items(state),
+        Screen::Preview(_) => super::screens::preview::preview_palette_items(state),
+        Screen::Help(_) => super::screens::help::help_palette_items(),
+        Screen::Config(_) => super::screens::config::config_palette_items(),
+        Screen::Confirm(_) => super::screens::confirm::confirm_palette_items(state),
+        Screen::Palette(_) => super::screens::palette::palette_palette_items(state),
     };
     if mode == PaletteMode::Command {
         items.extend(cross_items());
     }
     items
-}
-
-fn list_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let g = |code| list_guard(state, code);
-    vec![
-        key_item(
-            "Enter",
-            "Diff local ↔ gist",
-            KeyCode::Enter,
-            g(KeyCode::Enter),
-        ),
-        key_item(
-            "Space",
-            "Preview gist content",
-            KeyCode::Char(' '),
-            g(KeyCode::Char(' ')),
-        ),
-        key_item(
-            "d",
-            "Download gist → cwd",
-            KeyCode::Char('d'),
-            g(KeyCode::Char('d')),
-        ),
-        key_item(
-            "u",
-            "Upload local → gist",
-            KeyCode::Char('u'),
-            g(KeyCode::Char('u')),
-        ),
-        key_item(
-            "n",
-            "Create gist from local",
-            KeyCode::Char('n'),
-            g(KeyCode::Char('n')),
-        ),
-        key_item(
-            "p",
-            "Pin / unpin pair",
-            KeyCode::Char('p'),
-            g(KeyCode::Char('p')),
-        ),
-        key_item("P", "Open Pins view", KeyCode::Char('P'), true),
-        key_item(
-            "g",
-            "Open Gist manager",
-            KeyCode::Char('g'),
-            g(KeyCode::Char('g')),
-        ),
-        key_item(
-            "S",
-            "Smart-sync pinned pair",
-            KeyCode::Char('S'),
-            g(KeyCode::Char('S')),
-        ),
-        key_item(
-            "X",
-            "Remove file from gist",
-            KeyCode::Char('X'),
-            g(KeyCode::Char('X')),
-        ),
-        key_item(
-            "e",
-            "Edit local file",
-            KeyCode::Char('e'),
-            g(KeyCode::Char('e')),
-        ),
-        key_item(
-            "y",
-            "Copy gist URL",
-            KeyCode::Char('y'),
-            g(KeyCode::Char('y')),
-        ),
-        key_item(
-            "H",
-            "Revision history",
-            KeyCode::Char('H'),
-            g(KeyCode::Char('H')),
-        ),
-        key_item(
-            "*",
-            "Star / unstar gist",
-            KeyCode::Char('*'),
-            g(KeyCode::Char('*')),
-        ),
-        key_item("r", "Toggle recursive scan", KeyCode::Char('r'), true),
-        key_item("/", "Filter focused pane", KeyCode::Char('/'), true),
-        key_item("Tab", "Switch pane", KeyCode::Tab, true),
-        key_item("a", "Flip ranking anchor", KeyCode::Char('a'), true),
-        key_item("t", "Toggle description / id", KeyCode::Char('t'), true),
-        key_item("v", "Cycle gist visibility", KeyCode::Char('v'), true),
-        key_item("s", "Cycle pane sort", KeyCode::Char('s'), true),
-        key_item("?", "Help", KeyCode::Char('?'), true),
-    ]
-}
-
-fn pins_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let g = |code| pins_guard(state, code);
-    vec![
-        key_item(
-            "Enter",
-            "Diff pinned pair",
-            KeyCode::Enter,
-            g(KeyCode::Enter),
-        ),
-        key_item("s", "Smart-sync", KeyCode::Char('s'), g(KeyCode::Char('s'))),
-        key_item("u", "Force push", KeyCode::Char('u'), g(KeyCode::Char('u'))),
-        key_item("d", "Force pull", KeyCode::Char('d'), g(KeyCode::Char('d'))),
-        key_item("x", "Unpin pair", KeyCode::Char('x'), g(KeyCode::Char('x'))),
-        key_item("/", "Filter pins", KeyCode::Char('/'), true),
-        key_item("o", "Cycle sort", KeyCode::Char('o'), true),
-        key_item("q", "Back to list", KeyCode::Char('q'), true),
-        key_item("?", "Help", KeyCode::Char('?'), true),
-    ]
-}
-
-fn gists_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let g = |code| gists_guard(state, code);
-    vec![
-        key_item(
-            "Enter",
-            "Open gist detail",
-            KeyCode::Enter,
-            g(KeyCode::Enter),
-        ),
-        key_item(
-            "o",
-            "Open in browser",
-            KeyCode::Char('o'),
-            g(KeyCode::Char('o')),
-        ),
-        key_item(
-            "y",
-            "Copy gist URL",
-            KeyCode::Char('y'),
-            g(KeyCode::Char('y')),
-        ),
-        key_item(
-            "H",
-            "Revision history",
-            KeyCode::Char('H'),
-            g(KeyCode::Char('H')),
-        ),
-        key_item(
-            "*",
-            "Star / unstar gist",
-            KeyCode::Char('*'),
-            g(KeyCode::Char('*')),
-        ),
-        key_item("/", "Filter gists", KeyCode::Char('/'), true),
-        key_item("s", "Cycle sort", KeyCode::Char('s'), true),
-        key_item("v", "Cycle visibility", KeyCode::Char('v'), true),
-        key_item("q", "Back to list", KeyCode::Char('q'), true),
-        key_item("?", "Help", KeyCode::Char('?'), true),
-    ]
-}
-
-fn detail_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let g = |code| detail_guard(state, code);
-    vec![
-        key_item(
-            "Enter",
-            "Preview selected file",
-            KeyCode::Enter,
-            g(KeyCode::Enter),
-        ),
-        key_item(
-            "o",
-            "Open in browser",
-            KeyCode::Char('o'),
-            g(KeyCode::Char('o')),
-        ),
-        key_item(
-            "y",
-            "Copy gist URL",
-            KeyCode::Char('y'),
-            g(KeyCode::Char('y')),
-        ),
-        key_item(
-            "H",
-            "Revision history",
-            KeyCode::Char('H'),
-            g(KeyCode::Char('H')),
-        ),
-        key_item(
-            "e",
-            "Edit description",
-            KeyCode::Char('e'),
-            g(KeyCode::Char('e')),
-        ),
-        key_item(
-            "c",
-            "Compact revisions",
-            KeyCode::Char('c'),
-            g(KeyCode::Char('c')),
-        ),
-        key_item(
-            "*",
-            "Star / unstar gist",
-            KeyCode::Char('*'),
-            g(KeyCode::Char('*')),
-        ),
-        key_item("F", "Fork gist", KeyCode::Char('F'), g(KeyCode::Char('F'))),
-        key_item(
-            "X",
-            "Delete gist",
-            KeyCode::Char('X'),
-            g(KeyCode::Char('X')),
-        ),
-        key_item("Tab", "Switch Files / Comments", KeyCode::Tab, true),
-        key_item(
-            "m",
-            "Load older comments",
-            KeyCode::Char('m'),
-            g(KeyCode::Char('m')),
-        ),
-        key_item("q", "Back to Gist manager", KeyCode::Char('q'), true),
-        key_item("?", "Help", KeyCode::Char('?'), true),
-    ]
-}
-
-fn revisions_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let g = |code| revisions_guard(state, code);
-    vec![
-        key_item(
-            "Enter",
-            "Diff parent → revision",
-            KeyCode::Enter,
-            g(KeyCode::Enter),
-        ),
-        key_item(
-            "D",
-            "Diff revision vs head",
-            KeyCode::Char('D'),
-            g(KeyCode::Char('D')),
-        ),
-        key_item(
-            "r",
-            "Restore revision",
-            KeyCode::Char('r'),
-            g(KeyCode::Char('r')),
-        ),
-        // The palette *is* gated through `revisions_guard` here, unlike the real handler's
-        // own `F` arm (which stays unconditional — see the comment on that case in
-        // `revisions_guard`): cycling the target file doesn't need the revision list loaded,
-        // so `revisions_guard`'s `F` case checks file count, not `has_entries` (issue #288).
-        key_item(
-            "F",
-            "Cycle target file",
-            KeyCode::Char('F'),
-            g(KeyCode::Char('F')),
-        ),
-        key_item("q", "Back", KeyCode::Char('q'), true),
-        key_item("?", "Help", KeyCode::Char('?'), true),
-    ]
-}
-
-fn diff_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let g = |code| diff_guard(state, code);
-    vec![
-        key_item("d", "Download", KeyCode::Char('d'), g(KeyCode::Char('d'))),
-        key_item("u", "Upload", KeyCode::Char('u'), g(KeyCode::Char('u'))),
-        key_item("c", "Toggle full diff context", KeyCode::Char('c'), true),
-        key_item("w", "Toggle line wrap", KeyCode::Char('w'), true),
-        key_item("q", "Back", KeyCode::Char('q'), true),
-    ]
-}
-
-fn preview_palette_items(_state: &AppState) -> Vec<PaletteItem> {
-    vec![
-        key_item("R", "Refresh content", KeyCode::Char('R'), true),
-        key_item("w", "Toggle line wrap", KeyCode::Char('w'), true),
-        key_item("y", "Copy gist URL", KeyCode::Char('y'), true),
-        key_item("Y", "Copy file content", KeyCode::Char('Y'), true),
-        key_item("q", "Back", KeyCode::Char('q'), true),
-    ]
-}
-
-fn config_palette_items() -> Vec<PaletteItem> {
-    vec![
-        key_item("Enter", "Toggle / increase value", KeyCode::Enter, true),
-        key_item("h/l", "Decrease / increase value", KeyCode::Char('l'), true),
-        key_item("Esc", "Close settings", KeyCode::Esc, true),
-    ]
-}
-
-fn help_palette_items() -> Vec<PaletteItem> {
-    vec![
-        key_item("Tab", "Browse topic index", KeyCode::Tab, true),
-        key_item("q", "Close Help", KeyCode::Char('q'), true),
-    ]
 }
 
 /// Subsequence fuzzy match: every query char must appear in order in `target`.

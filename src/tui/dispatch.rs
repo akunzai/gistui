@@ -40,6 +40,13 @@ pub(super) fn dispatch_outcome(
             });
         }
         KeyOutcome::Download { mode } => download(state, mode),
+        KeyOutcome::DownloadRequested { target } => {
+            if target.exists() {
+                state.enter_confirm_from_diff(PendingAction::Download);
+            } else {
+                download(state, crate::actions::DownloadMode::CreateNew);
+            }
+        }
         KeyOutcome::DownloadGist { file, target } => {
             let gist = file.to_gist_file();
             let (local_label, gist_label) = diff_labels(Some(&target), &gist);

@@ -4,14 +4,19 @@
 //! Builders never touch the filesystem or network (issues #241 / #250).
 
 use super::render::{
-    about_topic_lines_plain, count_label, footer_with_status, gist_group_row_label, gist_info_line,
-    gist_row_label, help_topic_body, is_json_file, marked_row_text, pin_row_label,
-    revision_row_label, row_mark, spinner_glyph, unix_now, RowMark, CREATE_DESC_PREFIX,
-    CREATE_DESC_SUFFIX, MINIMAL_HINT,
+    gist_info_line, gist_row_label, is_json_file, spinner_glyph, unix_now, RowMark,
+    CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX,
+};
+use super::screens::{
+    config::build_config_vm as build_config, confirm::build_confirm_vm as build_confirm,
+    detail::build_gist_detail_vm as build_detail, diff::build_diff_vm as build_diff,
+    gists::build_gists_vm as build_gists, help::build_help_vm as build_help,
+    list::build_list_vm as build_list, palette::build_palette_vm as build_palette,
+    pins::build_pins_vm as build_pins, preview::build_preview_vm as build_preview,
+    revisions::build_revisions_vm as build_revisions,
 };
 use super::{
-    AppState, ConfigField, DetailFocus, FocusPane, GistView, HelpTopic, PaletteMode, PendingAction,
-    Screen, TextInput,
+    AppState, DetailFocus, FocusPane, GistView, PaletteMode, PendingAction, Screen, TextInput,
 };
 use crate::domain::SyncStatus;
 use crate::ranking::RankedGistFile;
@@ -155,7 +160,7 @@ pub struct GistDetailVm {
     pub comments: CommentsPaneVm,
     pub footer: String,
     pub footer_colored: bool,
-    pub editing_description: bool,
+    pub description_input: Option<TextInput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -198,6 +203,7 @@ pub struct GistsVm {
     pub rows: Vec<GistGroupRowVm>,
     pub selected: Option<usize>,
     pub filtering: bool,
+    pub filter_query: crate::tui::text_input::TextInput,
     pub footer_title: String,
     pub footer: String,
     pub footer_colored: bool,
@@ -261,8 +267,11 @@ pub enum ListFooterVm {
     Hints { text: String },
     /// One-shot status message (plain).
     Status { text: String },
-    /// Inline filter on the focused pane; paint still uses live `TextInput` for the caret.
-    Filtering { focus: FocusPane },
+    /// Inline filter on the focused pane; carries live query text and focus.
+    Filtering {
+        focus: FocusPane,
+        query: crate::tui::text_input::TextInput,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -273,7 +282,7 @@ pub struct PinsVm {
     /// Selected index into [`Self::rows`] (not the raw pin index).
     pub selected: Option<usize>,
     pub filtering: bool,
-    pub filter_query: String,
+    pub filter_query: crate::tui::text_input::TextInput,
     pub footer_title: String,
     pub footer: String,
     pub footer_colored: bool,
@@ -307,8 +316,8 @@ pub struct ConfirmVm {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmBackgroundVm {
-    /// Standard overwrite/upload/create backdrop: use [`build_diff_vm`].
-    Diff,
+    /// Standard overwrite/upload/create backdrop: pre-built diff view model.
+    Diff(DiffVm),
     /// Compaction confirm: gist info + file list.
     CompactGist(CompactGistBgVm),
     /// Missing group or nothing to show.
@@ -322,7 +331,7 @@ pub enum ConfirmModalKind {
     /// Create-flow description editor.
     DescriptionInput {
         prefix: &'static str,
-        value: String,
+        input: TextInput,
         suffix: &'static str,
     },
 }
@@ -367,56 +376,19 @@ pub(crate) fn build_chrome(state: &AppState) -> ChromeVm {
 pub fn build_view_model(state: &AppState) -> ViewModel {
     let chrome = build_chrome(state);
     let screen = match &state.screen {
-        Screen::List => ScreenVm::List(build_list_vm(state)),
-        Screen::Gists(_) => ScreenVm::Gists(build_gists_vm(state)),
-        Screen::GistDetail(_) => ScreenVm::GistDetail(build_gist_detail_vm(state)),
-        Screen::Revisions(_) => ScreenVm::Revisions(build_revisions_vm(state)),
-        Screen::Config(_) => ScreenVm::Config(build_config_vm(state)),
-        Screen::Diff(_) => ScreenVm::Diff(build_diff_vm(state)),
-        Screen::Preview(_) => ScreenVm::Preview(build_preview_vm(state)),
-        Screen::Pins(_) => ScreenVm::Pins(build_pins_vm(state)),
-        Screen::Confirm(_) => ScreenVm::Confirm(build_confirm_vm(state)),
-        Screen::Help(_) => ScreenVm::Help(build_help_vm(state)),
-        Screen::Palette(_) => ScreenVm::Palette(build_palette_vm(state)),
+        Screen::List => ScreenVm::List(build_list(state)),
+        Screen::Gists(_) => ScreenVm::Gists(build_gists(state)),
+        Screen::GistDetail(_) => ScreenVm::GistDetail(build_detail(state)),
+        Screen::Revisions(_) => ScreenVm::Revisions(build_revisions(state)),
+        Screen::Config(_) => ScreenVm::Config(build_config(state)),
+        Screen::Diff(_) => ScreenVm::Diff(build_diff(state)),
+        Screen::Preview(_) => ScreenVm::Preview(build_preview(state)),
+        Screen::Pins(_) => ScreenVm::Pins(build_pins(state)),
+        Screen::Confirm(_) => ScreenVm::Confirm(build_confirm(state)),
+        Screen::Help(_) => ScreenVm::Help(build_help(state)),
+        Screen::Palette(_) => ScreenVm::Palette(build_palette(state)),
     };
     ViewModel { chrome, screen }
-}
-
-/// Palette overlay body, plus the ViewModel for whatever screen it's covering (issue #272).
-pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
-    let p = state.palette().cloned().unwrap_or_default();
-    let background = build_background_screen_vm(state, &p.origin_screen).map(Box::new);
-    let has_query = p.mode == PaletteMode::Command;
-    let title = match p.mode {
-        PaletteMode::Menu => "Menu",
-        PaletteMode::Command => "Command palette",
-    };
-    let items: Vec<PaletteRowVm> = state
-        .palette_visible_items()
-        .into_iter()
-        .map(|item| PaletteRowVm {
-            key_hint: item.key_hint.clone(),
-            label: item.label.clone(),
-            enabled: item.enabled,
-        })
-        .collect();
-    let key_width = items
-        .iter()
-        .map(|item| item.key_hint.chars().count())
-        .max()
-        .unwrap_or(1)
-        .max(1);
-    PaletteVm {
-        background,
-        title,
-        has_query,
-        query: p.query,
-        selected: p.selected,
-        items,
-        key_width,
-        mode: p.mode,
-        anchor: p.anchor,
-    }
 }
 
 /// ViewModel for the screen a palette is covering, by its origin's tag. `state`'s accessors
@@ -425,17 +397,17 @@ pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
 ///
 /// `None` for Confirm (blank background preserved as-is, tracked separately in #277) and Palette
 /// (unreachable — the palette can't be opened while itself active).
-fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<ScreenVm> {
+pub(crate) fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<ScreenVm> {
     match origin {
-        Screen::List => Some(ScreenVm::List(build_list_vm(state))),
-        Screen::Gists(_) => Some(ScreenVm::Gists(build_gists_vm(state))),
-        Screen::GistDetail(_) => Some(ScreenVm::GistDetail(build_gist_detail_vm(state))),
-        Screen::Revisions(_) => Some(ScreenVm::Revisions(build_revisions_vm(state))),
-        Screen::Config(_) => Some(ScreenVm::Config(build_config_vm(state))),
-        Screen::Diff(_) => Some(ScreenVm::Diff(build_diff_vm(state))),
-        Screen::Preview(_) => Some(ScreenVm::Preview(build_preview_vm(state))),
-        Screen::Pins(_) => Some(ScreenVm::Pins(build_pins_vm(state))),
-        Screen::Help(_) => Some(ScreenVm::Help(build_help_vm(state))),
+        Screen::List => Some(ScreenVm::List(build_list(state))),
+        Screen::Gists(_) => Some(ScreenVm::Gists(build_gists(state))),
+        Screen::GistDetail(_) => Some(ScreenVm::GistDetail(build_detail(state))),
+        Screen::Revisions(_) => Some(ScreenVm::Revisions(build_revisions(state))),
+        Screen::Config(_) => Some(ScreenVm::Config(build_config(state))),
+        Screen::Diff(_) => Some(ScreenVm::Diff(build_diff(state))),
+        Screen::Preview(_) => Some(ScreenVm::Preview(build_preview(state))),
+        Screen::Pins(_) => Some(ScreenVm::Pins(build_pins(state))),
+        Screen::Help(_) => Some(ScreenVm::Help(build_help(state))),
         Screen::Confirm(_) | Screen::Palette(_) => None,
     }
 }
@@ -467,433 +439,11 @@ pub(crate) fn build_compact_gist_bg_vm(state: &AppState, gist_id: &str) -> Optio
     })
 }
 
-fn file_ext(name: &str) -> Option<String> {
+pub(crate) fn file_ext(name: &str) -> Option<String> {
     std::path::Path::new(name)
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
-}
-
-/// The diff pane title. The gist id, filenames, and both sides' mtimes live in the diff's
-/// `--- / +++` header lines (see `diff_labels`); the title stays concise and avoids
-/// repeating a path.
-pub(crate) fn diff_title(state: &AppState) -> String {
-    match state.pending_action() {
-        Some(PendingAction::Upload {
-            gist_id, filename, ..
-        }) => format!("Upload → gist {gist_id} / {filename}"),
-        Some(PendingAction::Create { local_path }) => {
-            format!(
-                "Create gist from {}",
-                crate::config::display_path(local_path)
-            )
-        }
-        Some(PendingAction::Delete { gist_id, .. }) => {
-            format!("Delete gist {gist_id}")
-        }
-        Some(PendingAction::RemoveFile {
-            gist_id, filename, ..
-        }) => {
-            format!("Remove {filename} from gist {gist_id}")
-        }
-        _ => {
-            let label = if state.diff_identical() {
-                "Diff (identical)"
-            } else {
-                "Diff"
-            };
-            let local = state.preview_local();
-            let target = state.download_target();
-            if local.as_os_str().is_empty() || local == target {
-                format!("{label} → {}", crate::config::display_path(&target))
-            } else {
-                format!(
-                    "{label}: {} → {}",
-                    crate::config::display_path(&local),
-                    crate::config::display_path(&target)
-                )
-            }
-        }
-    }
-}
-
-/// The `Screen::Diff` preview: the diff pane plus a scroll/commands footer.
-///
-/// #72 audit: this footer intentionally does not surface `state.status`. Diff actions (`d`/`u`)
-/// transition to `Screen::Confirm` or to the IO that lands back on `List`; their results surface
-/// on those destination screens (which read `state.status`), so no status is set while on Diff.
-/// Footer hints for `Screen::Diff` (pure for tests).
-pub(crate) fn diff_footer(state: &AppState) -> String {
-    let context = if state.diff_show_full {
-        "c context [full]".to_string()
-    } else {
-        format!("c context [{}]", state.diff_context)
-    };
-    // When wrapping, horizontal scroll (←→) is meaningless — drop it from the hint.
-    let scroll = if state.diff_wrap {
-        "↑↓ PgUp/Dn scroll"
-    } else {
-        "↑↓←→ PgUp/Dn scroll"
-    };
-    let wrap = if state.diff_wrap {
-        "w wrap [on]"
-    } else {
-        "w wrap [off]"
-    };
-    let back = "Esc/q back";
-    if !state.diff_allows_sync() {
-        if state.diff_identical() {
-            format!("Files are identical  ·  {scroll}  ·  {wrap}  ·  {context}  ·  {back}")
-        } else {
-            format!("{scroll}  ·  {wrap}  ·  {context}  ·  {back}")
-        }
-    } else if state.diff_identical() {
-        format!("Files are identical — nothing to sync  ·  {scroll}  ·  {wrap}  ·  {context}  ·  {back}")
-    } else {
-        format!("{scroll}  ·  d download  ·  u upload  ·  {wrap}  ·  {context}  ·  {back}")
-    }
-}
-
-/// Diff pane facts — also used as Confirm overwrite background (non-compact).
-pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
-    let text = state.diff_body_text();
-    let body = match state.effective_diff_context() {
-        Some(radius) => crate::diff::collapse_context(text, radius),
-        None => text.to_string(),
-    };
-    let download_target = state.download_target();
-    let preview_local = state.preview_local();
-    let ext = download_target
-        .file_name()
-        .or_else(|| preview_local.file_name())
-        .and_then(|n| n.to_str())
-        .and_then(file_ext);
-    DiffVm {
-        title: diff_title(state),
-        body,
-        footer: diff_footer(state),
-        wrap: state.diff_wrap,
-        scroll: state.diff_scroll(),
-        hscroll: state.diff_hscroll(),
-        syntax_highlight: state.syntax_highlight,
-        ext,
-    }
-}
-
-/// Preview body — usable under Palette-over-Preview as well.
-pub(crate) fn build_preview_vm(state: &AppState) -> PreviewVm {
-    let p = state.preview().cloned().unwrap_or_default();
-    let hints = if state.preview_wrap {
-        "↑↓ PgUp/Dn scroll  ·  w wrap [on]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
-    } else {
-        "↑↓←→ PgUp/Dn scroll  ·  w wrap [off]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
-    };
-    let (footer, footer_colored) = footer_with_status(state.status.as_deref(), hints);
-    let ext = p
-        .gist_key
-        .as_ref()
-        .and_then(|(_, filename)| file_ext(filename));
-    PreviewVm {
-        title: p.title,
-        body: p.text,
-        footer,
-        footer_colored,
-        wrap: state.preview_wrap,
-        scroll: p.scroll,
-        hscroll: p.hscroll,
-        syntax_highlight: state.syntax_highlight,
-        ext,
-    }
-}
-
-/// Revisions body — usable under Palette-over-Revisions as well.
-pub(crate) fn build_revisions_vm(state: &AppState) -> RevisionsVm {
-    let rev = state.revision().cloned().unwrap_or_default();
-    let (footer, footer_colored) = if let Some(message) = &state.status {
-        (message.clone(), false)
-    } else if rev.entries.is_none() {
-        ("Loading revisions…".to_string(), false)
-    } else if let Some(err) = &rev.fetch_error {
-        (err.clone(), false)
-    } else {
-        let file = state.revision_target_file_label();
-        (format!("file={file}"), false)
-    };
-
-    let gist_id = rev.gist_id.as_deref().unwrap_or("");
-    let label = state
-        .group_by_id(gist_id)
-        .map(|g| {
-            if g.description.trim().is_empty() {
-                g.id.clone()
-            } else {
-                g.description.clone()
-            }
-        })
-        .unwrap_or_else(|| gist_id.to_string());
-
-    let now = unix_now();
-    let (empty, empty_message, rows, selected) = match &rev.entries {
-        None => (
-            RevisionsEmptyKind::Loading,
-            Some("  ⏳ Loading revisions…".into()),
-            Vec::new(),
-            None,
-        ),
-        Some(entries) if entries.is_empty() => (
-            RevisionsEmptyKind::NoRevisions,
-            Some("  📭 No revisions found".into()),
-            Vec::new(),
-            None,
-        ),
-        Some(entries) => {
-            let rows = entries
-                .iter()
-                .enumerate()
-                .map(|(i, r)| revision_row_label(r, i, now))
-                .collect();
-            (RevisionsEmptyKind::HasRows, None, rows, Some(rev.index))
-        }
-    };
-
-    let count = rows.len();
-    RevisionsVm {
-        title: format!("Revisions: {label} {}", count_label(count, count)),
-        empty,
-        empty_message,
-        rows,
-        selected,
-        footer,
-        footer_colored,
-        hscroll: rev.hscroll,
-    }
-}
-
-/// Config/settings body — usable under Palette-over-Config as well.
-pub(crate) fn build_config_vm(state: &AppState) -> ConfigVm {
-    let rows = ConfigField::ALL
-        .iter()
-        .map(|field| {
-            let label = field.label();
-            let value = state.config_field_value(*field);
-            let hint = if field.is_numeric() {
-                "←/→"
-            } else {
-                "Enter"
-            };
-            format!("  {label:<28} {value:<8}  ({hint})")
-        })
-        .collect();
-    ConfigVm {
-        rows,
-        selected: state.config().map(|c| c.index).unwrap_or(0),
-        status: state.status.clone(),
-    }
-}
-
-/// Gist detail body — usable under Palette-over-GistDetail as well.
-pub(crate) fn build_gist_detail_vm(state: &AppState) -> GistDetailVm {
-    let (footer, footer_colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
-    let detail = state.detail().cloned().unwrap_or_default();
-    let Some(gist_id) = detail.gist_id.as_deref() else {
-        return GistDetailVm {
-            missing: true,
-            block_title: String::new(),
-            info_line: String::new(),
-            focus: detail.focus,
-            files: Vec::new(),
-            file_cursor: 0,
-            comments: CommentsPaneVm::PromptLoad,
-            footer,
-            footer_colored,
-            editing_description: state.editing_description,
-        };
-    };
-    let Some(group) = state.group_by_id(gist_id) else {
-        return GistDetailVm {
-            missing: true,
-            block_title: String::new(),
-            info_line: String::new(),
-            focus: detail.focus,
-            files: Vec::new(),
-            file_cursor: 0,
-            comments: CommentsPaneVm::PromptLoad,
-            footer,
-            footer_colored,
-            editing_description: state.editing_description,
-        };
-    };
-
-    let block_title = if group.description.trim().is_empty() {
-        format!("Gist {}", group.id)
-    } else {
-        format!("Gist: {}", group.description)
-    };
-    let info_line = gist_info_line(
-        &group,
-        unix_now(),
-        state.current_user_login.as_deref(),
-        state.gist_is_starred(gist_id),
-        state.gist_counts(gist_id),
-    );
-    let files = state.gist_file_display_names(gist_id);
-    let file_cursor = detail.file_cursor.min(files.len().saturating_sub(1));
-    let comments = build_comments_pane_vm(state);
-
-    GistDetailVm {
-        missing: false,
-        block_title,
-        info_line,
-        focus: detail.focus,
-        files,
-        file_cursor,
-        comments,
-        footer,
-        footer_colored,
-        editing_description: state.editing_description,
-    }
-}
-
-fn build_comments_pane_vm(state: &AppState) -> CommentsPaneVm {
-    let now = unix_now() as i64;
-    let detail = state.detail().cloned().unwrap_or_default();
-    match (
-        &detail.comments,
-        detail.comments_loading,
-        &detail.comments_error,
-    ) {
-        (None, true, _) => CommentsPaneVm::Loading,
-        (None, false, _) => CommentsPaneVm::PromptLoad,
-        (Some(_), _, Some(err)) => CommentsPaneVm::Error {
-            message: format!("comments error: {err}"),
-        },
-        (Some(comments), _, None) if comments.is_empty() => CommentsPaneVm::Empty,
-        (Some(comments), _, None) => {
-            let affordance = if detail.comments_loading_more {
-                CommentsAffordance::LoadingMore
-            } else if detail.comments_loaded_oldest_page > 1 {
-                CommentsAffordance::LoadOlder
-            } else {
-                CommentsAffordance::StartOfThread
-            };
-            let mut lines = Vec::new();
-            for c in comments {
-                let age = crate::domain::parse_rfc3339_to_unix(&c.created_at)
-                    .map(|t| crate::domain::humanize_age(now - t as i64))
-                    .unwrap_or_else(|| "?".into());
-                lines.push(CommentLineVm::Author {
-                    text: format!("{} · {age}", c.author),
-                });
-                for raw in c.body.lines() {
-                    lines.push(CommentLineVm::Body {
-                        text: format!("  {raw}"),
-                    });
-                }
-                lines.push(CommentLineVm::Blank);
-            }
-            CommentsPaneVm::Thread {
-                title: comments_title_text(state),
-                affordance,
-                lines,
-                scroll: detail.scroll,
-            }
-        }
-    }
-}
-
-/// Mirror of render-side comments title (pure; used by the view model).
-fn comments_title_text(state: &AppState) -> String {
-    let detail = state.detail().cloned().unwrap_or_default();
-    match (&detail.comments, detail.comments_total) {
-        (Some(c), _) if detail.comments_error.is_some() => format!("Comments ({})", c.len()),
-        (Some(c), Some(total)) if !c.is_empty() => {
-            let loaded = c.len() as u32;
-            let first = total.saturating_sub(loaded) + 1;
-            format!("Comments ({first}–{total} / {total})")
-        }
-        (Some(c), None) if !c.is_empty() => format!("Comments (newest {})", c.len()),
-        _ => "Comments".to_string(),
-    }
-}
-
-/// Gists manager body — usable under Palette-over-Gists as well.
-pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
-    let gm = state.gist_manager().cloned().unwrap_or_default();
-    let (footer_title, footer, footer_colored) = if gm.filtering {
-        (
-            "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
-            format!("/{}_", gm.filter_query),
-            false,
-        )
-    } else {
-        let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
-        (String::new(), footer, colored)
-    };
-
-    let groups = state.visible_gist_groups();
-    let total_groups = state.gist_groups().len();
-    let now = unix_now();
-
-    let (empty, empty_message, rows) = if groups.is_empty() {
-        if total_groups == 0 {
-            (
-                GistsEmptyKind::NoGists,
-                Some("  📭 No gists found".into()),
-                Vec::new(),
-            )
-        } else {
-            (
-                GistsEmptyKind::NoFilterMatch,
-                Some("  🔍 No gists match the filter".into()),
-                Vec::new(),
-            )
-        }
-    } else {
-        let rows = groups
-            .iter()
-            .map(|g| GistGroupRowVm {
-                gist_id: g.id.clone(),
-                label: gist_group_row_label(
-                    g,
-                    now,
-                    gm.sort,
-                    (
-                        state.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
-                        state.gist_star_counts.get(&g.id).copied().unwrap_or(0),
-                        state.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
-                    ),
-                    state.gist_is_starred(&g.id),
-                    state.current_user_login.as_deref(),
-                ),
-            })
-            .collect();
-        (GistsEmptyKind::HasRows, None, rows)
-    };
-
-    let mut title = format!(
-        "Gists {}  ·  sort:{}  ·  type:{}  ·  ★ {}  ·  ⑂ {}",
-        count_label(groups.len(), total_groups),
-        gm.sort.label(),
-        gm.type_filter.label(),
-        state.starred_gist_count(),
-        state.owned_fork_gist_count()
-    );
-    if !gm.filter_query.is_empty() {
-        title.push_str(&format!("  ·  /{}", gm.filter_query));
-    }
-
-    GistsVm {
-        title,
-        empty,
-        empty_message,
-        rows,
-        selected: (!groups.is_empty()).then_some(gm.cursor.index),
-        filtering: gm.filtering,
-        footer_title,
-        footer,
-        footer_colored,
-        hscroll: gm.cursor.hscroll,
-    }
 }
 
 /// Full gist file-list row as painted — [`gist_row_label`] plus `★ ` when the gist is starred.
@@ -904,227 +454,6 @@ pub(crate) fn gist_row_display(g: &RankedGistFile, view: GistView, state: &AppSt
         format!("★ {label}")
     } else {
         label
-    }
-}
-
-/// List body only — usable while `state.screen` is List **or** Palette-over-List (#250).
-pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
-    let (visible_locals, ranked) = state.list_pane_snapshots();
-
-    let local_empty;
-    let local_empty_message;
-    let local_rows;
-    if state.local_scanning && state.locals.is_empty() {
-        local_empty = ListPaneEmpty::Loading;
-        local_empty_message = Some(format!(
-            "  {} Scanning files…",
-            spinner_glyph(state.spinner_frame)
-        ));
-        local_rows = Vec::new();
-    } else if state.locals.is_empty() {
-        local_empty = ListPaneEmpty::NoItems;
-        local_empty_message = Some("  📭 No local files found".into());
-        local_rows = Vec::new();
-    } else if visible_locals.is_empty() {
-        local_empty = ListPaneEmpty::NoFilterMatch;
-        local_empty_message = Some("  🔍 No files match the filter".into());
-        local_rows = Vec::new();
-    } else {
-        local_empty = ListPaneEmpty::HasRows;
-        local_empty_message = None;
-        local_rows = visible_locals
-            .iter()
-            .map(|r| {
-                let mark = row_mark(&r.reasons);
-                let base = super::text::local_row_label(&r.candidate.path, &state.cwd);
-                ListRowVm {
-                    label: marked_row_text(base, mark),
-                    mark,
-                }
-            })
-            .collect();
-    }
-
-    let recursive_marker = if state.local_recursive { " [↓]" } else { "" };
-    let scanning_marker = if state.local_scanning { " …" } else { "" };
-    let mut local_title = format!(
-        "[1] Local {} · {}{}{} · sort:{}",
-        count_label(visible_locals.len(), state.locals.len()),
-        crate::config::display_path(&state.cwd),
-        recursive_marker,
-        scanning_marker,
-        state.local_sort.label()
-    );
-    if !state.local_filter_query.is_empty() {
-        local_title.push_str(&format!(" · /{}", state.local_filter_query));
-    }
-    if state.anchor == FocusPane::Local {
-        local_title.push_str(" · ⚓");
-    }
-
-    let gist_empty;
-    let gist_empty_message;
-    let gist_rows;
-    if state.loading && ranked.is_empty() {
-        gist_empty = ListPaneEmpty::Loading;
-        gist_empty_message = Some(format!(
-            "  {} Loading gists…",
-            spinner_glyph(state.spinner_frame)
-        ));
-        gist_rows = Vec::new();
-    } else if ranked.is_empty() {
-        if !state.filter_query.is_empty() {
-            gist_empty = ListPaneEmpty::NoFilterMatch;
-            gist_empty_message = Some("  🔍 No gists match the filter".into());
-        } else {
-            gist_empty = ListPaneEmpty::NoItems;
-            gist_empty_message = Some("  📭 No gists found".into());
-        }
-        gist_rows = Vec::new();
-    } else {
-        gist_empty = ListPaneEmpty::HasRows;
-        gist_empty_message = None;
-        gist_rows = ranked
-            .iter()
-            .map(|g| {
-                let mark = row_mark(&g.reasons);
-                let base = gist_row_display(g, state.gist_view, state);
-                ListRowVm {
-                    label: marked_row_text(base, mark),
-                    mark,
-                }
-            })
-            .collect();
-    }
-
-    let mut gist_title = format!(
-        "[2] Gists {} · {} · {}",
-        count_label(ranked.len(), state.gists.len()),
-        state.gist_type_filter.label(),
-        state.gist_sort.label()
-    );
-    if !state.filter_query.is_empty() {
-        gist_title.push_str(&format!(" · /{}", state.filter_query));
-    }
-    if state.anchor == FocusPane::Gist {
-        gist_title.push_str(" · ⚓");
-    }
-
-    let footer = if state.filtering {
-        ListFooterVm::Filtering { focus: state.focus }
-    } else if let Some(message) = &state.status {
-        ListFooterVm::Status {
-            text: message.clone(),
-        }
-    } else {
-        ListFooterVm::Hints {
-            text: MINIMAL_HINT.to_string(),
-        }
-    };
-
-    ListVm {
-        local: ListPaneVm {
-            title: local_title,
-            focused: state.focus == FocusPane::Local,
-            selected: (local_empty == ListPaneEmpty::HasRows).then_some(state.local_index),
-            empty: local_empty,
-            empty_message: local_empty_message,
-            rows: local_rows,
-        },
-        gist: ListPaneVm {
-            title: gist_title,
-            focused: state.focus == FocusPane::Gist,
-            selected: (gist_empty == ListPaneEmpty::HasRows).then_some(state.gist_index),
-            empty: gist_empty,
-            empty_message: gist_empty_message,
-            rows: gist_rows,
-        },
-        local_hscroll: state.local_hscroll,
-        gist_hscroll: state.gist_hscroll,
-        footer,
-    }
-}
-
-/// Pins body only — usable under Palette-over-Pins as well.
-pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
-    let pins = state.pins().cloned().unwrap_or_default();
-    let (footer_title, footer, footer_colored) = if pins.filtering {
-        (
-            "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
-            format!("/{}_", pins.filter_query),
-            false,
-        )
-    } else {
-        let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
-        (String::new(), footer, colored)
-    };
-
-    let visible = state.visible_pin_indices();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-
-    let (empty, rows) = if state.pinned.is_empty() {
-        (PinsEmptyKind::NoMappings, Vec::new())
-    } else if visible.is_empty() {
-        (PinsEmptyKind::NoFilterMatch, Vec::new())
-    } else {
-        let rows = visible
-            .iter()
-            .map(|&i| {
-                let m = &state.pinned[i];
-                let entry = state.cached_pin_sync_entry(i);
-                let status = entry.status;
-                let age = |ts: Option<u64>| {
-                    ts.map(|t| crate::domain::humanize_age(now - t as i64))
-                        .unwrap_or_else(|| "?".to_string())
-                };
-                let local_age = if status == SyncStatus::Missing {
-                    "missing".to_string()
-                } else {
-                    age(entry.local_ts)
-                };
-                let label = pin_row_label(
-                    status.icon(),
-                    &m.local_path,
-                    &m.gist_id,
-                    &m.gist_filename,
-                    &local_age,
-                    &age(entry.remote_ts),
-                );
-                PinRowVm {
-                    pin_index: i,
-                    status,
-                    label,
-                }
-            })
-            .collect();
-        (PinsEmptyKind::HasRows, rows)
-    };
-
-    let mut title = format!(
-        "Pinned Mappings {}",
-        count_label(visible.len(), state.pinned.len())
-    );
-    if !pins.filter_query.is_empty() {
-        title.push_str(&format!(" · /{}", pins.filter_query));
-    }
-    if pins.sort != crate::tui::PinSort::Default {
-        title.push_str(&format!(" · sort:{}", pins.sort.label()));
-    }
-
-    PinsVm {
-        title,
-        empty,
-        rows,
-        selected: (!visible.is_empty()).then_some(pins.cursor.index),
-        filtering: pins.filtering,
-        filter_query: pins.filter_query.to_string(),
-        footer_title,
-        footer,
-        footer_colored,
-        hscroll: pins.cursor.hscroll,
     }
 }
 
@@ -1214,109 +543,6 @@ pub(crate) fn confirm_prompt(state: &AppState) -> String {
             crate::config::display_path(&state.download_target())
         ),
     }
-}
-
-/// Title and border colour for the confirm modal. Destructive actions are tinted with the
-/// theme's `del_color` so the stakes read at a glance; non-destructive writes use the neutral
-/// `notice_color` prompt.
-pub(crate) fn confirm_modal_style(state: &AppState) -> (&'static str, Color) {
-    let theme = &state.theme;
-    match state.pending_action() {
-        Some(PendingAction::Create { .. }) if state.editing_description => {
-            ("Description", theme.accent)
-        }
-        Some(PendingAction::Create { .. }) => ("Create gist", theme.notice_color),
-        Some(PendingAction::Upload { .. }) => ("Upload", theme.notice_color),
-        Some(PendingAction::Delete { .. }) => ("Delete", theme.del_color),
-        Some(PendingAction::RemoveFile { .. }) => ("Remove file", theme.del_color),
-        Some(PendingAction::CompactGist { .. }) => ("Compact revisions", theme.del_color),
-        Some(PendingAction::RestoreRevision { .. }) => ("Restore revision", theme.notice_color),
-        _ => ("Overwrite", theme.del_color),
-    }
-}
-
-pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
-    let (title, border) = confirm_modal_style(state);
-    let kind = if matches!(state.pending_action(), Some(PendingAction::Create { .. }))
-        && state.editing_description
-    {
-        ConfirmModalKind::DescriptionInput {
-            prefix: CREATE_DESC_PREFIX,
-            value: state.description_input.to_string(),
-            suffix: CREATE_DESC_SUFFIX,
-        }
-    } else {
-        ConfirmModalKind::Prompt {
-            text: confirm_prompt(state),
-        }
-    };
-    let background = match state.pending_action() {
-        Some(PendingAction::CompactGist { gist_id, .. }) => {
-            match build_compact_gist_bg_vm(state, gist_id) {
-                Some(bg) => ConfirmBackgroundVm::CompactGist(bg),
-                None => ConfirmBackgroundVm::Empty,
-            }
-        }
-        _ => ConfirmBackgroundVm::Diff,
-    };
-    ConfirmVm {
-        title,
-        border,
-        kind,
-        background,
-    }
-}
-
-/// Help body only — usable under Palette-over-Help as well.
-pub(crate) fn build_help_vm(state: &AppState) -> HelpVm {
-    let help = state.help().cloned().unwrap_or_default();
-    let mode = if help.index_open {
-        let items = HelpTopic::all()
-            .iter()
-            .enumerate()
-            .map(|(i, t)| {
-                let key = if *t == HelpTopic::About {
-                    "0".to_string()
-                } else {
-                    (i + 1).to_string()
-                };
-                HelpIndexItemVm {
-                    key,
-                    title: t.title().to_string(),
-                }
-            })
-            .collect();
-        HelpModeVm::Index {
-            items,
-            selected: help.index_sel,
-        }
-    } else {
-        let title = format!(
-            "Help · {} — Tab topics · ↑↓ scroll · Esc back",
-            help.topic.title()
-        );
-        let (lines, about_repo_line) = if help.topic == HelpTopic::About {
-            (
-                about_topic_lines_plain(state),
-                Some(super::render::ABOUT_REPO_LINE),
-            )
-        } else {
-            (
-                help_topic_body(help.topic)
-                    .lines()
-                    .map(str::to_string)
-                    .collect(),
-                None,
-            )
-        };
-        HelpModeVm::Topic {
-            title,
-            lines,
-            scroll: help.scroll,
-            about_repo_line,
-        }
-    };
-    HelpVm { mode }
 }
 
 #[cfg(test)]
@@ -1591,7 +817,7 @@ mod tests {
         state.focus = FocusPane::Gist;
         match build_view_model(&state).screen {
             ScreenVm::List(list) => match list.footer {
-                ListFooterVm::Filtering { focus } => assert_eq!(focus, FocusPane::Gist),
+                ListFooterVm::Filtering { focus, .. } => assert_eq!(focus, FocusPane::Gist),
                 other => panic!("expected Filtering footer, got {other:?}"),
             },
             other => panic!("expected List, got {other:?}"),

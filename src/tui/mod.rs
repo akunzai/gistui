@@ -337,13 +337,17 @@ impl HelpTopic {
     /// fall back to the List topic.
     pub fn for_screen(screen: &Screen) -> HelpTopic {
         match screen {
-            Screen::Pins(_) => HelpTopic::Pins,
-            Screen::Gists(_) => HelpTopic::GistManager,
-            Screen::GistDetail(_) => HelpTopic::GistDetail,
-            Screen::Revisions(_) => HelpTopic::Revisions,
-            Screen::Config(_) => HelpTopic::Config,
-            Screen::Help(_) => HelpTopic::List,
-            _ => HelpTopic::List,
+            Screen::List => screens::list::help_topic(),
+            Screen::Diff(_) => screens::diff::help_topic(),
+            Screen::Confirm(_) => screens::confirm::help_topic(),
+            Screen::Preview(_) => screens::preview::help_topic(),
+            Screen::Help(_) => screens::help::help_topic(),
+            Screen::Pins(_) => screens::pins::help_topic(),
+            Screen::Gists(_) => screens::gists::help_topic(),
+            Screen::GistDetail(_) => screens::detail::help_topic(),
+            Screen::Revisions(_) => screens::revisions::help_topic(),
+            Screen::Palette(_) => screens::palette::help_topic(),
+            Screen::Config(_) => screens::config::help_topic(),
         }
     }
 }
@@ -577,6 +581,11 @@ pub enum KeyOutcome {
     /// [`DownloadMode::overwrite_after_user_confirm`] after Confirm `y` (issue #246).
     Download {
         mode: crate::actions::DownloadMode,
+    },
+    /// Request a download from the open Diff payload. Dispatch checks the target immediately
+    /// before choosing either an overwrite confirmation or a new-file download.
+    DownloadRequested {
+        target: PathBuf,
     },
     /// Download/fetch a selected gist file (may land on Diff/Confirm).
     DownloadGist {
@@ -1373,15 +1382,6 @@ impl AppState {
         self.leave();
     }
 
-    /// Snapshot the live GistDetail payload as a `Screen`, to stage into
-    /// [`Self::pending_return`] before an async fetch (preview/revisions/compact) that will
-    /// eventually call [`Self::enter`] once its result lands. Every caller is itself part of
-    /// GistDetail's own key handling, so `self.screen` is always `Screen::GistDetail` here.
-    fn park_gist_detail_screen(&self) -> Screen {
-        debug_assert!(self.screen.is_gist_detail());
-        self.screen.clone()
-    }
-
     pub fn upload_local_path(&self) -> Option<std::path::PathBuf> {
         match self.pending_action() {
             Some(PendingAction::Upload { local_path, .. }) => Some(local_path.clone()),
@@ -2021,33 +2021,6 @@ impl AppState {
         true
     }
 
-    pub fn selected_revision(&self) -> Option<&GistRevision> {
-        let rev = self.revision()?;
-        let entries = rev.entries.as_ref()?;
-        entries.get(rev.index)
-    }
-
-    /// Advance `revision_target_file` to the next filename in this gist (wraps). Returns
-    /// false when the gist has at most one file.
-    pub fn cycle_revision_target_file(&mut self) -> bool {
-        let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) else {
-            return false;
-        };
-        let files = self.gist_filenames(&gist_id);
-        if files.len() <= 1 {
-            return false;
-        }
-        let Some(rev) = self.revision_mut() else {
-            return false;
-        };
-        let current = files
-            .iter()
-            .position(|f| f == &rev.target_file)
-            .unwrap_or(0);
-        rev.target_file = files[(current + 1) % files.len()].clone();
-        true
-    }
-
     /// True when the diff view supports local↔gist download/upload (`d`/`u`). Revision-history
     /// diffs (returning to `Screen::Revisions`) are read-only comparisons. Checks the top of
     /// `nav_stack` directly (not [`Self::diff`]'s deep search) — this only makes sense while
@@ -2055,26 +2028,6 @@ impl AppState {
     /// parked.
     pub fn diff_allows_sync(&self) -> bool {
         !self.nav_stack.last().is_some_and(Screen::is_revisions)
-    }
-
-    /// Footer label for the revision-history target file, including `(n/total)` when multi-file.
-    pub fn revision_target_file_label(&self) -> String {
-        let Some(rev) = self.revision() else {
-            return String::new();
-        };
-        let Some(gist_id) = rev.gist_id.as_deref() else {
-            return rev.target_file.clone();
-        };
-        let files = self.gist_filenames(gist_id);
-        if files.len() <= 1 {
-            return rev.target_file.clone();
-        }
-        let pos = files
-            .iter()
-            .position(|f| f == &rev.target_file)
-            .map(|i| i + 1)
-            .unwrap_or(1);
-        format!("{} ({pos}/{})", rev.target_file, files.len())
     }
 
     pub fn group_by_id(&self, gist_id: &str) -> Option<GistGroup> {
@@ -2789,6 +2742,7 @@ use palette::{PaletteMode, PaletteState};
 
 mod render;
 use render::*;
+mod screens;
 mod text;
 use text::{comment_lines_count, hscroll_max_among, local_row_label};
 mod bg;
@@ -2807,7 +2761,15 @@ pub(crate) use view_model::{build_view_model, gist_row_display, ScreenVm};
 // Only exercised by tests.rs's `use super::*` — view_model.rs's own build_*_vm functions call
 // these directly without needing the re-export.
 #[cfg(test)]
-pub(crate) use view_model::{confirm_modal_style, confirm_prompt, diff_footer, diff_title};
+pub(crate) use screens::confirm::confirm_modal_style;
+#[cfg(test)]
+pub(crate) use screens::detail::detail_focus_tab;
+#[cfg(test)]
+pub(crate) use screens::diff::{diff_footer, diff_title};
+#[cfg(test)]
+pub(crate) use screens::pins::{pin_row_label, PinLabelParams};
+#[cfg(test)]
+pub(crate) use view_model::confirm_prompt;
 
 #[cfg(test)]
 mod tests;

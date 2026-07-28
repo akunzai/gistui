@@ -2305,21 +2305,24 @@ fn esc_in_diff_returns_to_list() {
 }
 
 #[test]
-fn d_in_diff_downloads_when_file_absent() {
+fn d_in_diff_requests_download_when_file_absent() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("does-not-exist.json");
     let mut state = initial_state();
-    state.enter_diff("d".into(), "r".into(), PathBuf::from("/tmp/local"), missing);
+    state.enter_diff(
+        "d".into(),
+        "r".into(),
+        PathBuf::from("/tmp/local"),
+        missing.clone(),
+    );
     assert!(matches!(
         state.handle_key(KeyCode::Char('d')),
-        KeyOutcome::Download {
-            mode: crate::actions::DownloadMode::CreateNew
-        }
+        KeyOutcome::DownloadRequested { target } if target == missing
     ));
 }
 
 #[test]
-fn d_in_diff_confirms_when_file_exists() {
+fn d_in_diff_requests_download_when_file_exists() {
     let dir = tempfile::tempdir().unwrap();
     let existing = dir.path().join("exists.json");
     std::fs::write(&existing, "old").unwrap();
@@ -2328,10 +2331,13 @@ fn d_in_diff_confirms_when_file_exists() {
         "d".into(),
         "r".into(),
         PathBuf::from("/tmp/local"),
-        existing,
+        existing.clone(),
     );
-    assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
-    assert!(state.screen.is_confirm());
+    assert!(matches!(
+        state.handle_key(KeyCode::Char('d')),
+        KeyOutcome::DownloadRequested { target } if target == existing
+    ));
+    assert!(state.screen.is_diff());
 }
 
 #[test]
@@ -2437,7 +2443,7 @@ fn confirm_esc_returns_to_diff() {
 }
 
 #[test]
-fn d_in_diff_on_existing_sets_download_pending() {
+fn d_in_diff_on_existing_requests_download() {
     let dir = tempfile::tempdir().unwrap();
     let existing = dir.path().join("exists.json");
     std::fs::write(&existing, "old").unwrap();
@@ -2446,14 +2452,13 @@ fn d_in_diff_on_existing_sets_download_pending() {
         "d".into(),
         "r".into(),
         PathBuf::from("/tmp/local"),
-        existing,
+        existing.clone(),
     );
-    assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
-    assert!(state.screen.is_confirm());
-    assert_eq!(
-        state.pending_action().cloned(),
-        Some(PendingAction::Download)
-    );
+    assert!(matches!(
+        state.handle_key(KeyCode::Char('d')),
+        KeyOutcome::DownloadRequested { target } if target == existing
+    ));
+    assert!(state.screen.is_diff());
 }
 
 #[test]
@@ -3753,14 +3758,14 @@ fn create_confirm_prompt_shortens_home_path() {
 #[test]
 fn pin_row_label_shows_home_as_tilde() {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
-    let label = pin_row_label(
-        "✓",
-        &home.join("code/gistui"),
-        "abc123",
-        "notes.txt",
-        "2h",
-        "3h",
-    );
+    let label = pin_row_label(PinLabelParams {
+        icon: "✓",
+        local_path: &home.join("code/gistui"),
+        gist_id: "abc123",
+        gist_filename: "notes.txt",
+        local_age: "2h",
+        gist_age: "3h",
+    });
     assert!(
         label.contains("~/code/gistui"),
         "expected ~ home in label, got {label}"
@@ -5835,8 +5840,9 @@ fn wheel_step_gist_detail_files_moves_one() {
 #[test]
 fn comment_lines_count_matches_view_model_thread_lines() {
     use crate::domain::GistComment;
+    use crate::tui::screens::detail::build_gist_detail_vm;
     use crate::tui::text::comment_lines_count;
-    use crate::tui::view_model::{build_gist_detail_vm, CommentLineVm, CommentsPaneVm};
+    use crate::tui::view_model::{CommentLineVm, CommentsPaneVm};
     let comments = vec![
         GistComment {
             author: "alice".into(),
@@ -6024,6 +6030,16 @@ fn palette_esc_returns_to_origin() {
     assert!(state.screen.is_palette());
     state.handle_key(KeyCode::Esc);
     assert!(state.screen.is_pins());
+}
+
+#[test]
+fn palette_global_openers_do_not_replace_the_active_palette() {
+    let mut state = crate::tui::initial_state();
+    state.open_palette_menu(None);
+    state.handle_key_with(KeyCode::Char('p'), KeyModifiers::CONTROL);
+    assert!(state.screen.is_palette());
+    state.handle_key(KeyCode::Char(';'));
+    assert_eq!(state.screen, Screen::List);
 }
 
 #[test]
