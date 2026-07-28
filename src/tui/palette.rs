@@ -1,5 +1,5 @@
 use super::{
-    keys::{detail_guard, list_guard, point_in, revisions_guard},
+    keys::{list_guard, point_in, revisions_guard},
     *,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -323,7 +323,7 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
         Screen::List => list_palette_items(state),
         Screen::Pins(_) => super::screens::pins::pins_palette_items(state),
         Screen::Gists(_) => super::screens::gists::gists_palette_items(state),
-        Screen::GistDetail(_) => detail_palette_items(state),
+        Screen::GistDetail(_) => super::screens::detail::detail_palette_items(state),
         Screen::Revisions(_) => revisions_palette_items(state),
         Screen::Diff(_) => super::screens::diff::diff_palette_items(state),
         Screen::Preview(_) => super::screens::preview::preview_palette_items(state),
@@ -426,70 +426,6 @@ fn list_palette_items(state: &AppState) -> Vec<PaletteItem> {
         key_item("t", "Toggle description / id", KeyCode::Char('t'), true),
         key_item("v", "Cycle gist visibility", KeyCode::Char('v'), true),
         key_item("s", "Cycle pane sort", KeyCode::Char('s'), true),
-        key_item("?", "Help", KeyCode::Char('?'), true),
-    ]
-}
-
-fn detail_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let g = |code| detail_guard(state, code);
-    vec![
-        key_item(
-            "Enter",
-            "Preview selected file",
-            KeyCode::Enter,
-            g(KeyCode::Enter),
-        ),
-        key_item(
-            "o",
-            "Open in browser",
-            KeyCode::Char('o'),
-            g(KeyCode::Char('o')),
-        ),
-        key_item(
-            "y",
-            "Copy gist URL",
-            KeyCode::Char('y'),
-            g(KeyCode::Char('y')),
-        ),
-        key_item(
-            "H",
-            "Revision history",
-            KeyCode::Char('H'),
-            g(KeyCode::Char('H')),
-        ),
-        key_item(
-            "e",
-            "Edit description",
-            KeyCode::Char('e'),
-            g(KeyCode::Char('e')),
-        ),
-        key_item(
-            "c",
-            "Compact revisions",
-            KeyCode::Char('c'),
-            g(KeyCode::Char('c')),
-        ),
-        key_item(
-            "*",
-            "Star / unstar gist",
-            KeyCode::Char('*'),
-            g(KeyCode::Char('*')),
-        ),
-        key_item("F", "Fork gist", KeyCode::Char('F'), g(KeyCode::Char('F'))),
-        key_item(
-            "X",
-            "Delete gist",
-            KeyCode::Char('X'),
-            g(KeyCode::Char('X')),
-        ),
-        key_item("Tab", "Switch Files / Comments", KeyCode::Tab, true),
-        key_item(
-            "m",
-            "Load older comments",
-            KeyCode::Char('m'),
-            g(KeyCode::Char('m')),
-        ),
-        key_item("q", "Back to Gist manager", KeyCode::Char('q'), true),
         key_item("?", "Help", KeyCode::Char('?'), true),
     ]
 }

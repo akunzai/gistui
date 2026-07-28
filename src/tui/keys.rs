@@ -360,162 +360,6 @@ impl AppState {
         }
     }
 
-    /// Pure key handling for `Screen::GistDetail`: scroll comments, compact, browser, back.
-    fn handle_key_detail(&mut self, code: KeyCode) -> KeyOutcome {
-        self.status = None;
-        if self.editing_description {
-            match code {
-                KeyCode::Esc => {
-                    self.editing_description = false;
-                    self.description_input.clear();
-                }
-                KeyCode::Enter => {
-                    let Some(gist_id) = self
-                        .detail()
-                        .and_then(|d| d.gist_id.clone())
-                        .or_else(|| self.selected_group().map(|g| g.id.clone()))
-                    else {
-                        return KeyOutcome::None;
-                    };
-                    return KeyOutcome::ApplyDescription {
-                        gist_id,
-                        description: self.description_input.to_string(),
-                    };
-                }
-                _ => {
-                    self.description_input.apply_edit(code);
-                }
-            }
-            return KeyOutcome::None;
-        }
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => {
-                self.leave();
-            }
-            KeyCode::Char('o') if detail_guard(self, code) => {
-                let Some(gist_id) = self.context_gist_id() else {
-                    return KeyOutcome::None;
-                };
-                return KeyOutcome::OpenBrowser { gist_id };
-            }
-            KeyCode::Char('y') if detail_guard(self, code) => {
-                let Some(gist_id) = self.context_gist_id() else {
-                    return KeyOutcome::None;
-                };
-                return KeyOutcome::CopyGistUrl { gist_id };
-            }
-            KeyCode::Char('H') if detail_guard(self, code) => {
-                if self.open_revisions() {
-                    if let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) {
-                        return KeyOutcome::FetchRevisions { gist_id };
-                    }
-                }
-            }
-            KeyCode::Char('e') if detail_guard(self, code) => {
-                let Some(id) = self.detail().and_then(|d| d.gist_id.clone()) else {
-                    return KeyOutcome::None;
-                };
-                if let Some(group) = self.group_by_id(&id) {
-                    self.editing_description = true;
-                    self.description_input.set(group.description.clone());
-                }
-            }
-            KeyCode::Char('c') if detail_guard(self, code) => {
-                let Some(id) = self.detail().and_then(|d| d.gist_id.clone()) else {
-                    return KeyOutcome::None;
-                };
-                self.pending_return = Some(self.park_gist_detail_screen());
-                let label = self
-                    .group_by_id(&id)
-                    .map(|g| {
-                        if g.description.trim().is_empty() {
-                            g.id
-                        } else {
-                            g.description
-                        }
-                    })
-                    .unwrap_or_else(|| id.clone());
-                return KeyOutcome::CompactGist { gist_id: id, label };
-            }
-            // Not gated through `detail_guard`: `star_toggle_intent`/`fork_intent` already have
-            // their own complete messages for the disabled cases ("select a gist first",
-            // "already yours — no fork needed").
-            KeyCode::Char('*') => return self.star_toggle_intent(),
-            KeyCode::Char('F') => return self.fork_intent(),
-            // 1–9 preview the content of the Nth file in the gist (full-screen preview).
-            KeyCode::Char(c @ '1'..='9') => {
-                return self.preview_detail_file((c as u8 - b'1') as usize);
-            }
-            KeyCode::Tab => {
-                let Some(d) = self.detail_mut() else {
-                    return KeyOutcome::None;
-                };
-                d.focus = match d.focus {
-                    DetailFocus::Comments => DetailFocus::Files,
-                    DetailFocus::Files => DetailFocus::Comments,
-                };
-                let fetch =
-                    d.focus == DetailFocus::Comments && d.comments.is_none() && !d.comments_loading;
-                if fetch {
-                    if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
-                        return KeyOutcome::FetchComments { gist_id };
-                    }
-                }
-            }
-            // X deletes the whole gist (y/n confirm). Reuses the shared Delete confirm path,
-            // which lands on the list once the gist is gone. Owned gists only (no-op otherwise).
-            KeyCode::Char('X') if detail_guard(self, code) => {
-                if let Some(group) = self
-                    .detail()
-                    .and_then(|d| d.gist_id.clone())
-                    .and_then(|id| self.group_by_id(&id))
-                {
-                    let label = if group.description.is_empty() {
-                        group.id.clone()
-                    } else {
-                        group.description.clone()
-                    };
-                    let text = format!(
-                        "Delete gist {} ({} file(s)): {label}.\n\nThis permanently removes the entire gist and all its files.",
-                        group.id, group.file_count
-                    );
-                    self.enter_confirm(
-                        PendingAction::Delete {
-                            gist_id: group.id.clone(),
-                            label,
-                        },
-                        text,
-                    );
-                }
-            }
-            KeyCode::Enter if detail_guard(self, code) => {
-                if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
-                    let cursor = self.detail().map(|d| d.file_cursor).unwrap_or(0);
-                    if let Some(filename) = self.gist_filenames(&gist_id).into_iter().nth(cursor) {
-                        self.pending_return = Some(self.park_gist_detail_screen());
-                        return KeyOutcome::PreviewContent {
-                            file: crate::domain::GistFileRef::id_name(gist_id, filename),
-                        };
-                    }
-                }
-            }
-            KeyCode::Char('m') if detail_guard(self, code) => {
-                if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
-                    let page = self
-                        .detail()
-                        .map(|d| d.comments_loaded_oldest_page.saturating_sub(1))
-                        .unwrap_or(0);
-                    if page > 0 {
-                        return KeyOutcome::LoadOlderComments { gist_id, page };
-                    }
-                }
-            }
-            KeyCode::Char('?') => self.open_help(),
-            _ => {}
-        }
-        KeyOutcome::None
-    }
-
     fn handle_key_revisions(&mut self, code: KeyCode) -> KeyOutcome {
         self.status = None;
         let entries_len = self
@@ -604,15 +448,7 @@ impl AppState {
             Screen::Preview(_) => super::screens::preview::wheel_step(),
             Screen::Diff(_) => super::screens::diff::wheel_step(),
             Screen::Confirm(_) => 3,
-            // GistDetail: the comments body scrolls like content (3 lines); the file list
-            // steps one file at a time.
-            Screen::GistDetail(_)
-                if self
-                    .detail()
-                    .is_some_and(|d| d.focus == DetailFocus::Comments) =>
-            {
-                3
-            }
+            Screen::GistDetail(_) => super::screens::detail::wheel_step(self),
             Screen::Help(h) => super::screens::help::wheel_step(h),
             Screen::Palette(_) => 1,
             _ => 1, // List/Pins/Gists/Revisions/Help index/GistDetail Files
@@ -760,23 +596,6 @@ impl AppState {
             }
             _ => self.handle_key_with(KeyCode::Enter, KeyModifiers::NONE),
         }
-    }
-
-    /// Preview the `index`-th file of the gist shown on `Screen::GistDetail` (full-screen),
-    /// the action behind the `1`–`9` keys and a file double-click.
-    fn preview_detail_file(&mut self, index: usize) -> KeyOutcome {
-        if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
-            if let Some(filename) = self.gist_filenames(&gist_id).into_iter().nth(index) {
-                if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
-                    return KeyOutcome::None;
-                }
-                self.pending_return = Some(self.park_gist_detail_screen());
-                return KeyOutcome::PreviewContent {
-                    file: crate::domain::GistFileRef::id_name(gist_id, filename),
-                };
-            }
-        }
-        KeyOutcome::None
     }
 
     fn revision_diff_incremental_intent(&mut self) -> KeyOutcome {
@@ -1140,37 +959,6 @@ pub(crate) fn diff_pair_previewable(
         }
     }
     true
-}
-
-pub(crate) fn detail_guard(state: &AppState, code: KeyCode) -> bool {
-    let d = state.detail();
-    let gist_id = d.and_then(|d| d.gist_id.clone());
-    let owned = gist_id
-        .as_deref()
-        .map(|id| state.gist_is_owned(id))
-        .unwrap_or(false);
-    match code {
-        KeyCode::Enter => {
-            d.is_some_and(|d| d.focus == DetailFocus::Files)
-                && gist_id.as_deref().is_some_and(|id| {
-                    state
-                        .gist_filenames(id)
-                        .into_iter()
-                        .nth(d.map(|d| d.file_cursor).unwrap_or(0))
-                        .is_some_and(|name| state.gist_file_is_text_previewable(id, &name))
-                })
-        }
-        KeyCode::Char('o' | 'y' | 'H' | '*') => gist_id.is_some(),
-        KeyCode::Char('e' | 'c' | 'X') => owned,
-        KeyCode::Char('F') => gist_id.is_some() && !owned,
-        // Load older comments: needs both a page to load AND the Comments tab focused —
-        // `can_load_older_comments` only checks the former (issue #288: previously the
-        // palette enabled this even while the Files tab was focused, where `m` is a no-op).
-        KeyCode::Char('m') => {
-            d.is_some_and(|d| d.focus == DetailFocus::Comments) && state.can_load_older_comments()
-        }
-        _ => false,
-    }
 }
 
 pub(crate) fn revisions_guard(state: &AppState, code: KeyCode) -> bool {
@@ -1693,19 +1481,6 @@ impl AppState {
         };
         let starring = !self.gist_is_starred(&gist_id);
         KeyOutcome::ToggleGistStar { gist_id, starring }
-    }
-
-    fn fork_intent(&mut self) -> KeyOutcome {
-        let Some(gist_id) = self.context_gist_id() else {
-            self.set_status("select a gist to fork");
-            return KeyOutcome::None;
-        };
-        if self.gist_is_owned(&gist_id) {
-            self.set_status("already yours — no fork needed");
-            KeyOutcome::None
-        } else {
-            KeyOutcome::ForkGist { gist_id }
-        }
     }
 
     /// Stage removal of the selected gist file behind a y/n confirm (`Screen::Confirm`). A gist

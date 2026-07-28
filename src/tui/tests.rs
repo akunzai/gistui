@@ -5835,8 +5835,9 @@ fn wheel_step_gist_detail_files_moves_one() {
 #[test]
 fn comment_lines_count_matches_view_model_thread_lines() {
     use crate::domain::GistComment;
+    use crate::tui::screens::detail::build_gist_detail_vm;
     use crate::tui::text::comment_lines_count;
-    use crate::tui::view_model::{build_gist_detail_vm, CommentLineVm, CommentsPaneVm};
+    use crate::tui::view_model::{CommentLineVm, CommentsPaneVm};
     let comments = vec![
         GistComment {
             author: "alice".into(),

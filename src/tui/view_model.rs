@@ -4,9 +4,9 @@
 //! Builders never touch the filesystem or network (issues #241 / #250).
 
 use super::render::{
-    count_label, footer_with_status, gist_info_line, gist_row_label, is_json_file, marked_row_text,
-    revision_row_label, row_mark, spinner_glyph, unix_now, RowMark, CREATE_DESC_PREFIX,
-    CREATE_DESC_SUFFIX, MINIMAL_HINT,
+    count_label, gist_info_line, gist_row_label, is_json_file, marked_row_text, revision_row_label,
+    row_mark, spinner_glyph, unix_now, RowMark, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX,
+    MINIMAL_HINT,
 };
 use super::{
     AppState, DetailFocus, FocusPane, GistView, PaletteMode, PendingAction, Screen, TextInput,
@@ -153,7 +153,7 @@ pub struct GistDetailVm {
     pub comments: CommentsPaneVm,
     pub footer: String,
     pub footer_colored: bool,
-    pub editing_description: bool,
+    pub description_input: Option<TextInput>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -367,7 +367,9 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
     let screen = match &state.screen {
         Screen::List => ScreenVm::List(build_list_vm(state)),
         Screen::Gists(_) => ScreenVm::Gists(super::screens::gists::build_gists_vm(state)),
-        Screen::GistDetail(_) => ScreenVm::GistDetail(build_gist_detail_vm(state)),
+        Screen::GistDetail(_) => {
+            ScreenVm::GistDetail(super::screens::detail::build_gist_detail_vm(state))
+        }
         Screen::Revisions(_) => ScreenVm::Revisions(build_revisions_vm(state)),
         Screen::Config(_) => ScreenVm::Config(super::screens::config::build_config_vm(state)),
         Screen::Diff(_) => ScreenVm::Diff(super::screens::diff::build_diff_vm(state)),
@@ -429,7 +431,9 @@ fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<Scree
         Screen::Gists(_) => Some(ScreenVm::Gists(super::screens::gists::build_gists_vm(
             state,
         ))),
-        Screen::GistDetail(_) => Some(ScreenVm::GistDetail(build_gist_detail_vm(state))),
+        Screen::GistDetail(_) => Some(ScreenVm::GistDetail(
+            super::screens::detail::build_gist_detail_vm(state),
+        )),
         Screen::Revisions(_) => Some(ScreenVm::Revisions(build_revisions_vm(state))),
         Screen::Config(_) => Some(ScreenVm::Config(super::screens::config::build_config_vm(
             state,
@@ -538,131 +542,6 @@ pub(crate) fn build_revisions_vm(state: &AppState) -> RevisionsVm {
         footer,
         footer_colored,
         hscroll: rev.hscroll,
-    }
-}
-
-/// Gist detail body — usable under Palette-over-GistDetail as well.
-pub(crate) fn build_gist_detail_vm(state: &AppState) -> GistDetailVm {
-    let (footer, footer_colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
-    let detail = state.detail().cloned().unwrap_or_default();
-    let Some(gist_id) = detail.gist_id.as_deref() else {
-        return GistDetailVm {
-            missing: true,
-            block_title: String::new(),
-            info_line: String::new(),
-            focus: detail.focus,
-            files: Vec::new(),
-            file_cursor: 0,
-            comments: CommentsPaneVm::PromptLoad,
-            footer,
-            footer_colored,
-            editing_description: state.editing_description,
-        };
-    };
-    let Some(group) = state.group_by_id(gist_id) else {
-        return GistDetailVm {
-            missing: true,
-            block_title: String::new(),
-            info_line: String::new(),
-            focus: detail.focus,
-            files: Vec::new(),
-            file_cursor: 0,
-            comments: CommentsPaneVm::PromptLoad,
-            footer,
-            footer_colored,
-            editing_description: state.editing_description,
-        };
-    };
-
-    let block_title = if group.description.trim().is_empty() {
-        format!("Gist {}", group.id)
-    } else {
-        format!("Gist: {}", group.description)
-    };
-    let info_line = gist_info_line(
-        &group,
-        unix_now(),
-        state.current_user_login.as_deref(),
-        state.gist_is_starred(gist_id),
-        state.gist_counts(gist_id),
-    );
-    let files = state.gist_file_display_names(gist_id);
-    let file_cursor = detail.file_cursor.min(files.len().saturating_sub(1));
-    let comments = build_comments_pane_vm(state);
-
-    GistDetailVm {
-        missing: false,
-        block_title,
-        info_line,
-        focus: detail.focus,
-        files,
-        file_cursor,
-        comments,
-        footer,
-        footer_colored,
-        editing_description: state.editing_description,
-    }
-}
-
-fn build_comments_pane_vm(state: &AppState) -> CommentsPaneVm {
-    let now = unix_now() as i64;
-    let detail = state.detail().cloned().unwrap_or_default();
-    match (
-        &detail.comments,
-        detail.comments_loading,
-        &detail.comments_error,
-    ) {
-        (None, true, _) => CommentsPaneVm::Loading,
-        (None, false, _) => CommentsPaneVm::PromptLoad,
-        (Some(_), _, Some(err)) => CommentsPaneVm::Error {
-            message: format!("comments error: {err}"),
-        },
-        (Some(comments), _, None) if comments.is_empty() => CommentsPaneVm::Empty,
-        (Some(comments), _, None) => {
-            let affordance = if detail.comments_loading_more {
-                CommentsAffordance::LoadingMore
-            } else if detail.comments_loaded_oldest_page > 1 {
-                CommentsAffordance::LoadOlder
-            } else {
-                CommentsAffordance::StartOfThread
-            };
-            let mut lines = Vec::new();
-            for c in comments {
-                let age = crate::domain::parse_rfc3339_to_unix(&c.created_at)
-                    .map(|t| crate::domain::humanize_age(now - t as i64))
-                    .unwrap_or_else(|| "?".into());
-                lines.push(CommentLineVm::Author {
-                    text: format!("{} · {age}", c.author),
-                });
-                for raw in c.body.lines() {
-                    lines.push(CommentLineVm::Body {
-                        text: format!("  {raw}"),
-                    });
-                }
-                lines.push(CommentLineVm::Blank);
-            }
-            CommentsPaneVm::Thread {
-                title: comments_title_text(state),
-                affordance,
-                lines,
-                scroll: detail.scroll,
-            }
-        }
-    }
-}
-
-/// Mirror of render-side comments title (pure; used by the view model).
-fn comments_title_text(state: &AppState) -> String {
-    let detail = state.detail().cloned().unwrap_or_default();
-    match (&detail.comments, detail.comments_total) {
-        (Some(c), _) if detail.comments_error.is_some() => format!("Comments ({})", c.len()),
-        (Some(c), Some(total)) if !c.is_empty() => {
-            let loaded = c.len() as u32;
-            let first = total.saturating_sub(loaded) + 1;
-            format!("Comments ({first}–{total} / {total})")
-        }
-        (Some(c), None) if !c.is_empty() => format!("Comments (newest {})", c.len()),
-        _ => "Comments".to_string(),
     }
 }
 
