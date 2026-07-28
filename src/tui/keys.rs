@@ -548,48 +548,31 @@ impl AppState {
                     pins.filtering = true;
                 }
             }
-            KeyCode::Enter if !self.pinned.is_empty() => {
-                if let Some(idx) = self.selected_pin_index() {
-                    let (gist_id, gist_filename, local_path) = {
-                        let pin = &self.pinned[idx];
-                        (
-                            pin.gist_id.clone(),
-                            pin.gist_filename.clone(),
-                            pin.local_path.clone(),
-                        )
-                    };
-                    if self.block_if_non_previewable_diff(
-                        &gist_id,
-                        &gist_filename,
-                        Some(local_path.as_path()),
-                    ) {
-                        return KeyOutcome::None;
-                    }
-                }
+            KeyCode::Enter if pins_guard(self, code) => {
                 let Some(index) = self.selected_pin_index() else {
                     return KeyOutcome::None;
                 };
                 return KeyOutcome::PreviewPinDiff { index };
             }
-            KeyCode::Char('x') if !self.pinned.is_empty() => {
+            KeyCode::Char('x') if pins_guard(self, code) => {
                 let Some(index) = self.selected_pin_index() else {
                     return KeyOutcome::None;
                 };
                 return KeyOutcome::UnpinAtPin { index };
             }
-            KeyCode::Char('s') if !self.pinned.is_empty() => {
+            KeyCode::Char('s') if pins_guard(self, code) => {
                 let Some(index) = self.selected_pin_index() else {
                     return KeyOutcome::None;
                 };
                 return KeyOutcome::SyncPinAuto { index };
             }
-            KeyCode::Char('u') if !self.pinned.is_empty() => {
+            KeyCode::Char('u') if pins_guard(self, code) => {
                 let Some(index) = self.selected_pin_index() else {
                     return KeyOutcome::None;
                 };
                 return KeyOutcome::SyncPinPush { index };
             }
-            KeyCode::Char('d') if !self.pinned.is_empty() => {
+            KeyCode::Char('d') if pins_guard(self, code) => {
                 let Some(index) = self.selected_pin_index() else {
                     return KeyOutcome::None;
                 };
@@ -637,8 +620,6 @@ impl AppState {
             }
             return KeyOutcome::None;
         }
-        let groups_len = self.visible_gist_groups().len();
-        let index = self.gist_manager().map(|g| g.cursor.index).unwrap_or(0);
         match code {
             KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
             KeyCode::Char('/') => {
@@ -658,8 +639,10 @@ impl AppState {
                     gm.cursor.reset();
                 }
             }
+            // Not gated through `gists_guard`: `star_toggle_intent` already has its own
+            // complete "select a gist first" message for the no-selection case.
             KeyCode::Char('*') => return self.star_toggle_intent(),
-            KeyCode::Enter if index < groups_len => {
+            KeyCode::Enter if gists_guard(self, code) => {
                 let Some(group) = self.selected_group() else {
                     return KeyOutcome::None;
                 };
@@ -667,19 +650,19 @@ impl AppState {
                     gist_id: group.id.clone(),
                 };
             }
-            KeyCode::Char('o') if index < groups_len => {
+            KeyCode::Char('o') if gists_guard(self, code) => {
                 let Some(gist_id) = self.context_gist_id() else {
                     return KeyOutcome::None;
                 };
                 return KeyOutcome::OpenBrowser { gist_id };
             }
-            KeyCode::Char('y') if index < groups_len => {
+            KeyCode::Char('y') if gists_guard(self, code) => {
                 let Some(gist_id) = self.context_gist_id() else {
                     return KeyOutcome::None;
                 };
                 return KeyOutcome::CopyGistUrl { gist_id };
             }
-            KeyCode::Char('H') if index < groups_len => {
+            KeyCode::Char('H') if gists_guard(self, code) => {
                 if self.open_revisions() {
                     if let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) {
                         return KeyOutcome::FetchRevisions { gist_id };
@@ -724,44 +707,38 @@ impl AppState {
             KeyCode::Char('q') | KeyCode::Esc => {
                 self.leave();
             }
-            KeyCode::Char('o') => {
+            KeyCode::Char('o') if detail_guard(self, code) => {
                 let Some(gist_id) = self.context_gist_id() else {
                     return KeyOutcome::None;
                 };
                 return KeyOutcome::OpenBrowser { gist_id };
             }
-            KeyCode::Char('y') => {
+            KeyCode::Char('y') if detail_guard(self, code) => {
                 let Some(gist_id) = self.context_gist_id() else {
                     return KeyOutcome::None;
                 };
                 return KeyOutcome::CopyGistUrl { gist_id };
             }
-            KeyCode::Char('H') => {
+            KeyCode::Char('H') if detail_guard(self, code) => {
                 if self.open_revisions() {
                     if let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) {
                         return KeyOutcome::FetchRevisions { gist_id };
                     }
                 }
             }
-            KeyCode::Char('e') => {
+            KeyCode::Char('e') if detail_guard(self, code) => {
                 let Some(id) = self.detail().and_then(|d| d.gist_id.clone()) else {
                     return KeyOutcome::None;
                 };
-                if !self.gist_is_owned(&id) {
-                    return KeyOutcome::None;
-                }
                 if let Some(group) = self.group_by_id(&id) {
                     self.editing_description = true;
                     self.description_input.set(group.description.clone());
                 }
             }
-            KeyCode::Char('c') => {
+            KeyCode::Char('c') if detail_guard(self, code) => {
                 let Some(id) = self.detail().and_then(|d| d.gist_id.clone()) else {
                     return KeyOutcome::None;
                 };
-                if !self.gist_is_owned(&id) {
-                    return KeyOutcome::None;
-                }
                 self.pending_return = Some(self.park_gist_detail_screen());
                 let label = self
                     .group_by_id(&id)
@@ -775,6 +752,9 @@ impl AppState {
                     .unwrap_or_else(|| id.clone());
                 return KeyOutcome::CompactGist { gist_id: id, label };
             }
+            // Not gated through `detail_guard`: `star_toggle_intent`/`fork_intent` already have
+            // their own complete messages for the disabled cases ("select a gist first",
+            // "already yours — no fork needed").
             KeyCode::Char('*') => return self.star_toggle_intent(),
             KeyCode::Char('F') => return self.fork_intent(),
             // 1–9 preview the content of the Nth file in the gist (full-screen preview).
@@ -799,11 +779,10 @@ impl AppState {
             }
             // X deletes the whole gist (y/n confirm). Reuses the shared Delete confirm path,
             // which lands on the list once the gist is gone. Owned gists only (no-op otherwise).
-            KeyCode::Char('X') => {
+            KeyCode::Char('X') if detail_guard(self, code) => {
                 if let Some(group) = self
                     .detail()
                     .and_then(|d| d.gist_id.clone())
-                    .filter(|id| self.gist_is_owned(id))
                     .and_then(|id| self.group_by_id(&id))
                 {
                     let label = if group.description.is_empty() {
@@ -824,13 +803,10 @@ impl AppState {
                     );
                 }
             }
-            KeyCode::Enter if self.detail().is_some_and(|d| d.focus == DetailFocus::Files) => {
+            KeyCode::Enter if detail_guard(self, code) => {
                 if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
                     let cursor = self.detail().map(|d| d.file_cursor).unwrap_or(0);
                     if let Some(filename) = self.gist_filenames(&gist_id).into_iter().nth(cursor) {
-                        if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
-                            return KeyOutcome::None;
-                        }
                         self.pending_return = Some(self.park_gist_detail_screen());
                         return KeyOutcome::PreviewContent {
                             file: crate::domain::GistFileRef::id_name(gist_id, filename),
@@ -838,20 +814,14 @@ impl AppState {
                     }
                 }
             }
-            KeyCode::Char('m')
-                if self
-                    .detail()
-                    .is_some_and(|d| d.focus == DetailFocus::Comments) =>
-            {
-                if self.can_load_older_comments() {
-                    if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
-                        let page = self
-                            .detail()
-                            .map(|d| d.comments_loaded_oldest_page.saturating_sub(1))
-                            .unwrap_or(0);
-                        if page > 0 {
-                            return KeyOutcome::LoadOlderComments { gist_id, page };
-                        }
+            KeyCode::Char('m') if detail_guard(self, code) => {
+                if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
+                    let page = self
+                        .detail()
+                        .map(|d| d.comments_loaded_oldest_page.saturating_sub(1))
+                        .unwrap_or(0);
+                    if page > 0 {
+                        return KeyOutcome::LoadOlderComments { gist_id, page };
                     }
                 }
             }
@@ -871,9 +841,15 @@ impl AppState {
             KeyCode::Char('q') | KeyCode::Esc => {
                 self.leave();
             }
-            KeyCode::Enter if entries_len > 0 => {
+            KeyCode::Enter if revisions_guard(self, code) => {
                 return self.revision_diff_incremental_intent();
             }
+            KeyCode::Char('D') if revisions_guard(self, code) => {
+                return self.revision_diff_intent();
+            }
+            // Distinct from `revisions_guard`'s `D` case only by omitting the `previewable`
+            // check, so a non-previewable file off-head still gets this precise message
+            // instead of falling to the (misleading, head-only) fallback below it.
             KeyCode::Char('D')
                 if entries_len > 0 && self.revision().is_some_and(|r| r.index > 0) =>
             {
@@ -882,9 +858,7 @@ impl AppState {
             KeyCode::Char('D') if entries_len > 0 => {
                 self.set_status("already at current revision");
             }
-            KeyCode::Char('r')
-                if entries_len > 1 && self.revision().is_some_and(|r| r.index > 0) =>
-            {
+            KeyCode::Char('r') if revisions_guard(self, code) => {
                 return self.restore_revision_preview_intent();
             }
             KeyCode::Char('r') if entries_len <= 1 => {
@@ -1463,6 +1437,197 @@ fn apply_filter_edit(code: KeyCode, query: &mut TextInput) -> FilterKey {
     }
 }
 
+// ── Palette/handler shared guards (issue #288) ──────────────────────────────────────────
+//
+// One `<screen>_guard(state, code) -> bool` per screen with non-trivial (data-dependent) key
+// enablement. Each is the single "would this key actually do something" predicate, called
+// both by that screen's `handle_key_*` match-arm guards below and by the matching
+// `*_palette_items` builder in `palette.rs` — so the two can never silently drift again.
+// Screens where every action is unconditionally enabled (Preview, Config, Help) have nothing
+// to share and are left as-is.
+
+/// Whether a diff between `gist_id`/`filename` and the (optional) local file at `local_path`
+/// is previewable — the gist file is text and, when a local pairing exists, so is it.
+fn diff_pair_previewable(
+    state: &AppState,
+    gist_id: &str,
+    filename: &str,
+    local_path: Option<&std::path::Path>,
+) -> bool {
+    if !state.gist_file_is_text_previewable(gist_id, filename) {
+        return false;
+    }
+    if let Some(path) = local_path {
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if !crate::domain::gist_file_is_text_previewable(name, None) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+pub(crate) fn pins_guard(state: &AppState, code: KeyCode) -> bool {
+    let has_pin = !state.pinned.is_empty() && state.selected_pin_index().is_some();
+    match code {
+        KeyCode::Enter => {
+            has_pin
+                && state.selected_pin_index().is_some_and(|idx| {
+                    let pin = &state.pinned[idx];
+                    diff_pair_previewable(
+                        state,
+                        &pin.gist_id,
+                        &pin.gist_filename,
+                        Some(pin.local_path.as_path()),
+                    )
+                })
+        }
+        KeyCode::Char('x' | 's' | 'u' | 'd') => has_pin,
+        _ => false,
+    }
+}
+
+pub(crate) fn gists_guard(state: &AppState, code: KeyCode) -> bool {
+    let has_sel = state.gist_manager().map(|g| g.cursor.index).unwrap_or(0)
+        < state.visible_gist_groups().len();
+    match code {
+        KeyCode::Enter | KeyCode::Char('o' | 'y' | 'H' | '*') => has_sel,
+        _ => false,
+    }
+}
+
+pub(crate) fn detail_guard(state: &AppState, code: KeyCode) -> bool {
+    let d = state.detail();
+    let gist_id = d.and_then(|d| d.gist_id.clone());
+    let owned = gist_id
+        .as_deref()
+        .map(|id| state.gist_is_owned(id))
+        .unwrap_or(false);
+    match code {
+        KeyCode::Enter => {
+            d.is_some_and(|d| d.focus == DetailFocus::Files)
+                && gist_id.as_deref().is_some_and(|id| {
+                    state
+                        .gist_filenames(id)
+                        .into_iter()
+                        .nth(d.map(|d| d.file_cursor).unwrap_or(0))
+                        .is_some_and(|name| state.gist_file_is_text_previewable(id, &name))
+                })
+        }
+        KeyCode::Char('o' | 'y' | 'H' | '*') => gist_id.is_some(),
+        KeyCode::Char('e' | 'c' | 'X') => owned,
+        KeyCode::Char('F') => gist_id.is_some() && !owned,
+        // Load older comments: needs both a page to load AND the Comments tab focused —
+        // `can_load_older_comments` only checks the former (issue #288: previously the
+        // palette enabled this even while the Files tab was focused, where `m` is a no-op).
+        KeyCode::Char('m') => {
+            d.is_some_and(|d| d.focus == DetailFocus::Comments) && state.can_load_older_comments()
+        }
+        _ => false,
+    }
+}
+
+pub(crate) fn revisions_guard(state: &AppState, code: KeyCode) -> bool {
+    let rev = state.revision();
+    let entries_len = rev
+        .and_then(|r| r.entries.as_ref().map(|e| e.len()))
+        .unwrap_or(0);
+    let has_entries = entries_len > 0;
+    let not_head = rev.is_some_and(|r| r.index > 0);
+    let gist_id = rev.and_then(|r| r.gist_id.clone());
+    let owned = gist_id
+        .as_deref()
+        .map(|id| state.gist_is_owned(id))
+        .unwrap_or(false);
+    let file = rev.map(|r| r.target_file.clone()).unwrap_or_default();
+    let previewable = gist_id
+        .as_ref()
+        .is_some_and(|id| state.gist_file_is_text_previewable(id, &file));
+    match code {
+        KeyCode::Enter => has_entries && previewable,
+        KeyCode::Char('D') => has_entries && not_head && previewable,
+        KeyCode::Char('r') => entries_len > 1 && not_head && owned,
+        // Cycling the target file only needs the gist to have more than one file — it does
+        // not depend on the revision list having loaded (`cycle_revision_target_file` never
+        // checks `entries`). Issue #288: previously the palette gated this on `has_entries`
+        // with no functional reason; unified on the handler's broader condition instead of
+        // narrowing the handler to match the palette.
+        KeyCode::Char('F') => gist_id
+            .as_deref()
+            .is_some_and(|id| state.gist_filenames(id).len() > 1),
+        _ => false,
+    }
+}
+
+pub(crate) fn diff_guard(state: &AppState, code: KeyCode) -> bool {
+    match code {
+        KeyCode::Char('d' | 'u') => state.diff_allows_sync() && !state.diff_identical(),
+        _ => false,
+    }
+}
+
+pub(crate) fn list_guard(state: &AppState, code: KeyCode) -> bool {
+    let (visible_locals, ranked) = state.list_pane_snapshots();
+    let has_gist = ranked.get(state.gist_index).is_some();
+    let has_local = visible_locals.get(state.local_index).is_some();
+    let gist = ranked.get(state.gist_index);
+    let gist_id = gist.map(|g| g.file.gist_id.clone());
+    let owned = gist_id
+        .as_deref()
+        .map(|id| state.gist_is_owned(id))
+        .unwrap_or(false);
+    let gist_file = gist.map(|g| g.file.clone());
+    let pinned_pair =
+        visible_locals
+            .get(state.local_index)
+            .zip(gist)
+            .is_some_and(|(local, gist)| {
+                state.pinned.iter().any(|m| {
+                    m.local_path == local.candidate.path
+                        && m.gist_id == gist.file.gist_id
+                        && m.gist_filename == gist.file.filename
+                })
+            });
+    match code {
+        KeyCode::Enter => gist_file.as_ref().is_some_and(|f| {
+            let local_path = visible_locals
+                .get(state.local_index)
+                .map(|r| r.candidate.path.as_path());
+            diff_pair_previewable(state, &f.gist_id, &f.filename, local_path)
+        }),
+        KeyCode::Char(' ') => gist_file
+            .as_ref()
+            .is_some_and(|f| state.gist_file_is_text_previewable(&f.gist_id, &f.filename)),
+        KeyCode::Char('d') => has_gist && state.focus == FocusPane::Gist,
+        KeyCode::Char('u') => has_local && has_gist && owned,
+        KeyCode::Char('n') => has_local,
+        // Pinning a *new* pair needs ownership (can't create a pin on a foreign gist);
+        // toggling an already-pinned pair off never did. Issue #288: previously the palette
+        // allowed 'p' on any local+gist pair regardless of ownership; `pin_toggle_intent`
+        // silently no-ops (via `block_if_foreign_gist`) for a foreign, not-yet-pinned pair.
+        KeyCode::Char('p') => has_local && has_gist && (pinned_pair || owned),
+        // Issue #288: previously the palette additionally required `pinned_pair` here, but
+        // `handle_key_list`'s real 'S' arm never has — a non-pinned pair is caught one layer
+        // down in the IO dispatcher (`dispatch.rs`) with a "pair is not pinned" status
+        // message, the same way pressing 'S' directly already behaves. Unified on the
+        // handler's (looser, tested) condition instead of narrowing the handler to match the
+        // palette, since the palette's extra restriction wasn't guarding against a real bug.
+        KeyCode::Char('S') => has_local && has_gist,
+        KeyCode::Char('g') => !state.gists.is_empty(),
+        KeyCode::Char('X') => {
+            has_gist
+                && owned
+                && gist_id
+                    .as_deref()
+                    .is_some_and(|id| state.gist_file_count(id) > 1)
+        }
+        KeyCode::Char('e') => has_local,
+        KeyCode::Char('y' | '*') => state.context_gist_id().is_some(),
+        KeyCode::Char('H') => has_gist,
+        _ => false,
+    }
+}
+
 impl AppState {
     fn handle_key_filter(&mut self, code: KeyCode) -> KeyOutcome {
         // Live navigation while typing: arrows move the focused pane's selection.
@@ -1547,6 +1712,8 @@ impl AppState {
                 self.gist_index = 0;
                 self.gist_hscroll = 0;
             }
+            // Not gated through `list_guard`: `star_toggle_intent` already has its own
+            // complete "select a gist first" message for the no-selection case.
             KeyCode::Char('*') => return self.star_toggle_intent(),
             KeyCode::Char('s') => self.cycle_focused_sort(),
             KeyCode::Char('r') => {
@@ -1565,6 +1732,10 @@ impl AppState {
             KeyCode::Char('?') => self.open_help(),
             KeyCode::Char('P') => self.open_pins(),
             KeyCode::Char('C') => self.open_config(),
+            // Not gated through `list_guard`: unlike the palette's "Smart-sync pinned pair"
+            // item, this key isn't restricted to an already-pinned pair — the IO dispatcher
+            // (`dispatch.rs`) checks pin membership downstream and reports "pair is not
+            // pinned" there. `list_guard`'s `S` case (used by the palette) is stricter.
             KeyCode::Char('S') => {
                 let (Some(local), Some(gist)) = (self.selected_local(), self.selected_gist())
                 else {
@@ -1577,36 +1748,32 @@ impl AppState {
                 };
             }
             KeyCode::Char('g') => self.open_gist_manager(),
-            KeyCode::Char('H') => {
-                let (_, ranked) = self.list_pane_snapshots();
-                if ranked.get(self.gist_index).is_none() {
-                    self.status = Some("select a gist file to view revision history".into());
-                } else if self.open_revisions() {
+            KeyCode::Char('H') if list_guard(self, code) => {
+                if self.open_revisions() {
                     if let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) {
                         return KeyOutcome::FetchRevisions { gist_id };
                     }
-                } else {
-                    self.status = Some("select a gist file to view revision history".into());
                 }
             }
-            KeyCode::Char('e') => {
+            KeyCode::Char('H') => {
+                self.status = Some("select a gist file to view revision history".into());
+            }
+            KeyCode::Char('e') if list_guard(self, code) => {
                 let (locals, _) = self.list_pane_snapshots();
                 if let Some(local) = locals.get(self.local_index) {
                     return KeyOutcome::EditLocal {
                         path: local.candidate.path.clone(),
                     };
                 }
+            }
+            KeyCode::Char('e') => {
                 self.status = Some("select a local file to edit".into());
             }
-            KeyCode::Char(' ') => {
+            KeyCode::Char(' ') if list_guard(self, code) => {
                 let (_, ranked) = self.list_pane_snapshots();
                 let Some(gist) = ranked.get(self.gist_index) else {
                     return KeyOutcome::None;
                 };
-                if self.block_if_non_previewable_gist_file(&gist.file.gist_id, &gist.file.filename)
-                {
-                    return KeyOutcome::None;
-                }
                 self.pending_return = Some(Screen::List);
                 return KeyOutcome::PreviewContent {
                     file: crate::domain::GistFileRef::new(
@@ -1616,7 +1783,19 @@ impl AppState {
                     ),
                 };
             }
-            KeyCode::Char('d') if self.focus == FocusPane::Gist => {
+            // has_gist but non-previewable (`list_guard` above didn't match) — replay the
+            // same check `PreviewContent` would use, so the user gets the precise
+            // "cannot preview: …" message instead of a silent no-op.
+            KeyCode::Char(' ') => {
+                let (_, ranked) = self.list_pane_snapshots();
+                if let Some(gist) = ranked.get(self.gist_index) {
+                    self.block_if_non_previewable_gist_file(
+                        &gist.file.gist_id,
+                        &gist.file.filename,
+                    );
+                }
+            }
+            KeyCode::Char('d') if list_guard(self, code) => {
                 let (_, ranked) = self.list_pane_snapshots();
                 if let Some(gist) = ranked.get(self.gist_index) {
                     let filename = gist.file.filename.clone();
@@ -1633,7 +1812,7 @@ impl AppState {
             // Enter works from either pane: it diffs the selected local file against the
             // selected gist (the top match when focus is on the local pane). Snapshot both
             // ranked lists once (issue #224 / #154 shape #1).
-            KeyCode::Enter => {
+            KeyCode::Enter if list_guard(self, code) => {
                 let (locals, ranked) = self.list_pane_snapshots();
                 let Some(gist) = ranked.get(self.gist_index) else {
                     return KeyOutcome::None;
@@ -1641,13 +1820,6 @@ impl AppState {
                 let local_path = locals
                     .get(self.local_index)
                     .map(|r| r.candidate.path.clone());
-                if self.block_if_non_previewable_diff(
-                    &gist.file.gist_id,
-                    &gist.file.filename,
-                    local_path.as_deref(),
-                ) {
-                    return KeyOutcome::None;
-                }
                 let filename = gist.file.filename.clone();
                 return KeyOutcome::PreviewDiff {
                     local_path,
@@ -1660,6 +1832,25 @@ impl AppState {
                     upload_orientation: self.focus == FocusPane::Local,
                 };
             }
+            // has_gist but non-diffable (`list_guard` above didn't match) — replay the same
+            // check `PreviewDiff` would use, so the user gets the precise "cannot preview: …"
+            // message instead of a silent no-op.
+            KeyCode::Enter => {
+                let (locals, ranked) = self.list_pane_snapshots();
+                if let Some(gist) = ranked.get(self.gist_index) {
+                    let local_path = locals
+                        .get(self.local_index)
+                        .map(|r| r.candidate.path.clone());
+                    self.block_if_non_previewable_diff(
+                        &gist.file.gist_id,
+                        &gist.file.filename,
+                        local_path.as_deref(),
+                    );
+                }
+            }
+            // Not gated through `list_guard`: `pin_toggle_intent` / `upload_intent` /
+            // `remove_gist_file_intent` / `create_gist_intent` already have their own complete
+            // messages for every disabled case (no selection, foreign gist, single-file gist…).
             KeyCode::Char('p') => return self.pin_toggle_intent(),
             KeyCode::Char('u') => return self.upload_intent(),
             KeyCode::Char('X') => self.remove_gist_file_intent(),
@@ -1949,7 +2140,7 @@ impl AppState {
             }
             // Identical files have nothing to sync, so download/upload are not offered.
             // Revision-history diffs are read-only (no local file pairing).
-            KeyCode::Char('d') if self.diff_allows_sync() && !self.diff_identical() => {
+            KeyCode::Char('d') if diff_guard(self, code) => {
                 if self.download_target().exists() {
                     self.enter_confirm_from_diff(PendingAction::Download);
                 } else {
@@ -1958,7 +2149,7 @@ impl AppState {
                     };
                 }
             }
-            KeyCode::Char('u') if self.diff_allows_sync() && !self.diff_identical() => {
+            KeyCode::Char('u') if diff_guard(self, code) => {
                 return self.upload_intent();
             }
             // Toggle between the configured context radius and the full file; the line

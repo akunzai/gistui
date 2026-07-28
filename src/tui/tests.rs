@@ -3654,6 +3654,24 @@ fn pins_screen_enter_emits_preview_pin_diff() {
     ));
 }
 
+#[test]
+fn pins_screen_enter_is_blocked_for_non_previewable_pair() {
+    // Issue #288: `pins_palette_items`'s "Diff pinned pair" already checked previewability,
+    // but `handle_key_pins`'s real Enter arm did not — a binary/image pinned pair showed
+    // disabled in the palette yet still diffed on a direct keypress. Now shared via
+    // `pins_guard`, so the key press is blocked the same way the palette already was.
+    let mut state = initial_state();
+    state.screen = Screen::Pins(Box::default());
+    state.pinned = vec![PinnedMapping {
+        local_path: PathBuf::from("/tmp/logo.png"),
+        gist_id: "g1".into(),
+        gist_filename: "logo.png".into(),
+        direction: None,
+        last_seen_hash: None,
+    }];
+    assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
+}
+
 fn pins_state_with_long_home_path() -> AppState {
     let mut state = initial_state();
     state.screen = Screen::Pins(Box::default());

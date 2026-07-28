@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 - Starred gist rows can fully horizontal-scroll again: the scroll limit now uses the same display string as painting (including the `★ ` prefix), so the trailing characters are reachable.
+- Context menu / command palette enablement now shares its logic with the real key handlers, fixing a few spots where the two had drifted: `p` (pin) and Pins' `Enter` (diff) now correctly account for gist ownership and file previewability; Detail's `m` (load older comments) and Revisions' `F` (cycle target file) now match their real keys' focus/file-count requirements exactly; List's `S` (smart-sync) is no longer disabled for a not-yet-pinned pair (pressing it still reports "pair is not pinned" as before).
 
 ## [0.17.0] — 2026-07-09
 
