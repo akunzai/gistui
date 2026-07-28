@@ -371,7 +371,7 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::Revisions(_) => ScreenVm::Revisions(build_revisions_vm(state)),
         Screen::Config(_) => ScreenVm::Config(super::screens::config::build_config_vm(state)),
         Screen::Diff(_) => ScreenVm::Diff(build_diff_vm(state)),
-        Screen::Preview(_) => ScreenVm::Preview(build_preview_vm(state)),
+        Screen::Preview(_) => ScreenVm::Preview(super::screens::preview::build_preview_vm(state)),
         Screen::Pins(_) => ScreenVm::Pins(build_pins_vm(state)),
         Screen::Confirm(_) => ScreenVm::Confirm(build_confirm_vm(state)),
         Screen::Help(_) => ScreenVm::Help(super::screens::help::build_help_vm(state)),
@@ -433,7 +433,9 @@ fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<Scree
             state,
         ))),
         Screen::Diff(_) => Some(ScreenVm::Diff(build_diff_vm(state))),
-        Screen::Preview(_) => Some(ScreenVm::Preview(build_preview_vm(state))),
+        Screen::Preview(_) => Some(ScreenVm::Preview(
+            super::screens::preview::build_preview_vm(state),
+        )),
         Screen::Pins(_) => Some(ScreenVm::Pins(build_pins_vm(state))),
         Screen::Help(_) => Some(ScreenVm::Help(super::screens::help::build_help_vm(state))),
         Screen::Confirm(_) | Screen::Palette(_) => None,
@@ -467,7 +469,7 @@ pub(crate) fn build_compact_gist_bg_vm(state: &AppState, gist_id: &str) -> Optio
     })
 }
 
-fn file_ext(name: &str) -> Option<String> {
+pub(crate) fn file_ext(name: &str) -> Option<String> {
     std::path::Path::new(name)
         .extension()
         .and_then(|e| e.to_str())
@@ -575,32 +577,6 @@ pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
         wrap: state.diff_wrap,
         scroll: state.diff_scroll(),
         hscroll: state.diff_hscroll(),
-        syntax_highlight: state.syntax_highlight,
-        ext,
-    }
-}
-
-/// Preview body — usable under Palette-over-Preview as well.
-pub(crate) fn build_preview_vm(state: &AppState) -> PreviewVm {
-    let p = state.preview().cloned().unwrap_or_default();
-    let hints = if state.preview_wrap {
-        "↑↓ PgUp/Dn scroll  ·  w wrap [on]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
-    } else {
-        "↑↓←→ PgUp/Dn scroll  ·  w wrap [off]  ·  y/Y copy url/content  ·  R refresh  ·  Esc/q back"
-    };
-    let (footer, footer_colored) = footer_with_status(state.status.as_deref(), hints);
-    let ext = p
-        .gist_key
-        .as_ref()
-        .and_then(|(_, filename)| file_ext(filename));
-    PreviewVm {
-        title: p.title,
-        body: p.text,
-        footer,
-        footer_colored,
-        wrap: state.preview_wrap,
-        scroll: p.scroll,
-        hscroll: p.hscroll,
         syntax_highlight: state.syntax_highlight,
         ext,
     }

@@ -6,3 +6,4 @@
 
 pub(crate) mod config;
 pub(crate) mod help;
+pub(crate) mod preview;

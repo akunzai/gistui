@@ -50,7 +50,7 @@ fn render_screen_vm(
         }
         super::ScreenVm::Diff(diff) => render_diff_vm(frame, state, diff, chrome, layout),
         super::ScreenVm::Preview(preview) => {
-            render_preview_vm(frame, state, preview, chrome, layout)
+            super::screens::preview::render_preview_vm(frame, state, preview, chrome, layout)
         }
         super::ScreenVm::Pins(pins) => render_pins_vm(frame, state, pins, chrome, layout),
         super::ScreenVm::Confirm(confirm) => {
@@ -161,91 +161,6 @@ pub(super) fn count_label(shown: usize, total: usize) -> String {
         format!("({shown}/{total})")
     } else {
         format!("({total})")
-    }
-}
-
-/// The preview body as per-line span vectors: syntax-highlighted when the feature is enabled and
-/// the file type is known, otherwise one plain span per line.
-fn preview_line_spans(
-    body: &str,
-    syntax_highlight: bool,
-    ext: Option<&str>,
-    theme: &Theme,
-) -> Vec<Vec<Span<'static>>> {
-    let lines: Vec<String> = body.lines().map(str::to_string).collect();
-    match (syntax_highlight, ext) {
-        (true, Some(ext)) => super::highlight::highlight_buffer(ext, &lines, theme),
-        _ => lines.into_iter().map(|l| vec![Span::raw(l)]).collect(),
-    }
-}
-
-fn render_preview_vm(
-    frame: &mut Frame,
-    state: &AppState,
-    preview: &super::view_model::PreviewVm,
-    chrome: &super::view_model::ChromeVm,
-    layout: &mut MouseLayout,
-) {
-    let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
-    let footer_lines = wrap_line_count(&preview.footer, area.width.saturating_sub(2)).max(1);
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(footer_lines)])
-        .split(area);
-
-    // When wrapping, horizontal scroll is meaningless — pin the x offset to 0 so long lines
-    // wrap into view instead of being scrolled off-screen.
-    let block = Block::default()
-        .title(preview.title.clone())
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .style(state.theme.base_style())
-        .padding(Padding::horizontal(1));
-    let line_spans = preview_line_spans(
-        &preview.body,
-        preview.syntax_highlight,
-        preview.ext.as_deref(),
-        &state.theme,
-    );
-    let total_lines = line_spans.len();
-    let paragraph = if preview.wrap {
-        // Wrapping needs the full line set; vertical scroll goes through Paragraph (no hscroll).
-        let body = Text::from(line_spans.into_iter().map(Line::from).collect::<Vec<_>>());
-        Paragraph::new(body)
-            .style(state.theme.base_style())
-            .scroll((preview.scroll, 0))
-            .wrap(Wrap { trim: false })
-            .block(block)
-    } else {
-        // Manual horizontal + vertical scroll mirrors diff_view, avoiding the styled-line
-        // redraw artifacts that Paragraph::scroll leaves on coloured spans.
-        let visible: Vec<Line> = line_spans
-            .into_iter()
-            .map(|spans| apply_hscroll_spans(spans, preview.hscroll as usize))
-            .skip(preview.scroll as usize)
-            .collect();
-        Paragraph::new(Text::from(visible))
-            .style(state.theme.base_style())
-            .block(block)
-    };
-    frame.render_widget(paragraph, chunks[0]);
-    // Only the non-wrap path keeps a 1:1 line↔row mapping for an accurate thumb; under soft
-    // wrapping the logical line count diverges from rendered rows, so skip the scrollbar there.
-    if !preview.wrap {
-        render_text_scrollbar(frame, chunks[0], total_lines, preview.scroll as usize);
-    }
-    render_footer(
-        frame,
-        chunks[1],
-        "",
-        &preview.footer,
-        preview.footer_colored,
-        &state.theme,
-        layout,
-    );
-    if chrome.mouse_enabled {
-        layout.close_button = Some(render_close_button(frame, area, &state.theme));
     }
 }
 
@@ -1716,7 +1631,7 @@ pub(super) const CREATE_DESC_SUFFIX: &str = "   ·  Enter next  ·  Esc cancel";
 /// Overlay a vertical scrollbar on the right edge of a bordered, scrollable text pane when
 /// its `total` lines overflow the inner viewport. `offset` is the index of the topmost
 /// visible line, so the thumb reflects the real scroll position (not a selection index).
-fn render_text_scrollbar(frame: &mut Frame, area: Rect, total: usize, offset: usize) {
+pub(super) fn render_text_scrollbar(frame: &mut Frame, area: Rect, total: usize, offset: usize) {
     let viewport = area.height.saturating_sub(2) as usize;
     if viewport == 0 || total <= viewport {
         return;

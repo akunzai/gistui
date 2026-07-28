@@ -765,7 +765,8 @@ impl AppState {
     fn wheel_step(&self) -> usize {
         match &self.screen {
             Screen::Config(_) => super::screens::config::wheel_step(),
-            Screen::Diff(_) | Screen::Preview(_) | Screen::Confirm(_) => 3,
+            Screen::Preview(_) => super::screens::preview::wheel_step(),
+            Screen::Diff(_) | Screen::Confirm(_) => 3,
             // GistDetail: the comments body scrolls like content (3 lines); the file list
             // steps one file at a time.
             Screen::GistDetail(_)
@@ -1212,44 +1213,6 @@ impl AppState {
                 KeyOutcome::None
             }
         }
-    }
-
-    fn handle_key_preview(&mut self, code: KeyCode) -> KeyOutcome {
-        // One-shot: any key dismisses a lingering status (e.g. a previous "fetch failed: …"); the
-        // run_loop refresh helper may set a fresh one afterwards.
-        self.status = None;
-        match code {
-            // In the preview, q and Esc return to wherever it was launched from (the list, or
-            // the gist detail view) — never an accidental app exit.
-            KeyCode::Char('q') | KeyCode::Esc => {
-                self.leave();
-            }
-            KeyCode::Char('R') => {
-                let Some(p) = self.preview() else {
-                    return KeyOutcome::None;
-                };
-                let Some((gist_id, filename)) = p.gist_key.clone() else {
-                    return KeyOutcome::None;
-                };
-                return KeyOutcome::RefreshPreview {
-                    file: crate::domain::GistFileRef::id_name(gist_id, filename),
-                };
-            }
-            KeyCode::Char('w') => self.preview_wrap = !self.preview_wrap,
-            KeyCode::Char('y') => {
-                let gist_id = self
-                    .preview()
-                    .and_then(|p| p.gist_key.as_ref().map(|(id, _)| id.clone()))
-                    .or_else(|| self.context_gist_id());
-                let Some(gist_id) = gist_id else {
-                    return KeyOutcome::None;
-                };
-                return KeyOutcome::CopyGistUrl { gist_id };
-            }
-            KeyCode::Char('Y') => return KeyOutcome::CopyPreviewContent,
-            _ => {}
-        }
-        KeyOutcome::None
     }
 }
 

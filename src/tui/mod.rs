@@ -341,6 +341,7 @@ impl HelpTopic {
             Screen::Gists(_) => HelpTopic::GistManager,
             Screen::GistDetail(_) => HelpTopic::GistDetail,
             Screen::Revisions(_) => HelpTopic::Revisions,
+            Screen::Preview(_) => screens::preview::HELP_TOPIC,
             Screen::Config(_) => screens::config::HELP_TOPIC,
             Screen::Help(_) => screens::help::HELP_TOPIC,
             _ => HelpTopic::List,

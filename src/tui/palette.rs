@@ -328,7 +328,7 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
         Screen::GistDetail(_) => detail_palette_items(state),
         Screen::Revisions(_) => revisions_palette_items(state),
         Screen::Diff(_) => diff_palette_items(state),
-        Screen::Preview(_) => preview_palette_items(state),
+        Screen::Preview(_) => super::screens::preview::preview_palette_items(state),
         Screen::Help(_) => super::screens::help::help_palette_items(),
         Screen::Config(_) => super::screens::config::config_palette_items(),
         Screen::Confirm(_) | Screen::Palette(_) => Vec::new(),
@@ -600,16 +600,6 @@ fn diff_palette_items(state: &AppState) -> Vec<PaletteItem> {
         key_item("u", "Upload", KeyCode::Char('u'), g(KeyCode::Char('u'))),
         key_item("c", "Toggle full diff context", KeyCode::Char('c'), true),
         key_item("w", "Toggle line wrap", KeyCode::Char('w'), true),
-        key_item("q", "Back", KeyCode::Char('q'), true),
-    ]
-}
-
-fn preview_palette_items(_state: &AppState) -> Vec<PaletteItem> {
-    vec![
-        key_item("R", "Refresh content", KeyCode::Char('R'), true),
-        key_item("w", "Toggle line wrap", KeyCode::Char('w'), true),
-        key_item("y", "Copy gist URL", KeyCode::Char('y'), true),
-        key_item("Y", "Copy file content", KeyCode::Char('Y'), true),
         key_item("q", "Back", KeyCode::Char('q'), true),
     ]
 }
