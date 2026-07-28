@@ -1,7 +1,4 @@
-use super::{
-    keys::{list_guard, point_in},
-    *,
-};
+use super::{keys::point_in, *};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 /// Menu = context-filtered actions near the click; Command = full list + fuzzy query.
@@ -320,7 +317,7 @@ fn cross_items() -> Vec<PaletteItem> {
 
 fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> Vec<PaletteItem> {
     let mut items = match screen {
-        Screen::List => list_palette_items(state),
+        Screen::List => super::screens::list::list_palette_items(state),
         Screen::Pins(_) => super::screens::pins::pins_palette_items(state),
         Screen::Gists(_) => super::screens::gists::gists_palette_items(state),
         Screen::GistDetail(_) => super::screens::detail::detail_palette_items(state),
@@ -335,99 +332,6 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
         items.extend(cross_items());
     }
     items
-}
-
-fn list_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let g = |code| list_guard(state, code);
-    vec![
-        key_item(
-            "Enter",
-            "Diff local ↔ gist",
-            KeyCode::Enter,
-            g(KeyCode::Enter),
-        ),
-        key_item(
-            "Space",
-            "Preview gist content",
-            KeyCode::Char(' '),
-            g(KeyCode::Char(' ')),
-        ),
-        key_item(
-            "d",
-            "Download gist → cwd",
-            KeyCode::Char('d'),
-            g(KeyCode::Char('d')),
-        ),
-        key_item(
-            "u",
-            "Upload local → gist",
-            KeyCode::Char('u'),
-            g(KeyCode::Char('u')),
-        ),
-        key_item(
-            "n",
-            "Create gist from local",
-            KeyCode::Char('n'),
-            g(KeyCode::Char('n')),
-        ),
-        key_item(
-            "p",
-            "Pin / unpin pair",
-            KeyCode::Char('p'),
-            g(KeyCode::Char('p')),
-        ),
-        key_item("P", "Open Pins view", KeyCode::Char('P'), true),
-        key_item(
-            "g",
-            "Open Gist manager",
-            KeyCode::Char('g'),
-            g(KeyCode::Char('g')),
-        ),
-        key_item(
-            "S",
-            "Smart-sync pinned pair",
-            KeyCode::Char('S'),
-            g(KeyCode::Char('S')),
-        ),
-        key_item(
-            "X",
-            "Remove file from gist",
-            KeyCode::Char('X'),
-            g(KeyCode::Char('X')),
-        ),
-        key_item(
-            "e",
-            "Edit local file",
-            KeyCode::Char('e'),
-            g(KeyCode::Char('e')),
-        ),
-        key_item(
-            "y",
-            "Copy gist URL",
-            KeyCode::Char('y'),
-            g(KeyCode::Char('y')),
-        ),
-        key_item(
-            "H",
-            "Revision history",
-            KeyCode::Char('H'),
-            g(KeyCode::Char('H')),
-        ),
-        key_item(
-            "*",
-            "Star / unstar gist",
-            KeyCode::Char('*'),
-            g(KeyCode::Char('*')),
-        ),
-        key_item("r", "Toggle recursive scan", KeyCode::Char('r'), true),
-        key_item("/", "Filter focused pane", KeyCode::Char('/'), true),
-        key_item("Tab", "Switch pane", KeyCode::Tab, true),
-        key_item("a", "Flip ranking anchor", KeyCode::Char('a'), true),
-        key_item("t", "Toggle description / id", KeyCode::Char('t'), true),
-        key_item("v", "Cycle gist visibility", KeyCode::Char('v'), true),
-        key_item("s", "Cycle pane sort", KeyCode::Char('s'), true),
-        key_item("?", "Help", KeyCode::Char('?'), true),
-    ]
 }
 
 /// Subsequence fuzzy match: every query char must appear in order in `target`.

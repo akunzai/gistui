@@ -396,6 +396,7 @@ impl AppState {
     /// panning. Help body also scrolls three; the Help topic index is a list (one row).
     fn wheel_step(&self) -> usize {
         match &self.screen {
+            Screen::List => super::screens::list::wheel_step(),
             Screen::Revisions(_) => super::screens::revisions::wheel_step(),
             Screen::Gists(_) => super::screens::gists::wheel_step(),
             Screen::Pins(_) => super::screens::pins::wheel_step(),
@@ -816,315 +817,7 @@ pub(crate) fn diff_pair_previewable(
     true
 }
 
-pub(crate) fn list_guard(state: &AppState, code: KeyCode) -> bool {
-    let (visible_locals, ranked) = state.list_pane_snapshots();
-    let has_gist = ranked.get(state.gist_index).is_some();
-    let has_local = visible_locals.get(state.local_index).is_some();
-    let gist = ranked.get(state.gist_index);
-    let gist_id = gist.map(|g| g.file.gist_id.clone());
-    let owned = gist_id
-        .as_deref()
-        .map(|id| state.gist_is_owned(id))
-        .unwrap_or(false);
-    let gist_file = gist.map(|g| g.file.clone());
-    let pinned_pair =
-        visible_locals
-            .get(state.local_index)
-            .zip(gist)
-            .is_some_and(|(local, gist)| {
-                state.pinned.iter().any(|m| {
-                    m.local_path == local.candidate.path
-                        && m.gist_id == gist.file.gist_id
-                        && m.gist_filename == gist.file.filename
-                })
-            });
-    match code {
-        KeyCode::Enter => gist_file.as_ref().is_some_and(|f| {
-            let local_path = visible_locals
-                .get(state.local_index)
-                .map(|r| r.candidate.path.as_path());
-            diff_pair_previewable(state, &f.gist_id, &f.filename, local_path)
-        }),
-        KeyCode::Char(' ') => gist_file
-            .as_ref()
-            .is_some_and(|f| state.gist_file_is_text_previewable(&f.gist_id, &f.filename)),
-        KeyCode::Char('d') => has_gist && state.focus == FocusPane::Gist,
-        KeyCode::Char('u') => has_local && has_gist && owned,
-        KeyCode::Char('n') => has_local,
-        // Pinning a *new* pair needs ownership (can't create a pin on a foreign gist);
-        // toggling an already-pinned pair off never did. Issue #288: previously the palette
-        // allowed 'p' on any local+gist pair regardless of ownership; `pin_toggle_intent`
-        // silently no-ops (via `block_if_foreign_gist`) for a foreign, not-yet-pinned pair.
-        KeyCode::Char('p') => has_local && has_gist && (pinned_pair || owned),
-        // Issue #288: previously the palette additionally required `pinned_pair` here, but
-        // `handle_key_list`'s real 'S' arm never has — a non-pinned pair is caught one layer
-        // down in the IO dispatcher (`dispatch.rs`) with a "pair is not pinned" status
-        // message, the same way pressing 'S' directly already behaves. Unified on the
-        // handler's (looser, tested) condition instead of narrowing the handler to match the
-        // palette, since the palette's extra restriction wasn't guarding against a real bug.
-        KeyCode::Char('S') => has_local && has_gist,
-        KeyCode::Char('g') => !state.gists.is_empty(),
-        KeyCode::Char('X') => {
-            has_gist
-                && owned
-                && gist_id
-                    .as_deref()
-                    .is_some_and(|id| state.gist_file_count(id) > 1)
-        }
-        KeyCode::Char('e') => has_local,
-        KeyCode::Char('y' | '*') => state.context_gist_id().is_some(),
-        KeyCode::Char('H') => has_gist,
-        _ => false,
-    }
-}
-
 impl AppState {
-    fn handle_key_filter(&mut self, code: KeyCode) -> KeyOutcome {
-        // Live navigation while typing: arrows move the focused pane's selection.
-        match code {
-            KeyCode::Up => {
-                self.list_move_focused(false);
-                return KeyOutcome::None;
-            }
-            KeyCode::Down => {
-                self.list_move_focused(true);
-                return KeyOutcome::None;
-            }
-            // Tab commits (keeps the query), leaves input, and switches pane.
-            KeyCode::Tab => {
-                self.filtering = false;
-                self.focus = match self.focus {
-                    FocusPane::Local => FocusPane::Gist,
-                    FocusPane::Gist => FocusPane::Local,
-                };
-                return KeyOutcome::None;
-            }
-            _ => {}
-        }
-        let focus = self.focus;
-        let query = match focus {
-            FocusPane::Local => &mut self.local_filter_query,
-            FocusPane::Gist => &mut self.filter_query,
-        };
-        match apply_filter_edit(code, query) {
-            FilterKey::Edited => self.reset_focused_filter_scroll(),
-            FilterKey::Cleared => {
-                self.filtering = false;
-                self.reset_focused_filter_scroll();
-            }
-            FilterKey::Exited => self.filtering = false,
-            FilterKey::Moved | FilterKey::Pass => {}
-        }
-        KeyOutcome::None
-    }
-
-    fn handle_key_list(&mut self, code: KeyCode) -> KeyOutcome {
-        // Any key dismisses a lingering status message (e.g. "Downloaded …"). A new
-        // status may be set afterwards by the run_loop IO helper for this key.
-        self.status = None;
-        // Any key disarms the pending quit; the quit arm below re-arms on the first q/Esc.
-        let quit_armed = std::mem::take(&mut self.quit_armed);
-        match code {
-            // Quitting the app is a two-step tap so a stray q/Esc on the list does not exit.
-            KeyCode::Char('q') | KeyCode::Esc => {
-                if quit_armed {
-                    return KeyOutcome::Quit;
-                }
-                self.quit_armed = true;
-                self.status = Some("Press q again to quit (any other key cancels)".into());
-            }
-            KeyCode::Tab => {
-                self.focus = match self.focus {
-                    FocusPane::Local => FocusPane::Gist,
-                    FocusPane::Gist => FocusPane::Local,
-                };
-            }
-            // 1/2 jump straight to a pane (mirrors Tab; selection indices are untouched).
-            KeyCode::Char('1') => self.focus = FocusPane::Local,
-            KeyCode::Char('2') => self.focus = FocusPane::Gist,
-            // Flip which pane drives the match ranking (anchor), independent of focus.
-            KeyCode::Char('a') => {
-                self.anchor = match self.anchor {
-                    FocusPane::Local => FocusPane::Gist,
-                    FocusPane::Gist => FocusPane::Local,
-                };
-                // Reset the newly-ranked (non-driver) pane to its top match.
-                self.reset_ranked_pane();
-            }
-            KeyCode::Char('t') => {
-                self.gist_view = match self.gist_view {
-                    GistView::Description => GistView::Id,
-                    GistView::Id => GistView::Description,
-                };
-            }
-            KeyCode::Char('v') => {
-                self.gist_type_filter = self.gist_type_filter.next();
-                self.gist_index = 0;
-                self.gist_hscroll = 0;
-            }
-            // Not gated through `list_guard`: `star_toggle_intent` already has its own
-            // complete "select a gist first" message for the no-selection case.
-            KeyCode::Char('*') => return self.star_toggle_intent(),
-            KeyCode::Char('s') => self.cycle_focused_sort(),
-            KeyCode::Char('r') => {
-                self.local_recursive = !self.local_recursive;
-                self.local_index = 0;
-                self.local_hscroll = 0;
-                return KeyOutcome::RefreshLocals;
-            }
-            KeyCode::Char('/') => self.filtering = true,
-            KeyCode::Char('y') => {
-                let Some(gist_id) = self.context_gist_id() else {
-                    return KeyOutcome::None;
-                };
-                return KeyOutcome::CopyGistUrl { gist_id };
-            }
-            KeyCode::Char('?') => self.open_help(),
-            KeyCode::Char('P') => self.open_pins(),
-            KeyCode::Char('C') => self.open_config(),
-            // Not gated through `list_guard`: unlike the palette's "Smart-sync pinned pair"
-            // item, this key isn't restricted to an already-pinned pair — the IO dispatcher
-            // (`dispatch.rs`) checks pin membership downstream and reports "pair is not
-            // pinned" there. `list_guard`'s `S` case (used by the palette) is stricter.
-            KeyCode::Char('S') => {
-                let (Some(local), Some(gist)) = (self.selected_local(), self.selected_gist())
-                else {
-                    return KeyOutcome::None;
-                };
-                return KeyOutcome::SyncSelectedPair {
-                    local_path: local.path.clone(),
-                    gist_id: gist.file.gist_id.clone(),
-                    filename: gist.file.filename.clone(),
-                };
-            }
-            KeyCode::Char('g') => self.open_gist_manager(),
-            KeyCode::Char('H') if list_guard(self, code) => {
-                if self.open_revisions() {
-                    if let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) {
-                        return KeyOutcome::FetchRevisions { gist_id };
-                    }
-                }
-            }
-            KeyCode::Char('H') => {
-                self.status = Some("select a gist file to view revision history".into());
-            }
-            KeyCode::Char('e') if list_guard(self, code) => {
-                let (locals, _) = self.list_pane_snapshots();
-                if let Some(local) = locals.get(self.local_index) {
-                    return KeyOutcome::EditLocal {
-                        path: local.candidate.path.clone(),
-                    };
-                }
-            }
-            KeyCode::Char('e') => {
-                self.status = Some("select a local file to edit".into());
-            }
-            KeyCode::Char(' ') if list_guard(self, code) => {
-                let (_, ranked) = self.list_pane_snapshots();
-                let Some(gist) = ranked.get(self.gist_index) else {
-                    return KeyOutcome::None;
-                };
-                self.pending_return = Some(Screen::List);
-                return KeyOutcome::PreviewContent {
-                    file: crate::domain::GistFileRef::new(
-                        gist.file.gist_id.clone(),
-                        gist.file.filename.clone(),
-                        gist.file.raw_url.clone(),
-                    ),
-                };
-            }
-            // has_gist but non-previewable (`list_guard` above didn't match) — replay the
-            // same check `PreviewContent` would use, so the user gets the precise
-            // "cannot preview: …" message instead of a silent no-op.
-            KeyCode::Char(' ') => {
-                let (_, ranked) = self.list_pane_snapshots();
-                if let Some(gist) = ranked.get(self.gist_index) {
-                    self.block_if_non_previewable_gist_file(
-                        &gist.file.gist_id,
-                        &gist.file.filename,
-                    );
-                }
-            }
-            KeyCode::Char('d') if list_guard(self, code) => {
-                let (_, ranked) = self.list_pane_snapshots();
-                if let Some(gist) = ranked.get(self.gist_index) {
-                    let filename = gist.file.filename.clone();
-                    return KeyOutcome::DownloadGist {
-                        file: crate::domain::GistFileRef::new(
-                            gist.file.gist_id.clone(),
-                            filename.clone(),
-                            gist.file.raw_url.clone(),
-                        ),
-                        target: self.cwd.join(&filename),
-                    };
-                }
-            }
-            // Enter works from either pane: it diffs the selected local file against the
-            // selected gist (the top match when focus is on the local pane). Snapshot both
-            // ranked lists once (issue #224 / #154 shape #1).
-            KeyCode::Enter if list_guard(self, code) => {
-                let (locals, ranked) = self.list_pane_snapshots();
-                let Some(gist) = ranked.get(self.gist_index) else {
-                    return KeyOutcome::None;
-                };
-                let local_path = locals
-                    .get(self.local_index)
-                    .map(|r| r.candidate.path.clone());
-                let filename = gist.file.filename.clone();
-                return KeyOutcome::PreviewDiff {
-                    local_path,
-                    file: crate::domain::GistFileRef::new(
-                        gist.file.gist_id.clone(),
-                        filename.clone(),
-                        gist.file.raw_url.clone(),
-                    ),
-                    target: self.cwd.join(&filename),
-                    upload_orientation: self.focus == FocusPane::Local,
-                };
-            }
-            // has_gist but non-diffable (`list_guard` above didn't match) — replay the same
-            // check `PreviewDiff` would use, so the user gets the precise "cannot preview: …"
-            // message instead of a silent no-op.
-            KeyCode::Enter => {
-                let (locals, ranked) = self.list_pane_snapshots();
-                if let Some(gist) = ranked.get(self.gist_index) {
-                    let local_path = locals
-                        .get(self.local_index)
-                        .map(|r| r.candidate.path.clone());
-                    self.block_if_non_previewable_diff(
-                        &gist.file.gist_id,
-                        &gist.file.filename,
-                        local_path.as_deref(),
-                    );
-                }
-            }
-            // Not gated through `list_guard`: `pin_toggle_intent` / `upload_intent` /
-            // `remove_gist_file_intent` / `create_gist_intent` already have their own complete
-            // messages for every disabled case (no selection, foreign gist, single-file gist…).
-            KeyCode::Char('p') => return self.pin_toggle_intent(),
-            KeyCode::Char('u') => return self.upload_intent(),
-            KeyCode::Char('X') => self.remove_gist_file_intent(),
-            KeyCode::Char('n') => self.create_gist_intent(),
-            _ => {}
-        }
-        KeyOutcome::None
-    }
-
-    /// Reset the focused pane's selection index and horizontal scroll (used when a
-    /// filter edit changes the visible rows).
-    fn reset_focused_filter_scroll(&mut self) {
-        match self.focus {
-            FocusPane::Local => {
-                self.local_index = 0;
-                self.local_hscroll = 0;
-            }
-            FocusPane::Gist => {
-                self.gist_index = 0;
-                self.gist_hscroll = 0;
-            }
-        }
-    }
-
     /// Page the focused list-pane selection by [`PAGE_SCROLL`] rows (clamped at bounds).
     fn list_page_focused(&mut self, forward: bool) {
         let step = PAGE_SCROLL as usize;
@@ -1171,7 +864,7 @@ impl AppState {
     /// list; otherwise it moves toward the top. Both directions clamp at the pane's bounds,
     /// reset the horizontal scroll, and re-rank the opposite pane when the focused pane is the
     /// ranking anchor.
-    fn list_move_focused(&mut self, forward: bool) {
+    pub(crate) fn list_move_focused(&mut self, forward: bool) {
         // Length-only snapshot once per move (issue #224).
         let (locals, ranked) = self.list_pane_snapshots();
         match self.focus {
@@ -1216,7 +909,7 @@ impl AppState {
 
     /// Cycle the focused pane's sort order (match -> name -> recent -> match) and reset that
     /// pane's selection and horizontal scroll.
-    fn cycle_focused_sort(&mut self) {
+    pub(crate) fn cycle_focused_sort(&mut self) {
         match self.focus {
             FocusPane::Gist => {
                 self.gist_sort = self.gist_sort.next();
@@ -1262,41 +955,6 @@ impl AppState {
         }));
     }
 
-    /// Pin/unpin the selected local↔gist pair: returns [`KeyOutcome::Unpin`] when the exact
-    /// pair is already pinned, otherwise [`KeyOutcome::Pin`]. Requires a selection in both
-    /// panes; otherwise it just sets a status hint.
-    fn pin_toggle_intent(&mut self) -> KeyOutcome {
-        let (locals, ranked) = self.list_pane_snapshots();
-        let (Some(local), Some(gist)) = (
-            locals.get(self.local_index).map(|r| &r.candidate),
-            ranked.get(self.gist_index),
-        ) else {
-            self.status = Some("select a local file and a gist to pin".into());
-            return KeyOutcome::None;
-        };
-        let local_path = local.path.clone();
-        let gist_id = gist.file.gist_id.clone();
-        let filename = gist.file.filename.clone();
-        let already = self.pinned.iter().any(|m| {
-            m.local_path == local_path && m.gist_id == gist_id && m.gist_filename == filename
-        });
-        if already {
-            KeyOutcome::Unpin {
-                local_path,
-                gist_id,
-                filename,
-            }
-        } else if self.block_if_foreign_gist(&gist_id, true) {
-            KeyOutcome::None
-        } else {
-            KeyOutcome::Pin {
-                local_path,
-                gist_id,
-                filename,
-            }
-        }
-    }
-
     pub(crate) fn star_toggle_intent(&mut self) -> KeyOutcome {
         let Some(gist_id) = self.context_gist_id() else {
             self.set_status("select a gist first");
@@ -1304,66 +962,6 @@ impl AppState {
         };
         let starring = !self.gist_is_starred(&gist_id);
         KeyOutcome::ToggleGistStar { gist_id, starring }
-    }
-
-    /// Stage removal of the selected gist file behind a y/n confirm (`Screen::Confirm`). A gist
-    /// must keep at least one file, so removing the gist's only file is refused — delete the
-    /// whole gist from the gist-level view (`g` then `X`) instead.
-    fn remove_gist_file_intent(&mut self) {
-        let Some(gist) = self.selected_gist() else {
-            self.status = Some("select a gist file to remove".into());
-            return;
-        };
-        let gist_id = gist.file.gist_id.clone();
-        if self.block_if_foreign_gist(&gist_id, false) {
-            return;
-        }
-        let filename = gist.file.filename.clone();
-        if self.gist_file_count(&gist_id) <= 1 {
-            self.status = Some(format!(
-                "{filename} is the gist's only file — use g then X to delete the gist"
-            ));
-            return;
-        }
-        let label = if gist.file.description.is_empty() {
-            gist_id.clone()
-        } else {
-            gist.file.description.clone()
-        };
-        self.pending_return = Some(Screen::List);
-        let text = format!(
-            "Remove file \"{filename}\" from gist {gist_id} ({label}).\n\nThe other files in this gist are kept. This cannot be undone."
-        );
-        self.enter_confirm(
-            PendingAction::RemoveFile {
-                gist_id,
-                filename,
-                label,
-            },
-            text,
-        );
-    }
-
-    /// Stage creation of a new gist from the selected local file. Create is a two-step confirm:
-    /// type an optional description (inline editor, shared with the gist-level view), then
-    /// choose visibility. Requires a selected local file.
-    fn create_gist_intent(&mut self) {
-        let Some(local) = self.selected_local() else {
-            self.status = Some("select a local file to create a gist".into());
-            return;
-        };
-        self.editing_description = true;
-        self.description_input.clear();
-        self.pending_return = Some(Screen::List);
-        self.enter_confirm(
-            PendingAction::Create {
-                local_path: local.path.clone(),
-            },
-            format!(
-                "Create a new gist from {}.\n\nType an optional description, then choose visibility.",
-                local.path.display()
-            ),
-        );
     }
 
     fn handle_key_confirm(&mut self, code: KeyCode) -> KeyOutcome {

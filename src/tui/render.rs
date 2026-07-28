@@ -4,8 +4,8 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{
-        Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph, Scrollbar,
-        ScrollbarOrientation, ScrollbarState, Wrap,
+        Block, BorderType, Borders, Padding, Paragraph, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Wrap,
     },
     Frame,
 };
@@ -39,7 +39,9 @@ fn render_screen_vm(
     layout: &mut MouseLayout,
 ) {
     match screen {
-        super::ScreenVm::List(list) => render_list_vm(frame, state, list, chrome, layout),
+        super::ScreenVm::List(list) => {
+            super::screens::list::render_list_vm(frame, state, list, chrome, layout)
+        }
         super::ScreenVm::Gists(gists) => {
             super::screens::gists::render_gists_vm(frame, state, gists, chrome, layout)
         }
@@ -638,190 +640,6 @@ pub(super) fn input_line(prefix: &str, input: &TextInput, suffix: &str) -> Line<
         spans.push(Span::raw(suffix.to_string()));
     }
     Line::from(spans)
-}
-
-fn list_pane_items(
-    pane: &super::view_model::ListPaneVm,
-    hscroll: u16,
-    theme: &Theme,
-) -> Vec<ListItem<'static>> {
-    match pane.empty {
-        super::view_model::ListPaneEmpty::HasRows => pane
-            .rows
-            .iter()
-            .map(|row| {
-                let item = ListItem::new(hscroll_str(&row.label, hscroll));
-                match row.mark {
-                    RowMark::SameName => item.style(Style::default().add_modifier(Modifier::BOLD)),
-                    RowMark::Pinned | RowMark::None => item,
-                }
-            })
-            .collect(),
-        _ => {
-            let msg = pane.empty_message.clone().unwrap_or_else(|| "  ".into());
-            vec![ListItem::new(msg).style(Style::default().fg(theme.dim))]
-        }
-    }
-}
-
-fn render_list_vm(
-    frame: &mut Frame,
-    state: &AppState,
-    list: &super::view_model::ListVm,
-    chrome: &super::view_model::ChromeVm,
-    layout: &mut MouseLayout,
-) {
-    let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
-    let footer_body = match &list.footer {
-        super::view_model::ListFooterVm::Hints { text }
-        | super::view_model::ListFooterVm::Status { text } => text.clone(),
-        super::view_model::ListFooterVm::Filtering { focus } => {
-            let (pane, query) = match focus {
-                FocusPane::Local => ("local", &state.local_filter_query),
-                FocusPane::Gist => ("gist", &state.filter_query),
-            };
-            // Height sizing uses a plain-text approximation; the painted footer uses `input_line`.
-            format!("filter {pane}: {query}_   (Tab next pane · Enter apply · Esc clear)")
-        }
-    };
-    let footer_is_command = matches!(list.footer, super::view_model::ListFooterVm::Hints { .. });
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(5),
-            Constraint::Length(footer_height(&footer_body, area.width, "")),
-        ])
-        .split(area);
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
-        .split(chunks[0]);
-
-    let local_items = list_pane_items(&list.local, list.local_hscroll, &state.theme);
-    let local_offset = render_pane(
-        frame,
-        columns[0],
-        &list.local.title,
-        local_items,
-        list.local.focused,
-        list.local.selected,
-        &state.theme,
-    );
-    if chrome.mouse_enabled {
-        layout.local = Some(PaneHit {
-            rect: columns[0],
-            offset: local_offset,
-        });
-    }
-
-    let gist_items = list_pane_items(&list.gist, list.gist_hscroll, &state.theme);
-    let gist_offset = render_pane(
-        frame,
-        columns[1],
-        &list.gist.title,
-        gist_items,
-        list.gist.focused,
-        list.gist.selected,
-        &state.theme,
-    );
-    if chrome.mouse_enabled {
-        layout.gist = Some(PaneHit {
-            rect: columns[1],
-            offset: gist_offset,
-        });
-    }
-
-    match &list.footer {
-        super::view_model::ListFooterVm::Filtering { focus } => {
-            let (pane, query) = match focus {
-                FocusPane::Local => ("local", &state.local_filter_query),
-                FocusPane::Gist => ("gist", &state.filter_query),
-            };
-            let line = input_line(
-                &format!("filter {pane}: "),
-                query,
-                "   (Tab next pane · Enter apply · Esc clear)",
-            );
-            render_footer_line(frame, chunks[1], "", line, &state.theme, layout);
-        }
-        _ => {
-            render_footer(
-                frame,
-                chunks[1],
-                "",
-                &footer_body,
-                footer_is_command,
-                &state.theme,
-                layout,
-            );
-        }
-    }
-}
-
-pub(super) fn render_pane(
-    frame: &mut Frame,
-    area: Rect,
-    title: &str,
-    items: Vec<ListItem>,
-    focused: bool,
-    selected: Option<usize>,
-    theme: &Theme,
-) -> usize {
-    let item_count = items.len();
-    let border_style = if focused {
-        Style::default().fg(theme.accent)
-    } else {
-        Style::default().fg(theme.dim)
-    };
-    // The border colour alone signals which pane is active; row text stays at full
-    // brightness in both panes so it is always legible.
-    // Focused selection is a solid bar (whole row); unfocused just bolds the row.
-    let highlight_style = if focused {
-        Style::default()
-            .bg(theme.accent)
-            .fg(theme.fg_on_accent)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)
-    };
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(title)
-                // Pin title to theme fg so it stays legible in both dark and light modes.
-                .title_style(Style::default().fg(theme.fg))
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(border_style)
-                .style(theme.base_style())
-                .padding(Padding::horizontal(1)),
-        )
-        .style(theme.base_style())
-        .highlight_style(highlight_style)
-        .highlight_symbol("▶ ");
-
-    let mut list_state = ListState::default();
-    list_state.select(selected);
-    frame.render_stateful_widget(list, area, &mut list_state);
-    let offset = list_state.offset();
-
-    // Show a scrollbar when the list overflows its viewport.
-    let viewport = area.height.saturating_sub(2) as usize;
-    if viewport > 0 && item_count > viewport {
-        let mut scrollbar_state = ScrollbarState::new(item_count).position(selected.unwrap_or(0));
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(None)
-                .end_symbol(None),
-            area.inner(Margin {
-                vertical: 1,
-                horizontal: 0,
-            }),
-            &mut scrollbar_state,
-        );
-    }
-    offset
 }
 
 /// Builds the visible, coloured slice of a unified diff (additions green, deletions red,

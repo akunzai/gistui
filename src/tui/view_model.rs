@@ -4,8 +4,8 @@
 //! Builders never touch the filesystem or network (issues #241 / #250).
 
 use super::render::{
-    count_label, gist_info_line, gist_row_label, is_json_file, marked_row_text, row_mark,
-    spinner_glyph, unix_now, RowMark, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX, MINIMAL_HINT,
+    gist_info_line, gist_row_label, is_json_file, spinner_glyph, unix_now, RowMark,
+    CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX,
 };
 use super::{
     AppState, DetailFocus, FocusPane, GistView, PaletteMode, PendingAction, Screen, TextInput,
@@ -364,7 +364,7 @@ pub(crate) fn build_chrome(state: &AppState) -> ChromeVm {
 pub fn build_view_model(state: &AppState) -> ViewModel {
     let chrome = build_chrome(state);
     let screen = match &state.screen {
-        Screen::List => ScreenVm::List(build_list_vm(state)),
+        Screen::List => ScreenVm::List(super::screens::list::build_list_vm(state)),
         Screen::Gists(_) => ScreenVm::Gists(super::screens::gists::build_gists_vm(state)),
         Screen::GistDetail(_) => {
             ScreenVm::GistDetail(super::screens::detail::build_gist_detail_vm(state))
@@ -428,7 +428,7 @@ pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
 /// (unreachable — the palette can't be opened while itself active).
 fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<ScreenVm> {
     match origin {
-        Screen::List => Some(ScreenVm::List(build_list_vm(state))),
+        Screen::List => Some(ScreenVm::List(super::screens::list::build_list_vm(state))),
         Screen::Gists(_) => Some(ScreenVm::Gists(super::screens::gists::build_gists_vm(
             state,
         ))),
@@ -493,144 +493,6 @@ pub(crate) fn gist_row_display(g: &RankedGistFile, view: GistView, state: &AppSt
         format!("★ {label}")
     } else {
         label
-    }
-}
-
-/// List body only — usable while `state.screen` is List **or** Palette-over-List (#250).
-pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
-    let (visible_locals, ranked) = state.list_pane_snapshots();
-
-    let local_empty;
-    let local_empty_message;
-    let local_rows;
-    if state.local_scanning && state.locals.is_empty() {
-        local_empty = ListPaneEmpty::Loading;
-        local_empty_message = Some(format!(
-            "  {} Scanning files…",
-            spinner_glyph(state.spinner_frame)
-        ));
-        local_rows = Vec::new();
-    } else if state.locals.is_empty() {
-        local_empty = ListPaneEmpty::NoItems;
-        local_empty_message = Some("  📭 No local files found".into());
-        local_rows = Vec::new();
-    } else if visible_locals.is_empty() {
-        local_empty = ListPaneEmpty::NoFilterMatch;
-        local_empty_message = Some("  🔍 No files match the filter".into());
-        local_rows = Vec::new();
-    } else {
-        local_empty = ListPaneEmpty::HasRows;
-        local_empty_message = None;
-        local_rows = visible_locals
-            .iter()
-            .map(|r| {
-                let mark = row_mark(&r.reasons);
-                let base = super::text::local_row_label(&r.candidate.path, &state.cwd);
-                ListRowVm {
-                    label: marked_row_text(base, mark),
-                    mark,
-                }
-            })
-            .collect();
-    }
-
-    let recursive_marker = if state.local_recursive { " [↓]" } else { "" };
-    let scanning_marker = if state.local_scanning { " …" } else { "" };
-    let mut local_title = format!(
-        "[1] Local {} · {}{}{} · sort:{}",
-        count_label(visible_locals.len(), state.locals.len()),
-        crate::config::display_path(&state.cwd),
-        recursive_marker,
-        scanning_marker,
-        state.local_sort.label()
-    );
-    if !state.local_filter_query.is_empty() {
-        local_title.push_str(&format!(" · /{}", state.local_filter_query));
-    }
-    if state.anchor == FocusPane::Local {
-        local_title.push_str(" · ⚓");
-    }
-
-    let gist_empty;
-    let gist_empty_message;
-    let gist_rows;
-    if state.loading && ranked.is_empty() {
-        gist_empty = ListPaneEmpty::Loading;
-        gist_empty_message = Some(format!(
-            "  {} Loading gists…",
-            spinner_glyph(state.spinner_frame)
-        ));
-        gist_rows = Vec::new();
-    } else if ranked.is_empty() {
-        if !state.filter_query.is_empty() {
-            gist_empty = ListPaneEmpty::NoFilterMatch;
-            gist_empty_message = Some("  🔍 No gists match the filter".into());
-        } else {
-            gist_empty = ListPaneEmpty::NoItems;
-            gist_empty_message = Some("  📭 No gists found".into());
-        }
-        gist_rows = Vec::new();
-    } else {
-        gist_empty = ListPaneEmpty::HasRows;
-        gist_empty_message = None;
-        gist_rows = ranked
-            .iter()
-            .map(|g| {
-                let mark = row_mark(&g.reasons);
-                let base = gist_row_display(g, state.gist_view, state);
-                ListRowVm {
-                    label: marked_row_text(base, mark),
-                    mark,
-                }
-            })
-            .collect();
-    }
-
-    let mut gist_title = format!(
-        "[2] Gists {} · {} · {}",
-        count_label(ranked.len(), state.gists.len()),
-        state.gist_type_filter.label(),
-        state.gist_sort.label()
-    );
-    if !state.filter_query.is_empty() {
-        gist_title.push_str(&format!(" · /{}", state.filter_query));
-    }
-    if state.anchor == FocusPane::Gist {
-        gist_title.push_str(" · ⚓");
-    }
-
-    let footer = if state.filtering {
-        ListFooterVm::Filtering { focus: state.focus }
-    } else if let Some(message) = &state.status {
-        ListFooterVm::Status {
-            text: message.clone(),
-        }
-    } else {
-        ListFooterVm::Hints {
-            text: MINIMAL_HINT.to_string(),
-        }
-    };
-
-    ListVm {
-        local: ListPaneVm {
-            title: local_title,
-            focused: state.focus == FocusPane::Local,
-            selected: (local_empty == ListPaneEmpty::HasRows).then_some(state.local_index),
-            empty: local_empty,
-            empty_message: local_empty_message,
-            rows: local_rows,
-        },
-        gist: ListPaneVm {
-            title: gist_title,
-            focused: state.focus == FocusPane::Gist,
-            selected: (gist_empty == ListPaneEmpty::HasRows).then_some(state.gist_index),
-            empty: gist_empty,
-            empty_message: gist_empty_message,
-            rows: gist_rows,
-        },
-        local_hscroll: state.local_hscroll,
-        gist_hscroll: state.gist_hscroll,
-        footer,
     }
 }
 

@@ -9,6 +9,7 @@ pub(crate) mod detail;
 pub(crate) mod diff;
 pub(crate) mod gists;
 pub(crate) mod help;
+pub(crate) mod list;
 pub(crate) mod pins;
 pub(crate) mod preview;
 pub(crate) mod revisions;
