@@ -64,7 +64,7 @@ fn render_screen_vm(
             super::screens::pins::render_pins_vm(frame, state, pins, chrome, layout)
         }
         super::ScreenVm::Confirm(confirm) => {
-            render_confirm_vm(frame, state, confirm, chrome, layout)
+            super::screens::confirm::render_confirm_vm(frame, state, confirm, chrome, layout)
         }
         super::ScreenVm::Help(help) => {
             super::screens::help::render_help_vm(frame, state, help, chrome, layout)
@@ -360,7 +360,7 @@ pub(super) fn file_rows(
 }
 
 /// Compaction-confirm background from a pure compact-gist view model.
-fn render_compact_gist_bg_vm(
+pub(super) fn render_compact_gist_bg_vm(
     frame: &mut Frame,
     area: Rect,
     bg: &super::view_model::CompactGistBgVm,
@@ -938,56 +938,6 @@ pub(super) fn render_diff_pane_vm(
     if !diff.wrap {
         let total_lines = diff.body.lines().count();
         render_text_scrollbar(frame, area, total_lines, diff.scroll as usize);
-    }
-}
-
-/// `Screen::Confirm`: the diff fills the screen as context behind a centered prompt modal,
-/// keeping the overwrite gate's diff visible while the question is asked front-and-centre.
-/// #72 audit: this modal intentionally does not surface `state.status`. It is a transient y/n
-/// gate — confirming executes the action and transitions to `List`/`Gists`, where the result
-/// status is shown; cancelling returns to the launching screen without setting a status here.
-fn render_confirm_vm(
-    frame: &mut Frame,
-    state: &AppState,
-    confirm: &super::view_model::ConfirmVm,
-    chrome: &super::view_model::ChromeVm,
-    layout: &mut MouseLayout,
-) {
-    match &confirm.background {
-        super::view_model::ConfirmBackgroundVm::CompactGist(bg) => {
-            render_compact_gist_bg_vm(frame, frame.area(), bg, &state.theme);
-        }
-        super::view_model::ConfirmBackgroundVm::Diff => {
-            let diff = super::screens::diff::build_diff_vm(state);
-            render_diff_pane_vm(frame, frame.area(), &diff, &state.theme);
-        }
-        super::view_model::ConfirmBackgroundVm::Empty => {}
-    }
-    let modal = match &confirm.kind {
-        super::view_model::ConfirmModalKind::DescriptionInput {
-            prefix,
-            value: _,
-            suffix,
-        } => {
-            // Cursor-aware paint still uses live `TextInput` from state (same buffer the VM
-            // snapshot was built from this frame).
-            render_centered_modal_input(
-                frame,
-                confirm.title,
-                prefix,
-                &state.description_input,
-                suffix,
-                confirm.border,
-                &state.theme,
-            )
-        }
-        super::view_model::ConfirmModalKind::Prompt { text } => {
-            render_centered_modal(frame, confirm.title, text, confirm.border, &state.theme)
-        }
-    };
-    if chrome.mouse_enabled {
-        // Put the close button on the modal box itself, not the full-screen corner.
-        layout.close_button = Some(render_close_button(frame, modal, &state.theme));
     }
 }
 

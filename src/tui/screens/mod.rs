@@ -5,6 +5,7 @@
 //! keep their exhaustive-match shape; each arm becomes a one-line call into a screen module.
 
 pub(crate) mod config;
+pub(crate) mod confirm;
 pub(crate) mod detail;
 pub(crate) mod diff;
 pub(crate) mod gists;

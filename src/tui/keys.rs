@@ -397,17 +397,16 @@ impl AppState {
     fn wheel_step(&self) -> usize {
         match &self.screen {
             Screen::List => super::screens::list::wheel_step(),
-            Screen::Revisions(_) => super::screens::revisions::wheel_step(),
-            Screen::Gists(_) => super::screens::gists::wheel_step(),
-            Screen::Pins(_) => super::screens::pins::wheel_step(),
-            Screen::Config(_) => super::screens::config::wheel_step(),
-            Screen::Preview(_) => super::screens::preview::wheel_step(),
             Screen::Diff(_) => super::screens::diff::wheel_step(),
-            Screen::Confirm(_) => 3,
-            Screen::GistDetail(_) => super::screens::detail::wheel_step(self),
+            Screen::Confirm(_) => super::screens::confirm::wheel_step(),
+            Screen::Preview(_) => super::screens::preview::wheel_step(),
             Screen::Help(h) => super::screens::help::wheel_step(h),
+            Screen::Pins(_) => super::screens::pins::wheel_step(),
+            Screen::Gists(_) => super::screens::gists::wheel_step(),
+            Screen::GistDetail(_) => super::screens::detail::wheel_step(self),
+            Screen::Revisions(_) => super::screens::revisions::wheel_step(),
+            Screen::Config(_) => super::screens::config::wheel_step(),
             Screen::Palette(_) => 1,
-            _ => 1, // List/Pins/Gists/Revisions/Help index/GistDetail Files
         }
     }
 
@@ -962,114 +961,6 @@ impl AppState {
         };
         let starring = !self.gist_is_starred(&gist_id);
         KeyOutcome::ToggleGistStar { gist_id, starring }
-    }
-
-    fn handle_key_confirm(&mut self, code: KeyCode) -> KeyOutcome {
-        // While typing the create flow's description, arrows drive the text cursor (handled
-        // below), not the background diff scroll.
-        match self.pending_action().cloned() {
-            Some(PendingAction::Download) => match code {
-                KeyCode::Char('y') => {
-                    return KeyOutcome::Download {
-                        mode: crate::actions::DownloadMode::overwrite_after_user_confirm(),
-                    };
-                }
-                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                    self.cancel_confirm_to_diff();
-                }
-                _ => {}
-            },
-            Some(PendingAction::Upload { ref local_path, .. }) => match code {
-                KeyCode::Char('y') if self.upload.watching => {
-                    self.set_status("editor still open — finish editing first");
-                }
-                KeyCode::Char('y') => return KeyOutcome::Upload,
-                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                    // Return to wherever the upload was initiated from (List, or Pins for
-                    // a pin push) instead of always snapping back to List.
-                    self.cancel_confirm();
-                    // The background watch thread (if any) is not force-killed — it cleans
-                    // itself up once the editor closes. Reset the flag now so a stale
-                    // late-arriving event (see AppState::apply_upload_edit_event) doesn't
-                    // matter, and so a future upload-edit session isn't blocked by it.
-                    self.upload.watching = false;
-                }
-                KeyCode::Char('e') if self.upload.watching => {
-                    self.set_status("editor already open");
-                }
-                KeyCode::Char('e') => return KeyOutcome::EditUpload,
-                KeyCode::Char('p') if is_json_file(local_path) => {
-                    self.upload.json_pretty = !self.upload.json_pretty;
-                    self.update_upload_diff();
-                }
-                KeyCode::Char('s') if is_json_file(local_path) => {
-                    self.upload.json_sort = !self.upload.json_sort;
-                    self.update_upload_diff();
-                }
-                _ => {}
-            },
-            Some(PendingAction::Create { .. }) if self.editing_description => match code {
-                // Step 1: type the optional description. Enter advances to the
-                // visibility choice; Esc cancels the whole create.
-                KeyCode::Enter => self.editing_description = false,
-                KeyCode::Esc => {
-                    self.editing_description = false;
-                    self.description_input.clear();
-                    self.back_to_list();
-                }
-                _ => {
-                    self.description_input.apply_edit(code);
-                }
-            },
-            Some(PendingAction::Create { .. }) => match code {
-                // Step 2: choose visibility (the description is kept in description_input).
-                KeyCode::Char('s') => return KeyOutcome::Create(false),
-                KeyCode::Char('p') => return KeyOutcome::Create(true),
-                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                    self.description_input.clear();
-                    self.back_to_list();
-                }
-                _ => {}
-            },
-            Some(PendingAction::Delete { .. }) => match code {
-                KeyCode::Char('y') => return KeyOutcome::ExecuteDelete,
-                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                    self.cancel_confirm();
-                }
-                _ => {}
-            },
-            Some(PendingAction::RemoveFile { .. }) => match code {
-                KeyCode::Char('y') => return KeyOutcome::ExecuteRemoveFile,
-                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                    self.back_to_list();
-                }
-                _ => {}
-            },
-            Some(PendingAction::CompactGist { .. }) => match code {
-                KeyCode::Char('y') => return KeyOutcome::ExecuteCompactGist,
-                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                    // Return to whichever screen launched the compaction (Gists or GistDetail).
-                    self.cancel_confirm();
-                }
-                _ => {}
-            },
-            Some(PendingAction::RestoreRevision { .. }) => match code {
-                KeyCode::Char('y') => return KeyOutcome::ExecuteRestoreRevision,
-                KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                    self.cancel_confirm();
-                    if !self.screen.is_revisions() {
-                        self.screen = Screen::Revisions(Box::default());
-                    }
-                }
-                _ => {}
-            },
-            _ => {
-                if matches!(code, KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q')) {
-                    self.cancel_confirm();
-                }
-            }
-        }
-        KeyOutcome::None
     }
 }
 

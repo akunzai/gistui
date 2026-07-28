@@ -304,8 +304,8 @@ pub struct ConfirmVm {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmBackgroundVm {
-    /// Standard overwrite/upload/create backdrop: use `screens::diff::build_diff_vm`.
-    Diff,
+    /// Standard overwrite/upload/create backdrop: pre-built diff view model.
+    Diff(DiffVm),
     /// Compaction confirm: gist info + file list.
     CompactGist(CompactGistBgVm),
     /// Missing group or nothing to show.
@@ -319,7 +319,7 @@ pub enum ConfirmModalKind {
     /// Create-flow description editor.
     DescriptionInput {
         prefix: &'static str,
-        value: String,
+        input: TextInput,
         suffix: &'static str,
     },
 }
@@ -376,7 +376,7 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::Diff(_) => ScreenVm::Diff(super::screens::diff::build_diff_vm(state)),
         Screen::Preview(_) => ScreenVm::Preview(super::screens::preview::build_preview_vm(state)),
         Screen::Pins(_) => ScreenVm::Pins(super::screens::pins::build_pins_vm(state)),
-        Screen::Confirm(_) => ScreenVm::Confirm(build_confirm_vm(state)),
+        Screen::Confirm(_) => ScreenVm::Confirm(super::screens::confirm::build_confirm_vm(state)),
         Screen::Help(_) => ScreenVm::Help(super::screens::help::build_help_vm(state)),
         Screen::Palette(_) => ScreenVm::Palette(build_palette_vm(state)),
     };
@@ -581,57 +581,6 @@ pub(crate) fn confirm_prompt(state: &AppState) -> String {
             "Overwrite {}? (y/n)",
             crate::config::display_path(&state.download_target())
         ),
-    }
-}
-
-/// Title and border colour for the confirm modal. Destructive actions are tinted with the
-/// theme's `del_color` so the stakes read at a glance; non-destructive writes use the neutral
-/// `notice_color` prompt.
-pub(crate) fn confirm_modal_style(state: &AppState) -> (&'static str, Color) {
-    let theme = &state.theme;
-    match state.pending_action() {
-        Some(PendingAction::Create { .. }) if state.editing_description => {
-            ("Description", theme.accent)
-        }
-        Some(PendingAction::Create { .. }) => ("Create gist", theme.notice_color),
-        Some(PendingAction::Upload { .. }) => ("Upload", theme.notice_color),
-        Some(PendingAction::Delete { .. }) => ("Delete", theme.del_color),
-        Some(PendingAction::RemoveFile { .. }) => ("Remove file", theme.del_color),
-        Some(PendingAction::CompactGist { .. }) => ("Compact revisions", theme.del_color),
-        Some(PendingAction::RestoreRevision { .. }) => ("Restore revision", theme.notice_color),
-        _ => ("Overwrite", theme.del_color),
-    }
-}
-
-pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
-    let (title, border) = confirm_modal_style(state);
-    let kind = if matches!(state.pending_action(), Some(PendingAction::Create { .. }))
-        && state.editing_description
-    {
-        ConfirmModalKind::DescriptionInput {
-            prefix: CREATE_DESC_PREFIX,
-            value: state.description_input.to_string(),
-            suffix: CREATE_DESC_SUFFIX,
-        }
-    } else {
-        ConfirmModalKind::Prompt {
-            text: confirm_prompt(state),
-        }
-    };
-    let background = match state.pending_action() {
-        Some(PendingAction::CompactGist { gist_id, .. }) => {
-            match build_compact_gist_bg_vm(state, gist_id) {
-                Some(bg) => ConfirmBackgroundVm::CompactGist(bg),
-                None => ConfirmBackgroundVm::Empty,
-            }
-        }
-        _ => ConfirmBackgroundVm::Diff,
-    };
-    ConfirmVm {
-        title,
-        border,
-        kind,
-        background,
     }
 }
 
