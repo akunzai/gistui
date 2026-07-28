@@ -40,7 +40,9 @@ fn render_screen_vm(
 ) {
     match screen {
         super::ScreenVm::List(list) => render_list_vm(frame, state, list, chrome, layout),
-        super::ScreenVm::Gists(gists) => render_gists_vm(frame, state, gists, chrome, layout),
+        super::ScreenVm::Gists(gists) => {
+            super::screens::gists::render_gists_vm(frame, state, gists, chrome, layout)
+        }
         super::ScreenVm::GistDetail(detail) => {
             render_gist_detail_vm(frame, state, detail, chrome, layout)
         }
@@ -244,98 +246,6 @@ pub(super) fn gist_group_row_label(
         forks_seg,
         age
     )
-}
-
-fn render_gists_vm(
-    frame: &mut Frame,
-    state: &AppState,
-    gists: &super::view_model::GistsVm,
-    chrome: &super::view_model::ChromeVm,
-    layout: &mut MouseLayout,
-) {
-    let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
-    // Footer: filter input while filtering, else status or hints (see #72 / #250).
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Min(3),
-            Constraint::Length(footer_height(
-                &gists.footer,
-                area.width,
-                &gists.footer_title,
-            )),
-        ])
-        .split(area);
-
-    let items: Vec<ListItem> = match gists.empty {
-        super::view_model::GistsEmptyKind::HasRows => gists
-            .rows
-            .iter()
-            .map(|row| ListItem::new(hscroll_str(&row.label, gists.hscroll)))
-            .collect(),
-        _ => {
-            let msg = gists.empty_message.clone().unwrap_or_else(|| "  ".into());
-            vec![ListItem::new(msg).style(Style::default().fg(state.theme.dim))]
-        }
-    };
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(gists.title.clone())
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(state.theme.accent))
-                .style(state.theme.base_style())
-                .padding(Padding::horizontal(1)),
-        )
-        .style(state.theme.base_style())
-        .highlight_style(
-            Style::default()
-                .bg(state.theme.accent)
-                .fg(state.theme.fg_on_accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▶ ");
-
-    let mut list_state = ListState::default();
-    list_state.select(gists.selected);
-    frame.render_stateful_widget(list, chunks[0], &mut list_state);
-    if chrome.mouse_enabled {
-        layout.list = Some(PaneHit {
-            rect: chunks[0],
-            offset: list_state.offset(),
-        });
-    }
-
-    if gists.filtering {
-        let filter_query = state
-            .gist_manager()
-            .map(|g| g.filter_query.clone())
-            .unwrap_or_default();
-        render_footer_line(
-            frame,
-            chunks[1],
-            &gists.footer_title,
-            input_line("/", &filter_query, ""),
-            &state.theme,
-            layout,
-        );
-    } else {
-        render_footer(
-            frame,
-            chunks[1],
-            &gists.footer_title,
-            &gists.footer,
-            gists.footer_colored,
-            &state.theme,
-            layout,
-        );
-    }
-    if chrome.mouse_enabled {
-        layout.close_button = Some(render_close_button(frame, area, &state.theme));
-    }
 }
 
 fn gist_info_counts_seg(comments: u32, stars: u32, forks: u32) -> String {

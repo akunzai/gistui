@@ -1,5 +1,5 @@
 use super::{
-    keys::{detail_guard, gists_guard, list_guard, point_in, revisions_guard},
+    keys::{detail_guard, list_guard, point_in, revisions_guard},
     *,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -322,7 +322,7 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
     let mut items = match screen {
         Screen::List => list_palette_items(state),
         Screen::Pins(_) => super::screens::pins::pins_palette_items(state),
-        Screen::Gists(_) => gists_palette_items(state),
+        Screen::Gists(_) => super::screens::gists::gists_palette_items(state),
         Screen::GistDetail(_) => detail_palette_items(state),
         Screen::Revisions(_) => revisions_palette_items(state),
         Screen::Diff(_) => super::screens::diff::diff_palette_items(state),
@@ -426,47 +426,6 @@ fn list_palette_items(state: &AppState) -> Vec<PaletteItem> {
         key_item("t", "Toggle description / id", KeyCode::Char('t'), true),
         key_item("v", "Cycle gist visibility", KeyCode::Char('v'), true),
         key_item("s", "Cycle pane sort", KeyCode::Char('s'), true),
-        key_item("?", "Help", KeyCode::Char('?'), true),
-    ]
-}
-
-fn gists_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let g = |code| gists_guard(state, code);
-    vec![
-        key_item(
-            "Enter",
-            "Open gist detail",
-            KeyCode::Enter,
-            g(KeyCode::Enter),
-        ),
-        key_item(
-            "o",
-            "Open in browser",
-            KeyCode::Char('o'),
-            g(KeyCode::Char('o')),
-        ),
-        key_item(
-            "y",
-            "Copy gist URL",
-            KeyCode::Char('y'),
-            g(KeyCode::Char('y')),
-        ),
-        key_item(
-            "H",
-            "Revision history",
-            KeyCode::Char('H'),
-            g(KeyCode::Char('H')),
-        ),
-        key_item(
-            "*",
-            "Star / unstar gist",
-            KeyCode::Char('*'),
-            g(KeyCode::Char('*')),
-        ),
-        key_item("/", "Filter gists", KeyCode::Char('/'), true),
-        key_item("s", "Cycle sort", KeyCode::Char('s'), true),
-        key_item("v", "Cycle visibility", KeyCode::Char('v'), true),
-        key_item("q", "Back to list", KeyCode::Char('q'), true),
         key_item("?", "Help", KeyCode::Char('?'), true),
     ]
 }

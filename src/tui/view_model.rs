@@ -4,9 +4,9 @@
 //! Builders never touch the filesystem or network (issues #241 / #250).
 
 use super::render::{
-    count_label, footer_with_status, gist_group_row_label, gist_info_line, gist_row_label,
-    is_json_file, marked_row_text, revision_row_label, row_mark, spinner_glyph, unix_now, RowMark,
-    CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX, MINIMAL_HINT,
+    count_label, footer_with_status, gist_info_line, gist_row_label, is_json_file, marked_row_text,
+    revision_row_label, row_mark, spinner_glyph, unix_now, RowMark, CREATE_DESC_PREFIX,
+    CREATE_DESC_SUFFIX, MINIMAL_HINT,
 };
 use super::{
     AppState, DetailFocus, FocusPane, GistView, PaletteMode, PendingAction, Screen, TextInput,
@@ -366,7 +366,7 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
     let chrome = build_chrome(state);
     let screen = match &state.screen {
         Screen::List => ScreenVm::List(build_list_vm(state)),
-        Screen::Gists(_) => ScreenVm::Gists(build_gists_vm(state)),
+        Screen::Gists(_) => ScreenVm::Gists(super::screens::gists::build_gists_vm(state)),
         Screen::GistDetail(_) => ScreenVm::GistDetail(build_gist_detail_vm(state)),
         Screen::Revisions(_) => ScreenVm::Revisions(build_revisions_vm(state)),
         Screen::Config(_) => ScreenVm::Config(super::screens::config::build_config_vm(state)),
@@ -426,7 +426,9 @@ pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
 fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<ScreenVm> {
     match origin {
         Screen::List => Some(ScreenVm::List(build_list_vm(state))),
-        Screen::Gists(_) => Some(ScreenVm::Gists(build_gists_vm(state))),
+        Screen::Gists(_) => Some(ScreenVm::Gists(super::screens::gists::build_gists_vm(
+            state,
+        ))),
         Screen::GistDetail(_) => Some(ScreenVm::GistDetail(build_gist_detail_vm(state))),
         Screen::Revisions(_) => Some(ScreenVm::Revisions(build_revisions_vm(state))),
         Screen::Config(_) => Some(ScreenVm::Config(super::screens::config::build_config_vm(
@@ -661,86 +663,6 @@ fn comments_title_text(state: &AppState) -> String {
         }
         (Some(c), None) if !c.is_empty() => format!("Comments (newest {})", c.len()),
         _ => "Comments".to_string(),
-    }
-}
-
-/// Gists manager body — usable under Palette-over-Gists as well.
-pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
-    let gm = state.gist_manager().cloned().unwrap_or_default();
-    let (footer_title, footer, footer_colored) = if gm.filtering {
-        (
-            "Filter (↑↓ move · Enter apply · Esc clear)".to_string(),
-            format!("/{}_", gm.filter_query),
-            false,
-        )
-    } else {
-        let (footer, colored) = footer_with_status(state.status.as_deref(), MINIMAL_HINT);
-        (String::new(), footer, colored)
-    };
-
-    let groups = state.visible_gist_groups();
-    let total_groups = state.gist_groups().len();
-    let now = unix_now();
-
-    let (empty, empty_message, rows) = if groups.is_empty() {
-        if total_groups == 0 {
-            (
-                GistsEmptyKind::NoGists,
-                Some("  📭 No gists found".into()),
-                Vec::new(),
-            )
-        } else {
-            (
-                GistsEmptyKind::NoFilterMatch,
-                Some("  🔍 No gists match the filter".into()),
-                Vec::new(),
-            )
-        }
-    } else {
-        let rows = groups
-            .iter()
-            .map(|g| GistGroupRowVm {
-                gist_id: g.id.clone(),
-                label: gist_group_row_label(
-                    g,
-                    now,
-                    gm.sort,
-                    (
-                        state.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
-                        state.gist_star_counts.get(&g.id).copied().unwrap_or(0),
-                        state.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
-                    ),
-                    state.gist_is_starred(&g.id),
-                    state.current_user_login.as_deref(),
-                ),
-            })
-            .collect();
-        (GistsEmptyKind::HasRows, None, rows)
-    };
-
-    let mut title = format!(
-        "Gists {}  ·  sort:{}  ·  type:{}  ·  ★ {}  ·  ⑂ {}",
-        count_label(groups.len(), total_groups),
-        gm.sort.label(),
-        gm.type_filter.label(),
-        state.starred_gist_count(),
-        state.owned_fork_gist_count()
-    );
-    if !gm.filter_query.is_empty() {
-        title.push_str(&format!("  ·  /{}", gm.filter_query));
-    }
-
-    GistsVm {
-        title,
-        empty,
-        empty_message,
-        rows,
-        selected: (!groups.is_empty()).then_some(gm.cursor.index),
-        filtering: gm.filtering,
-        footer_title,
-        footer,
-        footer_colored,
-        hscroll: gm.cursor.hscroll,
     }
 }
 

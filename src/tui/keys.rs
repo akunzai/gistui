@@ -360,91 +360,6 @@ impl AppState {
         }
     }
 
-    fn handle_key_gists(&mut self, code: KeyCode) -> KeyOutcome {
-        self.status = None;
-        // Inline text filter: live-navigate with arrows; Tab is a no-op (single pane).
-        if self.gist_manager().is_some_and(|g| g.filtering) {
-            let Some(gm) = self.gist_manager_mut() else {
-                return KeyOutcome::None;
-            };
-            match code {
-                KeyCode::Up => gm.cursor.up(),
-                KeyCode::Down => {
-                    // visible length needs self; re-fetch after borrow ends
-                }
-                _ => match apply_filter_edit(code, &mut gm.filter_query) {
-                    FilterKey::Edited => gm.cursor.reset(),
-                    FilterKey::Cleared => {
-                        gm.filtering = false;
-                        gm.cursor.reset();
-                    }
-                    FilterKey::Exited => gm.filtering = false,
-                    FilterKey::Moved | FilterKey::Pass => {}
-                },
-            }
-            if code == KeyCode::Down {
-                let len = self.visible_gist_groups().len();
-                if let Some(gm) = self.gist_manager_mut() {
-                    gm.cursor.down(len);
-                }
-            }
-            return KeyOutcome::None;
-        }
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => self.screen = Screen::List,
-            KeyCode::Char('/') => {
-                if let Some(gm) = self.gist_manager_mut() {
-                    gm.filtering = true;
-                }
-            }
-            KeyCode::Char('s') => {
-                if let Some(gm) = self.gist_manager_mut() {
-                    gm.sort = gm.sort.next();
-                    gm.cursor.reset();
-                }
-            }
-            KeyCode::Char('v') => {
-                if let Some(gm) = self.gist_manager_mut() {
-                    gm.type_filter = gm.type_filter.next();
-                    gm.cursor.reset();
-                }
-            }
-            // Not gated through `gists_guard`: `star_toggle_intent` already has its own
-            // complete "select a gist first" message for the no-selection case.
-            KeyCode::Char('*') => return self.star_toggle_intent(),
-            KeyCode::Enter if gists_guard(self, code) => {
-                let Some(group) = self.selected_group() else {
-                    return KeyOutcome::None;
-                };
-                return KeyOutcome::OpenGistDetail {
-                    gist_id: group.id.clone(),
-                };
-            }
-            KeyCode::Char('o') if gists_guard(self, code) => {
-                let Some(gist_id) = self.context_gist_id() else {
-                    return KeyOutcome::None;
-                };
-                return KeyOutcome::OpenBrowser { gist_id };
-            }
-            KeyCode::Char('y') if gists_guard(self, code) => {
-                let Some(gist_id) = self.context_gist_id() else {
-                    return KeyOutcome::None;
-                };
-                return KeyOutcome::CopyGistUrl { gist_id };
-            }
-            KeyCode::Char('H') if gists_guard(self, code) => {
-                if self.open_revisions() {
-                    if let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) {
-                        return KeyOutcome::FetchRevisions { gist_id };
-                    }
-                }
-            }
-            KeyCode::Char('?') => self.open_help(),
-            _ => {}
-        }
-        KeyOutcome::None
-    }
-
     /// Pure key handling for `Screen::GistDetail`: scroll comments, compact, browser, back.
     fn handle_key_detail(&mut self, code: KeyCode) -> KeyOutcome {
         self.status = None;
@@ -683,6 +598,7 @@ impl AppState {
     /// panning. Help body also scrolls three; the Help topic index is a list (one row).
     fn wheel_step(&self) -> usize {
         match &self.screen {
+            Screen::Gists(_) => super::screens::gists::wheel_step(),
             Screen::Pins(_) => super::screens::pins::wheel_step(),
             Screen::Config(_) => super::screens::config::wheel_step(),
             Screen::Preview(_) => super::screens::preview::wheel_step(),
@@ -1224,15 +1140,6 @@ pub(crate) fn diff_pair_previewable(
         }
     }
     true
-}
-
-pub(crate) fn gists_guard(state: &AppState, code: KeyCode) -> bool {
-    let has_sel = state.gist_manager().map(|g| g.cursor.index).unwrap_or(0)
-        < state.visible_gist_groups().len();
-    match code {
-        KeyCode::Enter | KeyCode::Char('o' | 'y' | 'H' | '*') => has_sel,
-        _ => false,
-    }
 }
 
 pub(crate) fn detail_guard(state: &AppState, code: KeyCode) -> bool {
@@ -1779,7 +1686,7 @@ impl AppState {
         }
     }
 
-    fn star_toggle_intent(&mut self) -> KeyOutcome {
+    pub(crate) fn star_toggle_intent(&mut self) -> KeyOutcome {
         let Some(gist_id) = self.context_gist_id() else {
             self.set_status("select a gist first");
             return KeyOutcome::None;
