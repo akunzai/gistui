@@ -685,4 +685,310 @@ mod tests {
         assert!(fuzzy_match("dl", "d download gist").is_some());
         assert!(fuzzy_match("xyz", "download gist").is_none());
     }
+
+    // ── build_palette_items dispatch for the 7 previously-untested screens (issue #292) ──
+
+    fn test_gist(gist_id: &str, filename: &str) -> GistFile {
+        GistFile {
+            gist_id: gist_id.to_string(),
+            description: "demo".into(),
+            filename: filename.to_string(),
+            public: false,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+            owner_login: String::new(),
+            fork_of_id: None,
+            raw_url: None,
+            content_type: None,
+            node_id: None,
+        }
+    }
+
+    fn menu_items(state: &AppState) -> Vec<PaletteItem> {
+        build_palette_items(state, &state.screen, PaletteMode::Menu)
+    }
+
+    fn item_tuples(items: &[PaletteItem]) -> Vec<(&str, &str, bool)> {
+        items
+            .iter()
+            .map(|i| (i.key_hint.as_str(), i.label.as_str(), i.enabled))
+            .collect()
+    }
+
+    fn enabled_for(items: &[PaletteItem], label: &str) -> bool {
+        items.iter().find(|i| i.label == label).unwrap().enabled
+    }
+
+    #[test]
+    fn gists_palette_items_disable_selection_actions_when_empty() {
+        let mut state = initial_state();
+        state.screen = Screen::Gists(Box::default());
+        let items = menu_items(&state);
+        assert_eq!(
+            item_tuples(&items),
+            vec![
+                ("Enter", "Open gist detail", false),
+                ("o", "Open in browser", false),
+                ("y", "Copy gist URL", false),
+                ("H", "Revision history", false),
+                ("*", "Star / unstar gist", false),
+                ("/", "Filter gists", true),
+                ("s", "Cycle sort", true),
+                ("v", "Cycle visibility", true),
+                ("q", "Back to list", true),
+                ("?", "Help", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn gists_palette_items_enable_selection_actions_when_selected() {
+        let mut state = initial_state();
+        state.gists = vec![test_gist("g1", "a.txt")];
+        state.screen = Screen::Gists(Box::default());
+        let items = menu_items(&state);
+        assert!(items.iter().all(|i| i.enabled));
+    }
+
+    #[test]
+    fn detail_palette_items_disable_everything_without_a_gist() {
+        let mut state = initial_state();
+        state.screen = Screen::GistDetail(Box::default());
+        let items = menu_items(&state);
+        assert_eq!(
+            item_tuples(&items),
+            vec![
+                ("Enter", "Preview selected file", false),
+                ("o", "Open in browser", false),
+                ("y", "Copy gist URL", false),
+                ("H", "Revision history", false),
+                ("e", "Edit description", false),
+                ("c", "Compact revisions", false),
+                ("*", "Star / unstar gist", false),
+                ("F", "Fork gist", false),
+                ("X", "Delete gist", false),
+                ("Tab", "Switch Files / Comments", true),
+                ("m", "Load older comments", false),
+                ("q", "Back to Gist manager", true),
+                ("?", "Help", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn detail_palette_items_enable_owned_actions_for_owned_previewable_gist() {
+        let mut state = initial_state();
+        state.gists = vec![test_gist("g1", "a.txt")];
+        state.screen = Screen::GistDetail(Box::new(DetailState {
+            gist_id: Some("g1".into()),
+            focus: DetailFocus::Files,
+            ..DetailState::default()
+        }));
+        let items = menu_items(&state);
+        assert_eq!(
+            item_tuples(&items),
+            vec![
+                ("Enter", "Preview selected file", true),
+                ("o", "Open in browser", true),
+                ("y", "Copy gist URL", true),
+                ("H", "Revision history", true),
+                ("e", "Edit description", true),
+                ("c", "Compact revisions", true),
+                ("*", "Star / unstar gist", true),
+                // Owned gist: fork is disabled (can't fork your own gist).
+                ("F", "Fork gist", false),
+                ("X", "Delete gist", true),
+                ("Tab", "Switch Files / Comments", true),
+                ("m", "Load older comments", false),
+                ("q", "Back to Gist manager", true),
+                ("?", "Help", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn detail_palette_items_gate_fork_on_ownership() {
+        let mut state = initial_state();
+        state.gists = vec![test_gist("g1", "a.txt")];
+        state.current_user_login = Some("someone-else".into());
+        state.screen = Screen::GistDetail(Box::new(DetailState {
+            gist_id: Some("g1".into()),
+            focus: DetailFocus::Files,
+            ..DetailState::default()
+        }));
+        let items = menu_items(&state);
+        assert!(!enabled_for(&items, "Edit description")); // not owned
+        assert!(!enabled_for(&items, "Delete gist")); // not owned
+        assert!(enabled_for(&items, "Fork gist")); // not owned + has gist -> forkable
+    }
+
+    #[test]
+    fn revisions_palette_items_gate_diff_and_restore_on_head_position() {
+        let mut state = initial_state();
+        state.gists = vec![test_gist("g1", "a.txt")];
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            target_file: "a.txt".into(),
+            index: 0,
+            entries: Some(vec![
+                GistRevision {
+                    version: "v2".into(),
+                    committed_at: "2026-06-10T00:00:00Z".into(),
+                    user: "u".into(),
+                    change_status: crate::domain::GistRevisionChangeStatus {
+                        total: 1,
+                        additions: 1,
+                        deletions: 0,
+                    },
+                },
+                GistRevision {
+                    version: "v1".into(),
+                    committed_at: "2026-06-01T00:00:00Z".into(),
+                    user: "u".into(),
+                    change_status: crate::domain::GistRevisionChangeStatus {
+                        total: 2,
+                        additions: 2,
+                        deletions: 0,
+                    },
+                },
+            ]),
+            ..RevisionState::default()
+        }));
+
+        // At head (index 0): incremental diff is available, but "vs head" diff and restore
+        // are not (there's nothing above head to diff/restore against).
+        let items = menu_items(&state);
+        assert_eq!(
+            item_tuples(&items),
+            vec![
+                ("Enter", "Diff parent → revision", true),
+                ("D", "Diff revision vs head", false),
+                ("r", "Restore revision", false),
+                ("F", "Cycle target file", true),
+                ("q", "Back", true),
+                ("?", "Help", true),
+            ]
+        );
+
+        // Off head (index 1): both become available.
+        if let Screen::Revisions(rev) = &mut state.screen {
+            rev.index = 1;
+        }
+        let items = menu_items(&state);
+        assert_eq!(
+            item_tuples(&items),
+            vec![
+                ("Enter", "Diff parent → revision", true),
+                ("D", "Diff revision vs head", true),
+                ("r", "Restore revision", true),
+                ("F", "Cycle target file", true),
+                ("q", "Back", true),
+                ("?", "Help", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn revisions_palette_items_disable_everything_before_entries_load() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::default());
+        let items = menu_items(&state);
+        assert_eq!(
+            item_tuples(&items),
+            vec![
+                ("Enter", "Diff parent → revision", false),
+                ("D", "Diff revision vs head", false),
+                ("r", "Restore revision", false),
+                ("F", "Cycle target file", false),
+                ("q", "Back", true),
+                ("?", "Help", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn diff_palette_items_enable_sync_by_default() {
+        let mut state = initial_state();
+        state.screen = Screen::Diff(Box::default());
+        let items = menu_items(&state);
+        assert_eq!(
+            item_tuples(&items),
+            vec![
+                ("d", "Download", true),
+                ("u", "Upload", true),
+                ("c", "Toggle full diff context", true),
+                ("w", "Toggle line wrap", true),
+                ("q", "Back", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn diff_palette_items_disable_sync_when_identical() {
+        let mut state = initial_state();
+        state.screen = Screen::Diff(Box::new(DiffState {
+            identical: true,
+            ..DiffState::default()
+        }));
+        let items = menu_items(&state);
+        assert!(!enabled_for(&items, "Download"));
+        assert!(!enabled_for(&items, "Upload"));
+        assert!(enabled_for(&items, "Toggle full diff context")); // unrelated to sync gating
+    }
+
+    #[test]
+    fn diff_palette_items_disable_sync_within_revision_diff_flow() {
+        let mut state = initial_state();
+        state.nav_stack.push(Screen::Revisions(Box::default()));
+        state.screen = Screen::Diff(Box::default());
+        let items = menu_items(&state);
+        assert!(!enabled_for(&items, "Download"));
+        assert!(!enabled_for(&items, "Upload"));
+    }
+
+    #[test]
+    fn preview_palette_items_are_always_enabled() {
+        let mut state = initial_state();
+        state.screen = Screen::Preview(Box::default());
+        let items = menu_items(&state);
+        assert_eq!(
+            item_tuples(&items),
+            vec![
+                ("R", "Refresh content", true),
+                ("w", "Toggle line wrap", true),
+                ("y", "Copy gist URL", true),
+                ("Y", "Copy file content", true),
+                ("q", "Back", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn config_palette_items_are_always_enabled() {
+        let mut state = initial_state();
+        state.screen = Screen::Config(Box::default());
+        let items = menu_items(&state);
+        assert_eq!(
+            item_tuples(&items),
+            vec![
+                ("Enter", "Toggle / increase value", true),
+                ("h/l", "Decrease / increase value", true),
+                ("Esc", "Close settings", true),
+            ]
+        );
+    }
+
+    #[test]
+    fn help_palette_items_are_always_enabled() {
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        let items = menu_items(&state);
+        assert_eq!(
+            item_tuples(&items),
+            vec![
+                ("Tab", "Browse topic index", true),
+                ("q", "Close Help", true),
+            ]
+        );
+    }
 }
