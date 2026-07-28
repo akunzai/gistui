@@ -1483,17 +1483,6 @@ pub(super) fn gist_row_label(g: &RankedGistFile, view: GistView) -> String {
     format!("{}{}", gist_badge_prefix(false, g.file.is_fork()), base)
 }
 
-/// Full gist file-list row as painted — [`gist_row_label`] plus `★ ` when the gist is starred.
-/// Hscroll max must measure this string (or [`marked_row_text`] of it), not the star-less label.
-pub(super) fn gist_row_display(g: &RankedGistFile, view: GistView, state: &AppState) -> String {
-    let label = gist_row_label(g, view);
-    if state.gist_is_starred(&g.file.gist_id) {
-        format!("★ {label}")
-    } else {
-        label
-    }
-}
-
 /// Greedy word-wrap line count, matching how `Paragraph` with `Wrap { trim: true }` breaks
 /// space-separated words at `width`. Used to size the footer block to its content.
 pub(super) fn wrap_line_count(text: &str, width: u16) -> u16 {
@@ -2087,161 +2076,11 @@ pub(super) fn diff_view_highlighted(
     )
 }
 
-/// The diff pane title. The gist id, filenames, and both sides' mtimes live in the diff's
-/// `--- / +++` header lines (see `diff_labels`); the title stays concise and avoids
-/// repeating a path.
-pub(super) fn diff_title(state: &AppState) -> String {
-    match state.pending_action() {
-        Some(PendingAction::Upload {
-            gist_id, filename, ..
-        }) => format!("Upload → gist {gist_id} / {filename}"),
-        Some(PendingAction::Create { local_path }) => {
-            format!(
-                "Create gist from {}",
-                crate::config::display_path(local_path)
-            )
-        }
-        Some(PendingAction::Delete { gist_id, .. }) => {
-            format!("Delete gist {gist_id}")
-        }
-        Some(PendingAction::RemoveFile {
-            gist_id, filename, ..
-        }) => {
-            format!("Remove {filename} from gist {gist_id}")
-        }
-        _ => {
-            let label = if state.diff_identical() {
-                "Diff (identical)"
-            } else {
-                "Diff"
-            };
-            let local = state.preview_local();
-            let target = state.download_target();
-            if local.as_os_str().is_empty() || local == target {
-                format!("{label} → {}", crate::config::display_path(&target))
-            } else {
-                format!(
-                    "{label}: {} → {}",
-                    crate::config::display_path(&local),
-                    crate::config::display_path(&target)
-                )
-            }
-        }
-    }
-}
-
 /// Label and trailing hint around the create flow's description input. Shared so
-/// `confirm_prompt` (plain text / tests) and `render_confirm` (the cursor-aware modal)
-/// can't drift apart.
+/// `confirm_prompt` (in `view_model.rs`; plain text / tests) and `render_confirm` (the
+/// cursor-aware modal, here) can't drift apart.
 pub(super) const CREATE_DESC_PREFIX: &str = "Description (optional): ";
 pub(super) const CREATE_DESC_SUFFIX: &str = "   ·  Enter next  ·  Esc cancel";
-
-/// The prompt shown inside the centered confirm modal — one line per pending action,
-/// listing the keys that resolve it. Pure so it can be unit-tested.
-pub(super) fn confirm_prompt(state: &AppState) -> String {
-    match state.pending_action() {
-        Some(PendingAction::Create { .. }) if state.editing_description => {
-            // `_` is the plain-text caret; the rendered modal draws a reverse-video
-            // cursor at its real position instead (see render_confirm).
-            format!(
-                "{CREATE_DESC_PREFIX}{}_{CREATE_DESC_SUFFIX}",
-                state.description_input
-            )
-        }
-        Some(PendingAction::Create { local_path }) => {
-            let desc = if state.description_input.is_empty() {
-                "no description".to_string()
-            } else {
-                format!("desc: {}", state.description_input)
-            };
-            format!(
-                "Create gist from {} ({desc})?  s secret  p public  Esc cancel",
-                crate::config::display_path(local_path)
-            )
-        }
-        Some(PendingAction::Upload {
-            gist_id: _,
-            filename: _,
-            local_path: _,
-        }) if state.upload.watching => {
-            format!(
-                "{} watching for edits — close the editor to continue  ·  n cancel",
-                spinner_glyph(state.spinner_frame)
-            )
-        }
-        Some(PendingAction::Upload {
-            gist_id,
-            filename,
-            local_path,
-        }) => {
-            let edited_status = if state.upload.edited_content.is_some() {
-                " [edited]"
-            } else {
-                ""
-            };
-            let mut opts = format!("y yes  n/Esc cancel  e edit{edited_status}");
-            if is_json_file(local_path) {
-                let pretty_status = if state.upload.json_pretty {
-                    " [on]"
-                } else {
-                    " [off]"
-                };
-                let sort_status = if state.upload.json_sort {
-                    " [on]"
-                } else {
-                    " [off]"
-                };
-                opts.push_str(&format!("  p pretty{pretty_status}  s sort{sort_status}"));
-            }
-            format!("Upload {filename} to gist {gist_id}?  ·  {opts}")
-        }
-        Some(PendingAction::Delete { gist_id, label }) => {
-            format!("Permanently delete \"{label}\" ({gist_id})? (y/n)")
-        }
-        Some(PendingAction::RemoveFile {
-            gist_id, filename, ..
-        }) => {
-            format!("Remove {filename} from gist {gist_id}? (y/n)")
-        }
-        Some(PendingAction::CompactGist { label, count, .. }) => {
-            format!(
-                "Compact {count} revisions of \"{label}\" into one? This force-pushes and cannot be undone. (y/n)"
-            )
-        }
-        Some(PendingAction::RestoreRevision {
-            filename,
-            version_label,
-            ..
-        }) => {
-            format!(
-                "Restore {filename} to revision {version_label}? This uploads old content as a new revision. (y/n)"
-            )
-        }
-        _ => format!(
-            "Overwrite {}? (y/n)",
-            crate::config::display_path(&state.download_target())
-        ),
-    }
-}
-
-/// Title and border colour for the confirm modal. Destructive actions are tinted with the
-/// theme's `del_color` so the stakes read at a glance; non-destructive writes use the neutral
-/// `notice_color` prompt.
-pub(super) fn confirm_modal_style(state: &AppState) -> (&'static str, Color) {
-    let theme = &state.theme;
-    match state.pending_action() {
-        Some(PendingAction::Create { .. }) if state.editing_description => {
-            ("Description", theme.accent)
-        }
-        Some(PendingAction::Create { .. }) => ("Create gist", theme.notice_color),
-        Some(PendingAction::Upload { .. }) => ("Upload", theme.notice_color),
-        Some(PendingAction::Delete { .. }) => ("Delete", theme.del_color),
-        Some(PendingAction::RemoveFile { .. }) => ("Remove file", theme.del_color),
-        Some(PendingAction::CompactGist { .. }) => ("Compact revisions", theme.del_color),
-        Some(PendingAction::RestoreRevision { .. }) => ("Restore revision", theme.notice_color),
-        _ => ("Overwrite", theme.del_color),
-    }
-}
 
 /// Overlay a vertical scrollbar on the right edge of a bordered, scrollable text pane when
 /// its `total` lines overflow the inner viewport. `offset` is the index of the topmost
@@ -2309,43 +2148,6 @@ fn render_diff_pane_vm(
     if !diff.wrap {
         let total_lines = diff.body.lines().count();
         render_text_scrollbar(frame, area, total_lines, diff.scroll as usize);
-    }
-}
-
-/// The `Screen::Diff` preview: the diff pane plus a scroll/commands footer.
-///
-/// #72 audit: this footer intentionally does not surface `state.status`. Diff actions (`d`/`u`)
-/// transition to `Screen::Confirm` or to the IO that lands back on `List`; their results surface
-/// on those destination screens (which read `state.status`), so no status is set while on Diff.
-/// Footer hints for `Screen::Diff` (pure for tests).
-pub(super) fn diff_footer(state: &AppState) -> String {
-    let context = if state.diff_show_full {
-        "c context [full]".to_string()
-    } else {
-        format!("c context [{}]", state.diff_context)
-    };
-    // When wrapping, horizontal scroll (←→) is meaningless — drop it from the hint.
-    let scroll = if state.diff_wrap {
-        "↑↓ PgUp/Dn scroll"
-    } else {
-        "↑↓←→ PgUp/Dn scroll"
-    };
-    let wrap = if state.diff_wrap {
-        "w wrap [on]"
-    } else {
-        "w wrap [off]"
-    };
-    let back = "Esc/q back";
-    if !state.diff_allows_sync() {
-        if state.diff_identical() {
-            format!("Files are identical  ·  {scroll}  ·  {wrap}  ·  {context}  ·  {back}")
-        } else {
-            format!("{scroll}  ·  {wrap}  ·  {context}  ·  {back}")
-        }
-    } else if state.diff_identical() {
-        format!("Files are identical — nothing to sync  ·  {scroll}  ·  {wrap}  ·  {context}  ·  {back}")
-    } else {
-        format!("{scroll}  ·  d download  ·  u upload  ·  {wrap}  ·  {context}  ·  {back}")
     }
 }
 
@@ -2615,8 +2417,7 @@ fn render_palette_vm(
         .add_modifier(Modifier::BOLD);
     let mut lines: Vec<Line<'static>> = Vec::new();
     if palette.has_query {
-        let query = state.palette().map(|p| p.query.clone()).unwrap_or_default();
-        lines.push(input_line("> ", &query, ""));
+        lines.push(input_line("> ", &palette.query, ""));
     }
     if palette.items.is_empty() {
         lines.push(Line::from(Span::styled("  (no matches)", dim)));
