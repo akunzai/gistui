@@ -542,7 +542,14 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
     }
 
     let footer = if state.filtering {
-        ListFooterVm::Filtering { focus: state.focus }
+        let query = match state.focus {
+            FocusPane::Local => state.local_filter_query.clone(),
+            FocusPane::Gist => state.filter_query.clone(),
+        };
+        ListFooterVm::Filtering {
+            focus: state.focus,
+            query,
+        }
     } else if let Some(message) = &state.status {
         ListFooterVm::Status {
             text: message.clone(),
@@ -678,10 +685,10 @@ pub(crate) fn render_list_vm(
     let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
     let footer_body = match &list.footer {
         ListFooterVm::Hints { text } | ListFooterVm::Status { text } => text.clone(),
-        ListFooterVm::Filtering { focus } => {
-            let (pane, query) = match focus {
-                FocusPane::Local => ("local", &state.local_filter_query),
-                FocusPane::Gist => ("gist", &state.filter_query),
+        ListFooterVm::Filtering { focus, query } => {
+            let pane = match focus {
+                FocusPane::Local => "local",
+                FocusPane::Gist => "gist",
             };
             // Height sizing uses a plain-text approximation; the painted footer uses `input_line`.
             format!("filter {pane}: {query}_   (Tab next pane · Enter apply · Esc clear)")
@@ -739,10 +746,10 @@ pub(crate) fn render_list_vm(
     }
 
     match &list.footer {
-        ListFooterVm::Filtering { focus } => {
-            let (pane, query) = match focus {
-                FocusPane::Local => ("local", &state.local_filter_query),
-                FocusPane::Gist => ("gist", &state.filter_query),
+        ListFooterVm::Filtering { focus, query } => {
+            let pane = match focus {
+                FocusPane::Local => "local",
+                FocusPane::Gist => "gist",
             };
             let line = crate::tui::render::input_line(
                 &format!("filter {pane}: "),

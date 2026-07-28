@@ -228,3 +228,7 @@ pub(crate) fn render_confirm_vm(
         ));
     }
 }
+
+pub(crate) fn confirm_palette_items(_state: &AppState) -> Vec<crate::tui::palette::PaletteItem> {
+    Vec::new()
+}

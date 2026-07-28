@@ -114,7 +114,7 @@ impl AppState {
         matched.into_iter().map(|(item, _)| item).collect()
     }
 
-    fn palette_clamp_selection(&mut self) {
+    pub(crate) fn palette_clamp_selection(&mut self) {
         let len = self.palette_visible_items().len();
         if let Some(p) = self.palette_mut() {
             if len == 0 {
@@ -122,121 +122,6 @@ impl AppState {
             } else if p.selected >= len {
                 p.selected = len - 1;
             }
-        }
-    }
-
-    pub(crate) fn handle_key_palette(
-        &mut self,
-        code: KeyCode,
-        _modifiers: KeyModifiers,
-    ) -> KeyOutcome {
-        let mode = self.palette().map(|p| p.mode).unwrap_or_default();
-        if mode == PaletteMode::Command {
-            match code {
-                KeyCode::Esc => {
-                    self.close_palette();
-                    return KeyOutcome::None;
-                }
-                KeyCode::Up => {
-                    if let Some(p) = self.palette_mut() {
-                        p.selected = p.selected.saturating_sub(1);
-                    }
-                    return KeyOutcome::None;
-                }
-                KeyCode::Down => {
-                    let len = self.palette_visible_items().len();
-                    if let Some(p) = self.palette_mut() {
-                        if len > 0 && p.selected + 1 < len {
-                            p.selected += 1;
-                        }
-                    }
-                    return KeyOutcome::None;
-                }
-                KeyCode::Enter => return self.execute_palette_selection(),
-                _ => {
-                    if let Some(p) = self.palette_mut() {
-                        if let EditResult::Changed = p.query.apply_edit(code) {
-                            p.selected = 0;
-                        }
-                    }
-                    self.palette_clamp_selection();
-                    return KeyOutcome::None;
-                }
-            }
-        }
-
-        // Menu mode: no query box — arrows pick a row, Enter runs it, Esc closes.
-        match code {
-            KeyCode::Esc | KeyCode::Char(';') => {
-                self.close_palette();
-                KeyOutcome::None
-            }
-            KeyCode::Up => {
-                if let Some(p) = self.palette_mut() {
-                    p.selected = p.selected.saturating_sub(1);
-                }
-                KeyOutcome::None
-            }
-            KeyCode::Down => {
-                let len = self.palette_visible_items().len();
-                if let Some(p) = self.palette_mut() {
-                    if len > 0 && p.selected + 1 < len {
-                        p.selected += 1;
-                    }
-                }
-                KeyOutcome::None
-            }
-            KeyCode::Enter => self.execute_palette_selection(),
-            _ => KeyOutcome::None,
-        }
-    }
-
-    fn execute_palette_selection(&mut self) -> KeyOutcome {
-        let selected = self.palette().map(|p| p.selected).unwrap_or(0);
-        let item = self
-            .palette_visible_items()
-            .get(selected)
-            .map(|i| (*i).clone());
-        let Some(item) = item else {
-            return KeyOutcome::None;
-        };
-        if !item.enabled {
-            return KeyOutcome::None;
-        }
-        let exec = item.exec;
-        let origin = self
-            .palette()
-            .map(|p| p.origin_screen.clone())
-            .unwrap_or(Screen::List);
-        self.close_palette();
-        self.screen = origin;
-        match exec {
-            PaletteExec::Key(code, modifiers) => self.handle_key_with(code, modifiers),
-            PaletteExec::Cross(CrossAction::GoToGists) => {
-                self.open_gist_manager();
-                KeyOutcome::None
-            }
-            PaletteExec::Cross(CrossAction::GoToPins) => {
-                self.open_pins();
-                KeyOutcome::None
-            }
-            PaletteExec::Cross(CrossAction::OpenHelp) => {
-                self.open_help();
-                KeyOutcome::None
-            }
-            PaletteExec::Cross(CrossAction::OpenConfig) => {
-                self.open_config();
-                KeyOutcome::None
-            }
-            PaletteExec::Cross(CrossAction::ToggleTheme) => {
-                self.theme_choice = match self.theme_choice {
-                    crate::config::ThemeChoice::Dark => crate::config::ThemeChoice::Light,
-                    crate::config::ThemeChoice::Light => crate::config::ThemeChoice::Dark,
-                };
-                self.theme = Theme::for_choice(self.theme_choice);
-                KeyOutcome::ThemeToggle
-            }
-            PaletteExec::Cross(CrossAction::Quit) => KeyOutcome::Quit,
         }
     }
 
@@ -326,7 +211,8 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
         Screen::Preview(_) => super::screens::preview::preview_palette_items(state),
         Screen::Help(_) => super::screens::help::help_palette_items(),
         Screen::Config(_) => super::screens::config::config_palette_items(),
-        Screen::Confirm(_) | Screen::Palette(_) => Vec::new(),
+        Screen::Confirm(_) => super::screens::confirm::confirm_palette_items(state),
+        Screen::Palette(_) => super::screens::palette::palette_palette_items(state),
     };
     if mode == PaletteMode::Command {
         items.extend(cross_items());

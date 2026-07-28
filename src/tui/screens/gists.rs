@@ -180,6 +180,7 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
         rows,
         selected: (!groups.is_empty()).then_some(gm.cursor.index),
         filtering: gm.filtering,
+        filter_query: gm.filter_query.clone(),
         footer_title,
         footer,
         footer_colored,
@@ -251,15 +252,11 @@ pub(crate) fn render_gists_vm(
     }
 
     if gists.filtering {
-        let filter_query = state
-            .gist_manager()
-            .map(|g| g.filter_query.clone())
-            .unwrap_or_default();
         crate::tui::render::render_footer_line(
             frame,
             chunks[1],
             &gists.footer_title,
-            crate::tui::render::input_line("/", &filter_query, ""),
+            crate::tui::render::input_line("/", &gists.filter_query, ""),
             &state.theme,
             layout,
         );

@@ -214,7 +214,7 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
         rows,
         selected: (!visible.is_empty()).then_some(pins.cursor.index),
         filtering: pins.filtering,
-        filter_query: pins.filter_query.to_string(),
+        filter_query: pins.filter_query.clone(),
         footer_title,
         footer,
         footer_colored,
@@ -303,14 +303,7 @@ pub(crate) fn render_pins_vm(
             frame,
             chunks[1],
             &pins.footer_title,
-            crate::tui::render::input_line(
-                "/",
-                &state
-                    .pins()
-                    .expect("filtering PinsVm implies Screen::Pins payload")
-                    .filter_query,
-                "",
-            ),
+            crate::tui::render::input_line("/", &pins.filter_query, ""),
             &state.theme,
             layout,
         );

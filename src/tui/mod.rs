@@ -346,7 +346,7 @@ impl HelpTopic {
             Screen::Gists(_) => screens::gists::help_topic(),
             Screen::GistDetail(_) => screens::detail::help_topic(),
             Screen::Revisions(_) => screens::revisions::help_topic(),
-            Screen::Palette(_) => HelpTopic::List,
+            Screen::Palette(_) => screens::palette::help_topic(),
             Screen::Config(_) => screens::config::help_topic(),
         }
     }
@@ -581,6 +581,11 @@ pub enum KeyOutcome {
     /// [`DownloadMode::overwrite_after_user_confirm`] after Confirm `y` (issue #246).
     Download {
         mode: crate::actions::DownloadMode,
+    },
+    /// Request a download from the open Diff payload. Dispatch checks the target immediately
+    /// before choosing either an overwrite confirmation or a new-file download.
+    DownloadRequested {
+        target: PathBuf,
     },
     /// Download/fetch a selected gist file (may land on Diff/Confirm).
     DownloadGist {

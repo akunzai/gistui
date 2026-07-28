@@ -1,4 +1,15 @@
-use super::{theme::Theme, *};
+use super::{
+    screens::{
+        config::render_config_vm as render_config, confirm::render_confirm_vm as render_confirm,
+        detail::render_gist_detail_vm as render_detail, diff::render_diff_vm as render_diff,
+        gists::render_gists_vm as render_gists, help::render_help_vm as render_help,
+        list::render_list_vm as render_list, palette::render_palette_vm as render_palette,
+        pins::render_pins_vm as render_pins, preview::render_preview_vm as render_preview,
+        revisions::render_revisions_vm as render_revisions,
+    },
+    theme::Theme,
+    *,
+};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
@@ -31,7 +42,7 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
 /// Paints one `ScreenVm`. Shared by `render()` (the primary per-frame path) and
 /// `render_palette_vm` (the palette's already-built background, issue #272) — one seam, two
 /// real callers, so a new `Screen` variant only needs wiring here once.
-fn render_screen_vm(
+pub(crate) fn render_screen_vm(
     frame: &mut Frame,
     state: &AppState,
     screen: &super::ScreenVm,
@@ -39,39 +50,17 @@ fn render_screen_vm(
     layout: &mut MouseLayout,
 ) {
     match screen {
-        super::ScreenVm::List(list) => {
-            super::screens::list::render_list_vm(frame, state, list, chrome, layout)
-        }
-        super::ScreenVm::Gists(gists) => {
-            super::screens::gists::render_gists_vm(frame, state, gists, chrome, layout)
-        }
-        super::ScreenVm::GistDetail(detail) => {
-            super::screens::detail::render_gist_detail_vm(frame, state, detail, chrome, layout)
-        }
-        super::ScreenVm::Revisions(revs) => {
-            super::screens::revisions::render_revisions_vm(frame, state, revs, chrome, layout)
-        }
-        super::ScreenVm::Config(config) => {
-            super::screens::config::render_config_vm(frame, state, config, chrome, layout)
-        }
-        super::ScreenVm::Diff(diff) => {
-            super::screens::diff::render_diff_vm(frame, state, diff, chrome, layout)
-        }
-        super::ScreenVm::Preview(preview) => {
-            super::screens::preview::render_preview_vm(frame, state, preview, chrome, layout)
-        }
-        super::ScreenVm::Pins(pins) => {
-            super::screens::pins::render_pins_vm(frame, state, pins, chrome, layout)
-        }
-        super::ScreenVm::Confirm(confirm) => {
-            super::screens::confirm::render_confirm_vm(frame, state, confirm, chrome, layout)
-        }
-        super::ScreenVm::Help(help) => {
-            super::screens::help::render_help_vm(frame, state, help, chrome, layout)
-        }
-        super::ScreenVm::Palette(palette) => {
-            render_palette_vm(frame, state, palette, chrome, layout)
-        }
+        ScreenVm::List(list) => render_list(frame, state, list, chrome, layout),
+        ScreenVm::Gists(gists) => render_gists(frame, state, gists, chrome, layout),
+        ScreenVm::GistDetail(detail) => render_detail(frame, state, detail, chrome, layout),
+        ScreenVm::Revisions(revs) => render_revisions(frame, state, revs, chrome, layout),
+        ScreenVm::Config(config) => render_config(frame, state, config, chrome, layout),
+        ScreenVm::Diff(diff) => render_diff(frame, state, diff, chrome, layout),
+        ScreenVm::Preview(preview) => render_preview(frame, state, preview, chrome, layout),
+        ScreenVm::Pins(pins) => render_pins(frame, state, pins, chrome, layout),
+        ScreenVm::Confirm(confirm) => render_confirm(frame, state, confirm, chrome, layout),
+        ScreenVm::Help(help) => render_help(frame, state, help, chrome, layout),
+        ScreenVm::Palette(palette) => render_palette(frame, state, palette, chrome, layout),
     }
 }
 
@@ -1054,7 +1043,7 @@ pub(super) fn palette_row_line(
 }
 
 /// Shared by palette paint (`PaletteVm` rows) and test helpers.
-fn palette_row_spans(
+pub(super) fn palette_row_spans(
     key_hint: &str,
     label: &str,
     key_width: usize,
@@ -1068,114 +1057,6 @@ fn palette_row_spans(
         ),
         Span::styled(label.to_string(), row_style),
     ])
-}
-
-fn render_palette_vm(
-    frame: &mut Frame,
-    state: &AppState,
-    palette: &super::view_model::PaletteVm,
-    chrome: &super::view_model::ChromeVm,
-    layout: &mut MouseLayout,
-) {
-    let mut bg_layout = MouseLayout::default();
-    if let Some(background) = &palette.background {
-        render_screen_vm(frame, state, background, chrome, &mut bg_layout);
-    }
-
-    let area = frame.area();
-    let body_lines = palette.items.len() + usize::from(palette.has_query);
-    let longest_row = palette
-        .items
-        .iter()
-        .map(|item| 2 + palette.key_width + 2 + item.label.chars().count());
-    let content_width = longest_row.max().unwrap_or(20) as u16;
-    let width = if palette.has_query {
-        (area.width * 70 / 100).clamp(
-            content_width.saturating_add(4),
-            area.width.saturating_sub(2).max(1),
-        )
-    } else {
-        (area.width * 45 / 100).clamp(
-            content_width.saturating_add(4),
-            area.width.saturating_sub(2).max(1),
-        )
-    };
-    let max_h = area.height.saturating_sub(2).max(1) as usize;
-    let height = (body_lines + 2).clamp(3, max_h) as u16;
-    let (x, y) = match (palette.mode, palette.anchor) {
-        (PaletteMode::Menu, Some((col, row))) => (
-            col.saturating_sub(width / 2)
-                .min(area.width.saturating_sub(width)),
-            row.saturating_sub(1)
-                .min(area.height.saturating_sub(height)),
-        ),
-        _ => (
-            area.width.saturating_sub(width) / 2,
-            area.height.saturating_sub(height).saturating_sub(1),
-        ),
-    };
-    let rect = Rect::new(x, y, width, height);
-
-    frame.render_widget(Clear, rect);
-
-    layout.palette_rows.clear();
-    let dim = Style::default().fg(state.theme.dim);
-    let active = Style::default()
-        .fg(state.theme.fg_on_accent)
-        .bg(state.theme.accent)
-        .add_modifier(Modifier::BOLD);
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    if palette.has_query {
-        lines.push(input_line("> ", &palette.query, ""));
-    }
-    if palette.items.is_empty() {
-        lines.push(Line::from(Span::styled("  (no matches)", dim)));
-    } else {
-        for (i, item) in palette.items.iter().enumerate() {
-            let row_style = if i == palette.selected {
-                active
-            } else if item.enabled {
-                state.theme.base_style()
-            } else {
-                Style::default().fg(state.theme.dim)
-            };
-            lines.push(palette_row_spans(
-                &item.key_hint,
-                &item.label,
-                palette.key_width,
-                &state.theme,
-                row_style,
-            ));
-        }
-    }
-    frame.render_widget(
-        Paragraph::new(lines).style(state.theme.base_style()).block(
-            Block::default()
-                .title(palette.title)
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(state.theme.accent))
-                .style(state.theme.base_style()),
-        ),
-        rect,
-    );
-
-    let inner = rect.inner(Margin::new(1, 1));
-    let mut y = inner.y + u16::from(palette.has_query);
-    for item in palette.items.iter() {
-        if y >= inner.bottom() {
-            break;
-        }
-        if chrome.mouse_enabled && item.enabled {
-            layout
-                .palette_rows
-                .push(Rect::new(inner.x, y, inner.width, 1));
-        }
-        y = y.saturating_add(1);
-    }
-    if chrome.mouse_enabled {
-        layout.palette_close = Some(render_close_button(frame, rect, &state.theme));
-    }
 }
 
 /// A centered "Working…" box shown while a blocking `gh` action runs.

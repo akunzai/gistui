@@ -42,13 +42,9 @@ impl AppState {
             // Identical files have nothing to sync, so download/upload are not offered.
             // Revision-history diffs are read-only (no local file pairing).
             KeyCode::Char('d') if diff_guard(self, code) => {
-                if self.download_target().exists() {
-                    self.enter_confirm_from_diff(PendingAction::Download);
-                } else {
-                    return KeyOutcome::Download {
-                        mode: crate::actions::DownloadMode::CreateNew,
-                    };
-                }
+                return KeyOutcome::DownloadRequested {
+                    target: self.download_target(),
+                };
             }
             KeyCode::Char('u') if diff_guard(self, code) => {
                 return self.upload_intent();

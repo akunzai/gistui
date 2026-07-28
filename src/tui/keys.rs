@@ -60,15 +60,17 @@ impl AppState {
     }
 
     pub fn handle_key_with(&mut self, code: KeyCode, modifiers: KeyModifiers) -> KeyOutcome {
-        if self.screen.is_palette() {
-            return self.handle_key_palette(code, modifiers);
-        }
-        if code == KeyCode::Char(';') && modifiers.is_empty() && !self.palette_blocked() {
+        if code == KeyCode::Char(';')
+            && modifiers.is_empty()
+            && !self.screen.is_palette()
+            && !self.palette_blocked()
+        {
             self.open_palette_menu(None);
             return KeyOutcome::None;
         }
         if code == KeyCode::Char('p')
             && modifiers.contains(KeyModifiers::CONTROL)
+            && !self.screen.is_palette()
             && !self.palette_blocked()
         {
             self.open_palette_command();
@@ -108,8 +110,7 @@ impl AppState {
             Screen::GistDetail(_) => self.handle_key_detail(code),
             Screen::Revisions(_) => self.handle_key_revisions(code),
             Screen::Config(_) => self.handle_key_config(code),
-            // Exhaustiveness only — palette keys return above via is_palette() early path.
-            Screen::Palette(_) => KeyOutcome::None,
+            Screen::Palette(_) => self.handle_key_palette(code, modifiers),
         }
     }
 
@@ -406,7 +407,7 @@ impl AppState {
             Screen::GistDetail(_) => super::screens::detail::wheel_step(self),
             Screen::Revisions(_) => super::screens::revisions::wheel_step(),
             Screen::Config(_) => super::screens::config::wheel_step(),
-            Screen::Palette(_) => 1,
+            Screen::Palette(_) => super::screens::palette::wheel_step(),
         }
     }
 

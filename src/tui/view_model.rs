@@ -7,6 +7,14 @@ use super::render::{
     gist_info_line, gist_row_label, is_json_file, spinner_glyph, unix_now, RowMark,
     CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX,
 };
+use super::screens::{
+    config::build_config_vm as build_config, confirm::build_confirm_vm as build_confirm,
+    detail::build_gist_detail_vm as build_detail, diff::build_diff_vm as build_diff,
+    gists::build_gists_vm as build_gists, help::build_help_vm as build_help,
+    list::build_list_vm as build_list, palette::build_palette_vm as build_palette,
+    pins::build_pins_vm as build_pins, preview::build_preview_vm as build_preview,
+    revisions::build_revisions_vm as build_revisions,
+};
 use super::{
     AppState, DetailFocus, FocusPane, GistView, PaletteMode, PendingAction, Screen, TextInput,
 };
@@ -195,6 +203,7 @@ pub struct GistsVm {
     pub rows: Vec<GistGroupRowVm>,
     pub selected: Option<usize>,
     pub filtering: bool,
+    pub filter_query: crate::tui::text_input::TextInput,
     pub footer_title: String,
     pub footer: String,
     pub footer_colored: bool,
@@ -258,8 +267,11 @@ pub enum ListFooterVm {
     Hints { text: String },
     /// One-shot status message (plain).
     Status { text: String },
-    /// Inline filter on the focused pane; paint still uses live `TextInput` for the caret.
-    Filtering { focus: FocusPane },
+    /// Inline filter on the focused pane; carries live query text and focus.
+    Filtering {
+        focus: FocusPane,
+        query: crate::tui::text_input::TextInput,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -270,7 +282,7 @@ pub struct PinsVm {
     /// Selected index into [`Self::rows`] (not the raw pin index).
     pub selected: Option<usize>,
     pub filtering: bool,
-    pub filter_query: String,
+    pub filter_query: crate::tui::text_input::TextInput,
     pub footer_title: String,
     pub footer: String,
     pub footer_colored: bool,
@@ -364,60 +376,19 @@ pub(crate) fn build_chrome(state: &AppState) -> ChromeVm {
 pub fn build_view_model(state: &AppState) -> ViewModel {
     let chrome = build_chrome(state);
     let screen = match &state.screen {
-        Screen::List => ScreenVm::List(super::screens::list::build_list_vm(state)),
-        Screen::Gists(_) => ScreenVm::Gists(super::screens::gists::build_gists_vm(state)),
-        Screen::GistDetail(_) => {
-            ScreenVm::GistDetail(super::screens::detail::build_gist_detail_vm(state))
-        }
-        Screen::Revisions(_) => {
-            ScreenVm::Revisions(super::screens::revisions::build_revisions_vm(state))
-        }
-        Screen::Config(_) => ScreenVm::Config(super::screens::config::build_config_vm(state)),
-        Screen::Diff(_) => ScreenVm::Diff(super::screens::diff::build_diff_vm(state)),
-        Screen::Preview(_) => ScreenVm::Preview(super::screens::preview::build_preview_vm(state)),
-        Screen::Pins(_) => ScreenVm::Pins(super::screens::pins::build_pins_vm(state)),
-        Screen::Confirm(_) => ScreenVm::Confirm(super::screens::confirm::build_confirm_vm(state)),
-        Screen::Help(_) => ScreenVm::Help(super::screens::help::build_help_vm(state)),
-        Screen::Palette(_) => ScreenVm::Palette(build_palette_vm(state)),
+        Screen::List => ScreenVm::List(build_list(state)),
+        Screen::Gists(_) => ScreenVm::Gists(build_gists(state)),
+        Screen::GistDetail(_) => ScreenVm::GistDetail(build_detail(state)),
+        Screen::Revisions(_) => ScreenVm::Revisions(build_revisions(state)),
+        Screen::Config(_) => ScreenVm::Config(build_config(state)),
+        Screen::Diff(_) => ScreenVm::Diff(build_diff(state)),
+        Screen::Preview(_) => ScreenVm::Preview(build_preview(state)),
+        Screen::Pins(_) => ScreenVm::Pins(build_pins(state)),
+        Screen::Confirm(_) => ScreenVm::Confirm(build_confirm(state)),
+        Screen::Help(_) => ScreenVm::Help(build_help(state)),
+        Screen::Palette(_) => ScreenVm::Palette(build_palette(state)),
     };
     ViewModel { chrome, screen }
-}
-
-/// Palette overlay body, plus the ViewModel for whatever screen it's covering (issue #272).
-pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
-    let p = state.palette().cloned().unwrap_or_default();
-    let background = build_background_screen_vm(state, &p.origin_screen).map(Box::new);
-    let has_query = p.mode == PaletteMode::Command;
-    let title = match p.mode {
-        PaletteMode::Menu => "Menu",
-        PaletteMode::Command => "Command palette",
-    };
-    let items: Vec<PaletteRowVm> = state
-        .palette_visible_items()
-        .into_iter()
-        .map(|item| PaletteRowVm {
-            key_hint: item.key_hint.clone(),
-            label: item.label.clone(),
-            enabled: item.enabled,
-        })
-        .collect();
-    let key_width = items
-        .iter()
-        .map(|item| item.key_hint.chars().count())
-        .max()
-        .unwrap_or(1)
-        .max(1);
-    PaletteVm {
-        background,
-        title,
-        has_query,
-        query: p.query,
-        selected: p.selected,
-        items,
-        key_width,
-        mode: p.mode,
-        anchor: p.anchor,
-    }
 }
 
 /// ViewModel for the screen a palette is covering, by its origin's tag. `state`'s accessors
@@ -426,27 +397,17 @@ pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
 ///
 /// `None` for Confirm (blank background preserved as-is, tracked separately in #277) and Palette
 /// (unreachable — the palette can't be opened while itself active).
-fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<ScreenVm> {
+pub(crate) fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<ScreenVm> {
     match origin {
-        Screen::List => Some(ScreenVm::List(super::screens::list::build_list_vm(state))),
-        Screen::Gists(_) => Some(ScreenVm::Gists(super::screens::gists::build_gists_vm(
-            state,
-        ))),
-        Screen::GistDetail(_) => Some(ScreenVm::GistDetail(
-            super::screens::detail::build_gist_detail_vm(state),
-        )),
-        Screen::Revisions(_) => Some(ScreenVm::Revisions(
-            super::screens::revisions::build_revisions_vm(state),
-        )),
-        Screen::Config(_) => Some(ScreenVm::Config(super::screens::config::build_config_vm(
-            state,
-        ))),
-        Screen::Diff(_) => Some(ScreenVm::Diff(super::screens::diff::build_diff_vm(state))),
-        Screen::Preview(_) => Some(ScreenVm::Preview(
-            super::screens::preview::build_preview_vm(state),
-        )),
-        Screen::Pins(_) => Some(ScreenVm::Pins(super::screens::pins::build_pins_vm(state))),
-        Screen::Help(_) => Some(ScreenVm::Help(super::screens::help::build_help_vm(state))),
+        Screen::List => Some(ScreenVm::List(build_list(state))),
+        Screen::Gists(_) => Some(ScreenVm::Gists(build_gists(state))),
+        Screen::GistDetail(_) => Some(ScreenVm::GistDetail(build_detail(state))),
+        Screen::Revisions(_) => Some(ScreenVm::Revisions(build_revisions(state))),
+        Screen::Config(_) => Some(ScreenVm::Config(build_config(state))),
+        Screen::Diff(_) => Some(ScreenVm::Diff(build_diff(state))),
+        Screen::Preview(_) => Some(ScreenVm::Preview(build_preview(state))),
+        Screen::Pins(_) => Some(ScreenVm::Pins(build_pins(state))),
+        Screen::Help(_) => Some(ScreenVm::Help(build_help(state))),
         Screen::Confirm(_) | Screen::Palette(_) => None,
     }
 }
@@ -856,7 +817,7 @@ mod tests {
         state.focus = FocusPane::Gist;
         match build_view_model(&state).screen {
             ScreenVm::List(list) => match list.footer {
-                ListFooterVm::Filtering { focus } => assert_eq!(focus, FocusPane::Gist),
+                ListFooterVm::Filtering { focus, .. } => assert_eq!(focus, FocusPane::Gist),
                 other => panic!("expected Filtering footer, got {other:?}"),
             },
             other => panic!("expected List, got {other:?}"),
