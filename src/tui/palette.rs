@@ -1,7 +1,5 @@
 use super::{
-    keys::{
-        detail_guard, diff_guard, gists_guard, list_guard, pins_guard, point_in, revisions_guard,
-    },
+    keys::{detail_guard, gists_guard, list_guard, pins_guard, point_in, revisions_guard},
     *,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
@@ -327,7 +325,7 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
         Screen::Gists(_) => gists_palette_items(state),
         Screen::GistDetail(_) => detail_palette_items(state),
         Screen::Revisions(_) => revisions_palette_items(state),
-        Screen::Diff(_) => diff_palette_items(state),
+        Screen::Diff(_) => super::screens::diff::diff_palette_items(state),
         Screen::Preview(_) => super::screens::preview::preview_palette_items(state),
         Screen::Help(_) => super::screens::help::help_palette_items(),
         Screen::Config(_) => super::screens::config::config_palette_items(),
@@ -590,17 +588,6 @@ fn revisions_palette_items(state: &AppState) -> Vec<PaletteItem> {
         ),
         key_item("q", "Back", KeyCode::Char('q'), true),
         key_item("?", "Help", KeyCode::Char('?'), true),
-    ]
-}
-
-fn diff_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let g = |code| diff_guard(state, code);
-    vec![
-        key_item("d", "Download", KeyCode::Char('d'), g(KeyCode::Char('d'))),
-        key_item("u", "Upload", KeyCode::Char('u'), g(KeyCode::Char('u'))),
-        key_item("c", "Toggle full diff context", KeyCode::Char('c'), true),
-        key_item("w", "Toggle line wrap", KeyCode::Char('w'), true),
-        key_item("q", "Back", KeyCode::Char('q'), true),
     ]
 }
 

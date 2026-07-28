@@ -48,7 +48,9 @@ fn render_screen_vm(
         super::ScreenVm::Config(config) => {
             super::screens::config::render_config_vm(frame, state, config, chrome, layout)
         }
-        super::ScreenVm::Diff(diff) => render_diff_vm(frame, state, diff, chrome, layout),
+        super::ScreenVm::Diff(diff) => {
+            super::screens::diff::render_diff_vm(frame, state, diff, chrome, layout)
+        }
         super::ScreenVm::Preview(preview) => {
             super::screens::preview::render_preview_vm(frame, state, preview, chrome, layout)
         }
@@ -1650,7 +1652,7 @@ pub(super) fn render_text_scrollbar(frame: &mut Frame, area: Rect, total: usize,
 }
 
 /// Render just the diff content pane (no footer) into `area` from a [`DiffVm`].
-fn render_diff_pane_vm(
+pub(super) fn render_diff_pane_vm(
     frame: &mut Frame,
     area: Rect,
     diff: &super::view_model::DiffVm,
@@ -1697,37 +1699,6 @@ fn render_diff_pane_vm(
     }
 }
 
-fn render_diff_vm(
-    frame: &mut Frame,
-    state: &AppState,
-    diff: &super::view_model::DiffVm,
-    chrome: &super::view_model::ChromeVm,
-    layout: &mut MouseLayout,
-) {
-    let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
-    let footer_lines = wrap_line_count(&diff.footer, area.width.saturating_sub(2)).max(1);
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(5), Constraint::Length(footer_lines)])
-        .split(area);
-
-    render_diff_pane_vm(frame, chunks[0], diff, &state.theme);
-
-    render_footer(
-        frame,
-        chunks[1],
-        "",
-        &diff.footer,
-        true,
-        &state.theme,
-        layout,
-    );
-    if chrome.mouse_enabled {
-        layout.close_button = Some(render_close_button(frame, area, &state.theme));
-    }
-}
-
 /// `Screen::Confirm`: the diff fills the screen as context behind a centered prompt modal,
 /// keeping the overwrite gate's diff visible while the question is asked front-and-centre.
 /// #72 audit: this modal intentionally does not surface `state.status`. It is a transient y/n
@@ -1745,7 +1716,7 @@ fn render_confirm_vm(
             render_compact_gist_bg_vm(frame, frame.area(), bg, &state.theme);
         }
         super::view_model::ConfirmBackgroundVm::Diff => {
-            let diff = super::view_model::build_diff_vm(state);
+            let diff = super::screens::diff::build_diff_vm(state);
             render_diff_pane_vm(frame, frame.area(), &diff, &state.theme);
         }
         super::view_model::ConfirmBackgroundVm::Empty => {}

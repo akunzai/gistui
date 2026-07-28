@@ -305,7 +305,7 @@ pub struct ConfirmVm {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmBackgroundVm {
-    /// Standard overwrite/upload/create backdrop: use [`build_diff_vm`].
+    /// Standard overwrite/upload/create backdrop: use `screens::diff::build_diff_vm`.
     Diff,
     /// Compaction confirm: gist info + file list.
     CompactGist(CompactGistBgVm),
@@ -370,7 +370,7 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::GistDetail(_) => ScreenVm::GistDetail(build_gist_detail_vm(state)),
         Screen::Revisions(_) => ScreenVm::Revisions(build_revisions_vm(state)),
         Screen::Config(_) => ScreenVm::Config(super::screens::config::build_config_vm(state)),
-        Screen::Diff(_) => ScreenVm::Diff(build_diff_vm(state)),
+        Screen::Diff(_) => ScreenVm::Diff(super::screens::diff::build_diff_vm(state)),
         Screen::Preview(_) => ScreenVm::Preview(super::screens::preview::build_preview_vm(state)),
         Screen::Pins(_) => ScreenVm::Pins(build_pins_vm(state)),
         Screen::Confirm(_) => ScreenVm::Confirm(build_confirm_vm(state)),
@@ -432,7 +432,7 @@ fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<Scree
         Screen::Config(_) => Some(ScreenVm::Config(super::screens::config::build_config_vm(
             state,
         ))),
-        Screen::Diff(_) => Some(ScreenVm::Diff(build_diff_vm(state))),
+        Screen::Diff(_) => Some(ScreenVm::Diff(super::screens::diff::build_diff_vm(state))),
         Screen::Preview(_) => Some(ScreenVm::Preview(
             super::screens::preview::build_preview_vm(state),
         )),
@@ -474,112 +474,6 @@ pub(crate) fn file_ext(name: &str) -> Option<String> {
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
-}
-
-/// The diff pane title. The gist id, filenames, and both sides' mtimes live in the diff's
-/// `--- / +++` header lines (see `diff_labels`); the title stays concise and avoids
-/// repeating a path.
-pub(crate) fn diff_title(state: &AppState) -> String {
-    match state.pending_action() {
-        Some(PendingAction::Upload {
-            gist_id, filename, ..
-        }) => format!("Upload → gist {gist_id} / {filename}"),
-        Some(PendingAction::Create { local_path }) => {
-            format!(
-                "Create gist from {}",
-                crate::config::display_path(local_path)
-            )
-        }
-        Some(PendingAction::Delete { gist_id, .. }) => {
-            format!("Delete gist {gist_id}")
-        }
-        Some(PendingAction::RemoveFile {
-            gist_id, filename, ..
-        }) => {
-            format!("Remove {filename} from gist {gist_id}")
-        }
-        _ => {
-            let label = if state.diff_identical() {
-                "Diff (identical)"
-            } else {
-                "Diff"
-            };
-            let local = state.preview_local();
-            let target = state.download_target();
-            if local.as_os_str().is_empty() || local == target {
-                format!("{label} → {}", crate::config::display_path(&target))
-            } else {
-                format!(
-                    "{label}: {} → {}",
-                    crate::config::display_path(&local),
-                    crate::config::display_path(&target)
-                )
-            }
-        }
-    }
-}
-
-/// The `Screen::Diff` preview: the diff pane plus a scroll/commands footer.
-///
-/// #72 audit: this footer intentionally does not surface `state.status`. Diff actions (`d`/`u`)
-/// transition to `Screen::Confirm` or to the IO that lands back on `List`; their results surface
-/// on those destination screens (which read `state.status`), so no status is set while on Diff.
-/// Footer hints for `Screen::Diff` (pure for tests).
-pub(crate) fn diff_footer(state: &AppState) -> String {
-    let context = if state.diff_show_full {
-        "c context [full]".to_string()
-    } else {
-        format!("c context [{}]", state.diff_context)
-    };
-    // When wrapping, horizontal scroll (←→) is meaningless — drop it from the hint.
-    let scroll = if state.diff_wrap {
-        "↑↓ PgUp/Dn scroll"
-    } else {
-        "↑↓←→ PgUp/Dn scroll"
-    };
-    let wrap = if state.diff_wrap {
-        "w wrap [on]"
-    } else {
-        "w wrap [off]"
-    };
-    let back = "Esc/q back";
-    if !state.diff_allows_sync() {
-        if state.diff_identical() {
-            format!("Files are identical  ·  {scroll}  ·  {wrap}  ·  {context}  ·  {back}")
-        } else {
-            format!("{scroll}  ·  {wrap}  ·  {context}  ·  {back}")
-        }
-    } else if state.diff_identical() {
-        format!("Files are identical — nothing to sync  ·  {scroll}  ·  {wrap}  ·  {context}  ·  {back}")
-    } else {
-        format!("{scroll}  ·  d download  ·  u upload  ·  {wrap}  ·  {context}  ·  {back}")
-    }
-}
-
-/// Diff pane facts — also used as Confirm overwrite background (non-compact).
-pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
-    let text = state.diff_body_text();
-    let body = match state.effective_diff_context() {
-        Some(radius) => crate::diff::collapse_context(text, radius),
-        None => text.to_string(),
-    };
-    let download_target = state.download_target();
-    let preview_local = state.preview_local();
-    let ext = download_target
-        .file_name()
-        .or_else(|| preview_local.file_name())
-        .and_then(|n| n.to_str())
-        .and_then(file_ext);
-    DiffVm {
-        title: diff_title(state),
-        body,
-        footer: diff_footer(state),
-        wrap: state.diff_wrap,
-        scroll: state.diff_scroll(),
-        hscroll: state.diff_hscroll(),
-        syntax_highlight: state.syntax_highlight,
-        ext,
-    }
 }
 
 /// Revisions body — usable under Palette-over-Revisions as well.

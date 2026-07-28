@@ -341,6 +341,7 @@ impl HelpTopic {
             Screen::Gists(_) => HelpTopic::GistManager,
             Screen::GistDetail(_) => HelpTopic::GistDetail,
             Screen::Revisions(_) => HelpTopic::Revisions,
+            Screen::Diff(_) => screens::diff::HELP_TOPIC,
             Screen::Preview(_) => screens::preview::HELP_TOPIC,
             Screen::Config(_) => screens::config::HELP_TOPIC,
             Screen::Help(_) => screens::help::HELP_TOPIC,
@@ -2809,7 +2810,9 @@ pub(crate) use view_model::{build_view_model, gist_row_display, ScreenVm};
 // Only exercised by tests.rs's `use super::*` — view_model.rs's own build_*_vm functions call
 // these directly without needing the re-export.
 #[cfg(test)]
-pub(crate) use view_model::{confirm_modal_style, confirm_prompt, diff_footer, diff_title};
+pub(crate) use screens::diff::{diff_footer, diff_title};
+#[cfg(test)]
+pub(crate) use view_model::{confirm_modal_style, confirm_prompt};
 
 #[cfg(test)]
 mod tests;

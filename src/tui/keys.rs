@@ -766,7 +766,8 @@ impl AppState {
         match &self.screen {
             Screen::Config(_) => super::screens::config::wheel_step(),
             Screen::Preview(_) => super::screens::preview::wheel_step(),
-            Screen::Diff(_) | Screen::Confirm(_) => 3,
+            Screen::Diff(_) => super::screens::diff::wheel_step(),
+            Screen::Confirm(_) => 3,
             // GistDetail: the comments body scrolls like content (3 lines); the file list
             // steps one file at a time.
             Screen::GistDetail(_)
@@ -1374,13 +1375,6 @@ pub(crate) fn revisions_guard(state: &AppState, code: KeyCode) -> bool {
     }
 }
 
-pub(crate) fn diff_guard(state: &AppState, code: KeyCode) -> bool {
-    match code {
-        KeyCode::Char('d' | 'u') => state.diff_allows_sync() && !state.diff_identical(),
-        _ => false,
-    }
-}
-
 pub(crate) fn list_guard(state: &AppState, code: KeyCode) -> bool {
     let (visible_locals, ranked) = state.list_pane_snapshots();
     let has_gist = ranked.get(state.gist_index).is_some();
@@ -1942,51 +1936,6 @@ impl AppState {
                 local.path.display()
             ),
         );
-    }
-
-    fn handle_key_diff(&mut self, code: KeyCode) -> KeyOutcome {
-        match code {
-            // In the diff, q and Esc return to wherever `enter()` recorded (List, Pins, …).
-            KeyCode::Char('q') | KeyCode::Esc => {
-                // Diff pairing identity lives on the payload; leaving drops it (not a full
-                // `back_to_list()` — that would also discard the rest of `nav_stack`).
-                self.staged_diff_gist = None;
-                self.leave();
-            }
-            // Identical files have nothing to sync, so download/upload are not offered.
-            // Revision-history diffs are read-only (no local file pairing).
-            KeyCode::Char('d') if diff_guard(self, code) => {
-                if self.download_target().exists() {
-                    self.enter_confirm_from_diff(PendingAction::Download);
-                } else {
-                    return KeyOutcome::Download {
-                        mode: crate::actions::DownloadMode::CreateNew,
-                    };
-                }
-            }
-            KeyCode::Char('u') if diff_guard(self, code) => {
-                return self.upload_intent();
-            }
-            // Toggle between the configured context radius and the full file; the line
-            // count changes, so reset the vertical scroll. The choice is persisted.
-            KeyCode::Char('c') => {
-                self.diff_show_full = !self.diff_show_full;
-                if let Some(d) = self.diff_mut() {
-                    d.scroll = 0;
-                }
-                return KeyOutcome::PersistDiffContext;
-            }
-            // Soft-wrap long lines instead of horizontal scrolling; reset the now-meaningless
-            // horizontal offset so wrapped lines start at column 0.
-            KeyCode::Char('w') => {
-                self.diff_wrap = !self.diff_wrap;
-                if let Some(d) = self.diff_mut() {
-                    d.hscroll = 0;
-                }
-            }
-            _ => {}
-        }
-        KeyOutcome::None
     }
 
     fn handle_key_confirm(&mut self, code: KeyCode) -> KeyOutcome {
