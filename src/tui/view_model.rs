@@ -4,14 +4,12 @@
 //! Builders never touch the filesystem or network (issues #241 / #250).
 
 use super::render::{
-    about_topic_lines_plain, count_label, footer_with_status, gist_group_row_label, gist_info_line,
-    gist_row_label, help_topic_body, is_json_file, marked_row_text, pin_row_label,
-    revision_row_label, row_mark, spinner_glyph, unix_now, RowMark, CREATE_DESC_PREFIX,
-    CREATE_DESC_SUFFIX, MINIMAL_HINT,
+    count_label, footer_with_status, gist_group_row_label, gist_info_line, gist_row_label,
+    is_json_file, marked_row_text, pin_row_label, revision_row_label, row_mark, spinner_glyph,
+    unix_now, RowMark, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX, MINIMAL_HINT,
 };
 use super::{
-    AppState, DetailFocus, FocusPane, GistView, HelpTopic, PaletteMode, PendingAction, Screen,
-    TextInput,
+    AppState, DetailFocus, FocusPane, GistView, PaletteMode, PendingAction, Screen, TextInput,
 };
 use crate::domain::SyncStatus;
 use crate::ranking::RankedGistFile;
@@ -376,7 +374,7 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::Preview(_) => ScreenVm::Preview(build_preview_vm(state)),
         Screen::Pins(_) => ScreenVm::Pins(build_pins_vm(state)),
         Screen::Confirm(_) => ScreenVm::Confirm(build_confirm_vm(state)),
-        Screen::Help(_) => ScreenVm::Help(build_help_vm(state)),
+        Screen::Help(_) => ScreenVm::Help(super::screens::help::build_help_vm(state)),
         Screen::Palette(_) => ScreenVm::Palette(build_palette_vm(state)),
     };
     ViewModel { chrome, screen }
@@ -437,7 +435,7 @@ fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<Scree
         Screen::Diff(_) => Some(ScreenVm::Diff(build_diff_vm(state))),
         Screen::Preview(_) => Some(ScreenVm::Preview(build_preview_vm(state))),
         Screen::Pins(_) => Some(ScreenVm::Pins(build_pins_vm(state))),
-        Screen::Help(_) => Some(ScreenVm::Help(build_help_vm(state))),
+        Screen::Help(_) => Some(ScreenVm::Help(super::screens::help::build_help_vm(state))),
         Screen::Confirm(_) | Screen::Palette(_) => None,
     }
 }
@@ -1245,58 +1243,6 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
         kind,
         background,
     }
-}
-
-/// Help body only — usable under Palette-over-Help as well.
-pub(crate) fn build_help_vm(state: &AppState) -> HelpVm {
-    let help = state.help().cloned().unwrap_or_default();
-    let mode = if help.index_open {
-        let items = HelpTopic::all()
-            .iter()
-            .enumerate()
-            .map(|(i, t)| {
-                let key = if *t == HelpTopic::About {
-                    "0".to_string()
-                } else {
-                    (i + 1).to_string()
-                };
-                HelpIndexItemVm {
-                    key,
-                    title: t.title().to_string(),
-                }
-            })
-            .collect();
-        HelpModeVm::Index {
-            items,
-            selected: help.index_sel,
-        }
-    } else {
-        let title = format!(
-            "Help · {} — Tab topics · ↑↓ scroll · Esc back",
-            help.topic.title()
-        );
-        let (lines, about_repo_line) = if help.topic == HelpTopic::About {
-            (
-                about_topic_lines_plain(state),
-                Some(super::render::ABOUT_REPO_LINE),
-            )
-        } else {
-            (
-                help_topic_body(help.topic)
-                    .lines()
-                    .map(str::to_string)
-                    .collect(),
-                None,
-            )
-        };
-        HelpModeVm::Topic {
-            title,
-            lines,
-            scroll: help.scroll,
-            about_repo_line,
-        }
-    };
-    HelpVm { mode }
 }
 
 #[cfg(test)]

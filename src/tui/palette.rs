@@ -329,7 +329,7 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
         Screen::Revisions(_) => revisions_palette_items(state),
         Screen::Diff(_) => diff_palette_items(state),
         Screen::Preview(_) => preview_palette_items(state),
-        Screen::Help(_) => help_palette_items(),
+        Screen::Help(_) => super::screens::help::help_palette_items(),
         Screen::Config(_) => super::screens::config::config_palette_items(),
         Screen::Confirm(_) | Screen::Palette(_) => Vec::new(),
     };
@@ -611,13 +611,6 @@ fn preview_palette_items(_state: &AppState) -> Vec<PaletteItem> {
         key_item("y", "Copy gist URL", KeyCode::Char('y'), true),
         key_item("Y", "Copy file content", KeyCode::Char('Y'), true),
         key_item("q", "Back", KeyCode::Char('q'), true),
-    ]
-}
-
-fn help_palette_items() -> Vec<PaletteItem> {
-    vec![
-        key_item("Tab", "Browse topic index", KeyCode::Tab, true),
-        key_item("q", "Close Help", KeyCode::Char('q'), true),
     ]
 }
 

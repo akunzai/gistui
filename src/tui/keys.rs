@@ -360,59 +360,6 @@ impl AppState {
         }
     }
 
-    fn handle_key_help(&mut self, code: KeyCode) -> KeyOutcome {
-        let topics = HelpTopic::all();
-        let leave = matches!(code, KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?'));
-        {
-            let Some(help) = self.help_mut() else {
-                return KeyOutcome::None;
-            };
-            if help.index_open {
-                match code {
-                    KeyCode::Enter => {
-                        help.topic = topics[help.index_sel];
-                        help.index_open = false;
-                        help.scroll = 0;
-                    }
-                    KeyCode::Char(c @ '1'..='9') if (c as u8 - b'1') < topics.len() as u8 => {
-                        help.topic = topics[(c as u8 - b'1') as usize];
-                        help.index_open = false;
-                        help.scroll = 0;
-                    }
-                    // `0` always jumps to About (last topic), independent of total count.
-                    KeyCode::Char('0') if topics.contains(&HelpTopic::About) => {
-                        help.topic = HelpTopic::About;
-                        help.index_open = false;
-                        help.scroll = 0;
-                    }
-                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {}
-                    _ => {}
-                }
-            } else {
-                match code {
-                    KeyCode::Tab => {
-                        help.index_sel = topics.iter().position(|&t| t == help.topic).unwrap_or(0);
-                        help.index_open = true;
-                    }
-                    KeyCode::Char(c @ '1'..='9') if (c as u8 - b'1') < topics.len() as u8 => {
-                        help.topic = topics[(c as u8 - b'1') as usize];
-                        help.scroll = 0;
-                    }
-                    KeyCode::Char('0') if topics.contains(&HelpTopic::About) => {
-                        help.topic = HelpTopic::About;
-                        help.scroll = 0;
-                    }
-                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {}
-                    _ => {}
-                }
-            }
-        }
-        if leave {
-            self.leave();
-        }
-        KeyOutcome::None
-    }
-
     fn handle_key_pins(&mut self, code: KeyCode) -> KeyOutcome {
         // One-shot: any key dismisses a lingering sync status; the run_loop IO helper for this
         // key may set a fresh one afterwards (e.g. "already in sync").
@@ -828,7 +775,7 @@ impl AppState {
             {
                 3
             }
-            Screen::Help(h) if !h.index_open => 3, // help body scrolls; topic index is a list
+            Screen::Help(h) => super::screens::help::wheel_step(h),
             Screen::Palette(_) => 1,
             _ => 1, // List/Pins/Gists/Revisions/Help index/GistDetail Files
         }

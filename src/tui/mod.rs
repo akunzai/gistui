@@ -342,7 +342,7 @@ impl HelpTopic {
             Screen::GistDetail(_) => HelpTopic::GistDetail,
             Screen::Revisions(_) => HelpTopic::Revisions,
             Screen::Config(_) => screens::config::HELP_TOPIC,
-            Screen::Help(_) => HelpTopic::List,
+            Screen::Help(_) => screens::help::HELP_TOPIC,
             _ => HelpTopic::List,
         }
     }
