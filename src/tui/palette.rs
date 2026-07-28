@@ -1,4 +1,9 @@
-use super::{keys::point_in, *};
+use super::{
+    keys::{
+        detail_guard, diff_guard, gists_guard, list_guard, pins_guard, point_in, revisions_guard,
+    },
+    *,
+};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 /// Menu = context-filtered actions near the click; Command = full list + fuzzy query.
@@ -335,101 +340,86 @@ fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> 
 }
 
 fn list_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    // One dual-pane snapshot for all enablement checks (issue #224).
-    let (visible_locals, ranked) = state.list_pane_snapshots();
-    let has_gist = ranked.get(state.gist_index).is_some();
-    let has_local = visible_locals.get(state.local_index).is_some();
-    let gist = ranked.get(state.gist_index);
-    let gist_id = gist.map(|g| g.file.gist_id.clone());
-    let owned = gist_id
-        .as_deref()
-        .map(|id| state.gist_is_owned(id))
-        .unwrap_or(false);
-    let gist_file = gist.map(|g| g.file.clone());
-    let previewable = gist_file
-        .as_ref()
-        .is_some_and(|f| state.gist_file_is_text_previewable(&f.gist_id, &f.filename));
-    let diffable = gist_file.as_ref().is_some_and(|f| {
-        let local_path = visible_locals
-            .get(state.local_index)
-            .map(|r| r.candidate.path.as_path());
-        diff_pair_previewable(state, &f.gist_id, &f.filename, local_path)
-    });
-    let multi_file = gist_id
-        .as_deref()
-        .map(|id| state.gist_file_count(id) > 1)
-        .unwrap_or(false);
-    let pinned_pair =
-        visible_locals
-            .get(state.local_index)
-            .zip(gist)
-            .is_some_and(|(local, gist)| {
-                state.pinned.iter().any(|m| {
-                    m.local_path == local.candidate.path
-                        && m.gist_id == gist.file.gist_id
-                        && m.gist_filename == gist.file.filename
-                })
-            });
-
+    let g = |code| list_guard(state, code);
     vec![
-        key_item("Enter", "Diff local ↔ gist", KeyCode::Enter, diffable),
+        key_item(
+            "Enter",
+            "Diff local ↔ gist",
+            KeyCode::Enter,
+            g(KeyCode::Enter),
+        ),
         key_item(
             "Space",
             "Preview gist content",
             KeyCode::Char(' '),
-            previewable,
+            g(KeyCode::Char(' ')),
         ),
         key_item(
             "d",
             "Download gist → cwd",
             KeyCode::Char('d'),
-            has_gist && state.focus == FocusPane::Gist,
+            g(KeyCode::Char('d')),
         ),
         key_item(
             "u",
             "Upload local → gist",
             KeyCode::Char('u'),
-            has_local && has_gist && owned,
+            g(KeyCode::Char('u')),
         ),
-        key_item("n", "Create gist from local", KeyCode::Char('n'), has_local),
+        key_item(
+            "n",
+            "Create gist from local",
+            KeyCode::Char('n'),
+            g(KeyCode::Char('n')),
+        ),
         key_item(
             "p",
             "Pin / unpin pair",
             KeyCode::Char('p'),
-            has_local && has_gist,
+            g(KeyCode::Char('p')),
         ),
         key_item("P", "Open Pins view", KeyCode::Char('P'), true),
         key_item(
             "g",
             "Open Gist manager",
             KeyCode::Char('g'),
-            !state.gists.is_empty(),
+            g(KeyCode::Char('g')),
         ),
         key_item(
             "S",
             "Smart-sync pinned pair",
             KeyCode::Char('S'),
-            pinned_pair,
+            g(KeyCode::Char('S')),
         ),
         key_item(
             "X",
             "Remove file from gist",
             KeyCode::Char('X'),
-            has_gist && owned && multi_file,
+            g(KeyCode::Char('X')),
         ),
-        key_item("e", "Edit local file", KeyCode::Char('e'), has_local),
+        key_item(
+            "e",
+            "Edit local file",
+            KeyCode::Char('e'),
+            g(KeyCode::Char('e')),
+        ),
         key_item(
             "y",
             "Copy gist URL",
             KeyCode::Char('y'),
-            state.context_gist_id().is_some(),
+            g(KeyCode::Char('y')),
         ),
-        key_item("H", "Revision history", KeyCode::Char('H'), has_gist),
+        key_item(
+            "H",
+            "Revision history",
+            KeyCode::Char('H'),
+            g(KeyCode::Char('H')),
+        ),
         key_item(
             "*",
             "Star / unstar gist",
             KeyCode::Char('*'),
-            state.context_gist_id().is_some(),
+            g(KeyCode::Char('*')),
         ),
         key_item("r", "Toggle recursive scan", KeyCode::Char('r'), true),
         key_item("/", "Filter focused pane", KeyCode::Char('/'), true),
@@ -443,13 +433,18 @@ fn list_palette_items(state: &AppState) -> Vec<PaletteItem> {
 }
 
 fn pins_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let has_pin = !state.pinned.is_empty() && state.selected_pin_index().is_some();
+    let g = |code| pins_guard(state, code);
     vec![
-        key_item("Enter", "Diff pinned pair", KeyCode::Enter, has_pin),
-        key_item("s", "Smart-sync", KeyCode::Char('s'), has_pin),
-        key_item("u", "Force push", KeyCode::Char('u'), has_pin),
-        key_item("d", "Force pull", KeyCode::Char('d'), has_pin),
-        key_item("x", "Unpin pair", KeyCode::Char('x'), has_pin),
+        key_item(
+            "Enter",
+            "Diff pinned pair",
+            KeyCode::Enter,
+            g(KeyCode::Enter),
+        ),
+        key_item("s", "Smart-sync", KeyCode::Char('s'), g(KeyCode::Char('s'))),
+        key_item("u", "Force push", KeyCode::Char('u'), g(KeyCode::Char('u'))),
+        key_item("d", "Force pull", KeyCode::Char('d'), g(KeyCode::Char('d'))),
+        key_item("x", "Unpin pair", KeyCode::Char('x'), g(KeyCode::Char('x'))),
         key_item("/", "Filter pins", KeyCode::Char('/'), true),
         key_item("o", "Cycle sort", KeyCode::Char('o'), true),
         key_item("q", "Back to list", KeyCode::Char('q'), true),
@@ -458,15 +453,38 @@ fn pins_palette_items(state: &AppState) -> Vec<PaletteItem> {
 }
 
 fn gists_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let groups = state.visible_gist_groups();
-    let index = state.gist_manager().map(|g| g.cursor.index).unwrap_or(0);
-    let has_sel = index < groups.len();
+    let g = |code| gists_guard(state, code);
     vec![
-        key_item("Enter", "Open gist detail", KeyCode::Enter, has_sel),
-        key_item("o", "Open in browser", KeyCode::Char('o'), has_sel),
-        key_item("y", "Copy gist URL", KeyCode::Char('y'), has_sel),
-        key_item("H", "Revision history", KeyCode::Char('H'), has_sel),
-        key_item("*", "Star / unstar gist", KeyCode::Char('*'), has_sel),
+        key_item(
+            "Enter",
+            "Open gist detail",
+            KeyCode::Enter,
+            g(KeyCode::Enter),
+        ),
+        key_item(
+            "o",
+            "Open in browser",
+            KeyCode::Char('o'),
+            g(KeyCode::Char('o')),
+        ),
+        key_item(
+            "y",
+            "Copy gist URL",
+            KeyCode::Char('y'),
+            g(KeyCode::Char('y')),
+        ),
+        key_item(
+            "H",
+            "Revision history",
+            KeyCode::Char('H'),
+            g(KeyCode::Char('H')),
+        ),
+        key_item(
+            "*",
+            "Star / unstar gist",
+            KeyCode::Char('*'),
+            g(KeyCode::Char('*')),
+        ),
         key_item("/", "Filter gists", KeyCode::Char('/'), true),
         key_item("s", "Cycle sort", KeyCode::Char('s'), true),
         key_item("v", "Cycle visibility", KeyCode::Char('v'), true),
@@ -476,67 +494,63 @@ fn gists_palette_items(state: &AppState) -> Vec<PaletteItem> {
 }
 
 fn detail_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let d = state.detail();
-    let gist_id = d.and_then(|d| d.gist_id.clone());
-    let owned = gist_id
-        .as_deref()
-        .map(|id| state.gist_is_owned(id))
-        .unwrap_or(false);
-    let on_files = d.is_some_and(|d| d.focus == DetailFocus::Files);
-    let file_count = gist_id
-        .as_deref()
-        .map(|id| state.gist_filenames(id).len())
-        .unwrap_or(0);
-    let file_cursor = d.map(|d| d.file_cursor).unwrap_or(0);
-    let has_file = on_files && file_cursor < file_count;
-    let previewable = gist_id.as_ref().is_some_and(|id| {
-        state
-            .gist_filenames(id)
-            .into_iter()
-            .nth(file_cursor)
-            .is_some_and(|name| state.gist_file_is_text_previewable(id, &name))
-    }) && has_file;
+    let g = |code| detail_guard(state, code);
     vec![
         key_item(
             "Enter",
             "Preview selected file",
             KeyCode::Enter,
-            previewable,
+            g(KeyCode::Enter),
         ),
         key_item(
             "o",
             "Open in browser",
             KeyCode::Char('o'),
-            gist_id.is_some(),
+            g(KeyCode::Char('o')),
         ),
-        key_item("y", "Copy gist URL", KeyCode::Char('y'), gist_id.is_some()),
+        key_item(
+            "y",
+            "Copy gist URL",
+            KeyCode::Char('y'),
+            g(KeyCode::Char('y')),
+        ),
         key_item(
             "H",
             "Revision history",
             KeyCode::Char('H'),
-            gist_id.is_some(),
+            g(KeyCode::Char('H')),
         ),
-        key_item("e", "Edit description", KeyCode::Char('e'), owned),
-        key_item("c", "Compact revisions", KeyCode::Char('c'), owned),
+        key_item(
+            "e",
+            "Edit description",
+            KeyCode::Char('e'),
+            g(KeyCode::Char('e')),
+        ),
+        key_item(
+            "c",
+            "Compact revisions",
+            KeyCode::Char('c'),
+            g(KeyCode::Char('c')),
+        ),
         key_item(
             "*",
             "Star / unstar gist",
             KeyCode::Char('*'),
-            gist_id.is_some(),
+            g(KeyCode::Char('*')),
         ),
+        key_item("F", "Fork gist", KeyCode::Char('F'), g(KeyCode::Char('F'))),
         key_item(
-            "F",
-            "Fork gist",
-            KeyCode::Char('F'),
-            gist_id.is_some() && !owned,
+            "X",
+            "Delete gist",
+            KeyCode::Char('X'),
+            g(KeyCode::Char('X')),
         ),
-        key_item("X", "Delete gist", KeyCode::Char('X'), owned),
         key_item("Tab", "Switch Files / Comments", KeyCode::Tab, true),
         key_item(
             "m",
             "Load older comments",
             KeyCode::Char('m'),
-            state.can_load_older_comments(),
+            g(KeyCode::Char('m')),
         ),
         key_item("q", "Back to Gist manager", KeyCode::Char('q'), true),
         key_item("?", "Help", KeyCode::Char('?'), true),
@@ -544,51 +558,46 @@ fn detail_palette_items(state: &AppState) -> Vec<PaletteItem> {
 }
 
 fn revisions_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let rev = state.revision();
-    let entries_len = rev
-        .and_then(|r| r.entries.as_ref().map(|e| e.len()))
-        .unwrap_or(0);
-    let has_entries = entries_len > 0;
-    let not_head = rev.is_some_and(|r| r.index > 0);
-    let gist_id = rev.and_then(|r| r.gist_id.clone());
-    let owned = gist_id
-        .as_deref()
-        .map(|id| state.gist_is_owned(id))
-        .unwrap_or(false);
-    let file = rev.map(|r| r.target_file.clone()).unwrap_or_default();
-    let previewable = gist_id
-        .as_ref()
-        .is_some_and(|id| state.gist_file_is_text_previewable(id, &file));
+    let g = |code| revisions_guard(state, code);
     vec![
         key_item(
             "Enter",
             "Diff parent → revision",
             KeyCode::Enter,
-            has_entries && previewable,
+            g(KeyCode::Enter),
         ),
         key_item(
             "D",
             "Diff revision vs head",
             KeyCode::Char('D'),
-            has_entries && not_head && previewable,
+            g(KeyCode::Char('D')),
         ),
         key_item(
             "r",
             "Restore revision",
             KeyCode::Char('r'),
-            entries_len > 1 && not_head && owned,
+            g(KeyCode::Char('r')),
         ),
-        key_item("F", "Cycle target file", KeyCode::Char('F'), has_entries),
+        // The palette *is* gated through `revisions_guard` here, unlike the real handler's
+        // own `F` arm (which stays unconditional — see the comment on that case in
+        // `revisions_guard`): cycling the target file doesn't need the revision list loaded,
+        // so `revisions_guard`'s `F` case checks file count, not `has_entries` (issue #288).
+        key_item(
+            "F",
+            "Cycle target file",
+            KeyCode::Char('F'),
+            g(KeyCode::Char('F')),
+        ),
         key_item("q", "Back", KeyCode::Char('q'), true),
         key_item("?", "Help", KeyCode::Char('?'), true),
     ]
 }
 
 fn diff_palette_items(state: &AppState) -> Vec<PaletteItem> {
-    let sync = state.diff_allows_sync() && !state.diff_identical();
+    let g = |code| diff_guard(state, code);
     vec![
-        key_item("d", "Download", KeyCode::Char('d'), sync),
-        key_item("u", "Upload", KeyCode::Char('u'), sync),
+        key_item("d", "Download", KeyCode::Char('d'), g(KeyCode::Char('d'))),
+        key_item("u", "Upload", KeyCode::Char('u'), g(KeyCode::Char('u'))),
         key_item("c", "Toggle full diff context", KeyCode::Char('c'), true),
         key_item("w", "Toggle line wrap", KeyCode::Char('w'), true),
         key_item("q", "Back", KeyCode::Char('q'), true),
@@ -618,25 +627,6 @@ fn help_palette_items() -> Vec<PaletteItem> {
         key_item("Tab", "Browse topic index", KeyCode::Tab, true),
         key_item("q", "Close Help", KeyCode::Char('q'), true),
     ]
-}
-
-fn diff_pair_previewable(
-    state: &AppState,
-    gist_id: &str,
-    filename: &str,
-    local_path: Option<&std::path::Path>,
-) -> bool {
-    if !state.gist_file_is_text_previewable(gist_id, filename) {
-        return false;
-    }
-    if let Some(path) = local_path {
-        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if !crate::domain::gist_file_is_text_previewable(name, None) {
-                return false;
-            }
-        }
-    }
-    true
 }
 
 /// Subsequence fuzzy match: every query char must appear in order in `target`.
@@ -823,6 +813,60 @@ mod tests {
     }
 
     #[test]
+    fn detail_palette_items_load_older_comments_requires_comments_focus() {
+        // Issue #288: `can_load_older_comments` doesn't check tab focus, so the palette
+        // previously showed "Load older comments" enabled even while the Files tab was
+        // focused (where `m` is a no-op in `handle_key_detail`).
+        let mut state = initial_state();
+        state.gists = vec![test_gist("g1", "a.txt")];
+        state.screen = Screen::GistDetail(Box::new(DetailState {
+            gist_id: Some("g1".into()),
+            focus: DetailFocus::Files,
+            comments: Some(vec![]),
+            comments_loaded_oldest_page: 2,
+            ..DetailState::default()
+        }));
+        let items = menu_items(&state);
+        assert!(!enabled_for(&items, "Load older comments")); // Files tab focused
+
+        if let Screen::GistDetail(d) = &mut state.screen {
+            d.focus = DetailFocus::Comments;
+        }
+        let items = menu_items(&state);
+        assert!(enabled_for(&items, "Load older comments"));
+    }
+
+    #[test]
+    fn list_palette_items_pin_requires_ownership_or_an_existing_pin() {
+        // Issue #288: `pin_toggle_intent` allows unpinning any already-pinned pair, but only
+        // allows creating a *new* pin on an owned gist — the palette previously enabled "Pin
+        // / unpin pair" for any local+gist selection regardless of ownership.
+        let mut state = initial_state();
+        state.current_user_login = Some("me".into());
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("a.txt"),
+            pinned: false,
+            modified: None,
+        }];
+        state.gists = vec![GistFile {
+            owner_login: "someone-else".into(),
+            ..test_gist("g1", "a.txt")
+        }];
+        let items = menu_items(&state);
+        assert!(!enabled_for(&items, "Pin / unpin pair")); // foreign, not yet pinned
+
+        state.pinned.push(crate::domain::PinnedMapping {
+            local_path: PathBuf::from("a.txt"),
+            gist_id: "g1".into(),
+            gist_filename: "a.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+        });
+        let items = menu_items(&state);
+        assert!(enabled_for(&items, "Pin / unpin pair")); // foreign, but already pinned (unpin)
+    }
+
+    #[test]
     fn revisions_palette_items_gate_diff_and_restore_on_head_position() {
         let mut state = initial_state();
         state.gists = vec![test_gist("g1", "a.txt")];
@@ -856,7 +900,9 @@ mod tests {
         }));
 
         // At head (index 0): incremental diff is available, but "vs head" diff and restore
-        // are not (there's nothing above head to diff/restore against).
+        // are not (there's nothing above head to diff/restore against). "Cycle target file"
+        // is also disabled here — not because of head position, but because this gist only
+        // has one file (`gist_filenames("g1").len() == 1`).
         let items = menu_items(&state);
         assert_eq!(
             item_tuples(&items),
@@ -864,13 +910,14 @@ mod tests {
                 ("Enter", "Diff parent → revision", true),
                 ("D", "Diff revision vs head", false),
                 ("r", "Restore revision", false),
-                ("F", "Cycle target file", true),
+                ("F", "Cycle target file", false),
                 ("q", "Back", true),
                 ("?", "Help", true),
             ]
         );
 
-        // Off head (index 1): both become available.
+        // Off head (index 1): diff/restore become available; "Cycle target file" stays
+        // disabled (still a single-file gist).
         if let Screen::Revisions(rev) = &mut state.screen {
             rev.index = 1;
         }
@@ -881,7 +928,7 @@ mod tests {
                 ("Enter", "Diff parent → revision", true),
                 ("D", "Diff revision vs head", true),
                 ("r", "Restore revision", true),
-                ("F", "Cycle target file", true),
+                ("F", "Cycle target file", false),
                 ("q", "Back", true),
                 ("?", "Help", true),
             ]
@@ -904,6 +951,24 @@ mod tests {
                 ("?", "Help", true),
             ]
         );
+    }
+
+    #[test]
+    fn revisions_palette_items_enable_cycle_target_file_before_entries_load() {
+        // Issue #288: cycling the target file doesn't need the revision list to have
+        // loaded — `cycle_revision_target_file` only checks the gist's file count, not
+        // `entries`. A multi-file gist should show "Cycle target file" enabled even while
+        // entries are still `None`.
+        let mut state = initial_state();
+        state.gists = vec![test_gist("g1", "a.txt"), test_gist("g1", "b.txt")];
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            target_file: "a.txt".into(),
+            ..RevisionState::default()
+        }));
+        let items = menu_items(&state);
+        assert!(enabled_for(&items, "Cycle target file"));
+        assert!(!enabled_for(&items, "Diff parent → revision")); // still no entries
     }
 
     #[test]
