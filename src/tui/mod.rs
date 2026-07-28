@@ -2803,7 +2803,11 @@ pub use text_input::{EditResult, TextInput};
 mod theme;
 pub use theme::Theme;
 mod view_model;
-pub(crate) use view_model::{build_view_model, ScreenVm};
+pub(crate) use view_model::{build_view_model, gist_row_display, ScreenVm};
+// Only exercised by tests.rs's `use super::*` — view_model.rs's own build_*_vm functions call
+// these directly without needing the re-export.
+#[cfg(test)]
+pub(crate) use view_model::{confirm_modal_style, confirm_prompt, diff_footer, diff_title};
 
 #[cfg(test)]
 mod tests;

@@ -4,15 +4,17 @@
 //! Builders never touch the filesystem or network (issues #241 / #250).
 
 use super::render::{
-    about_topic_lines_plain, confirm_modal_style, confirm_prompt, count_label, diff_footer,
-    diff_title, footer_with_status, gist_group_row_label, gist_info_line, gist_row_display,
-    help_topic_body, marked_row_text, pin_row_label, revision_row_label, row_mark, spinner_glyph,
-    unix_now, RowMark, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX, MINIMAL_HINT,
+    about_topic_lines_plain, count_label, footer_with_status, gist_group_row_label, gist_info_line,
+    gist_row_label, help_topic_body, is_json_file, marked_row_text, pin_row_label,
+    revision_row_label, row_mark, spinner_glyph, unix_now, RowMark, CREATE_DESC_PREFIX,
+    CREATE_DESC_SUFFIX, MINIMAL_HINT,
 };
 use super::{
-    AppState, ConfigField, DetailFocus, FocusPane, HelpTopic, PaletteMode, PendingAction, Screen,
+    AppState, ConfigField, DetailFocus, FocusPane, GistView, HelpTopic, PaletteMode, PendingAction,
+    Screen, TextInput,
 };
 use crate::domain::SyncStatus;
+use crate::ranking::RankedGistFile;
 use ratatui::style::Color;
 
 /// Full-frame presentation contract produced by [`build_view_model`].
@@ -56,6 +58,9 @@ pub struct PaletteVm {
     pub background: Option<Box<ScreenVm>>,
     pub title: &'static str,
     pub has_query: bool,
+    /// Live query text + cursor, painted as the input line in Command mode
+    /// (`has_query`) — carried here so paint never reads `state.palette()` directly.
+    pub query: TextInput,
     pub selected: usize,
     pub items: Vec<PaletteRowVm>,
     pub key_width: usize,
@@ -405,6 +410,7 @@ pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
         background,
         title,
         has_query,
+        query: p.query,
         selected: p.selected,
         items,
         key_width,
@@ -466,6 +472,86 @@ fn file_ext(name: &str) -> Option<String> {
         .extension()
         .and_then(|e| e.to_str())
         .map(|e| e.to_lowercase())
+}
+
+/// The diff pane title. The gist id, filenames, and both sides' mtimes live in the diff's
+/// `--- / +++` header lines (see `diff_labels`); the title stays concise and avoids
+/// repeating a path.
+pub(crate) fn diff_title(state: &AppState) -> String {
+    match state.pending_action() {
+        Some(PendingAction::Upload {
+            gist_id, filename, ..
+        }) => format!("Upload → gist {gist_id} / {filename}"),
+        Some(PendingAction::Create { local_path }) => {
+            format!(
+                "Create gist from {}",
+                crate::config::display_path(local_path)
+            )
+        }
+        Some(PendingAction::Delete { gist_id, .. }) => {
+            format!("Delete gist {gist_id}")
+        }
+        Some(PendingAction::RemoveFile {
+            gist_id, filename, ..
+        }) => {
+            format!("Remove {filename} from gist {gist_id}")
+        }
+        _ => {
+            let label = if state.diff_identical() {
+                "Diff (identical)"
+            } else {
+                "Diff"
+            };
+            let local = state.preview_local();
+            let target = state.download_target();
+            if local.as_os_str().is_empty() || local == target {
+                format!("{label} → {}", crate::config::display_path(&target))
+            } else {
+                format!(
+                    "{label}: {} → {}",
+                    crate::config::display_path(&local),
+                    crate::config::display_path(&target)
+                )
+            }
+        }
+    }
+}
+
+/// The `Screen::Diff` preview: the diff pane plus a scroll/commands footer.
+///
+/// #72 audit: this footer intentionally does not surface `state.status`. Diff actions (`d`/`u`)
+/// transition to `Screen::Confirm` or to the IO that lands back on `List`; their results surface
+/// on those destination screens (which read `state.status`), so no status is set while on Diff.
+/// Footer hints for `Screen::Diff` (pure for tests).
+pub(crate) fn diff_footer(state: &AppState) -> String {
+    let context = if state.diff_show_full {
+        "c context [full]".to_string()
+    } else {
+        format!("c context [{}]", state.diff_context)
+    };
+    // When wrapping, horizontal scroll (←→) is meaningless — drop it from the hint.
+    let scroll = if state.diff_wrap {
+        "↑↓ PgUp/Dn scroll"
+    } else {
+        "↑↓←→ PgUp/Dn scroll"
+    };
+    let wrap = if state.diff_wrap {
+        "w wrap [on]"
+    } else {
+        "w wrap [off]"
+    };
+    let back = "Esc/q back";
+    if !state.diff_allows_sync() {
+        if state.diff_identical() {
+            format!("Files are identical  ·  {scroll}  ·  {wrap}  ·  {context}  ·  {back}")
+        } else {
+            format!("{scroll}  ·  {wrap}  ·  {context}  ·  {back}")
+        }
+    } else if state.diff_identical() {
+        format!("Files are identical — nothing to sync  ·  {scroll}  ·  {wrap}  ·  {context}  ·  {back}")
+    } else {
+        format!("{scroll}  ·  d download  ·  u upload  ·  {wrap}  ·  {context}  ·  {back}")
+    }
 }
 
 /// Diff pane facts — also used as Confirm overwrite background (non-compact).
@@ -810,6 +896,17 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
     }
 }
 
+/// Full gist file-list row as painted — [`gist_row_label`] plus `★ ` when the gist is starred.
+/// Hscroll max must measure this string (or [`marked_row_text`] of it), not the star-less label.
+pub(crate) fn gist_row_display(g: &RankedGistFile, view: GistView, state: &AppState) -> String {
+    let label = gist_row_label(g, view);
+    if state.gist_is_starred(&g.file.gist_id) {
+        format!("★ {label}")
+    } else {
+        label
+    }
+}
+
 /// List body only — usable while `state.screen` is List **or** Palette-over-List (#250).
 pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
     let (visible_locals, ranked) = state.list_pane_snapshots();
@@ -1028,6 +1125,113 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
         footer,
         footer_colored,
         hscroll: pins.cursor.hscroll,
+    }
+}
+
+/// The prompt shown inside the centered confirm modal — one line per pending action,
+/// listing the keys that resolve it. Pure so it can be unit-tested.
+pub(crate) fn confirm_prompt(state: &AppState) -> String {
+    match state.pending_action() {
+        Some(PendingAction::Create { .. }) if state.editing_description => {
+            // `_` is the plain-text caret; the rendered modal draws a reverse-video
+            // cursor at its real position instead (see render_confirm).
+            format!(
+                "{CREATE_DESC_PREFIX}{}_{CREATE_DESC_SUFFIX}",
+                state.description_input
+            )
+        }
+        Some(PendingAction::Create { local_path }) => {
+            let desc = if state.description_input.is_empty() {
+                "no description".to_string()
+            } else {
+                format!("desc: {}", state.description_input)
+            };
+            format!(
+                "Create gist from {} ({desc})?  s secret  p public  Esc cancel",
+                crate::config::display_path(local_path)
+            )
+        }
+        Some(PendingAction::Upload {
+            gist_id: _,
+            filename: _,
+            local_path: _,
+        }) if state.upload.watching => {
+            format!(
+                "{} watching for edits — close the editor to continue  ·  n cancel",
+                spinner_glyph(state.spinner_frame)
+            )
+        }
+        Some(PendingAction::Upload {
+            gist_id,
+            filename,
+            local_path,
+        }) => {
+            let edited_status = if state.upload.edited_content.is_some() {
+                " [edited]"
+            } else {
+                ""
+            };
+            let mut opts = format!("y yes  n/Esc cancel  e edit{edited_status}");
+            if is_json_file(local_path) {
+                let pretty_status = if state.upload.json_pretty {
+                    " [on]"
+                } else {
+                    " [off]"
+                };
+                let sort_status = if state.upload.json_sort {
+                    " [on]"
+                } else {
+                    " [off]"
+                };
+                opts.push_str(&format!("  p pretty{pretty_status}  s sort{sort_status}"));
+            }
+            format!("Upload {filename} to gist {gist_id}?  ·  {opts}")
+        }
+        Some(PendingAction::Delete { gist_id, label }) => {
+            format!("Permanently delete \"{label}\" ({gist_id})? (y/n)")
+        }
+        Some(PendingAction::RemoveFile {
+            gist_id, filename, ..
+        }) => {
+            format!("Remove {filename} from gist {gist_id}? (y/n)")
+        }
+        Some(PendingAction::CompactGist { label, count, .. }) => {
+            format!(
+                "Compact {count} revisions of \"{label}\" into one? This force-pushes and cannot be undone. (y/n)"
+            )
+        }
+        Some(PendingAction::RestoreRevision {
+            filename,
+            version_label,
+            ..
+        }) => {
+            format!(
+                "Restore {filename} to revision {version_label}? This uploads old content as a new revision. (y/n)"
+            )
+        }
+        _ => format!(
+            "Overwrite {}? (y/n)",
+            crate::config::display_path(&state.download_target())
+        ),
+    }
+}
+
+/// Title and border colour for the confirm modal. Destructive actions are tinted with the
+/// theme's `del_color` so the stakes read at a glance; non-destructive writes use the neutral
+/// `notice_color` prompt.
+pub(crate) fn confirm_modal_style(state: &AppState) -> (&'static str, Color) {
+    let theme = &state.theme;
+    match state.pending_action() {
+        Some(PendingAction::Create { .. }) if state.editing_description => {
+            ("Description", theme.accent)
+        }
+        Some(PendingAction::Create { .. }) => ("Create gist", theme.notice_color),
+        Some(PendingAction::Upload { .. }) => ("Upload", theme.notice_color),
+        Some(PendingAction::Delete { .. }) => ("Delete", theme.del_color),
+        Some(PendingAction::RemoveFile { .. }) => ("Remove file", theme.del_color),
+        Some(PendingAction::CompactGist { .. }) => ("Compact revisions", theme.del_color),
+        Some(PendingAction::RestoreRevision { .. }) => ("Restore revision", theme.notice_color),
+        _ => ("Overwrite", theme.del_color),
     }
 }
 
