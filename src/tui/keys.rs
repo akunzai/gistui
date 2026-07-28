@@ -172,102 +172,6 @@ impl AppState {
         }
     }
 
-    /// Toggle or nudge the selected Config field. Returns true when a value changed
-    /// (caller should persist). Pure aside from mutating `self`.
-    pub(crate) fn adjust_config_field(&mut self, forward: bool) -> bool {
-        let index = self.config().map(|c| c.index).unwrap_or(0);
-        let field = ConfigField::ALL
-            .get(index)
-            .copied()
-            .unwrap_or(ConfigField::Theme);
-        match field {
-            ConfigField::Theme => {
-                self.theme_choice = match self.theme_choice {
-                    crate::config::ThemeChoice::Dark => crate::config::ThemeChoice::Light,
-                    crate::config::ThemeChoice::Light => crate::config::ThemeChoice::Dark,
-                };
-                self.theme = Theme::for_choice(self.theme_choice);
-                true
-            }
-            ConfigField::Mouse => {
-                self.config_mouse = !self.config_mouse;
-                self.mouse_enabled =
-                    crate::config::resolve_mouse_enabled(self.config_mouse, self.no_mouse_cli);
-                true
-            }
-            ConfigField::CheckUpdates => {
-                self.config_check_updates = !self.config_check_updates;
-                self.update_check_enabled = crate::config::resolve_update_check(
-                    self.config_check_updates,
-                    self.no_update_check_cli,
-                );
-                true
-            }
-            ConfigField::IgnoreTrailingNewline => {
-                self.ignore_trailing_newline = !self.ignore_trailing_newline;
-                true
-            }
-            ConfigField::ScanDepth => {
-                let next = if forward {
-                    self.scan_depth.saturating_add(1).min(20)
-                } else {
-                    self.scan_depth.saturating_sub(1)
-                };
-                if next == self.scan_depth {
-                    return false;
-                }
-                self.scan_depth = next;
-                true
-            }
-            ConfigField::DiffContext => {
-                let next = if forward {
-                    self.diff_context.saturating_add(1).min(50)
-                } else {
-                    self.diff_context.saturating_sub(1)
-                };
-                if next == self.diff_context {
-                    return false;
-                }
-                self.diff_context = next;
-                true
-            }
-        }
-    }
-
-    fn handle_key_config(&mut self, code: KeyCode) -> KeyOutcome {
-        let n = ConfigField::ALL.len();
-        match code {
-            KeyCode::Char('q') | KeyCode::Esc => {
-                self.leave();
-            }
-            KeyCode::Up | KeyCode::Char('k') => {
-                if let Some(c) = self.config_mut() {
-                    c.index = c.index.saturating_sub(1);
-                }
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                if let Some(c) = self.config_mut() {
-                    if c.index + 1 < n {
-                        c.index += 1;
-                    }
-                }
-            }
-            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right | KeyCode::Char('l') => {
-                if self.adjust_config_field(true) {
-                    return KeyOutcome::PersistSettings;
-                }
-            }
-            KeyCode::Left | KeyCode::Char('h') => {
-                if self.adjust_config_field(false) {
-                    return KeyOutcome::PersistSettings;
-                }
-            }
-            KeyCode::Char('?') => self.open_help(),
-            _ => {}
-        }
-        KeyOutcome::None
-    }
-
     /// Arrow / hjkl / Ctrl+b/f navigation. Returns true when the key was consumed.
     /// Filter and text-input modes keep `hjkl` as typed characters (arrows still move
     /// selection while filtering — handled in the filter branches).
@@ -913,6 +817,7 @@ impl AppState {
     /// panning. Help body also scrolls three; the Help topic index is a list (one row).
     fn wheel_step(&self) -> usize {
         match &self.screen {
+            Screen::Config(_) => super::screens::config::wheel_step(),
             Screen::Diff(_) | Screen::Preview(_) | Screen::Confirm(_) => 3,
             // GistDetail: the comments body scrolls like content (3 lines); the file list
             // steps one file at a time.

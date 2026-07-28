@@ -10,8 +10,8 @@ use super::render::{
     CREATE_DESC_SUFFIX, MINIMAL_HINT,
 };
 use super::{
-    AppState, ConfigField, DetailFocus, FocusPane, GistView, HelpTopic, PaletteMode, PendingAction,
-    Screen, TextInput,
+    AppState, DetailFocus, FocusPane, GistView, HelpTopic, PaletteMode, PendingAction, Screen,
+    TextInput,
 };
 use crate::domain::SyncStatus;
 use crate::ranking::RankedGistFile;
@@ -371,7 +371,7 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
         Screen::Gists(_) => ScreenVm::Gists(build_gists_vm(state)),
         Screen::GistDetail(_) => ScreenVm::GistDetail(build_gist_detail_vm(state)),
         Screen::Revisions(_) => ScreenVm::Revisions(build_revisions_vm(state)),
-        Screen::Config(_) => ScreenVm::Config(build_config_vm(state)),
+        Screen::Config(_) => ScreenVm::Config(super::screens::config::build_config_vm(state)),
         Screen::Diff(_) => ScreenVm::Diff(build_diff_vm(state)),
         Screen::Preview(_) => ScreenVm::Preview(build_preview_vm(state)),
         Screen::Pins(_) => ScreenVm::Pins(build_pins_vm(state)),
@@ -431,7 +431,9 @@ fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<Scree
         Screen::Gists(_) => Some(ScreenVm::Gists(build_gists_vm(state))),
         Screen::GistDetail(_) => Some(ScreenVm::GistDetail(build_gist_detail_vm(state))),
         Screen::Revisions(_) => Some(ScreenVm::Revisions(build_revisions_vm(state))),
-        Screen::Config(_) => Some(ScreenVm::Config(build_config_vm(state))),
+        Screen::Config(_) => Some(ScreenVm::Config(super::screens::config::build_config_vm(
+            state,
+        ))),
         Screen::Diff(_) => Some(ScreenVm::Diff(build_diff_vm(state))),
         Screen::Preview(_) => Some(ScreenVm::Preview(build_preview_vm(state))),
         Screen::Pins(_) => Some(ScreenVm::Pins(build_pins_vm(state))),
@@ -666,28 +668,6 @@ pub(crate) fn build_revisions_vm(state: &AppState) -> RevisionsVm {
         footer,
         footer_colored,
         hscroll: rev.hscroll,
-    }
-}
-
-/// Config/settings body — usable under Palette-over-Config as well.
-pub(crate) fn build_config_vm(state: &AppState) -> ConfigVm {
-    let rows = ConfigField::ALL
-        .iter()
-        .map(|field| {
-            let label = field.label();
-            let value = state.config_field_value(*field);
-            let hint = if field.is_numeric() {
-                "←/→"
-            } else {
-                "Enter"
-            };
-            format!("  {label:<28} {value:<8}  ({hint})")
-        })
-        .collect();
-    ConfigVm {
-        rows,
-        selected: state.config().map(|c| c.index).unwrap_or(0),
-        status: state.status.clone(),
     }
 }
 

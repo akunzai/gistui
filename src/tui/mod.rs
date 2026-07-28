@@ -341,7 +341,7 @@ impl HelpTopic {
             Screen::Gists(_) => HelpTopic::GistManager,
             Screen::GistDetail(_) => HelpTopic::GistDetail,
             Screen::Revisions(_) => HelpTopic::Revisions,
-            Screen::Config(_) => HelpTopic::Config,
+            Screen::Config(_) => screens::config::HELP_TOPIC,
             Screen::Help(_) => HelpTopic::List,
             _ => HelpTopic::List,
         }
@@ -2789,6 +2789,7 @@ use palette::{PaletteMode, PaletteState};
 
 mod render;
 use render::*;
+mod screens;
 mod text;
 use text::{comment_lines_count, hscroll_max_among, local_row_label};
 mod bg;

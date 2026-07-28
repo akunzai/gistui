@@ -45,7 +45,9 @@ fn render_screen_vm(
             render_gist_detail_vm(frame, state, detail, chrome, layout)
         }
         super::ScreenVm::Revisions(revs) => render_revisions_vm(frame, state, revs, chrome, layout),
-        super::ScreenVm::Config(config) => render_config_vm(frame, state, config, chrome, layout),
+        super::ScreenVm::Config(config) => {
+            super::screens::config::render_config_vm(frame, state, config, chrome, layout)
+        }
         super::ScreenVm::Diff(diff) => render_diff_vm(frame, state, diff, chrome, layout),
         super::ScreenVm::Preview(preview) => {
             render_preview_vm(frame, state, preview, chrome, layout)
@@ -61,7 +63,7 @@ fn render_screen_vm(
     }
 }
 
-fn render_close_button(frame: &mut Frame, outer: Rect, theme: &Theme) -> Rect {
+pub(super) fn render_close_button(frame: &mut Frame, outer: Rect, theme: &Theme) -> Rect {
     let text = "[✕]";
     let width = text.chars().count() as u16;
     if outer.width < width + 2 || outer.height == 0 {
@@ -375,59 +377,6 @@ pub(super) fn about_topic_lines_plain(state: &AppState) -> Vec<String> {
         ));
     }
     lines
-}
-
-fn render_config_vm(
-    frame: &mut Frame,
-    state: &AppState,
-    config: &super::view_model::ConfigVm,
-    chrome: &super::view_model::ChromeVm,
-    layout: &mut MouseLayout,
-) {
-    let area = frame.area();
-    let area = render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
-        .split(area);
-    let items: Vec<ListItem> = config
-        .rows
-        .iter()
-        .map(|row| ListItem::new(row.clone()))
-        .collect();
-    let mut list_state = ListState::default().with_selected(Some(config.selected));
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .title(" Settings ")
-        .title_bottom(Line::from(
-            " Esc close · Enter/←/→ change · saved on change ",
-        ))
-        .style(state.theme.base_style())
-        .border_style(Style::default().fg(state.theme.accent));
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(
-            Style::default()
-                .bg(state.theme.accent)
-                .fg(state.theme.fg_on_accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("▸ ");
-    frame.render_stateful_widget(list, chunks[0], &mut list_state);
-    if chrome.mouse_enabled {
-        layout.close_button = Some(render_close_button(frame, chunks[0], &state.theme));
-        layout.list = Some(PaneHit {
-            rect: chunks[0],
-            offset: 0,
-        });
-    }
-    if let Some(ref status) = config.status {
-        frame.render_widget(
-            Paragraph::new(status.as_str()).style(Style::default().fg(state.theme.accent)),
-            chunks[1],
-        );
-    }
 }
 
 fn render_help_vm(
