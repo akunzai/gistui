@@ -1205,14 +1205,24 @@ impl Jobs {
         self.absorb_inner(state, update_check_path)
     }
 
+    /// Poll each channel in turn and apply ready results to `state`.
+    ///
+    /// **Order matters**: the gist-list section spawns follow-up jobs (fork counts, fork
+    /// metadata, star counts) on success, and those sections poll the very channels it just
+    /// spawned in this same call — so `gist` must run before `fork`/`star`/`fork_meta`.
     fn absorb_inner(
         &mut self,
         state: &mut AppState,
         update_check_path: &Option<std::path::PathBuf>,
     ) -> Result<LoopFlow> {
-        // Bridge: absorb body still uses `channels` naming via local alias.
-        let channels = self;
-        absorb_background_results_body(state, channels, update_check_path)
+        self.on_gist_list_ready(state);
+        self.on_fork_counts_ready(state);
+        self.on_star_counts_ready(state);
+        self.on_fork_meta_ready(state);
+        self.on_local_scan_ready(state);
+        self.on_update_check_ready(state, update_check_path);
+        self.on_upload_watch_events(state);
+        Ok(self.on_action_outcome(state))
     }
 }
 
@@ -1229,242 +1239,200 @@ fn poll_channel<T>(slot: &mut Option<std::sync::mpsc::Receiver<T>>) -> Option<T>
     Some(value)
 }
 
-fn absorb_background_results_body(
-    state: &mut AppState,
-    channels: &mut Jobs,
-    update_check_path: &Option<std::path::PathBuf>,
-) -> Result<LoopFlow> {
-    // Absorb the background gist list once it arrives.
-    if state.loading {
-        if let Some((
-            gists,
-            starred,
-            starred_ids,
-            user_login,
-            comment_counts,
-            owned_raw,
-            starred_raw,
-        )) = poll_channel(&mut channels.gist)
-        {
-            persist_gist_cache_from_state_fields(
-                &gists,
-                &starred,
-                &starred_ids,
-                &user_login,
-                &comment_counts,
-                &state.gist_fork_counts,
-                &state.gist_star_counts,
-            );
-            state.gists = gists;
-            state.starred_gists = starred;
-            state.starred_gist_ids = starred_ids;
-            state.current_user_login = user_login;
-            state.gist_comment_counts = comment_counts;
-            state.loading = false;
-            if state.gist_index >= state.ranked_gists().len() {
-                state.gist_index = 0;
-            }
-            let count = state.visible_gist_groups().len();
-            if let Some(gm) = state.gist_manager_mut() {
-                gm.cursor.clamp_len(count);
-            }
-            let gist_ids: std::collections::HashSet<String> = state
-                .gists
-                .iter()
-                .chain(state.starred_gists.iter())
-                .map(|g| g.gist_id.clone())
-                .collect();
-            channels.fork = Some(spawn_fork_count_fetch(
+impl Jobs {
+    /// Absorb the background gist list once it arrives, and spawn the follow-up
+    /// fork-count/fork-meta/star-count jobs the freshly-loaded gist list needs.
+    fn on_gist_list_ready(&mut self, state: &mut AppState) {
+        if state.loading {
+            if let Some((
+                gists,
+                starred,
+                starred_ids,
+                user_login,
+                comment_counts,
                 owned_raw,
                 starred_raw,
-                gist_ids.clone(),
-            ));
-            channels.fork_meta = Some(spawn_fork_metadata_fetch(
-                state.gists.iter().map(|g| g.gist_id.clone()).collect(),
-            ));
-            let node_ids = crate::gh::merge_gist_node_id_maps(&state.gists, &state.starred_gists);
-            channels.star = Some(spawn_star_count_fetch(node_ids));
-        }
-    }
-
-    if let Some(fork_counts) = poll_channel(&mut channels.fork) {
-        state.gist_fork_counts = fork_counts;
-        persist_gist_cache_from_state(state);
-    }
-
-    if let Some(star_counts) = poll_channel(&mut channels.star) {
-        state.gist_star_counts = star_counts;
-        persist_gist_cache_from_state(state);
-    }
-
-    if let Some(result) = poll_channel(&mut channels.fork_meta) {
-        match result {
-            Ok(fork_of) => {
-                crate::gh::apply_fork_of_ids(&mut state.gists, &fork_of);
-                persist_gist_cache_from_state(state);
-            }
-            Err(error) => state.set_status(format!("fork detection unavailable: {error}")),
-        }
-    }
-
-    // Absorb a completed background local scan (ignore stale generations — issue #221).
-    if state.local_scanning {
-        if let Some(ref rx) = channels.local {
-            if let Ok((generation, locals)) = rx.try_recv() {
-                channels.local = None;
-                if state.apply_local_scan_if_current(generation, locals) {
-                    state.status = None;
+            )) = poll_channel(&mut self.gist)
+            {
+                persist_gist_cache_from_state_fields(
+                    &gists,
+                    &starred,
+                    &starred_ids,
+                    &user_login,
+                    &comment_counts,
+                    &state.gist_fork_counts,
+                    &state.gist_star_counts,
+                );
+                state.gists = gists;
+                state.starred_gists = starred;
+                state.starred_gist_ids = starred_ids;
+                state.current_user_login = user_login;
+                state.gist_comment_counts = comment_counts;
+                state.loading = false;
+                if state.gist_index >= state.ranked_gists().len() {
+                    state.gist_index = 0;
                 }
-                // Stale: a newer scan is (or was) in flight; leave spinner/list alone.
-            }
-        }
-    }
-
-    // Absorb the background update-check result: show the hint and persist the throttle.
-    // Failed checks are silent and not recorded, so they retry on the next launch.
-    if let Some(outcome) = poll_channel(&mut channels.update) {
-        let now = crate::update_check::now_secs();
-        match outcome {
-            crate::update_check::UpdateCheckOutcome::Newer(version) => {
-                if let Some(ref path) = update_check_path {
-                    crate::update_check::save_state(
-                        path,
-                        &crate::update_check::UpdateCheckState {
-                            last_check: now,
-                            latest_seen: version.clone(),
-                        },
-                    );
+                let count = state.visible_gist_groups().len();
+                if let Some(gm) = state.gist_manager_mut() {
+                    gm.cursor.clamp_len(count);
                 }
-                state.update_available = Some(version);
+                let gist_ids: std::collections::HashSet<String> = state
+                    .gists
+                    .iter()
+                    .chain(state.starred_gists.iter())
+                    .map(|g| g.gist_id.clone())
+                    .collect();
+                self.fork = Some(spawn_fork_count_fetch(
+                    owned_raw,
+                    starred_raw,
+                    gist_ids.clone(),
+                ));
+                self.fork_meta = Some(spawn_fork_metadata_fetch(
+                    state.gists.iter().map(|g| g.gist_id.clone()).collect(),
+                ));
+                let node_ids =
+                    crate::gh::merge_gist_node_id_maps(&state.gists, &state.starred_gists);
+                self.star = Some(spawn_star_count_fetch(node_ids));
             }
-            crate::update_check::UpdateCheckOutcome::UpToDate => {
-                if let Some(ref path) = update_check_path {
-                    crate::update_check::save_state(
-                        path,
-                        &crate::update_check::UpdateCheckState {
-                            last_check: now,
-                            latest_seen: String::new(),
-                        },
-                    );
+        }
+    }
+
+    /// Absorb background fork-count results.
+    fn on_fork_counts_ready(&mut self, state: &mut AppState) {
+        if let Some(fork_counts) = poll_channel(&mut self.fork) {
+            state.gist_fork_counts = fork_counts;
+            persist_gist_cache_from_state(state);
+        }
+    }
+
+    /// Absorb background star-count results.
+    fn on_star_counts_ready(&mut self, state: &mut AppState) {
+        if let Some(star_counts) = poll_channel(&mut self.star) {
+            state.gist_star_counts = star_counts;
+            persist_gist_cache_from_state(state);
+        }
+    }
+
+    /// Absorb background fork-metadata (owned-fork upstream ids) results.
+    fn on_fork_meta_ready(&mut self, state: &mut AppState) {
+        if let Some(result) = poll_channel(&mut self.fork_meta) {
+            match result {
+                Ok(fork_of) => {
+                    crate::gh::apply_fork_of_ids(&mut state.gists, &fork_of);
+                    persist_gist_cache_from_state(state);
                 }
-                state.update_available = None;
-            }
-            crate::update_check::UpdateCheckOutcome::Failed => {}
-        }
-    }
-
-    // Absorb upload-edit-watch events. Unlike the other channels above (one-shot), this one
-    // can carry several `ContentChanged` events before its terminal EditorClosed/ReadError —
-    // drain all of them so a burst of saves doesn't lag a tick behind.
-    let mut upload_watch_finished = false;
-    if let Some(ref rx) = channels.upload_edit_watch {
-        while let Ok(event) = rx.try_recv() {
-            if matches!(
-                event,
-                UploadEditWatchEvent::EditorClosed { .. } | UploadEditWatchEvent::ReadError { .. }
-            ) {
-                upload_watch_finished = true;
-            }
-            state.apply_upload_edit_event(event);
-            if upload_watch_finished {
-                break;
+                Err(error) => state.set_status(format!("fork detection unavailable: {error}")),
             }
         }
     }
-    if upload_watch_finished {
-        channels.upload_edit_watch = None;
+
+    /// Absorb a completed background local scan (ignore stale generations — issue #221).
+    fn on_local_scan_ready(&mut self, state: &mut AppState) {
+        if state.local_scanning {
+            if let Some(ref rx) = self.local {
+                if let Ok((generation, locals)) = rx.try_recv() {
+                    self.local = None;
+                    if state.apply_local_scan_if_current(generation, locals) {
+                        state.status = None;
+                    }
+                    // Stale: a newer scan is (or was) in flight; leave spinner/list alone.
+                }
+            }
+        }
     }
 
-    // Absorb a completed background per-action task (ignore stale generations — issue #221).
-    if let Some(ref rx) = channels.action {
-        if let Ok((generation, outcome)) = rx.try_recv() {
-            channels.action = None;
-            if state.is_current_bg_generation(generation) {
-                state.bg_task_msg = None;
-                match outcome {
-                    BgTaskOutcome::PreviewDiff {
-                        result,
-                        local_path,
-                        local_label,
-                        gist_label,
-                        target,
-                        upload_orientation,
-                    } => match result {
-                        Ok(remote) => {
-                            match local_path
-                                .as_ref()
-                                .map(|p| crate::domain::read_text_file_capped(p))
-                                .transpose()
-                            {
-                                Ok(local) => {
-                                    let local_content = local.unwrap_or_default();
-                                    let diff = preview_diff_text(
-                                        upload_orientation,
-                                        &local_label,
-                                        &local_content,
-                                        &gist_label,
-                                        &remote,
-                                        state.ignore_trailing_newline,
-                                    );
-                                    let identical = crate::diff::content_eq(
-                                        &local_content,
-                                        &remote,
-                                        state.ignore_trailing_newline,
-                                    );
-                                    state.enter_diff(
-                                        diff,
-                                        remote,
-                                        local_path.unwrap_or_default(),
-                                        target,
-                                    );
-                                    if let Some(d) = state.diff_mut() {
-                                        d.identical = identical;
-                                    }
-                                    // A pin diff that turns out identical confirms the cached
-                                    // last_seen_hash is (still) accurate — refresh it for free
-                                    // using the content we already fetched, so the Pins list's
-                                    // content-hash check (AppState::compute_pin_sync_status) stays
-                                    // correct even if the gist changed elsewhere since the last
-                                    // real sync. Hash the LOCAL content's raw bytes (not the
-                                    // trailing-newline-normalized `identical` comparison), so
-                                    // this matches the raw-byte hashing compute_pin_sync_status does.
-                                    if identical {
-                                        let pin = state.diff().and_then(|d| {
-                                            Some((
-                                                d.gist_id.clone()?,
-                                                d.gist_filename.clone()?,
-                                                d.local_path.clone(),
-                                            ))
-                                        });
-                                        if let Some((gid, fname, local_abs)) = pin {
-                                            record_pin_sync(
-                                                state,
-                                                &local_abs,
-                                                &gid,
-                                                &fname,
-                                                &local_content,
-                                                None,
-                                            );
-                                        }
-                                    }
-                                }
-                                Err(error) => state.set_status(format!("read failed: {error}")),
-                            }
-                        }
-                        Err(error) => state.set_status(format!("fetch failed: {error}")),
-                    },
-                    BgTaskOutcome::DownloadSelected {
-                        result,
-                        target,
-                        local_label,
-                        gist_label,
-                        file,
-                    } => match result {
-                        Ok(remote) => {
-                            if target.exists() {
-                                match crate::domain::read_text_file_capped(&target) {
-                                    Ok(local_content) => {
-                                        let diff = crate::diff::unified_diff(
+    /// Absorb the background update-check result: show the hint and persist the throttle.
+    /// Failed checks are silent and not recorded, so they retry on the next launch.
+    fn on_update_check_ready(
+        &mut self,
+        state: &mut AppState,
+        update_check_path: &Option<std::path::PathBuf>,
+    ) {
+        if let Some(outcome) = poll_channel(&mut self.update) {
+            let now = crate::update_check::now_secs();
+            match outcome {
+                crate::update_check::UpdateCheckOutcome::Newer(version) => {
+                    if let Some(ref path) = update_check_path {
+                        crate::update_check::save_state(
+                            path,
+                            &crate::update_check::UpdateCheckState {
+                                last_check: now,
+                                latest_seen: version.clone(),
+                            },
+                        );
+                    }
+                    state.update_available = Some(version);
+                }
+                crate::update_check::UpdateCheckOutcome::UpToDate => {
+                    if let Some(ref path) = update_check_path {
+                        crate::update_check::save_state(
+                            path,
+                            &crate::update_check::UpdateCheckState {
+                                last_check: now,
+                                latest_seen: String::new(),
+                            },
+                        );
+                    }
+                    state.update_available = None;
+                }
+                crate::update_check::UpdateCheckOutcome::Failed => {}
+            }
+        }
+    }
+
+    /// Absorb upload-edit-watch events. Unlike the other channels above (one-shot), this one
+    /// can carry several `ContentChanged` events before its terminal EditorClosed/ReadError —
+    /// drain all of them so a burst of saves doesn't lag a tick behind.
+    fn on_upload_watch_events(&mut self, state: &mut AppState) {
+        let mut upload_watch_finished = false;
+        if let Some(ref rx) = self.upload_edit_watch {
+            while let Ok(event) = rx.try_recv() {
+                if matches!(
+                    event,
+                    UploadEditWatchEvent::EditorClosed { .. }
+                        | UploadEditWatchEvent::ReadError { .. }
+                ) {
+                    upload_watch_finished = true;
+                }
+                state.apply_upload_edit_event(event);
+                if upload_watch_finished {
+                    break;
+                }
+            }
+        }
+        if upload_watch_finished {
+            self.upload_edit_watch = None;
+        }
+    }
+
+    /// Absorb a completed background per-action task (ignore stale generations — issue #221).
+    /// Returns [`LoopFlow::SkipIteration`] when the outcome should abort the rest of this
+    /// event-loop tick (stale revision fetch / no-op restore); otherwise `LoopFlow::Proceed`.
+    fn on_action_outcome(&mut self, state: &mut AppState) -> LoopFlow {
+        if let Some(ref rx) = self.action {
+            if let Ok((generation, outcome)) = rx.try_recv() {
+                self.action = None;
+                if state.is_current_bg_generation(generation) {
+                    state.bg_task_msg = None;
+                    match outcome {
+                        BgTaskOutcome::PreviewDiff {
+                            result,
+                            local_path,
+                            local_label,
+                            gist_label,
+                            target,
+                            upload_orientation,
+                        } => match result {
+                            Ok(remote) => {
+                                match local_path
+                                    .as_ref()
+                                    .map(|p| crate::domain::read_text_file_capped(p))
+                                    .transpose()
+                                {
+                                    Ok(local) => {
+                                        let local_content = local.unwrap_or_default();
+                                        let diff = preview_diff_text(
+                                            upload_orientation,
                                             &local_label,
                                             &local_content,
                                             &gist_label,
@@ -1476,384 +1444,461 @@ fn absorb_background_results_body(
                                             &remote,
                                             state.ignore_trailing_newline,
                                         );
-                                        state.staged_diff_gist =
-                                            Some((file.gist_id.clone(), file.filename.clone()));
-                                        state.enter_diff(diff, remote, target.clone(), target);
+                                        state.enter_diff(
+                                            diff,
+                                            remote,
+                                            local_path.unwrap_or_default(),
+                                            target,
+                                        );
                                         if let Some(d) = state.diff_mut() {
                                             d.identical = identical;
                                         }
+                                        // A pin diff that turns out identical confirms the cached
+                                        // last_seen_hash is (still) accurate — refresh it for free
+                                        // using the content we already fetched, so the Pins list's
+                                        // content-hash check (AppState::compute_pin_sync_status) stays
+                                        // correct even if the gist changed elsewhere since the last
+                                        // real sync. Hash the LOCAL content's raw bytes (not the
+                                        // trailing-newline-normalized `identical` comparison), so
+                                        // this matches the raw-byte hashing compute_pin_sync_status does.
+                                        if identical {
+                                            let pin = state.diff().and_then(|d| {
+                                                Some((
+                                                    d.gist_id.clone()?,
+                                                    d.gist_filename.clone()?,
+                                                    d.local_path.clone(),
+                                                ))
+                                            });
+                                            if let Some((gid, fname, local_abs)) = pin {
+                                                record_pin_sync(
+                                                    state,
+                                                    &local_abs,
+                                                    &gid,
+                                                    &fname,
+                                                    &local_content,
+                                                    None,
+                                                );
+                                            }
+                                        }
                                     }
-                                    Err(error) => state.set_status(error),
+                                    Err(error) => state.set_status(format!("read failed: {error}")),
                                 }
-                            } else {
-                                match crate::actions::execute_download(
-                                    &target,
-                                    &remote,
-                                    crate::actions::DownloadMode::CreateNew,
+                            }
+                            Err(error) => state.set_status(format!("fetch failed: {error}")),
+                        },
+                        BgTaskOutcome::DownloadSelected {
+                            result,
+                            target,
+                            local_label,
+                            gist_label,
+                            file,
+                        } => match result {
+                            Ok(remote) => {
+                                if target.exists() {
+                                    match crate::domain::read_text_file_capped(&target) {
+                                        Ok(local_content) => {
+                                            let diff = crate::diff::unified_diff(
+                                                &local_label,
+                                                &local_content,
+                                                &gist_label,
+                                                &remote,
+                                                state.ignore_trailing_newline,
+                                            );
+                                            let identical = crate::diff::content_eq(
+                                                &local_content,
+                                                &remote,
+                                                state.ignore_trailing_newline,
+                                            );
+                                            state.staged_diff_gist =
+                                                Some((file.gist_id.clone(), file.filename.clone()));
+                                            state.enter_diff(diff, remote, target.clone(), target);
+                                            if let Some(d) = state.diff_mut() {
+                                                d.identical = identical;
+                                            }
+                                        }
+                                        Err(error) => state.set_status(error),
+                                    }
+                                } else {
+                                    match crate::actions::execute_download(
+                                        &target,
+                                        &remote,
+                                        crate::actions::DownloadMode::CreateNew,
+                                    ) {
+                                        Ok(()) => {
+                                            state.set_status(format!(
+                                                "Downloaded {}",
+                                                target
+                                                    .file_name()
+                                                    .unwrap_or(target.as_os_str())
+                                                    .to_string_lossy()
+                                            ));
+                                            record_pin_sync(
+                                                state,
+                                                &target,
+                                                &file.gist_id,
+                                                &file.filename,
+                                                &remote,
+                                                Some(crate::domain::SyncDirection::Download),
+                                            );
+                                            refresh_locals(state);
+                                        }
+                                        Err(error) => {
+                                            state.set_status(format!("download failed: {error}"))
+                                        }
+                                    }
+                                }
+                            }
+                            Err(error) => state.set_status(format!("fetch failed: {error}")),
+                        },
+                        BgTaskOutcome::UploadPreview {
+                            result,
+                            file,
+                            local_path,
+                            local_label,
+                            gist_label,
+                        } => match result {
+                            Ok(remote) => {
+                                // Keep staged pin/list return; enter_confirm consumes it.
+                                let action = PendingAction::Upload {
+                                    gist_id: file.gist_id,
+                                    filename: file.filename,
+                                    local_path: local_path.clone(),
+                                };
+                                match state.init_upload_state(
+                                    &local_path,
+                                    Some(remote),
+                                    local_label,
+                                    gist_label,
                                 ) {
                                     Ok(()) => {
-                                        state.set_status(format!(
-                                            "Downloaded {}",
-                                            target
-                                                .file_name()
-                                                .unwrap_or(target.as_os_str())
-                                                .to_string_lossy()
-                                        ));
-                                        record_pin_sync(
-                                            state,
-                                            &target,
-                                            &file.gist_id,
-                                            &file.filename,
-                                            &remote,
-                                            Some(crate::domain::SyncDirection::Download),
-                                        );
-                                        refresh_locals(state);
+                                        // init_upload_state writes via update_upload_diff only when
+                                        // Confirm is already open; open Confirm first with empty
+                                        // body, then rebuild the upload diff into the payload.
+                                        state.enter_confirm(action, String::new());
+                                        state.update_upload_diff();
                                     }
                                     Err(error) => {
-                                        state.set_status(format!("download failed: {error}"))
+                                        state.set_status(format!(
+                                            "cannot read {}: {error}",
+                                            crate::config::display_path(&local_path)
+                                        ));
+                                    }
+                                }
+                            }
+                            Err(error) => state.set_status(format!("fetch failed: {error}")),
+                        },
+                        BgTaskOutcome::UploadReplace { result, file } => match result {
+                            Ok(_) => {
+                                state.gist_content_cache.remove(&file.cache_key());
+                                state.set_status(format!(
+                                    "Uploaded {} to gist {}",
+                                    file.filename, file.gist_id
+                                ));
+                                if let Some(local_path) = state.upload_local_path() {
+                                    let content = state.content_to_upload();
+                                    record_pin_sync(
+                                        state,
+                                        &local_path,
+                                        &file.gist_id,
+                                        &file.filename,
+                                        &content,
+                                        Some(crate::domain::SyncDirection::Upload),
+                                    );
+                                }
+                                // Return to wherever this upload was initiated from (List, or Pins
+                                // for a pin push) instead of always snapping to List.
+                                state.staged_diff_gist = None;
+                                state.leave();
+                                self.request_gist_fetch(state);
+                            }
+                            Err(error) => {
+                                state.set_status(format!("upload failed: {error}"));
+                                // Stay on Confirm payload if still open.
+                            }
+                        },
+                        BgTaskOutcome::CreateGist {
+                            result,
+                            local_path,
+                            public,
+                        } => match result {
+                            Ok(_) => {
+                                let visibility = if public { "public" } else { "secret" };
+                                state.set_status(format!(
+                                    "Created {} gist from {}",
+                                    visibility,
+                                    crate::config::display_path(&local_path)
+                                ));
+                                state.description_input.clear();
+                                state.back_to_list();
+                                self.request_gist_fetch(state);
+                            }
+                            Err(error) => {
+                                state.set_status(format!("create failed: {error}"));
+                                state.screen = Screen::List;
+                                state.description_input.clear();
+                            }
+                        },
+                        BgTaskOutcome::PreviewContent {
+                            result,
+                            file,
+                            preview_title,
+                        } => match result {
+                            Ok(content) => {
+                                let key = file.cache_key();
+                                state
+                                    .gist_content_cache
+                                    .insert(key.clone(), content.clone());
+                                state.enter_preview(preview_title, content, Some(key));
+                            }
+                            Err(error) => state.set_status(format!("fetch failed: {error}")),
+                        },
+                        BgTaskOutcome::DeleteGist { result, gist_id } => match result {
+                            Ok(_) => {
+                                state.set_status(format!("Deleted gist {gist_id}"));
+                                self.request_gist_fetch(state);
+                            }
+                            Err(error) => state.set_status(format!("delete failed: {error}")),
+                        },
+                        BgTaskOutcome::RemoveFile {
+                            result,
+                            gist_id,
+                            filename,
+                        } => match result {
+                            Ok(_) => {
+                                state
+                                    .gist_content_cache
+                                    .remove(&(gist_id.clone(), filename.clone()));
+                                state.set_status(format!("Removed {filename} from gist {gist_id}"));
+                                self.request_gist_fetch(state);
+                            }
+                            Err(error) => state.set_status(format!("remove failed: {error}")),
+                        },
+                        BgTaskOutcome::ApplyDescription { result, gist_id } => match result {
+                            Ok(_) => {
+                                state.set_status(format!("Updated description for gist {gist_id}"));
+                                self.request_gist_fetch(state);
+                            }
+                            Err(error) => {
+                                state.set_status(format!("description update failed: {error}"))
+                            }
+                        },
+                        BgTaskOutcome::CompactAnalyze {
+                            result,
+                            gist_id,
+                            label,
+                        } => match result {
+                            Ok(count) if count <= 1 => state.set_status(format!(
+                                "\"{label}\" already has a single revision — nothing to compact"
+                            )),
+                            Ok(count) => {
+                                // `pending_return` was staged at the 'c' keypress (keys.rs); `enter`
+                                // (inside `enter_confirm`) consumes it as the Confirm cancel path.
+                                state.enter_confirm(
+                                    PendingAction::CompactGist {
+                                        gist_id: gist_id.clone(),
+                                        label: label.clone(),
+                                        count,
+                                    },
+                                    format!(
+                                        "Compact gist {gist_id} (\"{label}\").\n\nIt has {count} revisions. Compacting clones it to a temp dir, squashes the history to a single commit, and force-pushes — the {} older revisions are gone for good.",
+                                        count - 1
+                                    ),
+                                );
+                            }
+                            Err(error) => {
+                                state.set_status(format!("revision check failed: {error}"))
+                            }
+                        },
+                        BgTaskOutcome::CompactGist {
+                            result,
+                            label,
+                            count,
+                        } => match result {
+                            Ok(_) => {
+                                state.set_status(format!(
+                                    "Compacted \"{label}\" ({count} → 1 revision)"
+                                ));
+                                self.request_gist_fetch(state);
+                            }
+                            Err(error) => state.set_status(format!("compact failed: {error}")),
+                        },
+                        BgTaskOutcome::CommentsInitialLoaded { gist_id, result } => {
+                            state.apply_initial_comments(&gist_id, result);
+                        }
+                        BgTaskOutcome::CommentsOlderLoaded { gist_id, result } => {
+                            state.apply_older_comments(&gist_id, result);
+                        }
+                        BgTaskOutcome::RevisionsFetched { gist_id, result } => {
+                            if state.revision().and_then(|r| r.gist_id.as_deref())
+                                != Some(gist_id.as_str())
+                            {
+                                return LoopFlow::SkipIteration;
+                            }
+                            match result {
+                                Ok(entries) => {
+                                    let short = entries.len() <= 1;
+                                    if let Some(rev) = state.revision_mut() {
+                                        rev.fetch_error = None;
+                                        rev.entries = Some(entries);
+                                    }
+                                    if short {
+                                        state.set_status("only one revision — nothing to restore");
+                                    }
+                                }
+                                Err(error) => {
+                                    if let Some(rev) = state.revision_mut() {
+                                        rev.entries = Some(Vec::new());
+                                        rev.fetch_error = Some(error);
                                     }
                                 }
                             }
                         }
-                        Err(error) => state.set_status(format!("fetch failed: {error}")),
-                    },
-                    BgTaskOutcome::UploadPreview {
-                        result,
-                        file,
-                        local_path,
-                        local_label,
-                        gist_label,
-                    } => match result {
-                        Ok(remote) => {
-                            // Keep staged pin/list return; enter_confirm consumes it.
-                            let action = PendingAction::Upload {
-                                gist_id: file.gist_id,
-                                filename: file.filename,
-                                local_path: local_path.clone(),
-                            };
-                            match state.init_upload_state(
-                                &local_path,
-                                Some(remote),
-                                local_label,
-                                gist_label,
-                            ) {
-                                Ok(()) => {
-                                    // init_upload_state writes via update_upload_diff only when
-                                    // Confirm is already open; open Confirm first with empty
-                                    // body, then rebuild the upload diff into the payload.
-                                    state.enter_confirm(action, String::new());
-                                    state.update_upload_diff();
-                                }
-                                Err(error) => {
-                                    state.set_status(format!(
-                                        "cannot read {}: {error}",
-                                        crate::config::display_path(&local_path)
-                                    ));
+                        BgTaskOutcome::RevisionDiff {
+                            result,
+                            old_label,
+                            new_label,
+                        } => match result {
+                            Ok((old_content, new_content)) => {
+                                let diff = crate::diff::unified_diff(
+                                    &old_label,
+                                    &old_content,
+                                    &new_label,
+                                    &new_content,
+                                    state.ignore_trailing_newline,
+                                );
+                                let identical = old_content == new_content;
+                                // `enter_diff` (via `enter`) parks the live Revisions screen so Esc
+                                // restores list cursor/entries.
+                                state.enter_diff(
+                                    diff,
+                                    String::new(),
+                                    PathBuf::new(),
+                                    PathBuf::new(),
+                                );
+                                if let Some(d) = state.diff_mut() {
+                                    d.identical = identical;
                                 }
                             }
-                        }
-                        Err(error) => state.set_status(format!("fetch failed: {error}")),
-                    },
-                    BgTaskOutcome::UploadReplace { result, file } => match result {
-                        Ok(_) => {
-                            state.gist_content_cache.remove(&file.cache_key());
-                            state.set_status(format!(
-                                "Uploaded {} to gist {}",
-                                file.filename, file.gist_id
-                            ));
-                            if let Some(local_path) = state.upload_local_path() {
-                                let content = state.content_to_upload();
-                                record_pin_sync(
-                                    state,
-                                    &local_path,
-                                    &file.gist_id,
-                                    &file.filename,
-                                    &content,
-                                    Some(crate::domain::SyncDirection::Upload),
+                            Err(error) => state.set_status(error),
+                        },
+                        BgTaskOutcome::RestoreRevisionReady {
+                            result,
+                            gist_id,
+                            filename,
+                            version,
+                            version_label,
+                        } => match result {
+                            Ok((revision_content, current_content)) => {
+                                if revision_content == current_content {
+                                    state.set_status(
+                                        "revision matches current — nothing to restore",
+                                    );
+                                    return LoopFlow::SkipIteration;
+                                }
+                                let old_label = format!("revision {version_label}");
+                                let new_label = format!("current {filename}");
+                                let diff = crate::diff::unified_diff(
+                                    &old_label,
+                                    &revision_content,
+                                    &new_label,
+                                    &current_content,
+                                    state.ignore_trailing_newline,
+                                );
+                                // `enter_confirm` (via `enter`) parks the live Revisions screen so
+                                // cancel restores cursor/entries.
+                                state.enter_confirm(
+                                    PendingAction::RestoreRevision {
+                                        gist_id,
+                                        filename,
+                                        version,
+                                        version_label,
+                                        content: revision_content,
+                                    },
+                                    diff,
                                 );
                             }
-                            // Return to wherever this upload was initiated from (List, or Pins
-                            // for a pin push) instead of always snapping to List.
-                            state.staged_diff_gist = None;
-                            state.leave();
-                            channels.request_gist_fetch(state);
-                        }
-                        Err(error) => {
-                            state.set_status(format!("upload failed: {error}"));
-                            // Stay on Confirm payload if still open.
-                        }
-                    },
-                    BgTaskOutcome::CreateGist {
-                        result,
-                        local_path,
-                        public,
-                    } => match result {
-                        Ok(_) => {
-                            let visibility = if public { "public" } else { "secret" };
-                            state.set_status(format!(
-                                "Created {} gist from {}",
-                                visibility,
-                                crate::config::display_path(&local_path)
-                            ));
-                            state.description_input.clear();
-                            state.back_to_list();
-                            channels.request_gist_fetch(state);
-                        }
-                        Err(error) => {
-                            state.set_status(format!("create failed: {error}"));
-                            state.screen = Screen::List;
-                            state.description_input.clear();
-                        }
-                    },
-                    BgTaskOutcome::PreviewContent {
-                        result,
-                        file,
-                        preview_title,
-                    } => match result {
-                        Ok(content) => {
-                            let key = file.cache_key();
-                            state
-                                .gist_content_cache
-                                .insert(key.clone(), content.clone());
-                            state.enter_preview(preview_title, content, Some(key));
-                        }
-                        Err(error) => state.set_status(format!("fetch failed: {error}")),
-                    },
-                    BgTaskOutcome::DeleteGist { result, gist_id } => match result {
-                        Ok(_) => {
-                            state.set_status(format!("Deleted gist {gist_id}"));
-                            channels.request_gist_fetch(state);
-                        }
-                        Err(error) => state.set_status(format!("delete failed: {error}")),
-                    },
-                    BgTaskOutcome::RemoveFile {
-                        result,
-                        gist_id,
-                        filename,
-                    } => match result {
-                        Ok(_) => {
-                            state
-                                .gist_content_cache
-                                .remove(&(gist_id.clone(), filename.clone()));
-                            state.set_status(format!("Removed {filename} from gist {gist_id}"));
-                            channels.request_gist_fetch(state);
-                        }
-                        Err(error) => state.set_status(format!("remove failed: {error}")),
-                    },
-                    BgTaskOutcome::ApplyDescription { result, gist_id } => match result {
-                        Ok(_) => {
-                            state.set_status(format!("Updated description for gist {gist_id}"));
-                            channels.request_gist_fetch(state);
-                        }
-                        Err(error) => {
-                            state.set_status(format!("description update failed: {error}"))
-                        }
-                    },
-                    BgTaskOutcome::CompactAnalyze {
-                        result,
-                        gist_id,
-                        label,
-                    } => match result {
-                        Ok(count) if count <= 1 => state.set_status(format!(
-                            "\"{label}\" already has a single revision — nothing to compact"
-                        )),
-                        Ok(count) => {
-                            // `pending_return` was staged at the 'c' keypress (keys.rs); `enter`
-                            // (inside `enter_confirm`) consumes it as the Confirm cancel path.
-                            state.enter_confirm(
-                                PendingAction::CompactGist {
-                                    gist_id: gist_id.clone(),
-                                    label: label.clone(),
-                                    count,
-                                },
-                                format!(
-                                    "Compact gist {gist_id} (\"{label}\").\n\nIt has {count} revisions. Compacting clones it to a temp dir, squashes the history to a single commit, and force-pushes — the {} older revisions are gone for good.",
-                                    count - 1
-                                ),
-                            );
-                        }
-                        Err(error) => state.set_status(format!("revision check failed: {error}")),
-                    },
-                    BgTaskOutcome::CompactGist {
-                        result,
-                        label,
-                        count,
-                    } => match result {
-                        Ok(_) => {
-                            state.set_status(format!(
-                                "Compacted \"{label}\" ({count} → 1 revision)"
-                            ));
-                            channels.request_gist_fetch(state);
-                        }
-                        Err(error) => state.set_status(format!("compact failed: {error}")),
-                    },
-                    BgTaskOutcome::CommentsInitialLoaded { gist_id, result } => {
-                        state.apply_initial_comments(&gist_id, result);
-                    }
-                    BgTaskOutcome::CommentsOlderLoaded { gist_id, result } => {
-                        state.apply_older_comments(&gist_id, result);
-                    }
-                    BgTaskOutcome::RevisionsFetched { gist_id, result } => {
-                        if state.revision().and_then(|r| r.gist_id.as_deref())
-                            != Some(gist_id.as_str())
-                        {
-                            return Ok(LoopFlow::SkipIteration);
-                        }
-                        match result {
-                            Ok(entries) => {
-                                let short = entries.len() <= 1;
-                                if let Some(rev) = state.revision_mut() {
-                                    rev.fetch_error = None;
-                                    rev.entries = Some(entries);
+                            Err(error) => state.set_status(error),
+                        },
+                        BgTaskOutcome::GistStarToggle {
+                            result,
+                            gist_id,
+                            starred,
+                        } => match result {
+                            Ok(()) => {
+                                if starred {
+                                    state.starred_gist_ids.insert(gist_id.clone());
+                                    state.set_status(format!("starred {gist_id}"));
+                                } else {
+                                    state.starred_gist_ids.remove(&gist_id);
+                                    state.set_status(format!("unstarred {gist_id}"));
                                 }
-                                if short {
-                                    state.set_status("only one revision — nothing to restore");
+                                self.request_gist_fetch(state);
+                            }
+                            Err(error) => state.set_status(format!("star toggle failed: {error}")),
+                        },
+                        BgTaskOutcome::ForkGist { result, gist_id } => match result {
+                            Ok(()) => {
+                                state.set_status(format!("forked {gist_id} into your account"));
+                                self.request_gist_fetch(state);
+                            }
+                            Err(error) => state.set_status(format!("fork failed: {error}")),
+                        },
+                        BgTaskOutcome::RestoreRevisionDone {
+                            result,
+                            gist_id,
+                            filename,
+                        } => match result {
+                            Ok(_) => {
+                                state
+                                    .gist_content_cache
+                                    .remove(&(gist_id.clone(), filename.clone()));
+                                state.set_status(format!(
+                                    "Restored {filename} from old revision (new revision created)"
+                                ));
+                                // Return to the revisions list `enter_confirm` parked when the
+                                // restore confirm was entered.
+                                state.leave();
+                                if !state.screen.is_revisions() {
+                                    state.screen = Screen::Revisions(Box::default());
+                                }
+                                let gist_id = state.revision_mut().and_then(|rev| {
+                                    rev.index = 0;
+                                    rev.entries = None;
+                                    rev.fetch_error = None;
+                                    rev.gist_id.clone()
+                                });
+                                self.request_gist_fetch(state);
+                                if let Some(gist_id) = gist_id {
+                                    self.spawn_action(state, "Loading revisions…", move || {
+                                        let result = crate::gh::fetch_gist_commits_json(&gist_id)
+                                            .map_err(|e| e.to_string())
+                                            .and_then(|raw| {
+                                                crate::gh::parse_gist_commits_json(&raw)
+                                                    .map_err(|e| e.to_string())
+                                            });
+                                        BgTaskOutcome::RevisionsFetched { gist_id, result }
+                                    });
                                 }
                             }
                             Err(error) => {
-                                if let Some(rev) = state.revision_mut() {
-                                    rev.entries = Some(Vec::new());
-                                    rev.fetch_error = Some(error);
-                                }
+                                state.set_status(format!("restore failed: {error}"));
+                                // Stay on Confirm payload if still open.
                             }
-                        }
+                        },
                     }
-                    BgTaskOutcome::RevisionDiff {
-                        result,
-                        old_label,
-                        new_label,
-                    } => match result {
-                        Ok((old_content, new_content)) => {
-                            let diff = crate::diff::unified_diff(
-                                &old_label,
-                                &old_content,
-                                &new_label,
-                                &new_content,
-                                state.ignore_trailing_newline,
-                            );
-                            let identical = old_content == new_content;
-                            // `enter_diff` (via `enter`) parks the live Revisions screen so Esc
-                            // restores list cursor/entries.
-                            state.enter_diff(diff, String::new(), PathBuf::new(), PathBuf::new());
-                            if let Some(d) = state.diff_mut() {
-                                d.identical = identical;
-                            }
-                        }
-                        Err(error) => state.set_status(error),
-                    },
-                    BgTaskOutcome::RestoreRevisionReady {
-                        result,
-                        gist_id,
-                        filename,
-                        version,
-                        version_label,
-                    } => match result {
-                        Ok((revision_content, current_content)) => {
-                            if revision_content == current_content {
-                                state.set_status("revision matches current — nothing to restore");
-                                return Ok(LoopFlow::SkipIteration);
-                            }
-                            let old_label = format!("revision {version_label}");
-                            let new_label = format!("current {filename}");
-                            let diff = crate::diff::unified_diff(
-                                &old_label,
-                                &revision_content,
-                                &new_label,
-                                &current_content,
-                                state.ignore_trailing_newline,
-                            );
-                            // `enter_confirm` (via `enter`) parks the live Revisions screen so
-                            // cancel restores cursor/entries.
-                            state.enter_confirm(
-                                PendingAction::RestoreRevision {
-                                    gist_id,
-                                    filename,
-                                    version,
-                                    version_label,
-                                    content: revision_content,
-                                },
-                                diff,
-                            );
-                        }
-                        Err(error) => state.set_status(error),
-                    },
-                    BgTaskOutcome::GistStarToggle {
-                        result,
-                        gist_id,
-                        starred,
-                    } => match result {
-                        Ok(()) => {
-                            if starred {
-                                state.starred_gist_ids.insert(gist_id.clone());
-                                state.set_status(format!("starred {gist_id}"));
-                            } else {
-                                state.starred_gist_ids.remove(&gist_id);
-                                state.set_status(format!("unstarred {gist_id}"));
-                            }
-                            channels.request_gist_fetch(state);
-                        }
-                        Err(error) => state.set_status(format!("star toggle failed: {error}")),
-                    },
-                    BgTaskOutcome::ForkGist { result, gist_id } => match result {
-                        Ok(()) => {
-                            state.set_status(format!("forked {gist_id} into your account"));
-                            channels.request_gist_fetch(state);
-                        }
-                        Err(error) => state.set_status(format!("fork failed: {error}")),
-                    },
-                    BgTaskOutcome::RestoreRevisionDone {
-                        result,
-                        gist_id,
-                        filename,
-                    } => match result {
-                        Ok(_) => {
-                            state
-                                .gist_content_cache
-                                .remove(&(gist_id.clone(), filename.clone()));
-                            state.set_status(format!(
-                                "Restored {filename} from old revision (new revision created)"
-                            ));
-                            // Return to the revisions list `enter_confirm` parked when the
-                            // restore confirm was entered.
-                            state.leave();
-                            if !state.screen.is_revisions() {
-                                state.screen = Screen::Revisions(Box::default());
-                            }
-                            let gist_id = state.revision_mut().and_then(|rev| {
-                                rev.index = 0;
-                                rev.entries = None;
-                                rev.fetch_error = None;
-                                rev.gist_id.clone()
-                            });
-                            channels.request_gist_fetch(state);
-                            if let Some(gist_id) = gist_id {
-                                channels.spawn_action(state, "Loading revisions…", move || {
-                                    let result = crate::gh::fetch_gist_commits_json(&gist_id)
-                                        .map_err(|e| e.to_string())
-                                        .and_then(|raw| {
-                                            crate::gh::parse_gist_commits_json(&raw)
-                                                .map_err(|e| e.to_string())
-                                        });
-                                    BgTaskOutcome::RevisionsFetched { gist_id, result }
-                                });
-                            }
-                        }
-                        Err(error) => {
-                            state.set_status(format!("restore failed: {error}"));
-                            // Stay on Confirm payload if still open.
-                        }
-                    },
-                }
-            } // is_current_bg_generation — stale outcomes are dropped without applying
+                } // is_current_bg_generation — stale outcomes are dropped without applying
+            }
         }
+        LoopFlow::Proceed
     }
-    Ok(LoopFlow::Proceed)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::poll_channel;
+    use super::*;
     use std::sync::mpsc;
+
+    // ---- poll_channel -------------------------------------------------
 
     #[test]
     fn returns_none_and_leaves_slot_when_empty() {
@@ -1885,5 +1930,990 @@ mod tests {
     fn returns_none_when_slot_already_empty() {
         let mut slot: Option<mpsc::Receiver<i32>> = None;
         assert_eq!(poll_channel(&mut slot), None);
+    }
+
+    // ---- test helpers ---------------------------------------------------
+
+    /// Empty `Jobs` registry — every slot `None`. Tests populate only the slot under test.
+    fn empty_jobs() -> Jobs {
+        Jobs {
+            update: None,
+            gist: None,
+            fork: None,
+            star: None,
+            fork_meta: None,
+            local: None,
+            upload_edit_watch: None,
+            action: None,
+        }
+    }
+
+    fn gist_file_ref(gist_id: &str, filename: &str) -> crate::domain::GistFileRef {
+        crate::domain::GistFileRef::new(gist_id, filename, None)
+    }
+
+    /// A `Jobs` whose `action` slot already has `outcome` waiting, stamped with the
+    /// generation `state` currently considers live (mirrors `spawn_action`).
+    fn jobs_with_current_action(state: &mut AppState, outcome: BgTaskOutcome) -> Jobs {
+        let generation = state.begin_bg_task();
+        let (tx, rx) = mpsc::channel();
+        tx.send((generation, outcome)).unwrap();
+        let mut jobs = empty_jobs();
+        jobs.action = Some(rx);
+        jobs
+    }
+
+    // ---- on_gist_list_ready ---------------------------------------------
+
+    #[test]
+    fn on_gist_list_ready_noop_when_not_loading() {
+        let mut state = initial_state();
+        state.loading = false;
+        let (tx, rx) = mpsc::channel::<GistFetchResult>();
+        tx.send(Default::default()).unwrap();
+        let mut jobs = empty_jobs();
+        jobs.gist = Some(rx);
+
+        jobs.on_gist_list_ready(&mut state);
+
+        // Guarded entirely by `state.loading`: the channel is never polled.
+        assert!(jobs.gist.is_some());
+        assert!(state.gists.is_empty());
+    }
+
+    #[test]
+    fn on_gist_list_ready_noop_when_channel_empty() {
+        let mut state = initial_state();
+        state.loading = true;
+        let (_tx, rx) = mpsc::channel::<GistFetchResult>();
+        let mut jobs = empty_jobs();
+        jobs.gist = Some(rx);
+
+        jobs.on_gist_list_ready(&mut state);
+
+        assert!(jobs.gist.is_some());
+        assert!(state.loading);
+        assert!(state.gists.is_empty());
+    }
+
+    // ---- on_fork_counts_ready / on_star_counts_ready ---------------------
+    //
+    // The "value received" branch of both also persists the gist cache to the real
+    // per-OS cache directory (`persist_gist_cache_from_state` — see `bg.rs`), which has
+    // no test seam (unlike `update_check_path`, it isn't threaded through as a
+    // parameter). Exercising that branch here would write to the developer's real
+    // `~/.cache/gistui/gists.json` (or platform equivalent) as a side effect of running
+    // `cargo test`, which the project's "no live gh/network in tests" convention rules
+    // out in spirit. Only the empty-channel guard is covered directly.
+
+    #[test]
+    fn on_fork_counts_ready_noop_when_channel_empty() {
+        let mut state = initial_state();
+        let (_tx, rx) = mpsc::channel();
+        let mut jobs = empty_jobs();
+        jobs.fork = Some(rx);
+
+        jobs.on_fork_counts_ready(&mut state);
+
+        assert!(jobs.fork.is_some());
+        assert!(state.gist_fork_counts.is_empty());
+    }
+
+    #[test]
+    fn on_star_counts_ready_noop_when_channel_empty() {
+        let mut state = initial_state();
+        let (_tx, rx) = mpsc::channel();
+        let mut jobs = empty_jobs();
+        jobs.star = Some(rx);
+
+        jobs.on_star_counts_ready(&mut state);
+
+        assert!(jobs.star.is_some());
+        assert!(state.gist_star_counts.is_empty());
+    }
+
+    // ---- on_fork_meta_ready -----------------------------------------------
+
+    #[test]
+    fn on_fork_meta_ready_noop_when_channel_empty() {
+        let mut state = initial_state();
+        let (_tx, rx) = mpsc::channel();
+        let mut jobs = empty_jobs();
+        jobs.fork_meta = Some(rx);
+
+        jobs.on_fork_meta_ready(&mut state);
+
+        assert!(jobs.fork_meta.is_some());
+    }
+
+    #[test]
+    fn on_fork_meta_ready_sets_status_on_error() {
+        let mut state = initial_state();
+        let (tx, rx) = mpsc::channel();
+        tx.send(Err("boom".to_string())).unwrap();
+        let mut jobs = empty_jobs();
+        jobs.fork_meta = Some(rx);
+
+        jobs.on_fork_meta_ready(&mut state);
+
+        assert!(jobs.fork_meta.is_none());
+        assert_eq!(
+            state.status.as_deref(),
+            Some("fork detection unavailable: boom")
+        );
+    }
+
+    // ---- on_local_scan_ready ----------------------------------------------
+
+    #[test]
+    fn on_local_scan_ready_noop_when_not_scanning() {
+        let mut state = initial_state();
+        state.local_scanning = false;
+        let (tx, rx) = mpsc::channel();
+        tx.send((1, Vec::<LocalCandidate>::new())).unwrap();
+        let mut jobs = empty_jobs();
+        jobs.local = Some(rx);
+
+        jobs.on_local_scan_ready(&mut state);
+
+        // Guarded by `state.local_scanning`: the channel is never touched.
+        assert!(jobs.local.is_some());
+    }
+
+    #[test]
+    fn on_local_scan_ready_applies_current_generation() {
+        let mut state = initial_state();
+        let generation = state.begin_local_scan();
+        state.local_scanning = true;
+        state.status = Some("Scanning files…".into());
+        let candidate = LocalCandidate {
+            path: PathBuf::from("a.txt"),
+            pinned: false,
+            modified: None,
+        };
+        let (tx, rx) = mpsc::channel();
+        tx.send((generation, vec![candidate.clone()])).unwrap();
+        let mut jobs = empty_jobs();
+        jobs.local = Some(rx);
+
+        jobs.on_local_scan_ready(&mut state);
+
+        assert!(jobs.local.is_none());
+        assert!(!state.local_scanning);
+        assert_eq!(state.locals, vec![candidate]);
+        assert!(state.status.is_none());
+    }
+
+    #[test]
+    fn on_local_scan_ready_ignores_stale_generation() {
+        let mut state = initial_state();
+        let stale = state.begin_local_scan();
+        let _current = state.begin_local_scan();
+        state.local_scanning = true;
+        let (tx, rx) = mpsc::channel();
+        tx.send((
+            stale,
+            vec![LocalCandidate {
+                path: PathBuf::from("stale.txt"),
+                pinned: false,
+                modified: None,
+            }],
+        ))
+        .unwrap();
+        let mut jobs = empty_jobs();
+        jobs.local = Some(rx);
+
+        jobs.on_local_scan_ready(&mut state);
+
+        // The stale result is drained off the channel but not applied — spinner/list
+        // stay as they were (a newer scan is still expected).
+        assert!(jobs.local.is_none());
+        assert!(state.local_scanning);
+        assert!(state.locals.is_empty());
+    }
+
+    // ---- on_update_check_ready ---------------------------------------------
+
+    #[test]
+    fn on_update_check_ready_noop_when_channel_empty() {
+        let mut state = initial_state();
+        let (_tx, rx) = mpsc::channel();
+        let mut jobs = empty_jobs();
+        jobs.update = Some(rx);
+
+        jobs.on_update_check_ready(&mut state, &None);
+
+        assert!(jobs.update.is_some());
+        assert!(state.update_available.is_none());
+    }
+
+    #[test]
+    fn on_update_check_ready_newer_persists_and_sets_available() {
+        let mut state = initial_state();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("update_check.json");
+        let (tx, rx) = mpsc::channel();
+        tx.send(crate::update_check::UpdateCheckOutcome::Newer(
+            "1.2.3".into(),
+        ))
+        .unwrap();
+        let mut jobs = empty_jobs();
+        jobs.update = Some(rx);
+
+        jobs.on_update_check_ready(&mut state, &Some(path.clone()));
+
+        assert_eq!(state.update_available.as_deref(), Some("1.2.3"));
+        let saved = crate::update_check::load_state(&path);
+        assert_eq!(saved.latest_seen, "1.2.3");
+    }
+
+    #[test]
+    fn on_update_check_ready_up_to_date_clears_available_and_persists_empty() {
+        let mut state = initial_state();
+        state.update_available = Some("old".into());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("update_check.json");
+        let (tx, rx) = mpsc::channel();
+        tx.send(crate::update_check::UpdateCheckOutcome::UpToDate)
+            .unwrap();
+        let mut jobs = empty_jobs();
+        jobs.update = Some(rx);
+
+        jobs.on_update_check_ready(&mut state, &Some(path.clone()));
+
+        assert!(state.update_available.is_none());
+        let saved = crate::update_check::load_state(&path);
+        assert_eq!(saved.latest_seen, "");
+    }
+
+    #[test]
+    fn on_update_check_ready_failed_is_silent() {
+        let mut state = initial_state();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("update_check.json");
+        let (tx, rx) = mpsc::channel();
+        tx.send(crate::update_check::UpdateCheckOutcome::Failed)
+            .unwrap();
+        let mut jobs = empty_jobs();
+        jobs.update = Some(rx);
+
+        jobs.on_update_check_ready(&mut state, &Some(path.clone()));
+
+        assert!(state.update_available.is_none());
+        assert!(!path.exists());
+    }
+
+    // ---- on_upload_watch_events ---------------------------------------------
+
+    #[test]
+    fn on_upload_watch_events_drains_until_terminal_event() {
+        let mut state = initial_state();
+        state.upload.watching = true;
+        state.enter_confirm(
+            PendingAction::Upload {
+                gist_id: "g1".into(),
+                filename: "a.txt".into(),
+                local_path: PathBuf::from("a.txt"),
+            },
+            String::new(),
+        );
+        let (tx, rx) = mpsc::channel();
+        tx.send(UploadEditWatchEvent::ContentChanged {
+            gist_id: "g1".into(),
+            filename: "a.txt".into(),
+            content: "one".into(),
+        })
+        .unwrap();
+        tx.send(UploadEditWatchEvent::EditorClosed {
+            gist_id: "g1".into(),
+            filename: "a.txt".into(),
+            content: "two".into(),
+        })
+        .unwrap();
+        let mut jobs = empty_jobs();
+        jobs.upload_edit_watch = Some(rx);
+
+        jobs.on_upload_watch_events(&mut state);
+
+        assert!(jobs.upload_edit_watch.is_none());
+        assert!(!state.upload.watching);
+        assert_eq!(state.upload.edited_content.as_deref(), Some("two"));
+    }
+
+    // ---- on_action_outcome: generation guard -------------------------------
+
+    #[test]
+    fn on_action_outcome_ignores_stale_generation() {
+        let mut state = initial_state();
+        let stale = state.begin_bg_task();
+        let _current = state.begin_bg_task();
+        state.bg_task_msg = Some("Deleting gist…".into());
+        let (tx, rx) = mpsc::channel();
+        tx.send((
+            stale,
+            BgTaskOutcome::DeleteGist {
+                result: Ok(()),
+                gist_id: "g1".into(),
+            },
+        ))
+        .unwrap();
+        let mut jobs = empty_jobs();
+        jobs.action = Some(rx);
+
+        let flow = jobs.on_action_outcome(&mut state);
+
+        assert!(matches!(flow, LoopFlow::Proceed));
+        assert!(jobs.action.is_none());
+        // Stale outcome dropped without applying — `bg_task_msg` untouched and no
+        // follow-up gist fetch spawned.
+        assert_eq!(state.bg_task_msg.as_deref(), Some("Deleting gist…"));
+        assert!(jobs.gist.is_none());
+        assert!(state.status.is_none());
+    }
+
+    // ---- on_action_outcome: PreviewDiff -------------------------------------
+
+    #[test]
+    fn on_action_outcome_preview_diff_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::PreviewDiff {
+                result: Err("boom".into()),
+                local_path: None,
+                local_label: "local".into(),
+                gist_label: "gist".into(),
+                target: PathBuf::from("target"),
+                upload_orientation: false,
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
+    }
+
+    #[test]
+    fn on_action_outcome_preview_diff_ok_without_local_enters_diff() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::PreviewDiff {
+                result: Ok("remote body".into()),
+                local_path: None,
+                local_label: "local".into(),
+                gist_label: "gist".into(),
+                target: PathBuf::from("target"),
+                upload_orientation: false,
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        let diff = state.diff().expect("expected Screen::Diff");
+        assert_eq!(diff.remote_content, "remote body");
+        assert!(!diff.identical);
+    }
+
+    // ---- on_action_outcome: DownloadSelected --------------------------------
+
+    #[test]
+    fn on_action_outcome_download_selected_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::DownloadSelected {
+                result: Err("boom".into()),
+                target: PathBuf::from("target"),
+                local_label: "local".into(),
+                gist_label: "gist".into(),
+                file: gist_file_ref("g1", "a.txt"),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
+    }
+
+    #[test]
+    fn on_action_outcome_download_selected_ok_existing_target_enters_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("a.txt");
+        std::fs::write(&target, "local body").unwrap();
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::DownloadSelected {
+                result: Ok("remote body".into()),
+                target: target.clone(),
+                local_label: "local".into(),
+                gist_label: "gist".into(),
+                file: gist_file_ref("g1", "a.txt"),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        let diff = state.diff().expect("expected Screen::Diff");
+        assert_eq!(diff.remote_content, "remote body");
+        // `enter_diff` takes `staged_diff_gist` and moves it onto the `DiffState` itself.
+        assert_eq!(diff.gist_id.as_deref(), Some("g1"));
+        assert_eq!(diff.gist_filename.as_deref(), Some("a.txt"));
+        assert!(state.staged_diff_gist.is_none());
+    }
+
+    // ---- on_action_outcome: UploadPreview -----------------------------------
+
+    #[test]
+    fn on_action_outcome_upload_preview_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::UploadPreview {
+                result: Err("boom".into()),
+                file: gist_file_ref("g1", "a.txt"),
+                local_path: PathBuf::from("a.txt"),
+                local_label: "local".into(),
+                gist_label: "gist".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
+    }
+
+    #[test]
+    fn on_action_outcome_upload_preview_ok_enters_confirm() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_path = dir.path().join("a.txt");
+        std::fs::write(&local_path, "local body").unwrap();
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::UploadPreview {
+                result: Ok("remote body".into()),
+                file: gist_file_ref("g1", "a.txt"),
+                local_path: local_path.clone(),
+                local_label: "local".into(),
+                gist_label: "gist".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert!(state.screen.is_confirm());
+        assert!(matches!(
+            state.pending_action(),
+            Some(PendingAction::Upload { gist_id, filename, .. })
+                if gist_id == "g1" && filename == "a.txt"
+        ));
+    }
+
+    // ---- on_action_outcome: UploadReplace / CreateGist / DeleteGist /
+    // RemoveFile / ApplyDescription / CompactGist / GistStarToggle / ForkGist /
+    // RestoreRevisionDone — Err arms only.
+    //
+    // Every Ok arm of these variants ends by calling `request_gist_fetch`, which
+    // spawns a real background gist fetch (`spawn_gist_fetch`): it shells out to `gh`
+    // (`check_gh_ready` + list/starred/user-login fetches) on success. That is a live
+    // `gh`/network call this project's tests must not make, and there is no injectable
+    // seam for it (unlike `update_check_path`). `RestoreRevisionDone::Ok` additionally
+    // spawns a second live `gh` call via `spawn_action`. Only the side-effect-free Err
+    // arms are covered directly.
+
+    #[test]
+    fn on_action_outcome_upload_replace_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::UploadReplace {
+                result: Err("boom".into()),
+                file: gist_file_ref("g1", "a.txt"),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("upload failed: boom"));
+    }
+
+    #[test]
+    fn on_action_outcome_create_gist_err_resets_screen() {
+        let mut state = initial_state();
+        state.description_input.set("desc");
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::CreateGist {
+                result: Err("boom".into()),
+                local_path: PathBuf::from("a.txt"),
+                public: true,
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("create failed: boom"));
+        assert!(matches!(state.screen, Screen::List));
+        assert!(state.description_input.is_empty());
+    }
+
+    #[test]
+    fn on_action_outcome_delete_gist_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::DeleteGist {
+                result: Err("boom".into()),
+                gist_id: "g1".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("delete failed: boom"));
+    }
+
+    #[test]
+    fn on_action_outcome_remove_file_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::RemoveFile {
+                result: Err("boom".into()),
+                gist_id: "g1".into(),
+                filename: "a.txt".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("remove failed: boom"));
+    }
+
+    #[test]
+    fn on_action_outcome_apply_description_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::ApplyDescription {
+                result: Err("boom".into()),
+                gist_id: "g1".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(
+            state.status.as_deref(),
+            Some("description update failed: boom")
+        );
+    }
+
+    #[test]
+    fn on_action_outcome_compact_gist_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::CompactGist {
+                result: Err("boom".into()),
+                label: "demo".into(),
+                count: 3,
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("compact failed: boom"));
+    }
+
+    #[test]
+    fn on_action_outcome_gist_star_toggle_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::GistStarToggle {
+                result: Err("boom".into()),
+                gist_id: "g1".into(),
+                starred: true,
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("star toggle failed: boom"));
+    }
+
+    #[test]
+    fn on_action_outcome_fork_gist_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::ForkGist {
+                result: Err("boom".into()),
+                gist_id: "g1".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("fork failed: boom"));
+    }
+
+    #[test]
+    fn on_action_outcome_restore_revision_done_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::RestoreRevisionDone {
+                result: Err("boom".into()),
+                gist_id: "g1".into(),
+                filename: "a.txt".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("restore failed: boom"));
+    }
+
+    // ---- on_action_outcome: PreviewContent (fully safe, both arms) ---------
+
+    #[test]
+    fn on_action_outcome_preview_content_ok_caches_and_enters_preview() {
+        let mut state = initial_state();
+        let file = gist_file_ref("g1", "a.txt");
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::PreviewContent {
+                result: Ok("body".into()),
+                file: file.clone(),
+                preview_title: "a.txt".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(
+            state.gist_content_cache.get(&file.cache_key()),
+            Some(&"body".to_string())
+        );
+        let preview = state.preview().expect("expected Screen::Preview");
+        assert_eq!(preview.text, "body");
+    }
+
+    #[test]
+    fn on_action_outcome_preview_content_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::PreviewContent {
+                result: Err("boom".into()),
+                file: gist_file_ref("g1", "a.txt"),
+                preview_title: "a.txt".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
+    }
+
+    // ---- on_action_outcome: CompactAnalyze (fully safe) ---------------------
+
+    #[test]
+    fn on_action_outcome_compact_analyze_single_revision_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::CompactAnalyze {
+                result: Ok(1),
+                gist_id: "g1".into(),
+                label: "demo".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(
+            state.status.as_deref(),
+            Some("\"demo\" already has a single revision — nothing to compact")
+        );
+    }
+
+    #[test]
+    fn on_action_outcome_compact_analyze_multi_revision_enters_confirm() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::CompactAnalyze {
+                result: Ok(4),
+                gist_id: "g1".into(),
+                label: "demo".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert!(matches!(
+            state.pending_action(),
+            Some(PendingAction::CompactGist { gist_id, count, .. })
+                if gist_id == "g1" && *count == 4
+        ));
+    }
+
+    #[test]
+    fn on_action_outcome_compact_analyze_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::CompactAnalyze {
+                result: Err("boom".into()),
+                gist_id: "g1".into(),
+                label: "demo".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("revision check failed: boom"));
+    }
+
+    // ---- on_action_outcome: comments dispatch (fully safe) ------------------
+
+    #[test]
+    fn on_action_outcome_comments_initial_loaded_ok_dispatches_to_detail() {
+        let mut state = initial_state();
+        state.screen = Screen::GistDetail(Box::new(DetailState {
+            gist_id: Some("g1".into()),
+            comments_loading: true,
+            ..Default::default()
+        }));
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::CommentsInitialLoaded {
+                gist_id: "g1".into(),
+                result: Ok(crate::tui::InitialComments {
+                    comments: vec![GistComment {
+                        author: "alice".into(),
+                        created_at: "2026-01-01T00:00:00Z".into(),
+                        body: "hi".into(),
+                    }],
+                    total: 1,
+                    oldest_page: 1,
+                }),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        let detail = state.detail().expect("expected Screen::GistDetail");
+        assert!(!detail.comments_loading);
+        assert_eq!(detail.comments_total, Some(1));
+    }
+
+    #[test]
+    fn on_action_outcome_comments_older_loaded_err_dispatches_to_detail() {
+        let mut state = initial_state();
+        state.screen = Screen::GistDetail(Box::new(DetailState {
+            gist_id: Some("g1".into()),
+            comments_loading_more: true,
+            ..Default::default()
+        }));
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::CommentsOlderLoaded {
+                gist_id: "g1".into(),
+                result: Err("boom".into()),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        let detail = state.detail().expect("expected Screen::GistDetail");
+        assert!(!detail.comments_loading_more);
+    }
+
+    // ---- on_action_outcome: RevisionsFetched --------------------------------
+
+    #[test]
+    fn on_action_outcome_revisions_fetched_returns_skip_iteration_on_gist_mismatch() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            ..Default::default()
+        }));
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::RevisionsFetched {
+                gist_id: "other-gist".into(),
+                result: Ok(Vec::new()),
+            },
+        );
+
+        let flow = jobs.on_action_outcome(&mut state);
+
+        assert!(matches!(flow, LoopFlow::SkipIteration));
+        // Not applied — still no entries.
+        assert!(state.revision().unwrap().entries.is_none());
+    }
+
+    #[test]
+    fn on_action_outcome_revisions_fetched_ok_sets_entries() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            ..Default::default()
+        }));
+        let entry = GistRevision {
+            version: "abc123".into(),
+            committed_at: "2026-01-01T00:00:00Z".into(),
+            user: "alice".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 1,
+                additions: 1,
+                deletions: 0,
+            },
+        };
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::RevisionsFetched {
+                gist_id: "g1".into(),
+                result: Ok(vec![entry.clone(), entry]),
+            },
+        );
+
+        let flow = jobs.on_action_outcome(&mut state);
+
+        assert!(matches!(flow, LoopFlow::Proceed));
+        assert_eq!(state.revision().unwrap().entries.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn on_action_outcome_revisions_fetched_err_sets_fetch_error() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            ..Default::default()
+        }));
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::RevisionsFetched {
+                gist_id: "g1".into(),
+                result: Err("boom".into()),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        let rev = state.revision().unwrap();
+        assert_eq!(rev.fetch_error.as_deref(), Some("boom"));
+        assert_eq!(rev.entries, Some(Vec::new()));
+    }
+
+    // ---- on_action_outcome: RevisionDiff ------------------------------------
+
+    #[test]
+    fn on_action_outcome_revision_diff_ok_enters_diff() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::RevisionDiff {
+                result: Ok(("old body".into(), "new body".into())),
+                old_label: "old".into(),
+                new_label: "new".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        let diff = state.diff().expect("expected Screen::Diff");
+        assert!(!diff.identical);
+    }
+
+    #[test]
+    fn on_action_outcome_revision_diff_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::RevisionDiff {
+                result: Err("boom".into()),
+                old_label: "old".into(),
+                new_label: "new".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("boom"));
+    }
+
+    // ---- on_action_outcome: RestoreRevisionReady ----------------------------
+
+    #[test]
+    fn on_action_outcome_restore_revision_ready_returns_skip_iteration_when_identical() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::RestoreRevisionReady {
+                result: Ok(("same".into(), "same".into())),
+                gist_id: "g1".into(),
+                filename: "a.txt".into(),
+                version: "abc123".into(),
+                version_label: "abc1234".into(),
+            },
+        );
+
+        let flow = jobs.on_action_outcome(&mut state);
+
+        assert!(matches!(flow, LoopFlow::SkipIteration));
+        assert_eq!(
+            state.status.as_deref(),
+            Some("revision matches current — nothing to restore")
+        );
+    }
+
+    #[test]
+    fn on_action_outcome_restore_revision_ready_ok_enters_confirm_when_different() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::RestoreRevisionReady {
+                result: Ok(("old".into(), "new".into())),
+                gist_id: "g1".into(),
+                filename: "a.txt".into(),
+                version: "abc123".into(),
+                version_label: "abc1234".into(),
+            },
+        );
+
+        let flow = jobs.on_action_outcome(&mut state);
+
+        assert!(matches!(flow, LoopFlow::Proceed));
+        assert!(matches!(
+            state.pending_action(),
+            Some(PendingAction::RestoreRevision { gist_id, filename, .. })
+                if gist_id == "g1" && filename == "a.txt"
+        ));
+    }
+
+    #[test]
+    fn on_action_outcome_restore_revision_ready_err_sets_status() {
+        let mut state = initial_state();
+        let mut jobs = jobs_with_current_action(
+            &mut state,
+            BgTaskOutcome::RestoreRevisionReady {
+                result: Err("boom".into()),
+                gist_id: "g1".into(),
+                filename: "a.txt".into(),
+                version: "abc123".into(),
+                version_label: "abc1234".into(),
+            },
+        );
+
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("boom"));
     }
 }
