@@ -1122,6 +1122,43 @@ fn unranked_locals(locals: &[LocalCandidate]) -> Vec<RankedLocal> {
         .collect()
 }
 
+/// Generates a `Screen`-payload accessor pair: an immutable getter that searches the current
+/// screen, palette origin, and `nav_stack` via [`AppState::find_screen`] (issue #242), and a
+/// mutable counterpart doing the same via `find_screen_mut`. The `live_only` variant instead
+/// restricts the mutable half to the literal active `Screen::$is` payload only — no
+/// palette-origin/`nav_stack` search — for the two payloads (`help`/`config`) whose mutators
+/// are intentionally narrower than their getters (issue #300).
+macro_rules! screen_payload_accessor {
+    (
+        $(#[$meta:meta])*
+        $get:ident, $get_mut:ident, $is:ident, $ty:ident, $state:ident, $state_mut:ident
+    ) => {
+        $(#[$meta])*
+        pub fn $get(&self) -> Option<&$ty> {
+            self.find_screen(Screen::$is).and_then(Screen::$state)
+        }
+
+        pub fn $get_mut(&mut self) -> Option<&mut $ty> {
+            self.find_screen_mut(Screen::$is).and_then(Screen::$state_mut)
+        }
+    };
+    (
+        $(#[$meta:meta])*
+        $get:ident, $get_mut:ident, $is:ident, $ty:ident, $state:ident, $state_mut:ident, live_only
+    ) => {
+        $(#[$meta])*
+        pub fn $get(&self) -> Option<&$ty> {
+            self.find_screen(Screen::$is).and_then(Screen::$state)
+        }
+
+        /// `live_only`: mutable payload only when this is the literal active screen — not via
+        /// palette origin or `nav_stack` (issue #300).
+        pub fn $get_mut(&mut self) -> Option<&mut $ty> {
+            self.screen.$state_mut()
+        }
+    };
+}
+
 impl AppState {
     /// Finds the nearest screen (current, then Palette's origin if the overlay is open, then
     /// `nav_stack` from most to least recent) matching `tag` (issue #271). Replaces the
@@ -1148,73 +1185,40 @@ impl AppState {
             .find(|s| tag(s))
     }
 
-    /// Help payload when Help is active, or when the palette is open over Help (issue #242).
-    pub fn help(&self) -> Option<&HelpState> {
-        self.find_screen(Screen::is_help)
-            .and_then(Screen::help_state)
+    screen_payload_accessor! {
+        /// Help payload when Help is active, or when the palette is open over Help (issue #242).
+        help, help_mut, is_help, HelpState, help_state, help_state_mut,
+        live_only // help_mut doesn't follow nav_stack/palette origin — see macro doc above.
     }
 
-    /// Mutable help payload when Help is the active screen (not via palette origin).
-    pub fn help_mut(&mut self) -> Option<&mut HelpState> {
-        self.screen.help_state_mut()
+    screen_payload_accessor! {
+        /// Config payload when Settings is active, or when the palette is open over Config.
+        config, config_mut, is_config, ConfigState, config_state, config_state_mut,
+        live_only // config_mut doesn't follow nav_stack/palette origin — see macro doc above.
     }
 
-    /// Config payload when Settings is active, or when the palette is open over Config.
-    pub fn config(&self) -> Option<&ConfigState> {
-        self.find_screen(Screen::is_config)
-            .and_then(Screen::config_state)
+    screen_payload_accessor! {
+        /// Revision payload when Revisions is active, parked on the Diff/Confirm/Preview return
+        /// path, or under palette origin (issue #242).
+        revision, revision_mut, is_revisions, RevisionState, revision_state, revision_state_mut
     }
 
-    pub fn config_mut(&mut self) -> Option<&mut ConfigState> {
-        self.screen.config_state_mut()
+    screen_payload_accessor! {
+        /// Pins payload when Pins is active, parked on the Diff/Confirm/Preview return path, or
+        /// under palette origin (issue #242).
+        pins, pins_mut, is_pins, PinsState, pins_state, pins_state_mut
     }
 
-    /// Revision payload when Revisions is active, parked on the Diff/Confirm/Preview return
-    /// path, or under palette origin (issue #242).
-    pub fn revision(&self) -> Option<&RevisionState> {
-        self.find_screen(Screen::is_revisions)
-            .and_then(Screen::revision_state)
+    screen_payload_accessor! {
+        /// Gist-manager payload when Gists is active, parked on a detail/revision return path, or
+        /// under palette origin (issue #242).
+        gist_manager, gist_manager_mut, is_gists, GistsManagerState, gists_state, gists_state_mut
     }
 
-    pub fn revision_mut(&mut self) -> Option<&mut RevisionState> {
-        self.find_screen_mut(Screen::is_revisions)
-            .and_then(Screen::revision_state_mut)
-    }
-
-    /// Pins payload when Pins is active, parked on the Diff/Confirm/Preview return path, or
-    /// under palette origin (issue #242).
-    pub fn pins(&self) -> Option<&PinsState> {
-        self.find_screen(Screen::is_pins)
-            .and_then(Screen::pins_state)
-    }
-
-    pub fn pins_mut(&mut self) -> Option<&mut PinsState> {
-        self.find_screen_mut(Screen::is_pins)
-            .and_then(Screen::pins_state_mut)
-    }
-
-    /// Gist-manager payload when Gists is active, parked on a detail/revision return path, or
-    /// under palette origin (issue #242).
-    pub fn gist_manager(&self) -> Option<&GistsManagerState> {
-        self.find_screen(Screen::is_gists)
-            .and_then(Screen::gists_state)
-    }
-
-    pub fn gist_manager_mut(&mut self) -> Option<&mut GistsManagerState> {
-        self.find_screen_mut(Screen::is_gists)
-            .and_then(Screen::gists_state_mut)
-    }
-
-    /// Detail payload when GistDetail is active, parked on a preview/revision/diff/confirm
-    /// return path, palette origin, or help/config return (issue #242).
-    pub fn detail(&self) -> Option<&DetailState> {
-        self.find_screen(Screen::is_gist_detail)
-            .and_then(Screen::detail_state)
-    }
-
-    pub fn detail_mut(&mut self) -> Option<&mut DetailState> {
-        self.find_screen_mut(Screen::is_gist_detail)
-            .and_then(Screen::detail_state_mut)
+    screen_payload_accessor! {
+        /// Detail payload when GistDetail is active, parked on a preview/revision/diff/confirm
+        /// return path, palette origin, or help/config return (issue #242).
+        detail, detail_mut, is_gist_detail, DetailState, detail_state, detail_state_mut
     }
 
     /// Palette payload when the overlay is open (issue #242).
@@ -1226,15 +1230,9 @@ impl AppState {
         self.screen.palette_state_mut()
     }
 
-    /// Preview payload when Preview is active, or under palette origin (issue #242).
-    pub fn preview(&self) -> Option<&PreviewState> {
-        self.find_screen(Screen::is_preview)
-            .and_then(Screen::preview_state)
-    }
-
-    pub fn preview_mut(&mut self) -> Option<&mut PreviewState> {
-        self.find_screen_mut(Screen::is_preview)
-            .and_then(Screen::preview_state_mut)
+    screen_payload_accessor! {
+        /// Preview payload when Preview is active, or under palette origin (issue #242).
+        preview, preview_mut, is_preview, PreviewState, preview_state, preview_state_mut
     }
 
     /// Navigate to `new_screen`, remembering how to get back (issue #271). The screen being
@@ -1272,27 +1270,15 @@ impl AppState {
         })));
     }
 
-    /// Diff payload when Diff is active, parked on the Confirm cancel path, or palette origin
-    /// (issue #242).
-    pub fn diff(&self) -> Option<&DiffState> {
-        self.find_screen(Screen::is_diff)
-            .and_then(Screen::diff_state)
+    screen_payload_accessor! {
+        /// Diff payload when Diff is active, parked on the Confirm cancel path, or palette origin
+        /// (issue #242).
+        diff, diff_mut, is_diff, DiffState, diff_state, diff_state_mut
     }
 
-    pub fn diff_mut(&mut self) -> Option<&mut DiffState> {
-        self.find_screen_mut(Screen::is_diff)
-            .and_then(Screen::diff_state_mut)
-    }
-
-    /// Confirm payload when Confirm is active, or under palette origin (issue #242).
-    pub fn confirm(&self) -> Option<&ConfirmState> {
-        self.find_screen(Screen::is_confirm)
-            .and_then(Screen::confirm_state)
-    }
-
-    pub fn confirm_mut(&mut self) -> Option<&mut ConfirmState> {
-        self.find_screen_mut(Screen::is_confirm)
-            .and_then(Screen::confirm_state_mut)
+    screen_payload_accessor! {
+        /// Confirm payload when Confirm is active, or under palette origin (issue #242).
+        confirm, confirm_mut, is_confirm, ConfirmState, confirm_state, confirm_state_mut
     }
 
     /// Pending action while Confirm is open.
