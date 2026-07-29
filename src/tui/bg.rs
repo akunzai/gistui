@@ -454,8 +454,7 @@ pub(super) fn spawn_pin_push(
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
     let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
     let (local_label, gist_label) = diff_labels(Some(&local_path), &file.to_gist_file());
-    jobs.spawn_action(state, "Loading diff…", move || {
-        let result = fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
+    jobs.spawn_gist_fetch_action(state, "Loading diff…", file, move |result, file| {
         BgTaskOutcome::UploadPreview {
             result,
             file,
@@ -480,8 +479,7 @@ pub(super) fn spawn_pin_pull(
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
     let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
     let (local_label, gist_label) = diff_labels(Some(&target), &file.to_gist_file());
-    jobs.spawn_action(state, "Downloading…", move || {
-        let result = fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
+    jobs.spawn_gist_fetch_action(state, "Downloading…", file, move |result, file| {
         BgTaskOutcome::DownloadSelected {
             result,
             target,
@@ -518,8 +516,8 @@ pub(super) fn spawn_pin_diff(
     };
     let (local_label, gist_label) = diff_labels(Some(&local_abs), &gist_file);
     let target = local_abs.clone();
-    jobs.spawn_action(state, "Loading diff…", move || {
-        let result = fetch_gist_content(&gist_id, &filename, raw_url.as_deref());
+    let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
+    jobs.spawn_gist_fetch_action(state, "Loading diff…", file, move |result, _file| {
         BgTaskOutcome::PreviewDiff {
             result,
             local_path: Some(local_abs),
@@ -1157,6 +1155,27 @@ impl Jobs {
         self.action = Some(rx);
         std::thread::spawn(move || {
             let _ = tx.send((generation, work()));
+        });
+    }
+
+    /// Spawn a background job that fetches a gist file's content, then hands the result
+    /// (and the file identity back) to `wrap` to build the `BgTaskOutcome`. Collapses the
+    /// `fetch_gist_content` template shared by `PreviewDiff`/`DownloadSelected`/
+    /// `UploadPreview`/`PreviewContent` across `dispatch.rs` and the pin-spawn helpers
+    /// below (issue #299). `wrap` gets `file` back so variants that store it (all but
+    /// `PreviewDiff`) don't need a second clone.
+    pub(super) fn spawn_gist_fetch_action(
+        &mut self,
+        state: &mut AppState,
+        msg: impl Into<String>,
+        file: crate::domain::GistFileRef,
+        wrap: impl FnOnce(std::result::Result<String, String>, crate::domain::GistFileRef) -> BgTaskOutcome
+            + Send
+            + 'static,
+    ) {
+        self.spawn_action(state, msg, move || {
+            let result = fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
+            wrap(result, file)
         });
     }
 
