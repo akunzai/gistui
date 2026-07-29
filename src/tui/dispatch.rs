@@ -26,9 +26,7 @@ pub(super) fn dispatch_outcome(
             let gist = file.to_gist_file();
             let (local_label, gist_label) = diff_labels(local_path.as_deref(), &gist);
 
-            jobs.spawn_action(state, "Loading diff…", move || {
-                let result =
-                    fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
+            jobs.spawn_gist_fetch_action(state, "Loading diff…", file, move |result, _file| {
                 BgTaskOutcome::PreviewDiff {
                     result,
                     local_path,
@@ -51,9 +49,7 @@ pub(super) fn dispatch_outcome(
             let gist = file.to_gist_file();
             let (local_label, gist_label) = diff_labels(Some(&target), &gist);
 
-            jobs.spawn_action(state, "Downloading…", move || {
-                let result =
-                    fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
+            jobs.spawn_gist_fetch_action(state, "Downloading…", file, move |result, file| {
                 BgTaskOutcome::DownloadSelected {
                     result,
                     target,
@@ -193,9 +189,7 @@ pub(super) fn dispatch_outcome(
                 file.raw_url = gist_file.raw_url.clone();
             }
 
-            jobs.spawn_action(state, "Loading diff…", move || {
-                let result =
-                    fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
+            jobs.spawn_gist_fetch_action(state, "Loading diff…", file, move |result, file| {
                 BgTaskOutcome::UploadPreview {
                     result,
                     file,
@@ -291,15 +285,16 @@ pub(super) fn dispatch_outcome(
                     file.raw_url = state.gist_file_raw_url(&file.gist_id, &file.filename);
                 }
                 let preview_title = format!("Preview: {} / {}", file.gist_id, file.filename);
-                jobs.spawn_action(state, "Loading preview…", move || {
-                    let result =
-                        fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
-                    BgTaskOutcome::PreviewContent {
+                jobs.spawn_gist_fetch_action(
+                    state,
+                    "Loading preview…",
+                    file,
+                    move |result, file| BgTaskOutcome::PreviewContent {
                         result,
                         file,
                         preview_title,
-                    }
-                });
+                    },
+                );
             }
         }
         KeyOutcome::RefreshPreview { mut file } => {
@@ -312,9 +307,7 @@ pub(super) fn dispatch_outcome(
                 file.raw_url = state.gist_file_raw_url(&file.gist_id, &file.filename);
             }
             let preview_title = format!("Preview: {} / {}", file.gist_id, file.filename);
-            jobs.spawn_action(state, "Loading preview…", move || {
-                let result =
-                    fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
+            jobs.spawn_gist_fetch_action(state, "Loading preview…", file, move |result, file| {
                 BgTaskOutcome::PreviewContent {
                     result,
                     file,
