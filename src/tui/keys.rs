@@ -3,7 +3,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 
 /// Vim-style navigation alias alongside arrow / page keys.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NavAction {
+pub(crate) enum NavAction {
     Up,
     Down,
     Left,
@@ -257,16 +257,7 @@ impl AppState {
                 }
                 true
             }
-            Screen::GistDetail(_) => {
-                match action {
-                    NavAction::Down => self.detail_nav(1),
-                    NavAction::Up => self.detail_nav(-1),
-                    NavAction::PageDown => self.detail_nav(10),
-                    NavAction::PageUp => self.detail_nav(-10),
-                    _ => return false,
-                }
-                true
-            }
+            Screen::GistDetail(_) => self.apply_navigation_detail(action),
             Screen::Revisions(rev) => {
                 let entries_len = rev.entries.as_ref().map(|e| e.len()).unwrap_or(0);
                 if entries_len == 0 {
@@ -357,38 +348,6 @@ impl AppState {
             | Screen::Revisions(_)
             | Screen::Preview(_) => self.status = None,
             _ => {}
-        }
-    }
-
-    /// Move within the focused detail pane: scroll comments, or move the file cursor
-    /// (clamped to the gist's file count). `delta` is signed rows.
-    fn detail_nav(&mut self, delta: i32) {
-        let focus = self.detail().map(|d| d.focus).unwrap_or_default();
-        match focus {
-            DetailFocus::Comments => {
-                if let Some(d) = self.detail_mut() {
-                    d.scroll = if delta < 0 {
-                        d.scroll.saturating_sub((-delta) as u16)
-                    } else {
-                        d.scroll.saturating_add(delta as u16)
-                    };
-                }
-            }
-            DetailFocus::Files => {
-                let count = self
-                    .detail()
-                    .and_then(|d| d.gist_id.as_deref())
-                    .map(|id| self.gist_filenames(id).len())
-                    .unwrap_or(0);
-                if count == 0 {
-                    return;
-                }
-                let max = count - 1;
-                if let Some(d) = self.detail_mut() {
-                    let next = d.file_cursor as i64 + delta as i64;
-                    d.file_cursor = next.clamp(0, max as i64) as usize;
-                }
-            }
         }
     }
 
@@ -515,27 +474,7 @@ impl AppState {
                 }
                 false
             }
-            Screen::GistDetail(_) => {
-                if let Some(hit) = layout.detail_files {
-                    if point_in(hit.rect, col, row) {
-                        // Clicking the file list focuses the Files tab; a row also moves the cursor.
-                        let count = self
-                            .detail()
-                            .and_then(|d| d.gist_id.as_deref())
-                            .map_or(0, |id| self.gist_filenames(id).len());
-                        if let Some(d) = self.detail_mut() {
-                            d.focus = DetailFocus::Files;
-                        }
-                        if let Some(idx) = hit.index_at(row, count) {
-                            if let Some(d) = self.detail_mut() {
-                                d.file_cursor = idx;
-                            }
-                            return true;
-                        }
-                    }
-                }
-                false
-            }
+            Screen::GistDetail(_) => self.click_select_detail(col, row, layout),
             _ => false,
         }
     }
@@ -552,68 +491,6 @@ impl AppState {
             }
             _ => self.handle_key_with(KeyCode::Enter, KeyModifiers::NONE),
         }
-    }
-
-    /// Switch the GistDetail tab if `col`/`row` lands on a tab header. Returns the outcome
-    /// (possibly `FetchComments`) when a tab was clicked, else `None` to fall through.
-    fn click_detail_tab(&mut self, col: u16, row: u16, layout: &MouseLayout) -> Option<KeyOutcome> {
-        if !self.screen.is_gist_detail() {
-            return None;
-        }
-        if let Some(rect) = layout.detail_tab_files {
-            if point_in(rect, col, row) {
-                if let Some(d) = self.detail_mut() {
-                    d.focus = DetailFocus::Files;
-                }
-                return Some(KeyOutcome::None);
-            }
-        }
-        if let Some(rect) = layout.detail_tab_comments {
-            if point_in(rect, col, row) {
-                let fetch = if let Some(d) = self.detail_mut() {
-                    d.focus = DetailFocus::Comments;
-                    d.comments.is_none() && !d.comments_loading
-                } else {
-                    false
-                };
-                if fetch {
-                    if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
-                        return Some(KeyOutcome::FetchComments { gist_id });
-                    }
-                }
-                return Some(KeyOutcome::None);
-            }
-        }
-        None
-    }
-
-    /// A click on the GistDetail "load older comments" affordance line.
-    fn click_comments_load_older(
-        &mut self,
-        col: u16,
-        row: u16,
-        layout: &MouseLayout,
-    ) -> Option<KeyOutcome> {
-        if !self.screen.is_gist_detail()
-            || !self
-                .detail()
-                .is_some_and(|d| d.focus == DetailFocus::Comments)
-        {
-            return None;
-        }
-        let rect = layout.comments_load_older?;
-        if point_in(rect, col, row) && self.can_load_older_comments() {
-            if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
-                let page = self
-                    .detail()
-                    .map(|d| d.comments_loaded_oldest_page.saturating_sub(1))
-                    .unwrap_or(0);
-                if page > 0 {
-                    return Some(KeyOutcome::LoadOlderComments { gist_id, page });
-                }
-            }
-        }
-        None
     }
 
     /// Translate a classified mouse intent into a state change, reusing existing keyboard
