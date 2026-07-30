@@ -2,8 +2,9 @@
 //! one file (issue #287, Phase 2).
 
 use crate::tui::bg::revision_version_label;
+use crate::tui::keys::{point_in, NavAction, PAGE_SCROLL};
 use crate::tui::view_model::{ChromeVm, RevisionsEmptyKind, RevisionsVm};
-use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, PaneHit};
+use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, PaneHit, Screen};
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
@@ -248,6 +249,63 @@ impl AppState {
             .map(|i| i + 1)
             .unwrap_or(1);
         format!("{} ({index}/{})", rev.target_file, files.len())
+    }
+
+    /// Arrow / hjkl / page-key navigation for `Screen::Revisions`: moves the entry cursor, or
+    /// scrolls it horizontally.
+    pub(crate) fn apply_navigation_revisions(&mut self, action: NavAction) -> bool {
+        let Screen::Revisions(rev) = &mut self.screen else {
+            return false;
+        };
+        let entries_len = rev.entries.as_ref().map(|e| e.len()).unwrap_or(0);
+        if entries_len == 0 {
+            return false;
+        }
+        match action {
+            NavAction::Down => {
+                rev.index = (rev.index + 1).min(entries_len - 1);
+            }
+            NavAction::Up => {
+                rev.index = rev.index.saturating_sub(1);
+            }
+            NavAction::PageDown => {
+                rev.index = (rev.index + PAGE_SCROLL as usize).min(entries_len - 1);
+            }
+            NavAction::PageUp => {
+                rev.index = rev.index.saturating_sub(PAGE_SCROLL as usize);
+            }
+            NavAction::Left => {
+                rev.hscroll = rev.hscroll.saturating_sub(1);
+            }
+            NavAction::Right => {
+                rev.hscroll = rev.hscroll.saturating_add(1);
+            }
+        }
+        true
+    }
+
+    /// Select the clicked row on `Screen::Revisions`, moving the entry cursor. Returns `true`
+    /// when a row was hit.
+    pub(crate) fn click_select_revisions(
+        &mut self,
+        col: u16,
+        row: u16,
+        layout: &MouseLayout,
+    ) -> bool {
+        let Screen::Revisions(rev) = &mut self.screen else {
+            return false;
+        };
+        if let Some(hit) = layout.list {
+            if point_in(hit.rect, col, row) {
+                let count = rev.entries.as_ref().map_or(0, |e| e.len());
+                if let Some(idx) = hit.index_at(row, count) {
+                    rev.index = idx;
+                    rev.hscroll = 0;
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 

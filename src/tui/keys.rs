@@ -34,10 +34,15 @@ fn nav_action(code: KeyCode, modifiers: KeyModifiers) -> Option<NavAction> {
 /// Lines moved per PageUp/PageDown in the scrollable views. Matches the gist-detail paging step
 /// (`detail_nav(10)`); `handle_key` is pure and cannot read the viewport height, so a fixed step
 /// keeps paging predictable without threading terminal size into the key logic.
-const PAGE_SCROLL: u16 = 10;
+pub(crate) const PAGE_SCROLL: u16 = 10;
 
 /// Dispatch [`NavAction`] onto a Pins/Gists [`ListCursor`] (step from [`PAGE_SCROLL`]).
-fn apply_list_cursor_nav(cursor: &mut ListCursor, action: NavAction, len: usize, hmax: u16) {
+pub(crate) fn apply_list_cursor_nav(
+    cursor: &mut ListCursor,
+    action: NavAction,
+    len: usize,
+    hmax: u16,
+) {
     let step = PAGE_SCROLL as usize;
     match action {
         NavAction::Down => cursor.down(len),
@@ -188,25 +193,14 @@ impl AppState {
         {
             return false;
         }
-        // Pins/Gists: precompute len/hmax with &self, then mut ListCursor (issue #274).
-        // Cannot hold `&mut PinsState` from `match &mut self.screen` while calling helpers.
+        // Pins/Gists dispatch before the match below (issue #274: cannot hold `&mut PinsState`
+        // from `match &mut self.screen` while calling helpers) -- each screen's own
+        // apply_navigation_<screen> reproduces that precompute-then-mutate shape.
         if matches!(self.screen, Screen::Pins(_)) {
-            let len = self.visible_pin_indices().len();
-            let hmax = self.pins_hscroll_max();
-            let Some(pins) = self.pins_mut() else {
-                return false;
-            };
-            apply_list_cursor_nav(&mut pins.cursor, action, len, hmax);
-            return true;
+            return self.apply_navigation_pins(action);
         }
         if matches!(self.screen, Screen::Gists(_)) {
-            let len = self.visible_gist_groups().len();
-            let hmax = self.gists_hscroll_max();
-            let Some(gm) = self.gist_manager_mut() else {
-                return false;
-            };
-            apply_list_cursor_nav(&mut gm.cursor, action, len, hmax);
-            return true;
+            return self.apply_navigation_gists(action);
         }
         match &mut self.screen {
             Screen::Palette(_) => {
@@ -226,95 +220,11 @@ impl AppState {
                 }
                 true
             }
-            Screen::Help(help) => {
-                let topics = HelpTopic::all();
-                if help.index_open {
-                    match action {
-                        NavAction::Up => help.index_sel = help.index_sel.saturating_sub(1),
-                        NavAction::Down => {
-                            if help.index_sel + 1 < topics.len() {
-                                help.index_sel += 1;
-                            }
-                        }
-                        _ => return false,
-                    }
-                } else {
-                    match action {
-                        NavAction::Up => {
-                            help.scroll = help.scroll.saturating_sub(1);
-                        }
-                        NavAction::Down => {
-                            help.scroll = help.scroll.saturating_add(1);
-                        }
-                        NavAction::PageUp => {
-                            help.scroll = help.scroll.saturating_sub(PAGE_SCROLL);
-                        }
-                        NavAction::PageDown => {
-                            help.scroll = help.scroll.saturating_add(PAGE_SCROLL);
-                        }
-                        _ => return false,
-                    }
-                }
-                true
-            }
+            Screen::Help(_) => self.apply_navigation_help(action),
             Screen::GistDetail(_) => self.apply_navigation_detail(action),
-            Screen::Revisions(rev) => {
-                let entries_len = rev.entries.as_ref().map(|e| e.len()).unwrap_or(0);
-                if entries_len == 0 {
-                    return false;
-                }
-                match action {
-                    NavAction::Down => {
-                        rev.index = (rev.index + 1).min(entries_len - 1);
-                    }
-                    NavAction::Up => {
-                        rev.index = rev.index.saturating_sub(1);
-                    }
-                    NavAction::PageDown => {
-                        rev.index = (rev.index + PAGE_SCROLL as usize).min(entries_len - 1);
-                    }
-                    NavAction::PageUp => {
-                        rev.index = rev.index.saturating_sub(PAGE_SCROLL as usize);
-                    }
-                    NavAction::Left => {
-                        rev.hscroll = rev.hscroll.saturating_sub(1);
-                    }
-                    NavAction::Right => {
-                        rev.hscroll = rev.hscroll.saturating_add(1);
-                    }
-                }
-                true
-            }
-            Screen::List => {
-                match action {
-                    NavAction::Down => self.list_move_focused(true),
-                    NavAction::Up => self.list_move_focused(false),
-                    NavAction::PageDown => self.list_page_focused(true),
-                    NavAction::PageUp => self.list_page_focused(false),
-                    NavAction::Left => self.scroll_focused_left(),
-                    NavAction::Right => self.scroll_focused_right(),
-                }
-                true
-            }
-            Screen::Config(cfg) => {
-                let n = ConfigField::ALL.len();
-                match action {
-                    NavAction::Up => {
-                        cfg.index = cfg.index.saturating_sub(1);
-                    }
-                    NavAction::Down => {
-                        if cfg.index + 1 < n {
-                            cfg.index += 1;
-                        }
-                    }
-                    NavAction::Left | NavAction::Right => {
-                        // Adjust is handled in handle_key_config (needs PersistSettings).
-                        return false;
-                    }
-                    _ => return false,
-                }
-                true
-            }
+            Screen::Revisions(_) => self.apply_navigation_revisions(action),
+            Screen::List => self.apply_navigation_list(action),
+            Screen::Config(_) => self.apply_navigation_config(action),
             // Diff, Preview and Confirm all scroll the same diff/preview buffer identically.
             Screen::Diff(_) | Screen::Preview(_) | Screen::Confirm(_) => {
                 match action {
@@ -375,105 +285,13 @@ impl AppState {
     /// blank area or border focuses it but selects nothing (returns `false`); a click off
     /// every list returns `false`.
     fn click_select(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
-        match &mut self.screen {
-            Screen::List => {
-                if let Some(hit) = layout.local {
-                    if point_in(hit.rect, col, row) {
-                        // A click anywhere in the pane (incl. blank/border) focuses it; a
-                        // click on a row also selects it.
-                        self.focus = FocusPane::Local;
-                        if let Some(idx) = hit.index_at(row, self.visible_locals().len()) {
-                            self.local_index = idx;
-                            self.local_hscroll = 0;
-                            if self.anchor == FocusPane::Local {
-                                self.reset_ranked_pane();
-                            }
-                            return true;
-                        }
-                        return false;
-                    }
-                }
-                if let Some(hit) = layout.gist {
-                    if point_in(hit.rect, col, row) {
-                        self.focus = FocusPane::Gist;
-                        if let Some(idx) = hit.index_at(row, self.ranked_gists().len()) {
-                            self.gist_index = idx;
-                            self.gist_hscroll = 0;
-                            if self.anchor == FocusPane::Gist {
-                                self.reset_ranked_pane();
-                            }
-                            return true;
-                        }
-                        return false;
-                    }
-                }
-                false
-            }
-            Screen::Gists(_) => {
-                if let Some(hit) = layout.list {
-                    if point_in(hit.rect, col, row) {
-                        let count = self.visible_gist_groups().len();
-                        if let Some(idx) = hit.index_at(row, count) {
-                            if let Some(gm) = self.gist_manager_mut() {
-                                gm.cursor.select(idx);
-                                return true;
-                            }
-                        }
-                    }
-                }
-                false
-            }
-            Screen::Pins(_) => {
-                if let Some(hit) = layout.list {
-                    if point_in(hit.rect, col, row) {
-                        let count = self.visible_pin_indices().len();
-                        if let Some(idx) = hit.index_at(row, count) {
-                            if let Some(pins) = self.pins_mut() {
-                                pins.cursor.select(idx);
-                                return true;
-                            }
-                        }
-                    }
-                }
-                false
-            }
-            Screen::Revisions(rev) => {
-                if let Some(hit) = layout.list {
-                    if point_in(hit.rect, col, row) {
-                        let count = rev.entries.as_ref().map_or(0, |e| e.len());
-                        if let Some(idx) = hit.index_at(row, count) {
-                            rev.index = idx;
-                            rev.hscroll = 0;
-                            return true;
-                        }
-                    }
-                }
-                false
-            }
-            // Only set when the topic index is open (render_help), so this is a no-op while
-            // viewing a topic's body.
-            Screen::Help(help) => {
-                if let Some(hit) = layout.list {
-                    if point_in(hit.rect, col, row) {
-                        if let Some(idx) = hit.index_at(row, HelpTopic::all().len()) {
-                            help.index_sel = idx;
-                            return true;
-                        }
-                    }
-                }
-                false
-            }
-            Screen::Config(cfg) => {
-                if let Some(hit) = layout.list {
-                    if point_in(hit.rect, col, row) {
-                        if let Some(idx) = hit.index_at(row, ConfigField::ALL.len()) {
-                            cfg.index = idx;
-                            return true;
-                        }
-                    }
-                }
-                false
-            }
+        match &self.screen {
+            Screen::List => self.click_select_list(col, row, layout),
+            Screen::Gists(_) => self.click_select_gists(col, row, layout),
+            Screen::Pins(_) => self.click_select_pins(col, row, layout),
+            Screen::Revisions(_) => self.click_select_revisions(col, row, layout),
+            Screen::Help(_) => self.click_select_help(col, row, layout),
+            Screen::Config(_) => self.click_select_config(col, row, layout),
             Screen::GistDetail(_) => self.click_select_detail(col, row, layout),
             _ => false,
         }
@@ -696,7 +514,7 @@ pub(crate) fn diff_pair_previewable(
 
 impl AppState {
     /// Page the focused list-pane selection by [`PAGE_SCROLL`] rows (clamped at bounds).
-    fn list_page_focused(&mut self, forward: bool) {
+    pub(crate) fn list_page_focused(&mut self, forward: bool) {
         let step = PAGE_SCROLL as usize;
         // One snapshot for the focused pane length (issue #224) — selection-index
         // changes do not alter list length, so this is safe.

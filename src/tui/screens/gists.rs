@@ -1,6 +1,7 @@
 //! `Screen::Gists` — key handling, view-model, paint, and palette items colocated in one
 //! file (issue #287, Phase 2).
 
+use crate::tui::keys::{apply_list_cursor_nav, point_in, NavAction};
 use crate::tui::view_model::{ChromeVm, GistGroupRowVm, GistsEmptyKind, GistsVm};
 use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, PaneHit, Screen};
 use crossterm::event::KeyCode;
@@ -103,6 +104,36 @@ impl AppState {
             _ => {}
         }
         KeyOutcome::None
+    }
+
+    /// Arrow / hjkl / page-key navigation for `Screen::Gists`'s list cursor. Precomputes
+    /// len/hmax with `&self`, then mutates the cursor (issue #274: cannot hold
+    /// `&mut GistsManagerState` from `match &mut self.screen` while calling helpers).
+    pub(crate) fn apply_navigation_gists(&mut self, action: NavAction) -> bool {
+        let len = self.visible_gist_groups().len();
+        let hmax = self.gists_hscroll_max();
+        let Some(gm) = self.gist_manager_mut() else {
+            return false;
+        };
+        apply_list_cursor_nav(&mut gm.cursor, action, len, hmax);
+        true
+    }
+
+    /// Select the clicked row on `Screen::Gists`, moving the list cursor. Returns `true` when
+    /// a row was hit.
+    pub(crate) fn click_select_gists(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
+        if let Some(hit) = layout.list {
+            if point_in(hit.rect, col, row) {
+                let count = self.visible_gist_groups().len();
+                if let Some(idx) = hit.index_at(row, count) {
+                    if let Some(gm) = self.gist_manager_mut() {
+                        gm.cursor.select(idx);
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 }
 

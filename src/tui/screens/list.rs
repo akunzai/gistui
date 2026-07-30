@@ -1,7 +1,7 @@
 //! `Screen::List` — key handling, view-model, paint, and palette items colocated in one
 //! file (issue #287, Phase 2).
 
-use crate::tui::keys::{apply_filter_edit, diff_pair_previewable, FilterKey};
+use crate::tui::keys::{apply_filter_edit, diff_pair_previewable, point_in, FilterKey, NavAction};
 use crate::tui::view_model::{
     ChromeVm, ListFooterVm, ListPaneEmpty, ListPaneVm, ListRowVm, ListVm,
 };
@@ -435,6 +435,57 @@ impl AppState {
                 local.path.display()
             ),
         );
+    }
+
+    /// Arrow / hjkl / page-key navigation for `Screen::List`: moves the focused pane's
+    /// selection, or scrolls it horizontally.
+    pub(crate) fn apply_navigation_list(&mut self, action: NavAction) -> bool {
+        match action {
+            NavAction::Down => self.list_move_focused(true),
+            NavAction::Up => self.list_move_focused(false),
+            NavAction::PageDown => self.list_page_focused(true),
+            NavAction::PageUp => self.list_page_focused(false),
+            NavAction::Left => self.scroll_focused_left(),
+            NavAction::Right => self.scroll_focused_right(),
+        }
+        true
+    }
+
+    /// Select the clicked row on `Screen::List`, focusing its pane. Returns `true` when a row
+    /// was hit (so a double-click should "open" it). A click in a pane's blank area or border
+    /// focuses it but selects nothing (returns `false`); a click off every list returns `false`.
+    pub(crate) fn click_select_list(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
+        if let Some(hit) = layout.local {
+            if point_in(hit.rect, col, row) {
+                // A click anywhere in the pane (incl. blank/border) focuses it; a
+                // click on a row also selects it.
+                self.focus = FocusPane::Local;
+                if let Some(idx) = hit.index_at(row, self.visible_locals().len()) {
+                    self.local_index = idx;
+                    self.local_hscroll = 0;
+                    if self.anchor == FocusPane::Local {
+                        self.reset_ranked_pane();
+                    }
+                    return true;
+                }
+                return false;
+            }
+        }
+        if let Some(hit) = layout.gist {
+            if point_in(hit.rect, col, row) {
+                self.focus = FocusPane::Gist;
+                if let Some(idx) = hit.index_at(row, self.ranked_gists().len()) {
+                    self.gist_index = idx;
+                    self.gist_hscroll = 0;
+                    if self.anchor == FocusPane::Gist {
+                        self.reset_ranked_pane();
+                    }
+                    return true;
+                }
+                return false;
+            }
+        }
+        false
     }
 }
 

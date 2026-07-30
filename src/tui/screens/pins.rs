@@ -1,6 +1,7 @@
 //! `Screen::Pins` — key handling, view-model, paint, and palette items colocated in one
 //! file (issue #287, Phase 2).
 
+use crate::tui::keys::{apply_list_cursor_nav, point_in, NavAction};
 use crate::tui::view_model::{ChromeVm, PinRowVm, PinsEmptyKind, PinsVm};
 use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, PaneHit, Screen};
 use crossterm::event::KeyCode;
@@ -110,6 +111,36 @@ impl AppState {
             _ => {}
         }
         KeyOutcome::None
+    }
+
+    /// Arrow / hjkl / page-key navigation for `Screen::Pins`'s list cursor. Precomputes
+    /// len/hmax with `&self`, then mutates the cursor (issue #274: cannot hold
+    /// `&mut PinsState` from `match &mut self.screen` while calling helpers).
+    pub(crate) fn apply_navigation_pins(&mut self, action: NavAction) -> bool {
+        let len = self.visible_pin_indices().len();
+        let hmax = self.pins_hscroll_max();
+        let Some(pins) = self.pins_mut() else {
+            return false;
+        };
+        apply_list_cursor_nav(&mut pins.cursor, action, len, hmax);
+        true
+    }
+
+    /// Select the clicked row on `Screen::Pins`, moving the list cursor. Returns `true` when
+    /// a row was hit.
+    pub(crate) fn click_select_pins(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
+        if let Some(hit) = layout.list {
+            if point_in(hit.rect, col, row) {
+                let count = self.visible_pin_indices().len();
+                if let Some(idx) = hit.index_at(row, count) {
+                    if let Some(pins) = self.pins_mut() {
+                        pins.cursor.select(idx);
+                        return true;
+                    }
+                }
+            }
+        }
+        false
     }
 }
 
