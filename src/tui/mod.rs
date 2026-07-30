@@ -2347,106 +2347,6 @@ pub fn run(no_mouse: bool, no_update_check: bool) -> Result<()> {
     result
 }
 
-/// The result of the initial newest-first comment load: the newest page plus the metadata
-/// needed to page backwards.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InitialComments {
-    pub comments: Vec<GistComment>,
-    pub total: u32,
-    pub oldest_page: u32,
-}
-
-impl AppState {
-    /// Reset comment-pagination state (called when (re)opening a gist detail or switching
-    /// the loaded gist), so a fresh Tab re-fetches from the newest page.
-    pub fn reset_comment_pagination(&mut self) {
-        let Some(d) = self.detail_mut() else {
-            return;
-        };
-        d.comments = None;
-        d.comments_loading = false;
-        d.comments_error = None;
-        d.comments_total = None;
-        d.comments_loaded_oldest_page = 0;
-        d.comments_loading_more = false;
-        d.comments_scroll_to_bottom = false;
-    }
-
-    /// Apply the initial newest-page load. Ignored if the user navigated to another gist
-    /// (stale response). On success, requests a one-shot scroll-to-bottom so the newest
-    /// comment is visible.
-    pub fn apply_initial_comments(
-        &mut self,
-        gist_id: &str,
-        result: Result<InitialComments, String>,
-    ) {
-        let Some(d) = self.detail_mut() else {
-            return;
-        };
-        if d.gist_id.as_deref() != Some(gist_id) {
-            return;
-        }
-        d.comments_loading = false;
-        match result {
-            Ok(init) => {
-                d.comments_total = Some(init.total);
-                d.comments_loaded_oldest_page = init.oldest_page;
-                d.comments = Some(init.comments);
-                d.comments_scroll_to_bottom = true;
-            }
-            Err(error) => {
-                d.comments_error = Some(error);
-            }
-        }
-    }
-
-    /// Apply a "load older" page: prepend it (older comments sort first) and bump
-    /// `detail_scroll` by the prepended line count so the viewport stays put. Ignored on
-    /// stale gist.
-    pub fn apply_older_comments(
-        &mut self,
-        gist_id: &str,
-        result: Result<Vec<GistComment>, String>,
-    ) {
-        let Some(d) = self.detail_mut() else {
-            return;
-        };
-        if d.gist_id.as_deref() != Some(gist_id) {
-            return;
-        }
-        d.comments_loading_more = false;
-        match result {
-            Ok(mut older) => {
-                let added = comment_lines_count(&older);
-                if let Some(existing) = d.comments.as_mut() {
-                    older.append(existing);
-                    *existing = older;
-                } else {
-                    d.comments = Some(older);
-                }
-                d.comments_loaded_oldest_page =
-                    d.comments_loaded_oldest_page.saturating_sub(1).max(1);
-                d.scroll = d.scroll.saturating_add(added);
-            }
-            Err(error) => {
-                d.comments_error = Some(error);
-            }
-        }
-    }
-
-    /// Whether a "load older" action should be offered: comments are loaded, an older page
-    /// exists, and no load is already in flight.
-    pub fn can_load_older_comments(&self) -> bool {
-        let Some(d) = self.detail() else {
-            return false;
-        };
-        d.comments.is_some()
-            && d.comments_loaded_oldest_page > 1
-            && !d.comments_loading_more
-            && !d.comments_loading
-    }
-}
-
 /// Draw a centered, bordered box over the current frame, sized to fit `body` (clamped to
 /// the frame) and wiped clean with `Clear` so whatever is behind it doesn't bleed through.
 /// This is the shared "centered window" primitive behind both the loading overlay and the
@@ -2460,8 +2360,9 @@ use palette::{PaletteMode, PaletteState};
 mod render;
 use render::*;
 mod screens;
+pub use screens::detail::InitialComments;
 mod text;
-use text::{comment_lines_count, hscroll_max_among, local_row_label};
+use text::{hscroll_max_among, local_row_label};
 mod bg;
 mod dispatch;
 mod keys;
