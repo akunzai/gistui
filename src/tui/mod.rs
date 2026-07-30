@@ -2,7 +2,7 @@ use crate::domain::{
     group_gists, GistComment, GistFile, GistFileRef, GistGroup, GistRevision, LocalCandidate,
     PinnedMapping,
 };
-use crate::ranking::{rank_gist_files, rank_local_files, MatchReason, RankedGistFile, RankedLocal};
+use crate::ranking::{MatchReason, RankedGistFile, RankedLocal};
 use anyhow::Result;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -1081,47 +1081,6 @@ pub struct AppState {
     pub pin_sync_cache_dirty: bool,
 }
 
-/// One pin's presentation-derived sync facts, computed off the draw path.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PinSyncCacheEntry {
-    pub status: crate::domain::SyncStatus,
-    pub local_ts: Option<u64>,
-    pub remote_ts: Option<u64>,
-}
-
-impl Default for PinSyncCacheEntry {
-    fn default() -> Self {
-        Self {
-            status: crate::domain::SyncStatus::Unknown,
-            local_ts: None,
-            remote_ts: None,
-        }
-    }
-}
-
-fn unranked_gists(gists: Vec<GistFile>) -> Vec<RankedGistFile> {
-    gists
-        .into_iter()
-        .map(|file| RankedGistFile {
-            file,
-            score: 0,
-            reasons: Vec::new(),
-        })
-        .collect()
-}
-
-fn unranked_locals(locals: &[LocalCandidate]) -> Vec<RankedLocal> {
-    locals
-        .iter()
-        .cloned()
-        .map(|candidate| RankedLocal {
-            candidate,
-            score: 0,
-            reasons: Vec::new(),
-        })
-        .collect()
-}
-
 /// Generates a `Screen`-payload accessor pair: an immutable getter that searches the current
 /// screen, palette origin, and `nav_stack` via [`AppState::find_screen`] (issue #242), and a
 /// mutable counterpart doing the same via `find_screen_mut`. The `live_only` variant instead
@@ -1648,128 +1607,6 @@ impl AppState {
         };
         self.set_status(message.to_string());
         true
-    }
-
-    /// Filtered owned/starred gist file rows (no ranking/sort). Shared by
-    /// [`Self::ranked_gists`] and [`Self::list_pane_snapshots`].
-    fn filtered_gist_files(&self) -> Vec<GistFile> {
-        let query = self.filter_query.to_lowercase();
-        self.list_gist_source()
-            .iter()
-            .filter(|g| self.gist_type_filter.matches_file(g))
-            .filter(|g| {
-                query.is_empty()
-                    || g.filename.to_lowercase().contains(&query)
-                    || g.description.to_lowercase().contains(&query)
-            })
-            .cloned()
-            .collect()
-    }
-
-    /// Rank/sort gist files for a known local path (or unranked when `local_path` is
-    /// `None` / anchor is Gist). Does **not** call `selected_local` / `visible_locals`.
-    fn rank_gist_files_for(&self, local_path: Option<&std::path::Path>) -> Vec<RankedGistFile> {
-        let gists = self.filtered_gist_files();
-        let mut ranked = match local_path {
-            Some(path) => rank_gist_files(path, &gists, &self.pinned),
-            None => unranked_gists(gists),
-        };
-        self.gist_sort.apply(&mut ranked);
-        ranked
-    }
-
-    /// Local rows with optional reverse-rank against a known gist file. Does **not**
-    /// call `selected_gist` / `ranked_gists`.
-    fn rank_local_files_for(&self, gist: Option<&GistFile>) -> Vec<RankedLocal> {
-        let mut ranked = match gist {
-            Some(file) => rank_local_files(file, &self.locals, &self.pinned),
-            None => unranked_locals(&self.locals),
-        };
-        let query = self.local_filter_query.to_lowercase();
-        if !query.is_empty() {
-            ranked.retain(|r| {
-                local_row_label(&r.candidate.path, &self.cwd)
-                    .to_lowercase()
-                    .contains(&query)
-            });
-        }
-        self.local_sort.apply(&mut ranked);
-        ranked
-    }
-
-    pub fn ranked_gists(&self) -> Vec<RankedGistFile> {
-        // Anchor-driven ranking: the gist pane is ranked against the selected local file
-        // only while the LOCAL pane is the anchor (anchor == Local). When the gist pane
-        // is the anchor it uses its own sort (no ranking), which also breaks the
-        // otherwise-mutual dependency with `visible_locals`.
-        // NOTE: only evaluate the local selection inside the anchor==Local branch.
-        // Computing it eagerly would recurse: selected_local -> visible_locals ->
-        // selected_gist -> ranked_gists.
-        let local_path = if self.anchor == FocusPane::Local {
-            self.rank_local_files_for(None)
-                .get(self.local_index)
-                .map(|r| r.candidate.path.clone())
-        } else {
-            None
-        };
-        self.rank_gist_files_for(local_path.as_deref())
-    }
-
-    /// The local file list after sorting (and, while the gist pane drives, reverse ranking
-    /// against the selected gist). Single source of truth for the local pane's order,
-    /// selection, and rendering — mirrors `ranked_gists`.
-    pub fn visible_locals(&self) -> Vec<RankedLocal> {
-        // Mirror of `ranked_gists`: only evaluate the gist selection in the anchor==Gist
-        // branch to avoid recursing back through `ranked_gists` -> `selected_local`.
-        let gist = if self.anchor == FocusPane::Gist {
-            self.rank_gist_files_for(None)
-                .into_iter()
-                .nth(self.gist_index)
-                .map(|r| r.file)
-        } else {
-            None
-        };
-        self.rank_local_files_for(gist.as_ref())
-    }
-
-    /// Build both list-pane orderings with **one** construction of each list (issue #224 /
-    /// shape #1 from #154). Prefer this when a key/palette/render path needs both sides or
-    /// multiple selected rows — avoids N full filter+rank+sort passes per call site.
-    ///
-    /// Expansion order follows the anchor so the mutual recursion is not entered:
-    /// - `Local` anchor: locals (driver) first, then gists ranked on the selected local
-    /// - `Gist` anchor: gists (driver) first, then locals reverse-ranked on the selected gist
-    ///
-    /// Public `ranked_gists` / `visible_locals` / `selected_*` stay pure recomputes so unit
-    /// tests keep the no-stale-cache contract; hot handlers should call this instead.
-    pub fn list_pane_snapshots(&self) -> (Vec<RankedLocal>, Vec<RankedGistFile>) {
-        match self.anchor {
-            FocusPane::Local => {
-                let locals = self.rank_local_files_for(None);
-                let path = locals
-                    .get(self.local_index)
-                    .map(|r| r.candidate.path.as_path());
-                let gists = self.rank_gist_files_for(path);
-                (locals, gists)
-            }
-            FocusPane::Gist => {
-                let gists = self.rank_gist_files_for(None);
-                let gist = gists.get(self.gist_index).map(|r| &r.file);
-                let locals = self.rank_local_files_for(gist);
-                (locals, gists)
-            }
-        }
-    }
-
-    pub fn selected_local(&self) -> Option<LocalCandidate> {
-        self.visible_locals()
-            .into_iter()
-            .nth(self.local_index)
-            .map(|r| r.candidate)
-    }
-
-    pub fn selected_gist(&self) -> Option<RankedGistFile> {
-        self.ranked_gists().into_iter().nth(self.gist_index)
     }
 
     /// All gists collapsed to one entry each (raw, unfiltered) from the owned list.
@@ -2510,112 +2347,6 @@ pub fn run(no_mouse: bool, no_update_check: bool) -> Result<()> {
     result
 }
 
-impl AppState {
-    /// Resolve a pin's absolute local path against `cwd`.
-    fn pin_local_abs(&self, m: &crate::domain::PinnedMapping) -> PathBuf {
-        if m.local_path.is_absolute() {
-            m.local_path.clone()
-        } else {
-            self.cwd.join(&m.local_path)
-        }
-    }
-
-    /// `(local_ts, remote_ts)` Unix-seconds for `pinned[index]`. The remote side comes
-    /// from the matching gist's in-memory `updated_at`; the local side prefers the
-    /// discovered candidate's mtime and falls back to stat-ing the path on disk.
-    pub fn pin_mtimes(&self, index: usize) -> (Option<u64>, Option<u64>) {
-        let Some(m) = self.pinned.get(index) else {
-            return (None, None);
-        };
-        let local_abs = self.pin_local_abs(m);
-        let local_ts = self
-            .locals
-            .iter()
-            .find_map(|c| {
-                let cabs = if c.path.is_absolute() {
-                    c.path.clone()
-                } else {
-                    self.cwd.join(&c.path)
-                };
-                (cabs == local_abs).then_some(c.modified).flatten()
-            })
-            // Pins can point outside cwd (or into skipped/too-deep dirs), so they
-            // never appear in `self.locals`. Fall back to stat-ing the path so the
-            // Pins list and sync status still reflect the real mtime.
-            .or_else(|| crate::local::file_mtime_secs(&local_abs));
-        let remote_ts = self.gists.iter().find_map(|g| {
-            (g.gist_id == m.gist_id && g.filename == m.gist_filename)
-                .then(|| crate::domain::parse_rfc3339_to_unix(&g.updated_at))
-                .flatten()
-        });
-        (local_ts, remote_ts)
-    }
-
-    /// Impure single-pin status: in-memory mtimes plus a content-hash fallback when
-    /// timestamps disagree (`Push`/`Pull`) but the local file still matches `last_seen_hash`.
-    /// Used by [`Self::refresh_pin_sync_cache`] and by action dispatch (smart-sync); **not**
-    /// for paint — presentation reads [`Self::cached_pin_sync_status`] (issue #241).
-    pub(crate) fn compute_pin_sync_status(&self, index: usize) -> crate::domain::SyncStatus {
-        let (local_ts, remote_ts) = self.pin_mtimes(index);
-        let status = crate::domain::sync_status(local_ts, remote_ts);
-        if !matches!(
-            status,
-            crate::domain::SyncStatus::Push | crate::domain::SyncStatus::Pull
-        ) {
-            return status;
-        }
-        let Some(m) = self.pinned.get(index) else {
-            return status;
-        };
-        let Some(baseline) = m.last_seen_hash.as_deref() else {
-            return status;
-        };
-        let local_abs = self.pin_local_abs(m);
-        match std::fs::read(&local_abs) {
-            Ok(bytes) if crate::domain::sha256_hex(&bytes) == baseline => {
-                crate::domain::SyncStatus::InSync
-            }
-            _ => status,
-        }
-    }
-
-    /// Rebuild [`Self::pin_sync_cache`] for every pin (may stat / read local files). Clears
-    /// the dirty flag. Call from run_loop before drawing Pins, after pin-list changes, and
-    /// after successful pin sync absorb — not from pure `handle_key` or the view-model builder.
-    pub fn refresh_pin_sync_cache(&mut self) {
-        self.pin_sync_cache = (0..self.pinned.len())
-            .map(|i| {
-                let (local_ts, remote_ts) = self.pin_mtimes(i);
-                PinSyncCacheEntry {
-                    status: self.compute_pin_sync_status(i),
-                    local_ts,
-                    remote_ts,
-                }
-            })
-            .collect();
-        self.pin_sync_cache_dirty = false;
-    }
-
-    /// Mark the pin presentation cache dirty so the next Pins draw refreshes it.
-    pub fn mark_pin_sync_cache_dirty(&mut self) {
-        self.pin_sync_cache_dirty = true;
-    }
-
-    /// Pure read of cached pin sync status. Missing / short cache → [`SyncStatus::Unknown`]
-    /// (refresh invariant should have filled the cache before Pins paint).
-    pub fn cached_pin_sync_status(&self, index: usize) -> crate::domain::SyncStatus {
-        self.pin_sync_cache
-            .get(index)
-            .map(|e| e.status)
-            .unwrap_or(crate::domain::SyncStatus::Unknown)
-    }
-
-    /// Pure read of a full cache entry; default [`PinSyncCacheEntry`] when missing.
-    pub fn cached_pin_sync_entry(&self, index: usize) -> PinSyncCacheEntry {
-        self.pin_sync_cache.get(index).copied().unwrap_or_default()
-    }
-}
-
 /// The result of the initial newest-first comment load: the newest page plus the metadata
 /// needed to page backwards.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2736,6 +2467,9 @@ mod dispatch;
 mod keys;
 mod list_cursor;
 pub(crate) use list_cursor::ListCursor;
+mod list_ranking;
+mod pin_sync;
+pub use pin_sync::PinSyncCacheEntry;
 mod run_loop;
 use run_loop::run_loop;
 mod text_input;

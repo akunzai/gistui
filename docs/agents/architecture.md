@@ -6,8 +6,8 @@ Index: [`AGENTS.md`](../../AGENTS.md). Source of truth for types lives in the mo
 
 | Kind | Modules | Testing |
 | --- | --- | --- |
-| **Pure** (unit-tested) | `domain`, `config`, `ranking`, `local`, `diff`, actions **plan/guard**, `tui::view_model` | In-crate unit tests |
-| **Impure** (thin IO) | `gh`, actions **execute**, `tui::run_loop` / `tui::bg` | Fixtures / injectable runners only; no live `gh` |
+| **Pure** (unit-tested) | `domain`, `config`, `ranking`, `local`, `diff`, actions **plan/guard**, `tui::view_model`, `tui::list_ranking` | In-crate unit tests |
+| **Impure** (thin IO) | `gh`, actions **execute**, `tui::run_loop` / `tui::bg` / `tui::pin_sync` | Fixtures / injectable runners only; no live `gh` |
 
 `build_view_model` (`@src/tui/view_model.rs`): `AppState` + pin-sync cache → presentation facts. Paint helpers apply theme/layout only — no business rules, FS, or network.
 
@@ -36,7 +36,7 @@ handle_key (pure) → KeyOutcome → run_loop / dispatch_outcome (IO)
 - Call sites: `jobs.spawn_action` / `request_*` — do not own ad-hoc channel fields on `AppState`.
 - `run_loop` only **polls** `jobs.absorb`.
 
-## Pin-sync presentation
+## Pin-sync presentation (`@src/tui/pin_sync.rs`)
 
 - `refresh_pin_sync_cache` is **impure** (stat/read/hash); fills `AppState::pin_sync_cache`.
 - Refresh on: enter/return Pins, pin-list change, successful pin-sync absorb, dirty flag / length mismatch — **not** every frame, **not** from the pure VM builder.
