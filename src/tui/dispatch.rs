@@ -211,21 +211,17 @@ pub(super) fn dispatch_outcome(
 
             let upload_content = state.content_to_upload();
 
-            // ScratchDir owns cleanup: early write failure drops here; on success
-            // ownership moves into the bg job and drops after execute (issue #275).
-            let scratch = match crate::temp_dir::ScratchDir::create("upload") {
-                Ok(dir) => dir,
-                Err(e) => {
-                    state.set_status(format!("failed to create temp dir: {e}"));
-                    return Ok(LoopFlow::Proceed);
-                }
-            };
-
-            let temp_file_path = scratch.path().join(&filename);
-            if let Err(e) = std::fs::write(&temp_file_path, &upload_content) {
-                state.set_status(format!("failed to write temp file: {e}"));
+            // ScratchDir owns cleanup: `write_scratch_file` drops it on early failure; on
+            // success ownership moves into the bg job and drops after execute (issue #275).
+            let Some((scratch, temp_file_path)) = write_scratch_file(
+                state,
+                "upload",
+                &filename,
+                "temp file",
+                upload_content.as_bytes(),
+            ) else {
                 return Ok(LoopFlow::Proceed);
-            }
+            };
 
             let has_same_name = state
                 .gists
@@ -559,21 +555,19 @@ pub(super) fn dispatch_outcome(
             else {
                 return Ok(LoopFlow::Proceed);
             };
-            // ScratchDir owns cleanup across write-failure early return and the
-            // bg job that consumes the JSON payload (issue #275).
-            let scratch = match crate::temp_dir::ScratchDir::create("restore") {
-                Ok(dir) => dir,
-                Err(e) => {
-                    state.set_status(format!("failed to create temp dir: {e}"));
-                    return Ok(LoopFlow::Proceed);
-                }
-            };
-            let json_path = scratch.path().join("restore.json");
+            // ScratchDir owns cleanup: `write_scratch_file` drops it on early failure; on
+            // success ownership moves into the bg job that consumes the JSON payload
+            // (issue #275).
             let body = crate::actions::restore_revision_json(&filename, &content);
-            if let Err(e) = std::fs::write(&json_path, &body) {
-                state.set_status(format!("failed to write restore payload: {e}"));
+            let Some((scratch, json_path)) = write_scratch_file(
+                state,
+                "restore",
+                "restore.json",
+                "restore payload",
+                body.as_bytes(),
+            ) else {
                 return Ok(LoopFlow::Proceed);
-            }
+            };
             let plan = crate::actions::restore_revision_command(&gist_id, &json_path);
             jobs.spawn_action(state, "Restoring revision…", move || {
                 let result = crate::actions::execute_command(&plan)

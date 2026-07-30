@@ -866,6 +866,33 @@ pub(super) fn edit_upload_buffer(
     Ok(())
 }
 
+/// Create a scratch dir and write `body` to `filename` inside it, setting a status message
+/// and returning `None` on either failure — the caller owns the early return (`ScratchDir`
+/// cleanup on early failure, or ownership moving into a bg job on success, per issue #275).
+/// `context` names the file for the write-failure message (e.g. "temp file"); the
+/// create-dir failure message is the same regardless of caller.
+pub(super) fn write_scratch_file(
+    state: &mut AppState,
+    label: &str,
+    filename: &str,
+    context: &str,
+    body: &[u8],
+) -> Option<(crate::temp_dir::ScratchDir, PathBuf)> {
+    let scratch = match crate::temp_dir::ScratchDir::create(label) {
+        Ok(dir) => dir,
+        Err(e) => {
+            state.set_status(format!("failed to create temp dir: {e}"));
+            return None;
+        }
+    };
+    let path = scratch.path().join(filename);
+    if let Err(e) = std::fs::write(&path, body) {
+        state.set_status(format!("failed to write {context}: {e}"));
+        return None;
+    }
+    Some((scratch, path))
+}
+
 pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode) {
     let target = state.download_target();
     let content = state.preview_remote().to_string();
