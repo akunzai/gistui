@@ -1,8 +1,11 @@
 //! `Screen::Config` (Settings) — key handling, view-model, paint, and palette items
 //! colocated in one file (issue #287, Phase 2).
 
+use crate::tui::keys::{point_in, NavAction};
 use crate::tui::view_model::{ChromeVm, ConfigVm};
-use crate::tui::{AppState, ConfigField, HelpTopic, KeyOutcome, MouseLayout, PaneHit, Theme};
+use crate::tui::{
+    AppState, ConfigField, HelpTopic, KeyOutcome, MouseLayout, PaneHit, Screen, Theme,
+};
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
@@ -117,6 +120,47 @@ impl AppState {
                 true
             }
         }
+    }
+
+    /// Arrow key navigation for `Screen::Config`: moves the field-index selection. Left/Right
+    /// are handled in `handle_key_config` (adjusting a field needs `PersistSettings`).
+    pub(crate) fn apply_navigation_config(&mut self, action: NavAction) -> bool {
+        let Screen::Config(cfg) = &mut self.screen else {
+            return false;
+        };
+        let n = ConfigField::ALL.len();
+        match action {
+            NavAction::Up => {
+                cfg.index = cfg.index.saturating_sub(1);
+            }
+            NavAction::Down => {
+                if cfg.index + 1 < n {
+                    cfg.index += 1;
+                }
+            }
+            NavAction::Left | NavAction::Right => {
+                // Adjust is handled in handle_key_config (needs PersistSettings).
+                return false;
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Select the clicked field row on `Screen::Config`. Returns `true` when a row was hit.
+    pub(crate) fn click_select_config(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
+        let Screen::Config(cfg) = &mut self.screen else {
+            return false;
+        };
+        if let Some(hit) = layout.list {
+            if point_in(hit.rect, col, row) {
+                if let Some(idx) = hit.index_at(row, ConfigField::ALL.len()) {
+                    cfg.index = idx;
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 

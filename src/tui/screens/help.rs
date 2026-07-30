@@ -1,8 +1,9 @@
 //! `Screen::Help` — key handling, view-model, paint, and palette items colocated in one
 //! file (issue #287, Phase 2).
 
+use crate::tui::keys::{point_in, NavAction, PAGE_SCROLL};
 use crate::tui::view_model::{ChromeVm, HelpIndexItemVm, HelpModeVm, HelpVm};
-use crate::tui::{AppState, HelpState, HelpTopic, KeyOutcome, MouseLayout, PaneHit};
+use crate::tui::{AppState, HelpState, HelpTopic, KeyOutcome, MouseLayout, PaneHit, Screen};
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::Rect,
@@ -84,6 +85,61 @@ impl AppState {
             self.leave();
         }
         KeyOutcome::None
+    }
+
+    /// Arrow / hjkl / page-key navigation for `Screen::Help`: moves the topic-index
+    /// selection, or scrolls the topic body.
+    pub(crate) fn apply_navigation_help(&mut self, action: NavAction) -> bool {
+        let Screen::Help(help) = &mut self.screen else {
+            return false;
+        };
+        let topics = HelpTopic::all();
+        if help.index_open {
+            match action {
+                NavAction::Up => help.index_sel = help.index_sel.saturating_sub(1),
+                NavAction::Down => {
+                    if help.index_sel + 1 < topics.len() {
+                        help.index_sel += 1;
+                    }
+                }
+                _ => return false,
+            }
+        } else {
+            match action {
+                NavAction::Up => {
+                    help.scroll = help.scroll.saturating_sub(1);
+                }
+                NavAction::Down => {
+                    help.scroll = help.scroll.saturating_add(1);
+                }
+                NavAction::PageUp => {
+                    help.scroll = help.scroll.saturating_sub(PAGE_SCROLL);
+                }
+                NavAction::PageDown => {
+                    help.scroll = help.scroll.saturating_add(PAGE_SCROLL);
+                }
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    /// Select the clicked topic-index row on `Screen::Help`. Only set when the topic index is
+    /// open (render_help), so this is a no-op while viewing a topic's body. Returns `true`
+    /// when a row was hit.
+    pub(crate) fn click_select_help(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
+        let Screen::Help(help) = &mut self.screen else {
+            return false;
+        };
+        if let Some(hit) = layout.list {
+            if point_in(hit.rect, col, row) {
+                if let Some(idx) = hit.index_at(row, HelpTopic::all().len()) {
+                    help.index_sel = idx;
+                    return true;
+                }
+            }
+        }
+        false
     }
 }
 
