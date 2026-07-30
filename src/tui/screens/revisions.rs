@@ -503,3 +503,220 @@ pub(crate) fn revisions_palette_items(state: &AppState) -> Vec<crate::tui::palet
         key_item("?", "Help", KeyCode::Char('?'), true),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::*;
+
+    use crate::tui::tests::{revision_ref, state_with_gists};
+
+    fn revision_mut(state: &mut AppState) -> &mut RevisionState {
+        if !state.screen.is_revisions() {
+            state.screen = Screen::Revisions(Box::default());
+        }
+        state.revision_mut().expect("expected Screen::Revisions")
+    }
+
+    #[test]
+    fn revisions_r_on_head_is_blocked() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Revisions(Box::default());
+        revision_mut(&mut state).entries = Some(vec![crate::domain::GistRevision {
+            version: "abc".into(),
+            committed_at: "2026-06-10T00:00:00Z".into(),
+            user: "u".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 1,
+                additions: 1,
+                deletions: 0,
+            },
+        }]);
+        state.handle_key(KeyCode::Char('r'));
+        assert_eq!(
+            state.status.as_deref(),
+            Some("only one revision — nothing to restore")
+        );
+    }
+
+    #[test]
+    fn revisions_capital_d_on_current_shows_status() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Revisions(Box::default());
+        revision_mut(&mut state).gist_id = Some("g1".into());
+        revision_mut(&mut state).target_file = "a.txt".into();
+        revision_mut(&mut state).index = 0;
+        revision_mut(&mut state).entries = Some(vec![
+            crate::domain::GistRevision {
+                version: "v2".into(),
+                committed_at: "2026-06-10T00:00:00Z".into(),
+                user: "u".into(),
+                change_status: crate::domain::GistRevisionChangeStatus {
+                    total: 1,
+                    additions: 1,
+                    deletions: 0,
+                },
+            },
+            crate::domain::GistRevision {
+                version: "v1".into(),
+                committed_at: "2026-06-01T00:00:00Z".into(),
+                user: "u".into(),
+                change_status: crate::domain::GistRevisionChangeStatus {
+                    total: 2,
+                    additions: 2,
+                    deletions: 0,
+                },
+            },
+        ]);
+        assert_eq!(state.handle_key(KeyCode::Char('D')), KeyOutcome::None);
+        assert_eq!(state.status.as_deref(), Some("already at current revision"));
+        revision_mut(&mut state).index = 1;
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('D')),
+            KeyOutcome::RevisionDiff { .. }
+        ));
+    }
+
+    #[test]
+    fn revisions_enter_triggers_incremental_diff() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Revisions(Box::default());
+        revision_mut(&mut state).gist_id = Some("g1".into());
+        revision_mut(&mut state).target_file = "a.txt".into();
+        revision_mut(&mut state).index = 0;
+        revision_mut(&mut state).entries = Some(vec![
+            crate::domain::GistRevision {
+                version: "v2".into(),
+                committed_at: "2026-06-10T00:00:00Z".into(),
+                user: "u".into(),
+                change_status: crate::domain::GistRevisionChangeStatus {
+                    total: 1,
+                    additions: 1,
+                    deletions: 0,
+                },
+            },
+            crate::domain::GistRevision {
+                version: "v1".into(),
+                committed_at: "2026-06-01T00:00:00Z".into(),
+                user: "u".into(),
+                change_status: crate::domain::GistRevisionChangeStatus {
+                    total: 2,
+                    additions: 2,
+                    deletions: 0,
+                },
+            },
+        ]);
+        assert!(matches!(
+            state.handle_key(KeyCode::Enter),
+            KeyOutcome::RevisionDiffIncremental { .. }
+        ));
+        revision_mut(&mut state).index = 1;
+        assert!(matches!(
+            state.handle_key(KeyCode::Enter),
+            KeyOutcome::RevisionDiffIncremental { .. }
+        ));
+    }
+
+    #[test]
+    fn revision_diff_omits_download_upload() {
+        let mut state = initial_state();
+        state.pending_return = Some(Screen::Revisions(Box::default()));
+        state.enter_diff("diff".into(), String::new(), PathBuf::new(), PathBuf::new());
+        let footer = diff_footer(&state);
+        assert!(!footer.contains("download"));
+        assert!(!footer.contains("upload"));
+        assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
+        assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn revisions_capital_f_cycles_target_file() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Revisions(Box::default());
+        revision_mut(&mut state).gist_id = Some("g1".into());
+        revision_mut(&mut state).target_file = "a.txt".into();
+        revision_mut(&mut state).entries = Some(vec![]);
+        state.handle_key(KeyCode::Char('F'));
+        assert_eq!(revision_ref(&state).target_file, "b.txt");
+        state.handle_key(KeyCode::Char('F'));
+        assert_eq!(revision_ref(&state).target_file, "a.txt");
+        assert_eq!(state.revision_target_file_label(), "a.txt (1/2)");
+    }
+
+    #[test]
+    fn revisions_capital_f_on_single_file_gist_shows_status() {
+        let mut state = initial_state();
+        state.gists = vec![GistFile {
+            gist_id: "g1".into(),
+            description: "solo".into(),
+            filename: "only.txt".into(),
+            public: false,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            owner_login: String::new(),
+            fork_of_id: None,
+
+            raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
+        }];
+        state.screen = Screen::Revisions(Box::default());
+        revision_mut(&mut state).gist_id = Some("g1".into());
+        revision_mut(&mut state).target_file = "only.txt".into();
+        revision_mut(&mut state).entries = Some(vec![]);
+        state.handle_key(KeyCode::Char('F'));
+        assert_eq!(state.status.as_deref(), Some("only one file in this gist"));
+    }
+
+    #[test]
+    fn revisions_click_selects_and_double_click_matches_enter() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Revisions(Box::default());
+        revision_mut(&mut state).gist_id = Some("g1".into());
+        revision_mut(&mut state).target_file = "a.txt".into();
+        revision_mut(&mut state).index = 0;
+        revision_mut(&mut state).entries = Some(vec![
+            crate::domain::GistRevision {
+                version: "v2".into(),
+                committed_at: "2026-06-10T00:00:00Z".into(),
+                user: "u".into(),
+                change_status: crate::domain::GistRevisionChangeStatus {
+                    total: 1,
+                    additions: 1,
+                    deletions: 0,
+                },
+            },
+            crate::domain::GistRevision {
+                version: "v1".into(),
+                committed_at: "2026-06-01T00:00:00Z".into(),
+                user: "u".into(),
+                change_status: crate::domain::GistRevisionChangeStatus {
+                    total: 2,
+                    additions: 2,
+                    deletions: 0,
+                },
+            },
+        ]);
+        let hit = PaneHit {
+            rect: Rect::new(0, 0, 40, 10),
+            offset: 0,
+        };
+        let layout = MouseLayout {
+            list: Some(hit),
+            ..Default::default()
+        };
+        let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
+        assert_eq!(out, KeyOutcome::None);
+        assert_eq!(revision_ref(&state).index, 1);
+        let mut by_key = state.clone();
+        let key_out = by_key.handle_key(KeyCode::Enter);
+        let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
+        assert_eq!(by_mouse, key_out);
+        assert!(matches!(
+            by_mouse,
+            KeyOutcome::RevisionDiffIncremental { .. }
+        ));
+    }
+}

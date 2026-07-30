@@ -232,3 +232,163 @@ pub(crate) fn render_confirm_vm(
 pub(crate) fn confirm_palette_items(_state: &AppState) -> Vec<crate::tui::palette::PaletteItem> {
     Vec::new()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::*;
+
+    use crate::tui::tests::{set_pending, state_with_gists};
+
+    fn upload_pending(gist_id: &str, filename: &str) -> PendingAction {
+        PendingAction::Upload {
+            gist_id: gist_id.into(),
+            filename: filename.into(),
+            local_path: PathBuf::from(format!("/tmp/{filename}")),
+        }
+    }
+
+    #[test]
+    fn apply_upload_edit_event_content_changed_updates_diff_live() {
+        let mut state = initial_state();
+        state.screen = Screen::Confirm(Box::default());
+        set_pending(&mut state, upload_pending("a", "notes.txt"));
+        state.upload.watching = true;
+        state.upload.remote_content = Some("old\n".into());
+        state.upload.local_label = Some("local".into());
+        state.upload.gist_label = Some("gist".into());
+
+        state.apply_upload_edit_event(crate::tui::bg::UploadEditWatchEvent::ContentChanged {
+            gist_id: "a".into(),
+            filename: "notes.txt".into(),
+            content: "new\n".into(),
+        });
+
+        assert_eq!(state.upload.edited_content.as_deref(), Some("new\n"));
+        assert!(
+            state.upload.watching,
+            "still watching — editor hasn't closed yet"
+        );
+        assert!(state.diff_body_text().contains("new"));
+    }
+
+    #[test]
+    fn apply_upload_edit_event_editor_closed_stops_watching() {
+        let mut state = initial_state();
+        state.screen = Screen::Confirm(Box::default());
+        set_pending(&mut state, upload_pending("a", "notes.txt"));
+        state.upload.watching = true;
+
+        state.apply_upload_edit_event(crate::tui::bg::UploadEditWatchEvent::EditorClosed {
+            gist_id: "a".into(),
+            filename: "notes.txt".into(),
+            content: "final\n".into(),
+        });
+
+        assert_eq!(state.upload.edited_content.as_deref(), Some("final\n"));
+        assert!(!state.upload.watching);
+    }
+
+    #[test]
+    fn apply_upload_edit_event_read_error_stops_watching_and_sets_status() {
+        let mut state = initial_state();
+        state.screen = Screen::Confirm(Box::default());
+        set_pending(&mut state, upload_pending("a", "notes.txt"));
+        state.upload.watching = true;
+
+        state.apply_upload_edit_event(crate::tui::bg::UploadEditWatchEvent::ReadError {
+            gist_id: "a".into(),
+            filename: "notes.txt".into(),
+            message: "permission denied".into(),
+        });
+
+        assert!(!state.upload.watching);
+        assert_eq!(
+            state.status.as_deref(),
+            Some("failed to read edited file: permission denied")
+        );
+    }
+
+    #[test]
+    fn apply_upload_edit_event_discards_when_a_different_upload_is_now_pending() {
+        let mut state = initial_state();
+        // A new upload edit session started before the OLD one's final event arrived.
+        state.screen = Screen::Confirm(Box::default());
+        set_pending(&mut state, upload_pending("a", "other.txt"));
+        state.upload.watching = true;
+        state.upload.edited_content = Some("current session content".into());
+
+        state.apply_upload_edit_event(crate::tui::bg::UploadEditWatchEvent::EditorClosed {
+            gist_id: "a".into(),
+            filename: "notes.txt".into(), // stale session's filename, not "other.txt"
+            content: "stale content".into(),
+        });
+
+        assert_eq!(
+            state.upload.edited_content.as_deref(),
+            Some("current session content")
+        );
+        assert!(
+            state.upload.watching,
+            "the current session's watch must not be cancelled"
+        );
+    }
+
+    #[test]
+    fn apply_upload_edit_event_discards_stale_event_after_cancel_reentry_same_identity() {
+        let mut state = initial_state();
+        // Simulates: user cancelled a GUI-editor watch session (n resets watching to false but
+        // does NOT kill the background thread), then re-entered upload for the SAME gist/file
+        // without pressing `e` again. An event from the abandoned first session's thread must
+        // not silently overwrite this new, non-watching session's content.
+        state.screen = Screen::Confirm(Box::default());
+        set_pending(&mut state, upload_pending("a", "notes.txt"));
+        state.upload.watching = false; // never re-entered edit mode this session
+        state.upload.edited_content = None;
+
+        state.apply_upload_edit_event(crate::tui::bg::UploadEditWatchEvent::ContentChanged {
+            gist_id: "a".into(),
+            filename: "notes.txt".into(),
+            content: "leaked from abandoned session".into(),
+        });
+
+        assert_eq!(
+            state.upload.edited_content, None,
+            "an event from an abandoned (cancelled, still-running) watch session must not \
+             leak into a new, non-watching session with the same gist/file identity"
+        );
+    }
+
+    #[test]
+    fn restore_revision_confirm_prompt_and_y_intent() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Confirm(Box::default());
+        set_pending(
+            &mut state,
+            PendingAction::RestoreRevision {
+                gist_id: "g1".into(),
+                filename: "a.txt".into(),
+                version: "oldsha".into(),
+                version_label: "oldsha (3d ago)".into(),
+                content: "old\n".into(),
+            },
+        );
+        assert_eq!(
+            confirm_modal_style(&state),
+            ("Restore revision", Color::Yellow)
+        );
+        assert!(confirm_prompt(&state).contains("Restore a.txt to revision oldsha (3d ago)"));
+        assert_eq!(
+            state.handle_key(KeyCode::Char('y')),
+            KeyOutcome::ExecuteRestoreRevision
+        );
+    }
+
+    #[test]
+    fn palette_blocked_during_confirm() {
+        let mut state = crate::tui::initial_state();
+        state.screen = Screen::Confirm(Box::default());
+        state.handle_key(KeyCode::Char(';'));
+        assert!(state.screen.is_confirm());
+    }
+}

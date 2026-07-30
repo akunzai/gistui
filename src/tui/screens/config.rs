@@ -251,3 +251,75 @@ pub(crate) fn config_palette_items() -> Vec<crate::tui::palette::PaletteItem> {
         key_item("Esc", "Close settings", KeyCode::Esc, true),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::*;
+
+    fn config_mut(state: &mut AppState) -> &mut ConfigState {
+        if !state.screen.is_config() {
+            state.screen = Screen::Config(Box::default());
+        }
+        state.config_mut().expect("expected Screen::Config")
+    }
+
+    #[test]
+    fn adjust_config_mouse_updates_mouse_enabled_respecting_cli() {
+        let mut state = initial_state();
+        state.open_config();
+        config_mut(&mut state).index = ConfigField::ALL
+            .iter()
+            .position(|f| *f == ConfigField::Mouse)
+            .unwrap();
+        state.no_mouse_cli = false;
+        state.config_mouse = false;
+        state.mouse_enabled = false;
+
+        assert!(state.adjust_config_field(true));
+        assert!(state.config_mouse);
+        assert!(
+            state.mouse_enabled,
+            "toggling mouse on must enable session mouse when CLI does not force off"
+        );
+
+        // CLI --no-mouse still wins for the effective session flag.
+        state.no_mouse_cli = true;
+        state.config_mouse = false;
+        state.mouse_enabled = false;
+        assert!(state.adjust_config_field(true));
+        assert!(state.config_mouse);
+        assert!(
+            !state.mouse_enabled,
+            "--no-mouse must keep mouse_enabled false even when config prefers on"
+        );
+    }
+
+    #[test]
+    fn config_adjust_theme_returns_persist_settings() {
+        let mut state = initial_state();
+        state.open_config();
+        // Theme is index 0
+        config_mut(&mut state).index = 0;
+        assert_eq!(state.theme_choice, crate::config::ThemeChoice::Dark);
+        assert!(state.adjust_config_field(true));
+        assert_eq!(state.theme_choice, crate::config::ThemeChoice::Light);
+        // Space on config screen yields PersistSettings
+        let outcome = state.handle_key(KeyCode::Char(' '));
+        assert_eq!(outcome, KeyOutcome::PersistSettings);
+    }
+
+    #[test]
+    fn config_adjust_scan_depth_clamps_and_reports_change() {
+        let mut state = initial_state();
+        state.open_config();
+        config_mut(&mut state).index = ConfigField::ALL
+            .iter()
+            .position(|f| *f == ConfigField::ScanDepth)
+            .unwrap();
+        state.scan_depth = 0;
+        assert!(!state.adjust_config_field(false)); // already min
+        assert!(state.adjust_config_field(true));
+        assert_eq!(state.scan_depth, 1);
+    }
+}
