@@ -923,3 +923,427 @@ pub(crate) fn list_palette_items(state: &AppState) -> Vec<crate::tui::palette::P
         key_item("?", "Help", KeyCode::Char('?'), true),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::*;
+    use crossterm::event::KeyModifiers;
+
+    use crate::tui::tests::{
+        list_state_with_matches, set_pending, state_ready_to_create, state_with_gists,
+        state_with_local_paths, state_with_two_gists,
+    };
+
+    fn clear_pending(state: &mut AppState) {
+        if state.screen.is_confirm() {
+            state.screen = Screen::List;
+        }
+    }
+
+    #[test]
+    fn esc_in_preview_returns_to_list_and_clears() {
+        let mut state = initial_state();
+        state.enter_preview(
+            "Preview: a / x".into(),
+            "raw content".into(),
+            Some(("a".into(), "x".into())),
+        );
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+        assert!(state.preview().is_none());
+    }
+
+    #[test]
+    fn back_to_list_clears_preview() {
+        let mut state = initial_state();
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
+        state.back_to_list();
+        assert_eq!(state.screen, Screen::List);
+        assert!(!state.diff_previewed());
+        assert!(state.diff_body_text().is_empty());
+        assert!(state.preview_remote().is_empty());
+        assert_eq!(state.preview_local(), PathBuf::new());
+        assert_eq!(state.download_target(), PathBuf::new());
+    }
+
+    #[test]
+    fn identical_diff_disables_download_and_upload() {
+        let mut state = initial_state();
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
+        if let Some(d) = state.diff_mut() {
+            d.identical = true;
+        }
+        assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
+        assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::None);
+        // Scrolling and leaving still work.
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn esc_in_diff_returns_to_list() {
+        let mut state = initial_state();
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+        assert!(!state.diff_previewed());
+    }
+
+    #[test]
+    fn q_in_diff_returns_to_list() {
+        let mut state = initial_state();
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn o_on_main_list_is_noop_now_that_browser_moved_to_gist_view() {
+        let mut state = state_with_two_gists();
+        assert_eq!(state.handle_key(KeyCode::Char('o')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn confirm_upload_n_cancels_and_resets_watching() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "a".into(),
+                filename: "settings.json".into(),
+                local_path: PathBuf::from("/tmp/settings.json"),
+            },
+        );
+        state.upload.watching = true;
+
+        assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
+        assert!(state.pending_action().is_none());
+        assert_eq!(state.screen, Screen::List);
+        assert!(
+            !state.upload.watching,
+            "cancelling must reset watching so a future upload-edit session isn't blocked forever \
+             by a stale flag (the background thread is not force-killed and cleans up on its own)"
+        );
+    }
+
+    #[test]
+    fn apply_upload_edit_event_discards_when_context_is_stale() {
+        let mut state = initial_state();
+        // The user already left Confirm (e.g. cancelled) before this late event arrived.
+        state.screen = Screen::List;
+        clear_pending(&mut state);
+        state.upload.watching = false;
+        state.upload.edited_content = None;
+
+        state.apply_upload_edit_event(crate::tui::bg::UploadEditWatchEvent::ContentChanged {
+            gist_id: "a".into(),
+            filename: "notes.txt".into(),
+            content: "should be ignored".into(),
+        });
+
+        assert_eq!(state.upload.edited_content, None);
+    }
+
+    #[test]
+    fn n_without_local_is_noop() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn x_without_gist_is_noop() {
+        let mut state = initial_state();
+        state.focus = FocusPane::Gist;
+        assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn x_on_a_gists_only_file_is_blocked() {
+        let mut state = initial_state();
+        state.focus = FocusPane::Gist;
+        state.gists = vec![GistFile {
+            gist_id: "abc123".into(),
+            description: String::new(),
+            filename: "notes.md".into(),
+            public: false,
+            updated_at: "2026-01-01T00:00:00Z".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+            owner_login: String::new(),
+            fork_of_id: None,
+
+            raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
+        }];
+        // Removing the only file would leave a fileless gist, which GitHub forbids.
+        assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+        assert!(state.pending_action().is_none());
+        assert!(state.status.as_deref().unwrap().contains("only file"));
+    }
+
+    #[test]
+    fn delete_confirm_n_returns_to_list() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Delete {
+                gist_id: "abc123".into(),
+                label: "my notes".into(),
+            },
+        );
+        assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+        assert!(state.pending_action().is_none());
+    }
+
+    #[test]
+    fn g_with_no_gists_is_blocked() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char('g')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn create_confirm_esc_cancels() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Create {
+                local_path: PathBuf::from("/tmp/config.toml"),
+            },
+        );
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+        assert_eq!(state.pending_action().cloned(), None);
+    }
+
+    #[test]
+    fn create_esc_while_editing_description_cancels() {
+        let mut state = state_ready_to_create();
+        state.handle_key(KeyCode::Char('n'));
+        state.handle_key(KeyCode::Char('x'));
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+        assert_eq!(state.pending_action().cloned(), None);
+        assert!(!state.editing_description);
+        assert!(state.description_input.is_empty());
+    }
+
+    #[test]
+    fn lowercase_h_does_not_open_revision_history() {
+        let mut state = list_state_with_matches();
+        state.focus = FocusPane::Gist;
+        state.gist_index = 0;
+        assert_eq!(state.handle_key(KeyCode::Char('h')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn scroll_down_moves_focused_list_by_one() {
+        let mut state = state_with_local_paths(&["a.rs", "b.rs", "c.rs"]);
+        state.screen = Screen::List;
+        state.focus = FocusPane::Local;
+        state.local_index = 0;
+        let out = state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+        assert_eq!(out, KeyOutcome::None);
+        assert_eq!(state.local_index, 1);
+    }
+
+    #[test]
+    fn scroll_up_moves_focused_list_by_one() {
+        let mut state = state_with_local_paths(&["a.rs", "b.rs", "c.rs"]);
+        state.screen = Screen::List;
+        state.focus = FocusPane::Local;
+        state.local_index = 2;
+        let out = state.handle_mouse(MouseInput::ScrollUp, &MouseLayout::default());
+        assert_eq!(out, KeyOutcome::None);
+        assert_eq!(state.local_index, 1);
+    }
+
+    #[test]
+    fn list_click_selects_and_focuses_gist_pane() {
+        let mut state = state_with_gists();
+        state.screen = Screen::List;
+        state.focus = FocusPane::Local;
+        state.gist_hscroll = 5;
+        let hit = PaneHit {
+            rect: Rect::new(20, 0, 20, 10),
+            offset: 0,
+        };
+        let layout = MouseLayout {
+            gist: Some(hit),
+            ..Default::default()
+        };
+        // row 2 -> content idx 1 (top border is row 0, row 1 = idx 0, row 2 = idx 1)
+        let out = state.handle_mouse(MouseInput::Click { col: 25, row: 2 }, &layout);
+        assert_eq!(out, KeyOutcome::None);
+        assert_eq!(state.focus, FocusPane::Gist);
+        assert_eq!(state.gist_index, 1);
+        assert_eq!(state.gist_hscroll, 0);
+    }
+
+    #[test]
+    fn list_click_selects_and_focuses_local_pane() {
+        let mut state = state_with_local_paths(&["a.rs", "b.rs", "c.rs"]);
+        state.gists = vec![];
+        state.screen = Screen::List;
+        state.focus = FocusPane::Gist;
+        state.local_hscroll = 5;
+        let hit = PaneHit {
+            rect: Rect::new(0, 0, 20, 10),
+            offset: 0,
+        };
+        let layout = MouseLayout {
+            local: Some(hit),
+            ..Default::default()
+        };
+        // row 1 -> idx 0 (first content row after top border)
+        let out = state.handle_mouse(MouseInput::Click { col: 5, row: 1 }, &layout);
+        assert_eq!(out, KeyOutcome::None);
+        assert_eq!(state.focus, FocusPane::Local);
+        assert_eq!(state.local_index, 0);
+        assert_eq!(state.local_hscroll, 0);
+    }
+
+    #[test]
+    fn list_double_click_opens_diff() {
+        let mut state = state_with_gists();
+        state.screen = Screen::List;
+        let hit = PaneHit {
+            rect: Rect::new(20, 0, 20, 10),
+            offset: 0,
+        };
+        let layout = MouseLayout {
+            gist: Some(hit),
+            ..Default::default()
+        };
+        // row 1 -> idx 0 (first gist)
+        let out = state.handle_mouse(MouseInput::DoubleClick { col: 25, row: 1 }, &layout);
+        assert_eq!(state.focus, FocusPane::Gist);
+        assert_eq!(state.gist_index, 0);
+        assert!(matches!(out, KeyOutcome::PreviewDiff { .. }));
+    }
+
+    #[test]
+    fn click_in_pane_blank_focuses_without_selecting() {
+        let mut state = state_with_gists();
+        state.screen = Screen::List;
+        state.focus = FocusPane::Local;
+        state.gist_index = 0;
+        let hit = PaneHit {
+            rect: Rect::new(20, 0, 20, 4),
+            offset: 0,
+        };
+        let layout = MouseLayout {
+            gist: Some(hit),
+            ..Default::default()
+        };
+        // row 0 is the top border (no row there): clicking the gist pane's blank/border area
+        // switches focus to it but selects nothing.
+        let out = state.handle_mouse(MouseInput::Click { col: 25, row: 0 }, &layout);
+        assert_eq!(out, KeyOutcome::None);
+        assert_eq!(state.focus, FocusPane::Gist);
+        assert_eq!(state.gist_index, 0);
+    }
+
+    #[test]
+    fn scroll_down_clamps_at_list_end() {
+        // Only 1 item in local; scrolling down should clamp (no panic, no index change).
+        let mut state = state_with_local_paths(&["a.rs"]);
+        state.screen = Screen::List;
+        state.focus = FocusPane::Local;
+        state.local_index = 0;
+        state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+        assert_eq!(state.local_index, 0);
+    }
+
+    #[test]
+    fn semicolon_opens_menu_palette() {
+        let mut state = crate::tui::initial_state();
+        state.handle_key(KeyCode::Char(';'));
+        assert!(state.screen.is_palette());
+        assert_eq!(
+            state.palette().unwrap().mode,
+            crate::tui::palette::PaletteMode::Menu
+        );
+        assert_eq!(state.palette().unwrap().origin_screen, Screen::List);
+    }
+
+    #[test]
+    fn palette_global_openers_do_not_replace_the_active_palette() {
+        let mut state = crate::tui::initial_state();
+        state.open_palette_menu(None);
+        state.handle_key_with(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert!(state.screen.is_palette());
+        state.handle_key(KeyCode::Char(';'));
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn open_config_does_not_write_config_file() {
+        // Point config_path() at a throwaway XDG dir and assert the *real* path stays absent
+        // after open_config() — not an unrelated tempfile the app never uses.
+        let _guard = crate::config::tests::ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", dir.path());
+        let path = crate::config::config_path().unwrap();
+        assert_eq!(path, dir.path().join("gistui").join("config.toml"));
+        assert!(!path.exists());
+
+        let mut state = initial_state();
+        state.screen = Screen::List;
+        state.open_config();
+        assert!(state.screen.is_config());
+        // Opening alone must not create the file — persist only after a field change.
+        assert!(
+            !path.exists(),
+            "open_config must not create {}",
+            path.display()
+        );
+
+        match prev {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+    }
+
+    #[test]
+    fn config_c_key_opens_settings_from_list() {
+        let mut state = initial_state();
+        state.screen = Screen::List;
+        state.handle_key(KeyCode::Char('C'));
+        assert!(state.screen.is_config());
+        state.handle_key(KeyCode::Esc);
+        assert_eq!(state.screen, Screen::List);
+    }
+}

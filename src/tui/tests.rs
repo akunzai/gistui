@@ -1,7 +1,7 @@
 use super::*;
 
 /// Test helper: mutable HelpState when on Help (creates empty Help if needed).
-fn help_mut(state: &mut AppState) -> &mut HelpState {
+pub(super) fn help_mut(state: &mut AppState) -> &mut HelpState {
     if !state.screen.is_help() {
         state.screen = Screen::Help(Box::default());
     }
@@ -10,59 +10,38 @@ fn help_mut(state: &mut AppState) -> &mut HelpState {
         _ => unreachable!(),
     }
 }
-fn help_ref(state: &AppState) -> &HelpState {
+pub(super) fn help_ref(state: &AppState) -> &HelpState {
     state.help().expect("expected Screen::Help")
 }
-fn config_mut(state: &mut AppState) -> &mut ConfigState {
-    if !state.screen.is_config() {
-        state.screen = Screen::Config(Box::default());
-    }
-    state.config_mut().expect("expected Screen::Config")
-}
-fn revision_mut(state: &mut AppState) -> &mut RevisionState {
-    if !state.screen.is_revisions() {
-        state.screen = Screen::Revisions(Box::default());
-    }
-    state.revision_mut().expect("expected Screen::Revisions")
-}
-fn revision_ref(state: &AppState) -> &RevisionState {
+pub(super) fn revision_ref(state: &AppState) -> &RevisionState {
     state.revision().expect("expected Screen::Revisions")
 }
-fn pins_mut(state: &mut AppState) -> &mut PinsState {
+pub(super) fn pins_mut(state: &mut AppState) -> &mut PinsState {
     if !state.screen.is_pins() {
         state.screen = Screen::Pins(Box::default());
     }
     state.pins_mut().expect("expected Screen::Pins")
 }
-fn pins_ref(state: &AppState) -> &PinsState {
+pub(super) fn pins_ref(state: &AppState) -> &PinsState {
     state.pins().expect("expected Screen::Pins")
 }
-fn gists_mut(state: &mut AppState) -> &mut GistsManagerState {
+pub(super) fn gists_mut(state: &mut AppState) -> &mut GistsManagerState {
     if !state.screen.is_gists() {
         state.screen = Screen::Gists(Box::default());
     }
     state.gist_manager_mut().expect("expected Screen::Gists")
 }
-fn gists_ref(state: &AppState) -> &GistsManagerState {
-    state.gist_manager().expect("expected Screen::Gists")
-}
-fn detail_mut(state: &mut AppState) -> &mut DetailState {
+pub(super) fn detail_mut(state: &mut AppState) -> &mut DetailState {
     if !state.screen.is_gist_detail() {
         state.screen = Screen::GistDetail(Box::default());
     }
     state.detail_mut().expect("expected Screen::GistDetail")
 }
-fn detail_ref(state: &AppState) -> &DetailState {
-    state.detail().expect("expected Screen::GistDetail")
-}
-fn preview_ref(state: &AppState) -> &PreviewState {
-    state.preview().expect("expected Screen::Preview")
-}
 
 /// Open Confirm with the given action (keeps existing body text when already on Diff/Confirm).
 /// Mirrors production `enter_confirm`/`enter_confirm_from_diff`: a staged `pending_return`
 /// becomes the cancel path (via `AppState::enter`) when present, otherwise the live screen does.
-fn set_pending(state: &mut AppState, action: PendingAction) {
+pub(super) fn set_pending(state: &mut AppState, action: PendingAction) {
     if state.screen.is_confirm() {
         if let Some(c) = state.confirm_mut() {
             c.action = action;
@@ -76,13 +55,7 @@ fn set_pending(state: &mut AppState, action: PendingAction) {
     state.enter_confirm(action, String::new());
 }
 
-fn clear_pending(state: &mut AppState) {
-    if state.screen.is_confirm() {
-        state.screen = Screen::List;
-    }
-}
-
-fn set_diff_body(state: &mut AppState, text: impl Into<String>) {
+pub(super) fn set_diff_body(state: &mut AppState, text: impl Into<String>) {
     let text = text.into();
     if let Some(t) = state.diff_body_text_mut() {
         *t = text;
@@ -95,7 +68,7 @@ fn set_diff_body(state: &mut AppState, text: impl Into<String>) {
     }));
 }
 
-fn set_diff_scroll(state: &mut AppState, scroll: u16) {
+pub(super) fn set_diff_scroll(state: &mut AppState, scroll: u16) {
     match &mut state.screen {
         Screen::Diff(d) => d.scroll = scroll,
         Screen::Confirm(c) => c.scroll = scroll,
@@ -108,25 +81,12 @@ fn set_diff_scroll(state: &mut AppState, scroll: u16) {
     }
 }
 
-fn set_diff_hscroll(state: &mut AppState, hscroll: u16) {
-    match &mut state.screen {
-        Screen::Diff(d) => d.hscroll = hscroll,
-        Screen::Confirm(c) => c.hscroll = hscroll,
-        _ => {
-            state.screen = Screen::Diff(Box::new(DiffState {
-                hscroll,
-                ..DiffState::default()
-            }));
-        }
-    }
-}
-
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use std::path::PathBuf;
 
-fn state_with_gists() -> AppState {
+pub(super) fn state_with_gists() -> AppState {
     let mut state = initial_state();
     state.gists = vec![
         GistFile {
@@ -166,30 +126,7 @@ fn state_with_gists() -> AppState {
     state
 }
 
-fn state_with_many_files(n: usize) -> AppState {
-    let mut state = initial_state();
-    state.gists = (0..n)
-        .map(|i| GistFile {
-            gist_id: "g1".into(),
-            description: "demo".into(),
-            filename: format!("f{i}.txt"),
-            public: false,
-            updated_at: "2026-06-10T00:00:00Z".into(),
-            created_at: "2026-06-01T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            node_id: None,
-        })
-        .collect();
-    state
-}
-
-fn state_with_local_paths(paths: &[&str]) -> AppState {
+pub(super) fn state_with_local_paths(paths: &[&str]) -> AppState {
     let mut state = initial_state();
     state.cwd = PathBuf::from("/cwd");
     state.locals = paths
@@ -240,7 +177,7 @@ fn local_down_clamps_to_filtered_count() {
     assert_eq!(state.local_index, 0); // clamped: only one visible row
 }
 
-fn list_state_with_matches() -> AppState {
+pub(super) fn list_state_with_matches() -> AppState {
     let mut state = initial_state();
     state.locals = vec![
         LocalCandidate {
@@ -368,109 +305,6 @@ fn moving_driver_pane_resets_ranked_pane() {
 }
 
 #[test]
-fn enter_on_gist_opens_detail() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Gists(Box::default());
-    let outcome = state.handle_key(KeyCode::Enter);
-    assert!(matches!(outcome, KeyOutcome::OpenGistDetail { .. }));
-}
-
-#[test]
-fn detail_focus_and_cursor_default_to_files_and_zero() {
-    let mut state = initial_state();
-    state.screen = Screen::GistDetail(Box::default());
-    assert_eq!(detail_ref(&state).focus, DetailFocus::Files);
-    assert_eq!(detail_ref(&state).file_cursor, 0);
-}
-
-#[test]
-fn detail_tab_toggles_focus() {
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    assert_eq!(detail_ref(&state).focus, DetailFocus::Files);
-    let outcome = state.handle_key(KeyCode::Tab);
-    assert!(matches!(outcome, KeyOutcome::FetchComments { .. }));
-    assert_eq!(detail_ref(&state).focus, DetailFocus::Comments);
-    let outcome = state.handle_key(KeyCode::Tab);
-    assert!(matches!(outcome, KeyOutcome::None));
-    assert_eq!(detail_ref(&state).focus, DetailFocus::Files);
-}
-
-#[test]
-fn detail_tab_to_comments_skips_fetch_when_already_loaded() {
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    detail_mut(&mut state).comments = Some(Vec::new());
-    let outcome = state.handle_key(KeyCode::Tab);
-    assert!(matches!(outcome, KeyOutcome::None));
-    assert_eq!(detail_ref(&state).focus, DetailFocus::Comments);
-}
-
-#[test]
-fn detail_files_focus_arrows_move_cursor_and_clamp() {
-    let mut state = state_with_gists(); // g1 has 2 files: a.txt, b.txt
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    detail_mut(&mut state).focus = DetailFocus::Files;
-
-    state.handle_key(KeyCode::Up); // already at 0, clamps
-    assert_eq!(detail_ref(&state).file_cursor, 0);
-    state.handle_key(KeyCode::Down);
-    assert_eq!(detail_ref(&state).file_cursor, 1);
-    state.handle_key(KeyCode::Down); // only 2 files, clamps at index 1
-    assert_eq!(detail_ref(&state).file_cursor, 1);
-    state.handle_key(KeyCode::PageUp); // jumps to 0
-    assert_eq!(detail_ref(&state).file_cursor, 0);
-    state.handle_key(KeyCode::PageDown); // +10 clamps to last (1)
-    assert_eq!(detail_ref(&state).file_cursor, 1);
-    // Comment scroll is untouched while files-focused.
-    assert_eq!(detail_ref(&state).scroll, 0);
-}
-
-#[test]
-fn detail_comments_focus_arrows_still_scroll_comments() {
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).focus = DetailFocus::Comments;
-    state.handle_key(KeyCode::Down);
-    assert_eq!(detail_ref(&state).scroll, 1);
-    assert_eq!(detail_ref(&state).file_cursor, 0); // cursor untouched
-}
-
-#[test]
-fn detail_enter_previews_cursor_file_including_tenth() {
-    let mut state = state_with_many_files(12);
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    detail_mut(&mut state).focus = DetailFocus::Files;
-    detail_mut(&mut state).file_cursor = 9; // the 10th file — unreachable via 1-9
-    let outcome = state.handle_key(KeyCode::Enter);
-    assert!(matches!(
-        outcome,
-        KeyOutcome::PreviewContent {
-            file: ref f,
-            ..
-        } if f.gist_id == "g1" && f.filename == "f9.txt"
-    ));
-    assert!(state
-        .pending_return
-        .as_ref()
-        .is_some_and(Screen::is_gist_detail));
-}
-
-#[test]
-fn detail_enter_in_comments_focus_is_noop() {
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    detail_mut(&mut state).focus = DetailFocus::Comments;
-    let outcome = state.handle_key(KeyCode::Enter);
-    assert!(matches!(outcome, KeyOutcome::None));
-}
-
-#[test]
 fn detail_q_returns_to_gists() {
     let mut state = state_with_gists();
     // Mirrors what `enter()` does when GistDetail is opened from Gists (OpenGistDetail).
@@ -478,111 +312,6 @@ fn detail_q_returns_to_gists() {
     state.screen = Screen::GistDetail(Box::default());
     state.handle_key(KeyCode::Char('q'));
     assert!(state.screen.is_gists());
-}
-
-#[test]
-fn detail_scroll_saturates_at_zero() {
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).focus = DetailFocus::Comments;
-    detail_mut(&mut state).scroll = 0;
-    state.handle_key(KeyCode::Up);
-    assert_eq!(detail_ref(&state).scroll, 0);
-    state.handle_key(KeyCode::Down);
-    assert_eq!(detail_ref(&state).scroll, 1);
-}
-
-#[test]
-fn detail_c_triggers_compaction_and_records_origin() {
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    let outcome = state.handle_key(KeyCode::Char('c'));
-    assert!(matches!(outcome, KeyOutcome::CompactGist { .. }));
-    assert!(state
-        .pending_return
-        .as_ref()
-        .is_some_and(Screen::is_gist_detail));
-}
-
-#[test]
-fn detail_number_key_requests_file_preview() {
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    let outcome = state.handle_key(KeyCode::Char('1'));
-    assert!(matches!(
-        outcome,
-        KeyOutcome::PreviewContent {
-            file: ref f,
-            ..
-        } if f.gist_id == "g1" && f.filename == "a.txt"
-    ));
-    assert!(state
-        .pending_return
-        .as_ref()
-        .is_some_and(Screen::is_gist_detail));
-}
-
-#[test]
-fn detail_number_key_out_of_range_is_ignored() {
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    // Only two files exist; pressing 5 must do nothing (no fetch requested).
-    let outcome = state.handle_key(KeyCode::Char('5'));
-    assert!(matches!(outcome, KeyOutcome::None));
-}
-
-#[test]
-fn preview_w_toggles_line_wrapping() {
-    let mut state = initial_state();
-    state.screen = Screen::Preview(Box::default());
-    assert!(!state.preview_wrap);
-    state.handle_key(KeyCode::Char('w'));
-    assert!(state.preview_wrap);
-    state.handle_key(KeyCode::Char('w'));
-    assert!(!state.preview_wrap);
-}
-
-#[test]
-fn diff_w_toggles_wrap_and_resets_hscroll() {
-    let mut state = initial_state();
-    state.screen = Screen::Diff(Box::default());
-    set_diff_hscroll(&mut state, 5);
-    assert!(!state.diff_wrap);
-    state.handle_key(KeyCode::Char('w'));
-    assert!(state.diff_wrap);
-    // Horizontal offset is meaningless once wrapping, so it resets.
-    assert_eq!(state.diff_hscroll(), 0);
-    state.handle_key(KeyCode::Char('w'));
-    assert!(!state.diff_wrap);
-}
-
-#[test]
-fn diff_footer_reflects_wrap_toggle() {
-    let mut state = initial_state();
-    state.screen = Screen::Diff(Box::default());
-    assert!(diff_footer(&state).contains("w wrap [off]"));
-    state.diff_wrap = true;
-    let footer = diff_footer(&state);
-    assert!(footer.contains("w wrap [on]"));
-    // The horizontal-scroll arrows are dropped from the hint when wrapping.
-    assert!(!footer.contains("←→"));
-}
-
-#[test]
-fn detail_x_requests_gist_delete_confirm() {
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    let outcome = state.handle_key(KeyCode::Char('X'));
-    assert!(matches!(outcome, KeyOutcome::None));
-    assert!(state.screen.is_confirm());
-    assert!(matches!(
-        state.pending_action(),
-        Some(PendingAction::Delete { gist_id, .. }) if gist_id == "g1"
-    ));
 }
 
 #[test]
@@ -612,24 +341,6 @@ fn file_list_scroll_keeps_cursor_visible() {
 }
 
 #[test]
-fn pins_key_clears_lingering_status_for_one_shot_display() {
-    let mut state = initial_state();
-    state.screen = Screen::Pins(Box::default());
-    state.status = Some("already in sync".into());
-    state.handle_key(KeyCode::Up); // any key
-    assert_eq!(state.status, None);
-}
-
-#[test]
-fn preview_key_clears_lingering_status_for_one_shot_display() {
-    let mut state = initial_state();
-    state.screen = Screen::Preview(Box::default());
-    state.status = Some("fetch failed: boom".into());
-    state.handle_key(KeyCode::Down); // any key
-    assert_eq!(state.status, None);
-}
-
-#[test]
 fn footer_with_status_prefers_status_else_colourised_hints() {
     // A one-shot status message wins and is shown plain (not key-colourised).
     let (msg, colored) = footer_with_status(Some("already in sync"), "↑↓ move · q back");
@@ -639,17 +350,6 @@ fn footer_with_status_prefers_status_else_colourised_hints() {
     let (hint, colored) = footer_with_status(None, "↑↓ move · q back");
     assert_eq!(hint, "↑↓ move · q back");
     assert!(colored);
-}
-
-#[test]
-fn star_key_in_detail_returns_toggle_intent() {
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    assert!(matches!(
-        state.handle_key(KeyCode::Char('*')),
-        KeyOutcome::ToggleGistStar { .. }
-    ));
 }
 
 #[test]
@@ -675,25 +375,6 @@ fn spinner_glyph_cycles_through_frames_and_wraps() {
     // Every position in one revolution yields a distinct glyph.
     let frames: std::collections::HashSet<_> = (0..10).map(spinner_glyph).collect();
     assert_eq!(frames.len(), 10);
-}
-
-#[test]
-fn context_gist_id_uses_detail_id_on_detail_screen() {
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    assert_eq!(state.context_gist_id().as_deref(), Some("g1"));
-}
-
-#[test]
-fn context_gist_id_uses_group_cursor_on_gists_screen() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Gists(Box::default());
-    gists_mut(&mut state).cursor.index = 0;
-    assert_eq!(
-        state.context_gist_id(),
-        state.selected_group().map(|g| g.id)
-    );
 }
 
 #[test]
@@ -1084,7 +765,7 @@ fn gist_type_filter_limits_ranked_gists() {
     assert_eq!(only_secret[0].file.gist_id, "sec");
 }
 
-fn state_with_two_gists() -> AppState {
+pub(super) fn state_with_two_gists() -> AppState {
     let mut state = initial_state();
     state.gists = vec![
         GistFile {
@@ -1226,58 +907,6 @@ fn space_without_gist_is_noop() {
 }
 
 #[test]
-fn esc_in_preview_returns_to_list_and_clears() {
-    let mut state = initial_state();
-    state.enter_preview(
-        "Preview: a / x".into(),
-        "raw content".into(),
-        Some(("a".into(), "x".into())),
-    );
-    assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::List);
-    assert!(state.preview().is_none());
-}
-
-#[test]
-fn preview_scrolls_with_arrows() {
-    let mut state = initial_state();
-    state.enter_preview("t".into(), "l1\nl2\nl3".into(), None);
-    state.handle_key(KeyCode::Down);
-    assert_eq!(preview_ref(&state).scroll, 1);
-    state.handle_key(KeyCode::Up);
-    assert_eq!(preview_ref(&state).scroll, 0);
-}
-
-#[test]
-fn page_keys_jump_by_ten_clamped_to_bounds() {
-    let mut state = initial_state();
-    // 30 lines → bottom is line 29 (count - 1).
-    let text = (0..30)
-        .map(|i| format!("l{i}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    state.enter_preview("t".into(), text, None);
-    state.handle_key(KeyCode::PageDown);
-    assert_eq!(preview_ref(&state).scroll, 10);
-    // A second page-down would reach 20; a third clamps at the 29-line bottom, not 30.
-    state.handle_key(KeyCode::PageDown);
-    state.handle_key(KeyCode::PageDown);
-    assert_eq!(preview_ref(&state).scroll, 29);
-    state.handle_key(KeyCode::PageUp);
-    assert_eq!(preview_ref(&state).scroll, 19);
-}
-
-#[test]
-fn page_up_saturates_at_top_in_diff() {
-    let mut state = initial_state();
-    state.screen = Screen::Diff(Box::default());
-    set_diff_body(&mut state, "a\nb\nc");
-    set_diff_scroll(&mut state, 1);
-    state.handle_key(KeyCode::PageUp);
-    assert_eq!(state.diff_scroll(), 0);
-}
-
-#[test]
 fn question_opens_contextual_help_from_list() {
     let mut state = initial_state();
     state.handle_key(KeyCode::Char('?'));
@@ -1305,27 +934,6 @@ fn q_in_help_closes_to_list() {
     state.screen = Screen::Help(Box::default());
     assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
     assert_eq!(state.screen, Screen::List);
-}
-
-#[test]
-fn diff_context_toggle_flips_effective_radius() {
-    let mut state = initial_state();
-    state.diff_context = 3;
-    assert_eq!(state.effective_diff_context(), Some(3));
-
-    // Pressing `c` in the diff view flips to full view and resets the scroll.
-    state.screen = Screen::Diff(Box::default());
-    set_diff_scroll(&mut state, 12);
-    let outcome = state.handle_key(KeyCode::Char('c'));
-    assert_eq!(outcome, KeyOutcome::PersistDiffContext);
-    assert!(state.diff_show_full);
-    assert_eq!(state.diff_scroll(), 0);
-    assert_eq!(state.effective_diff_context(), None);
-
-    // Pressing it again returns to the configured radius.
-    state.handle_key(KeyCode::Char('c'));
-    assert!(!state.diff_show_full);
-    assert_eq!(state.effective_diff_context(), Some(3));
 }
 
 #[test]
@@ -2140,24 +1748,6 @@ fn enter_diff_sets_diff_screen() {
 }
 
 #[test]
-fn back_to_list_clears_preview() {
-    let mut state = initial_state();
-    state.enter_diff(
-        "d".into(),
-        "r".into(),
-        PathBuf::from("/tmp/x"),
-        PathBuf::from("/tmp/x"),
-    );
-    state.back_to_list();
-    assert_eq!(state.screen, Screen::List);
-    assert!(!state.diff_previewed());
-    assert!(state.diff_body_text().is_empty());
-    assert!(state.preview_remote().is_empty());
-    assert_eq!(state.preview_local(), PathBuf::new());
-    assert_eq!(state.download_target(), PathBuf::new());
-}
-
-#[test]
 fn enter_in_gist_focus_with_selection_returns_preview() {
     let mut state = state_with_selection();
     assert!(matches!(
@@ -2251,25 +1841,6 @@ fn diff_scroll_respects_bounds() {
 }
 
 #[test]
-fn identical_diff_disables_download_and_upload() {
-    let mut state = initial_state();
-    state.enter_diff(
-        "d".into(),
-        "r".into(),
-        PathBuf::from("/tmp/x"),
-        PathBuf::from("/tmp/x"),
-    );
-    if let Some(d) = state.diff_mut() {
-        d.identical = true;
-    }
-    assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
-    assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::None);
-    // Scrolling and leaving still work.
-    assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::List);
-}
-
-#[test]
 fn diff_hscroll_respects_bounds() {
     let mut state = initial_state();
     // Longest line is "abcd" (4 chars) -> max offset 3.
@@ -2288,20 +1859,6 @@ fn diff_hscroll_respects_bounds() {
     assert_eq!(state.diff_hscroll(), 3);
     state.handle_key(KeyCode::Left);
     assert_eq!(state.diff_hscroll(), 2);
-}
-
-#[test]
-fn esc_in_diff_returns_to_list() {
-    let mut state = initial_state();
-    state.enter_diff(
-        "d".into(),
-        "r".into(),
-        PathBuf::from("/tmp/x"),
-        PathBuf::from("/tmp/x"),
-    );
-    assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::List);
-    assert!(!state.diff_previewed());
 }
 
 #[test]
@@ -2370,19 +1927,6 @@ fn confirm_n_returns_to_diff() {
     set_pending(&mut state, PendingAction::Download);
     assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
     assert!(state.screen.is_diff());
-}
-
-#[test]
-fn q_in_diff_returns_to_list() {
-    let mut state = initial_state();
-    state.enter_diff(
-        "d".into(),
-        "r".into(),
-        PathBuf::from("/tmp/x"),
-        PathBuf::from("/tmp/x"),
-    );
-    assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::List);
 }
 
 #[test]
@@ -2556,23 +2100,6 @@ fn u_without_selection_is_noop() {
 }
 
 #[test]
-fn o_in_gist_view_opens_browser() {
-    let mut state = state_with_two_gists();
-    state.screen = Screen::Gists(Box::default());
-    assert!(matches!(
-        state.handle_key(KeyCode::Char('o')),
-        KeyOutcome::OpenBrowser { .. }
-    ));
-}
-
-#[test]
-fn o_on_main_list_is_noop_now_that_browser_moved_to_gist_view() {
-    let mut state = state_with_two_gists();
-    assert_eq!(state.handle_key(KeyCode::Char('o')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::List);
-}
-
-#[test]
 fn y_copies_gist_url_on_list_gists_and_detail() {
     let mut list = state_with_two_gists();
     assert!(matches!(
@@ -2597,20 +2124,6 @@ fn y_copies_gist_url_on_list_gists_and_detail() {
 }
 
 #[test]
-fn preview_y_copies_url_and_capital_y_copies_content() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Preview(Box::default());
-    assert!(matches!(
-        state.handle_key(KeyCode::Char('y')),
-        KeyOutcome::CopyGistUrl { .. }
-    ));
-    assert_eq!(
-        state.handle_key(KeyCode::Char('Y')),
-        KeyOutcome::CopyPreviewContent
-    );
-}
-
-#[test]
 fn c_in_detail_requests_compaction_not_gist_manager() {
     let mut state = state_with_two_gists();
     state.screen = Screen::Gists(Box::default());
@@ -2624,40 +2137,6 @@ fn c_in_detail_requests_compaction_not_gist_manager() {
     // `c` on the main list is not a compaction trigger.
     let mut list = state_with_two_gists();
     assert_eq!(list.handle_key(KeyCode::Char('c')), KeyOutcome::None);
-}
-
-#[test]
-fn compact_confirm_y_executes_and_n_returns_to_gist_manager() {
-    let mut state = state_with_two_gists();
-    // CompactAnalyze parks the restore target before Confirm opens (staged pending_return).
-    state.pending_return = Some(Screen::Gists(Box::default()));
-    set_pending(
-        &mut state,
-        PendingAction::CompactGist {
-            gist_id: "a".into(),
-            label: "My Ghostty config".into(),
-            count: 3,
-        },
-    );
-    assert_eq!(
-        state.handle_key(KeyCode::Char('y')),
-        KeyOutcome::ExecuteCompactGist
-    );
-
-    // Re-open confirm for the cancel path (y does not leave Confirm until IO runs).
-    state.pending_return = Some(Screen::Gists(Box::default()));
-    set_pending(
-        &mut state,
-        PendingAction::CompactGist {
-            gist_id: "a".into(),
-            label: "My Ghostty config".into(),
-            count: 3,
-        },
-    );
-    // Cancelling drops the pending action and lands back on the parked restore target.
-    state.handle_key(KeyCode::Char('n'));
-    assert!(state.screen.is_gists());
-    assert!(state.pending_action().is_none());
 }
 
 #[test]
@@ -2678,38 +2157,6 @@ fn e_edits_local_with_file_selected() {
 fn e_without_local_is_noop() {
     let mut state = initial_state();
     assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::None);
-}
-
-#[test]
-fn u_in_diff_screen_returns_upload_intent() {
-    let mut state = initial_state();
-    state.locals = vec![LocalCandidate {
-        path: PathBuf::from("/tmp/config"),
-        pinned: false,
-        modified: None,
-    }];
-    state.gists = vec![GistFile {
-        gist_id: "a".into(),
-        description: "x".into(),
-        filename: "settings.json".into(),
-        public: false,
-        updated_at: "x".into(),
-        created_at: "x".into(),
-        owner_login: String::new(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        node_id: None,
-    }];
-    state.screen = Screen::Diff(Box::default());
-    // The gist has no "config" file -> case B -> add directly.
-    assert!(matches!(
-        state.handle_key(KeyCode::Char('u')),
-        KeyOutcome::UploadAdd { .. }
-    ));
 }
 
 #[test]
@@ -2775,50 +2222,6 @@ fn confirm_upload_e_is_blocked_while_watching() {
 
     assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::None);
     assert_eq!(state.status.as_deref(), Some("editor already open"));
-}
-
-#[test]
-fn confirm_upload_n_cancels_and_resets_watching() {
-    let mut state = initial_state();
-    set_pending(
-        &mut state,
-        PendingAction::Upload {
-            gist_id: "a".into(),
-            filename: "settings.json".into(),
-            local_path: PathBuf::from("/tmp/settings.json"),
-        },
-    );
-    state.upload.watching = true;
-
-    assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
-    assert!(state.pending_action().is_none());
-    assert_eq!(state.screen, Screen::List);
-    assert!(
-        !state.upload.watching,
-        "cancelling must reset watching so a future upload-edit session isn't blocked forever \
-         by a stale flag (the background thread is not force-killed and cleans up on its own)"
-    );
-}
-
-#[test]
-fn confirm_upload_n_cancels_to_diff_return_screen() {
-    let mut state = initial_state();
-    state.pending_return = Some(Screen::Pins(Box::default()));
-    set_pending(
-        &mut state,
-        PendingAction::Upload {
-            gist_id: "a".into(),
-            filename: "settings.json".into(),
-            local_path: PathBuf::from("/tmp/settings.json"),
-        },
-    );
-
-    assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
-    assert!(state.pending_action().is_none());
-    assert!(
-        state.screen.is_pins(),
-        "cancelling an upload initiated from Pins must return to Pins, not always List"
-    );
 }
 
 #[test]
@@ -2971,143 +2374,6 @@ fn content_to_upload_prefers_edited_content_for_json() {
     assert_eq!(state.content_to_upload(), r#"{"token":"REDACTED"}"#);
 }
 
-fn upload_pending(gist_id: &str, filename: &str) -> PendingAction {
-    PendingAction::Upload {
-        gist_id: gist_id.into(),
-        filename: filename.into(),
-        local_path: PathBuf::from(format!("/tmp/{filename}")),
-    }
-}
-
-#[test]
-fn apply_upload_edit_event_content_changed_updates_diff_live() {
-    let mut state = initial_state();
-    state.screen = Screen::Confirm(Box::default());
-    set_pending(&mut state, upload_pending("a", "notes.txt"));
-    state.upload.watching = true;
-    state.upload.remote_content = Some("old\n".into());
-    state.upload.local_label = Some("local".into());
-    state.upload.gist_label = Some("gist".into());
-
-    state.apply_upload_edit_event(super::bg::UploadEditWatchEvent::ContentChanged {
-        gist_id: "a".into(),
-        filename: "notes.txt".into(),
-        content: "new\n".into(),
-    });
-
-    assert_eq!(state.upload.edited_content.as_deref(), Some("new\n"));
-    assert!(
-        state.upload.watching,
-        "still watching — editor hasn't closed yet"
-    );
-    assert!(state.diff_body_text().contains("new"));
-}
-
-#[test]
-fn apply_upload_edit_event_editor_closed_stops_watching() {
-    let mut state = initial_state();
-    state.screen = Screen::Confirm(Box::default());
-    set_pending(&mut state, upload_pending("a", "notes.txt"));
-    state.upload.watching = true;
-
-    state.apply_upload_edit_event(super::bg::UploadEditWatchEvent::EditorClosed {
-        gist_id: "a".into(),
-        filename: "notes.txt".into(),
-        content: "final\n".into(),
-    });
-
-    assert_eq!(state.upload.edited_content.as_deref(), Some("final\n"));
-    assert!(!state.upload.watching);
-}
-
-#[test]
-fn apply_upload_edit_event_read_error_stops_watching_and_sets_status() {
-    let mut state = initial_state();
-    state.screen = Screen::Confirm(Box::default());
-    set_pending(&mut state, upload_pending("a", "notes.txt"));
-    state.upload.watching = true;
-
-    state.apply_upload_edit_event(super::bg::UploadEditWatchEvent::ReadError {
-        gist_id: "a".into(),
-        filename: "notes.txt".into(),
-        message: "permission denied".into(),
-    });
-
-    assert!(!state.upload.watching);
-    assert_eq!(
-        state.status.as_deref(),
-        Some("failed to read edited file: permission denied")
-    );
-}
-
-#[test]
-fn apply_upload_edit_event_discards_when_context_is_stale() {
-    let mut state = initial_state();
-    // The user already left Confirm (e.g. cancelled) before this late event arrived.
-    state.screen = Screen::List;
-    clear_pending(&mut state);
-    state.upload.watching = false;
-    state.upload.edited_content = None;
-
-    state.apply_upload_edit_event(super::bg::UploadEditWatchEvent::ContentChanged {
-        gist_id: "a".into(),
-        filename: "notes.txt".into(),
-        content: "should be ignored".into(),
-    });
-
-    assert_eq!(state.upload.edited_content, None);
-}
-
-#[test]
-fn apply_upload_edit_event_discards_when_a_different_upload_is_now_pending() {
-    let mut state = initial_state();
-    // A new upload edit session started before the OLD one's final event arrived.
-    state.screen = Screen::Confirm(Box::default());
-    set_pending(&mut state, upload_pending("a", "other.txt"));
-    state.upload.watching = true;
-    state.upload.edited_content = Some("current session content".into());
-
-    state.apply_upload_edit_event(super::bg::UploadEditWatchEvent::EditorClosed {
-        gist_id: "a".into(),
-        filename: "notes.txt".into(), // stale session's filename, not "other.txt"
-        content: "stale content".into(),
-    });
-
-    assert_eq!(
-        state.upload.edited_content.as_deref(),
-        Some("current session content")
-    );
-    assert!(
-        state.upload.watching,
-        "the current session's watch must not be cancelled"
-    );
-}
-
-#[test]
-fn apply_upload_edit_event_discards_stale_event_after_cancel_reentry_same_identity() {
-    let mut state = initial_state();
-    // Simulates: user cancelled a GUI-editor watch session (n resets watching to false but
-    // does NOT kill the background thread), then re-entered upload for the SAME gist/file
-    // without pressing `e` again. An event from the abandoned first session's thread must
-    // not silently overwrite this new, non-watching session's content.
-    state.screen = Screen::Confirm(Box::default());
-    set_pending(&mut state, upload_pending("a", "notes.txt"));
-    state.upload.watching = false; // never re-entered edit mode this session
-    state.upload.edited_content = None;
-
-    state.apply_upload_edit_event(super::bg::UploadEditWatchEvent::ContentChanged {
-        gist_id: "a".into(),
-        filename: "notes.txt".into(),
-        content: "leaked from abandoned session".into(),
-    });
-
-    assert_eq!(
-        state.upload.edited_content, None,
-        "an event from an abandoned (cancelled, still-running) watch session must not \
-         leak into a new, non-watching session with the same gist/file identity"
-    );
-}
-
 #[test]
 fn n_opens_create_confirm() {
     let mut state = initial_state();
@@ -3124,21 +2390,6 @@ fn n_opens_create_confirm() {
             local_path: PathBuf::from("/tmp/config.toml")
         })
     );
-}
-
-#[test]
-fn n_without_local_is_noop() {
-    let mut state = initial_state();
-    assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::List);
-}
-
-#[test]
-fn x_without_gist_is_noop() {
-    let mut state = initial_state();
-    state.focus = FocusPane::Gist;
-    assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::List);
 }
 
 #[test]
@@ -3193,33 +2444,6 @@ fn x_removes_selected_file_from_a_multifile_gist() {
 }
 
 #[test]
-fn x_on_a_gists_only_file_is_blocked() {
-    let mut state = initial_state();
-    state.focus = FocusPane::Gist;
-    state.gists = vec![GistFile {
-        gist_id: "abc123".into(),
-        description: String::new(),
-        filename: "notes.md".into(),
-        public: false,
-        updated_at: "2026-01-01T00:00:00Z".into(),
-        created_at: "2026-01-01T00:00:00Z".into(),
-        owner_login: String::new(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        node_id: None,
-    }];
-    // Removing the only file would leave a fileless gist, which GitHub forbids.
-    assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::List);
-    assert!(state.pending_action().is_none());
-    assert!(state.status.as_deref().unwrap().contains("only file"));
-}
-
-#[test]
 fn remove_file_confirm_y_returns_execute_remove_file() {
     let mut state = initial_state();
     set_pending(
@@ -3253,57 +2477,6 @@ fn delete_confirm_y_returns_execute_delete() {
 }
 
 #[test]
-fn delete_confirm_n_returns_to_list() {
-    let mut state = initial_state();
-    set_pending(
-        &mut state,
-        PendingAction::Delete {
-            gist_id: "abc123".into(),
-            label: "my notes".into(),
-        },
-    );
-    assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::List);
-    assert!(state.pending_action().is_none());
-}
-
-#[test]
-fn g_opens_gist_view_landing_on_the_selected_files_gist() {
-    let mut state = state_with_two_gists();
-    // Select the second gist's row in the main (file) list, then jump to the
-    // gist-level view; it should land on that same gist.
-    state.gist_index = 1;
-    assert_eq!(state.handle_key(KeyCode::Char('g')), KeyOutcome::None);
-    assert!(state.screen.is_gists());
-    assert_eq!(gists_ref(&state).cursor.index, 1);
-    assert_eq!(state.selected_group().unwrap().id, "b");
-}
-
-#[test]
-fn g_with_no_gists_is_blocked() {
-    let mut state = initial_state();
-    assert_eq!(state.handle_key(KeyCode::Char('g')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::List);
-}
-
-#[test]
-fn detail_e_edits_description_with_prefill_and_enter_applies() {
-    let mut state = state_with_two_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("a".into());
-    state.handle_key(KeyCode::Char('e'));
-    assert!(state.editing_description);
-    // Prefilled with the current description.
-    assert_eq!(state.description_input, "My Ghostty config");
-    state.handle_key(KeyCode::Char('!'));
-    assert_eq!(state.description_input, "My Ghostty config!");
-    assert!(matches!(
-        state.handle_key(KeyCode::Enter),
-        KeyOutcome::ApplyDescription { .. }
-    ));
-}
-
-#[test]
 fn input_line_reverses_the_char_under_the_cursor() {
     let mut input = TextInput::from("abc");
     input.left(); // ab|c → cursor on 'c'
@@ -3334,27 +2507,6 @@ fn input_line_cursor_at_end_reverses_trailing_space() {
 }
 
 #[test]
-fn detail_description_edits_mid_string_with_cursor_keys() {
-    let mut state = state_with_two_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("a".into());
-    state.handle_key(KeyCode::Char('e'));
-    assert_eq!(state.description_input, "My Ghostty config");
-    // Jump to the start, step right past "My", and insert without retyping the rest.
-    state.handle_key(KeyCode::Home);
-    state.handle_key(KeyCode::Right);
-    state.handle_key(KeyCode::Right);
-    state.handle_key(KeyCode::Char(' '));
-    state.handle_key(KeyCode::Char('o'));
-    state.handle_key(KeyCode::Char('w'));
-    state.handle_key(KeyCode::Char('n'));
-    assert_eq!(state.description_input, "My own Ghostty config");
-    // Delete removes the char at the cursor (the space before "Ghostty").
-    state.handle_key(KeyCode::Delete);
-    assert_eq!(state.description_input, "My ownGhostty config");
-}
-
-#[test]
 fn create_description_edits_mid_string_with_cursor_keys() {
     let mut state = initial_state();
     set_pending(
@@ -3378,146 +2530,11 @@ fn create_description_edits_mid_string_with_cursor_keys() {
 }
 
 #[test]
-fn detail_esc_cancels_description_edit() {
-    let mut state = state_with_two_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("a".into());
-    state.handle_key(KeyCode::Char('e'));
-    assert!(state.editing_description);
-    state.handle_key(KeyCode::Esc);
-    assert!(!state.editing_description);
-    assert!(state.description_input.is_empty());
-}
-
-#[test]
-fn detail_x_stages_whole_gist_delete() {
-    let mut state = state_with_two_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("b".into());
-    assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
-    assert!(state.screen.is_confirm());
-    assert_eq!(
-        state.pending_action().cloned(),
-        Some(PendingAction::Delete {
-            gist_id: "b".into(),
-            label: "SSH config".into(),
-        })
-    );
-}
-
-#[test]
 fn gist_view_q_returns_to_list() {
     let mut state = state_with_two_gists();
     state.screen = Screen::Gists(Box::default());
     state.handle_key(KeyCode::Char('q'));
     assert_eq!(state.screen, Screen::List);
-}
-
-#[test]
-fn gist_view_v_cycles_visibility_filter() {
-    // state_with_two_gists: gist "a" is public, gist "b" is secret.
-    let mut state = state_with_two_gists();
-    state.screen = Screen::Gists(Box::default());
-    assert_eq!(state.visible_gist_groups().len(), 2);
-
-    state.handle_key(KeyCode::Char('v')); // -> public
-    let vis = state.visible_gist_groups();
-    assert_eq!(vis.len(), 1);
-    assert_eq!(vis[0].id, "a");
-
-    state.handle_key(KeyCode::Char('v')); // -> secret
-    let vis = state.visible_gist_groups();
-    assert_eq!(vis.len(), 1);
-    assert_eq!(vis[0].id, "b");
-
-    state.handle_key(KeyCode::Char('v')); // -> starred (empty source)
-    assert_eq!(state.visible_gist_groups().len(), 0);
-
-    state.handle_key(KeyCode::Char('v')); // -> forked (none here)
-    assert_eq!(state.visible_gist_groups().len(), 0);
-
-    state.handle_key(KeyCode::Char('v')); // -> all
-    assert_eq!(state.visible_gist_groups().len(), 2);
-}
-
-#[test]
-fn gist_view_filter_narrows_then_esc_clears() {
-    let mut state = state_with_two_gists();
-    state.screen = Screen::Gists(Box::default());
-    state.handle_key(KeyCode::Char('/'));
-    assert!(gists_ref(&state).filtering);
-    for c in "ssh".chars() {
-        state.handle_key(KeyCode::Char(c));
-    }
-    let vis = state.visible_gist_groups();
-    assert_eq!(vis.len(), 1);
-    assert_eq!(vis[0].id, "b"); // "SSH config"
-
-    state.handle_key(KeyCode::Esc);
-    assert!(!gists_ref(&state).filtering);
-    assert!(gists_ref(&state).filter_query.is_empty());
-    assert_eq!(state.visible_gist_groups().len(), 2);
-}
-
-#[test]
-fn gist_view_s_cycles_sort_updated_then_created() {
-    let mut state = initial_state();
-    state.screen = Screen::Gists(Box::default());
-    state.gists = vec![
-        GistFile {
-            gist_id: "old-upd".into(),
-            description: "x".into(),
-            filename: "f".into(),
-            public: false,
-            updated_at: "2026-01-01T00:00:00Z".into(),
-            created_at: "2026-12-01T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            node_id: None,
-        },
-        GistFile {
-            gist_id: "new-upd".into(),
-            description: "y".into(),
-            filename: "g".into(),
-            public: false,
-            updated_at: "2026-06-01T00:00:00Z".into(),
-            created_at: "2026-02-01T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            node_id: None,
-        },
-    ];
-    // Default: sort by updated (newest first).
-    assert_eq!(gists_ref(&state).sort, GistGroupSort::Updated);
-    assert_eq!(state.visible_gist_groups()[0].id, "new-upd");
-    // s -> sort by created (newest created first).
-    state.handle_key(KeyCode::Char('s'));
-    assert_eq!(gists_ref(&state).sort, GistGroupSort::Created);
-    assert_eq!(state.visible_gist_groups()[0].id, "old-upd");
-}
-
-#[test]
-fn gist_view_left_right_scrolls_horizontally() {
-    let mut state = state_with_two_gists();
-    state.screen = Screen::Gists(Box::default());
-    assert_eq!(gists_ref(&state).cursor.hscroll, 0);
-    state.handle_key(KeyCode::Right);
-    assert_eq!(gists_ref(&state).cursor.hscroll, 1);
-    state.handle_key(KeyCode::Left);
-    assert_eq!(gists_ref(&state).cursor.hscroll, 0);
-    // Left at the origin saturates at 0.
-    state.handle_key(KeyCode::Left);
-    assert_eq!(gists_ref(&state).cursor.hscroll, 0);
 }
 
 #[test]
@@ -3546,21 +2563,7 @@ fn create_confirm_s_and_p_choose_visibility() {
     );
 }
 
-#[test]
-fn create_confirm_esc_cancels() {
-    let mut state = initial_state();
-    set_pending(
-        &mut state,
-        PendingAction::Create {
-            local_path: PathBuf::from("/tmp/config.toml"),
-        },
-    );
-    assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::List);
-    assert_eq!(state.pending_action().cloned(), None);
-}
-
-fn state_ready_to_create() -> AppState {
+pub(super) fn state_ready_to_create() -> AppState {
     let mut state = initial_state();
     state.locals = vec![LocalCandidate {
         path: PathBuf::from("/tmp/config.toml"),
@@ -3601,83 +2604,7 @@ fn create_enter_advances_to_visibility_then_s_creates() {
     );
 }
 
-#[test]
-fn create_esc_while_editing_description_cancels() {
-    let mut state = state_ready_to_create();
-    state.handle_key(KeyCode::Char('n'));
-    state.handle_key(KeyCode::Char('x'));
-    assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::List);
-    assert_eq!(state.pending_action().cloned(), None);
-    assert!(!state.editing_description);
-    assert!(state.description_input.is_empty());
-}
-
-#[test]
-fn pins_screen_sync_keys_emit_outcomes() {
-    let mut state = initial_state();
-    state.screen = Screen::Pins(Box::default());
-    state.pinned = vec![PinnedMapping {
-        local_path: PathBuf::from("/tmp/a.txt"),
-        gist_id: "g1".into(),
-        gist_filename: "a.txt".into(),
-        direction: None,
-        last_seen_hash: None,
-    }];
-    assert!(matches!(
-        state.handle_key(KeyCode::Char('s')),
-        KeyOutcome::SyncPinAuto { .. }
-    ));
-    assert!(matches!(
-        state.handle_key(KeyCode::Char('u')),
-        KeyOutcome::SyncPinPush { .. }
-    ));
-    assert!(matches!(
-        state.handle_key(KeyCode::Char('d')),
-        KeyOutcome::SyncPinPull { .. }
-    ));
-    assert!(matches!(
-        state.handle_key(KeyCode::Char('x')),
-        KeyOutcome::UnpinAtPin { .. }
-    ));
-}
-
-#[test]
-fn pins_screen_enter_emits_preview_pin_diff() {
-    let mut state = initial_state();
-    state.screen = Screen::Pins(Box::default());
-    state.pinned = vec![PinnedMapping {
-        local_path: PathBuf::from("/tmp/a.txt"),
-        gist_id: "g1".into(),
-        gist_filename: "a.txt".into(),
-        direction: None,
-        last_seen_hash: None,
-    }];
-    assert!(matches!(
-        state.handle_key(KeyCode::Enter),
-        KeyOutcome::PreviewPinDiff { .. }
-    ));
-}
-
-#[test]
-fn pins_screen_enter_is_blocked_for_non_previewable_pair() {
-    // Issue #288: `pins_palette_items`'s "Diff pinned pair" already checked previewability,
-    // but `handle_key_pins`'s real Enter arm did not — a binary/image pinned pair showed
-    // disabled in the palette yet still diffed on a direct keypress. Now shared via
-    // `pins_guard`, so the key press is blocked the same way the palette already was.
-    let mut state = initial_state();
-    state.screen = Screen::Pins(Box::default());
-    state.pinned = vec![PinnedMapping {
-        local_path: PathBuf::from("/tmp/logo.png"),
-        gist_id: "g1".into(),
-        gist_filename: "logo.png".into(),
-        direction: None,
-        last_seen_hash: None,
-    }];
-    assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
-}
-
-fn pins_state_with_long_home_path() -> AppState {
+pub(super) fn pins_state_with_long_home_path() -> AppState {
     let mut state = initial_state();
     state.screen = Screen::Pins(Box::default());
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
@@ -3690,13 +2617,6 @@ fn pins_state_with_long_home_path() -> AppState {
     }];
     pins_mut(&mut state).cursor.index = 0;
     state
-}
-
-#[test]
-fn pins_hscroll_starts_at_zero() {
-    let mut state = initial_state();
-    state.screen = Screen::Pins(Box::default());
-    assert_eq!(pins_ref(&state).cursor.hscroll, 0);
 }
 
 #[test]
@@ -3774,58 +2694,6 @@ fn pin_row_label_shows_home_as_tilde() {
 }
 
 #[test]
-fn pins_right_scrolls_then_clamps_at_a_bound() {
-    let mut state = pins_state_with_long_home_path();
-    state.handle_key(KeyCode::Right);
-    assert_eq!(
-        pins_ref(&state).cursor.hscroll,
-        1,
-        "Right should advance the scroll"
-    );
-    // Far past the end clamps to a stable maximum (does not run away).
-    for _ in 0..500 {
-        state.handle_key(KeyCode::Right);
-    }
-    let clamped = pins_ref(&state).cursor.hscroll;
-    state.handle_key(KeyCode::Right);
-    assert_eq!(
-        pins_ref(&state).cursor.hscroll,
-        clamped,
-        "scroll must clamp at its max"
-    );
-    assert!(clamped > 0, "a long path must be scrollable");
-}
-
-#[test]
-fn pins_left_clamps_at_zero() {
-    let mut state = pins_state_with_long_home_path();
-    state.handle_key(KeyCode::Right);
-    state.handle_key(KeyCode::Left);
-    state.handle_key(KeyCode::Left);
-    assert_eq!(pins_ref(&state).cursor.hscroll, 0);
-}
-
-#[test]
-fn pins_hscroll_resets_when_selection_moves() {
-    let mut state = pins_state_with_long_home_path();
-    state.pinned.push(PinnedMapping {
-        local_path: PathBuf::from("/tmp/b.txt"),
-        gist_id: "g2".into(),
-        gist_filename: "b.txt".into(),
-        direction: None,
-        last_seen_hash: None,
-    });
-    state.handle_key(KeyCode::Right);
-    assert!(pins_ref(&state).cursor.hscroll > 0);
-    state.handle_key(KeyCode::Down);
-    assert_eq!(
-        pins_ref(&state).cursor.hscroll,
-        0,
-        "moving selection resets hscroll"
-    );
-}
-
-#[test]
 fn entering_pins_screen_resets_hscroll() {
     let mut state = pins_state_with_long_home_path();
     state.handle_key(KeyCode::Right);
@@ -3834,19 +2702,6 @@ fn entering_pins_screen_resets_hscroll() {
     state.handle_key(KeyCode::Char('P'));
     assert!(state.screen.is_pins());
     assert_eq!(pins_ref(&state).cursor.hscroll, 0);
-}
-
-#[test]
-fn top_bar_gists_click_opens_gist_manager_from_any_screen() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Preview(Box::default()); // arbitrary screen that has no 'g' binding of its own
-    let layout = MouseLayout {
-        top_bar_gists: Some(Rect::new(10, 0, 7, 1)),
-        ..Default::default()
-    };
-    let out = state.handle_mouse(MouseInput::Click { col: 12, row: 0 }, &layout);
-    assert!(state.screen.is_gists());
-    assert_eq!(out, KeyOutcome::None);
 }
 
 #[test]
@@ -3862,56 +2717,6 @@ fn top_bar_pins_click_opens_pins_from_any_screen() {
     let out = state.handle_mouse(MouseInput::Click { col: 22, row: 0 }, &layout);
     assert!(state.screen.is_pins());
     assert_eq!(pins_ref(&state).cursor.hscroll, 0);
-    assert_eq!(out, KeyOutcome::None);
-}
-
-#[test]
-fn top_bar_config_click_opens_settings_from_any_screen() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Preview(Box::default());
-    let layout = MouseLayout {
-        top_bar_config: Some(Rect::new(28, 0, 8, 1)),
-        ..Default::default()
-    };
-    let out = state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
-    assert!(state.screen.is_config());
-    assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
-    assert_eq!(out, KeyOutcome::None);
-}
-
-#[test]
-fn top_bar_config_click_while_already_on_config_does_not_trap_keyboard_exit() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Preview(Box::default());
-    let layout = MouseLayout {
-        top_bar_config: Some(Rect::new(28, 0, 8, 1)),
-        ..Default::default()
-    };
-    state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
-    assert!(state.screen.is_config());
-    assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
-
-    // Second click on Config while already there must not overwrite return_screen.
-    let out = state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
-    assert!(state.screen.is_config());
-    assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
-    assert_eq!(out, KeyOutcome::None);
-
-    state.handle_key(KeyCode::Esc);
-    assert!(state.screen.is_preview());
-}
-
-#[test]
-fn top_bar_help_click_opens_help_and_remembers_return_screen_from_any_screen() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Preview(Box::default());
-    let layout = MouseLayout {
-        top_bar_help: Some(Rect::new(30, 0, 7, 1)),
-        ..Default::default()
-    };
-    let out = state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
-    assert!(state.screen.is_help());
-    assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
     assert_eq!(out, KeyOutcome::None);
 }
 
@@ -4245,173 +3050,7 @@ fn list_filter_enter_keeps_query_and_exits() {
     assert_eq!(state.local_filter_query, "j"); // query kept
 }
 
-fn gists_screen_state() -> AppState {
-    let mut state = initial_state();
-    state.gists = vec![
-        GistFile {
-            gist_id: "g1".into(),
-            description: "alpha".into(),
-            filename: "a.txt".into(),
-            public: false,
-            updated_at: "2026-06-10T00:00:00Z".into(),
-            created_at: "2026-06-01T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            node_id: None,
-        },
-        GistFile {
-            gist_id: "g2".into(),
-            description: "beta".into(),
-            filename: "b.txt".into(),
-            public: false,
-            updated_at: "2026-06-10T00:00:00Z".into(),
-            created_at: "2026-06-01T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            node_id: None,
-        },
-    ];
-    state.screen = Screen::Gists(Box::default());
-    state
-}
-
-#[test]
-fn gists_filter_navigates_while_typing() {
-    let mut state = gists_screen_state();
-    gists_mut(&mut state).filtering = true;
-
-    state.handle_key(KeyCode::Down);
-    assert_eq!(gists_ref(&state).cursor.index, 1);
-    assert!(gists_ref(&state).filtering);
-    state.handle_key(KeyCode::Up);
-    assert_eq!(gists_ref(&state).cursor.index, 0);
-}
-
-#[test]
-fn gists_filter_empty_backspace_exits() {
-    let mut state = gists_screen_state();
-    gists_mut(&mut state).filtering = true;
-
-    state.handle_key(KeyCode::Char('a'));
-    state.handle_key(KeyCode::Backspace); // empty again, still filtering
-    assert!(gists_ref(&state).filtering);
-    state.handle_key(KeyCode::Backspace); // empty -> exit
-    assert!(!gists_ref(&state).filtering);
-}
-
-#[test]
-fn gists_filter_tab_is_noop() {
-    let mut state = gists_screen_state();
-    gists_mut(&mut state).filtering = true;
-    state.handle_key(KeyCode::Char('a'));
-
-    state.handle_key(KeyCode::Tab);
-    assert!(gists_ref(&state).filtering); // still typing
-    assert_eq!(gists_ref(&state).filter_query, "a"); // unchanged
-}
-
 // ── Pins screen filter ────────────────────────────────────────────────────────
-
-fn state_with_pins(rows: &[(&str, &str, &str)]) -> AppState {
-    let mut state = initial_state();
-    state.cwd = PathBuf::from("/cwd");
-    state.screen = Screen::Pins(Box::default());
-    state.pinned = rows
-        .iter()
-        .map(|(lp, id, fname)| PinnedMapping {
-            local_path: PathBuf::from(lp),
-            gist_id: (*id).into(),
-            gist_filename: (*fname).into(),
-            direction: None,
-            last_seen_hash: None,
-        })
-        .collect();
-    state
-}
-
-#[test]
-fn visible_pin_indices_filters_by_path_and_filename() {
-    let mut state = state_with_pins(&[
-        ("/cwd/.zshrc", "g1", "zshrc"),
-        ("/cwd/init.lua", "g2", "init.lua"),
-        ("/cwd/notes.md", "g3", "notes.md"),
-    ]);
-    assert_eq!(state.visible_pin_indices(), vec![0, 1, 2]);
-
-    pins_mut(&mut state).filter_query = "lua".into(); // matches filename of row 1
-    assert_eq!(state.visible_pin_indices(), vec![1]);
-
-    pins_mut(&mut state).filter_query = "ZSH".into(); // case-insensitive, matches path of row 0
-    assert_eq!(state.visible_pin_indices(), vec![0]);
-}
-
-#[test]
-fn selected_pin_index_maps_through_filter() {
-    let mut state = state_with_pins(&[
-        ("/cwd/alpha", "g1", "alpha"),
-        ("/cwd/beta", "g2", "beta"),
-        ("/cwd/gamma", "g3", "gamma"),
-    ]);
-    pins_mut(&mut state).filter_query = "gamma".into(); // only row 2 visible
-    pins_mut(&mut state).cursor.index = 0; // first (and only) visible row
-    assert_eq!(state.selected_pin_index(), Some(2)); // TRUE index, not 0
-}
-
-#[test]
-fn pins_down_clamps_to_filtered_count() {
-    let mut state = state_with_pins(&[
-        ("/cwd/a", "g1", "a"),
-        ("/cwd/blua", "g2", "blua"),
-        ("/cwd/c", "g3", "c"),
-    ]);
-    pins_mut(&mut state).filter_query = "lua".into(); // 1 visible
-    state.handle_key(KeyCode::Down);
-    assert_eq!(pins_ref(&state).cursor.index, 0); // clamped to the single filtered row
-}
-
-#[test]
-fn pins_filter_input_behaviors() {
-    let mut state = state_with_pins(&[("/cwd/a", "g1", "a"), ("/cwd/b", "g2", "b")]);
-    pins_mut(&mut state).filtering = true;
-
-    // live nav while typing
-    state.handle_key(KeyCode::Down);
-    assert_eq!(pins_ref(&state).cursor.index, 1);
-    assert!(pins_ref(&state).filtering);
-
-    // Tab is a no-op (single pane)
-    state.handle_key(KeyCode::Char('a'));
-    state.handle_key(KeyCode::Tab);
-    assert!(pins_ref(&state).filtering);
-    assert_eq!(pins_ref(&state).filter_query, "a");
-
-    // Esc clears + exits
-    state.handle_key(KeyCode::Esc);
-    assert!(!pins_ref(&state).filtering);
-    assert_eq!(pins_ref(&state).filter_query, "");
-
-    // Backspace on empty exits
-    pins_mut(&mut state).filtering = true;
-    state.handle_key(KeyCode::Backspace);
-    assert!(!pins_ref(&state).filtering);
-
-    // Enter keeps query + exits
-    pins_mut(&mut state).filtering = true;
-    state.handle_key(KeyCode::Char('b'));
-    state.handle_key(KeyCode::Enter);
-    assert!(!pins_ref(&state).filtering);
-    assert_eq!(pins_ref(&state).filter_query, "b");
-}
 
 #[test]
 fn help_topic_all_is_ordered_and_titled() {
@@ -4481,158 +3120,6 @@ fn capital_h_from_gist_detail_opens_revisions_and_fetches() {
 }
 
 #[test]
-fn revisions_r_on_head_is_blocked() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Revisions(Box::default());
-    revision_mut(&mut state).entries = Some(vec![crate::domain::GistRevision {
-        version: "abc".into(),
-        committed_at: "2026-06-10T00:00:00Z".into(),
-        user: "u".into(),
-        change_status: crate::domain::GistRevisionChangeStatus {
-            total: 1,
-            additions: 1,
-            deletions: 0,
-        },
-    }]);
-    state.handle_key(KeyCode::Char('r'));
-    assert_eq!(
-        state.status.as_deref(),
-        Some("only one revision — nothing to restore")
-    );
-}
-
-#[test]
-fn revisions_capital_d_on_current_shows_status() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Revisions(Box::default());
-    revision_mut(&mut state).gist_id = Some("g1".into());
-    revision_mut(&mut state).target_file = "a.txt".into();
-    revision_mut(&mut state).index = 0;
-    revision_mut(&mut state).entries = Some(vec![
-        crate::domain::GistRevision {
-            version: "v2".into(),
-            committed_at: "2026-06-10T00:00:00Z".into(),
-            user: "u".into(),
-            change_status: crate::domain::GistRevisionChangeStatus {
-                total: 1,
-                additions: 1,
-                deletions: 0,
-            },
-        },
-        crate::domain::GistRevision {
-            version: "v1".into(),
-            committed_at: "2026-06-01T00:00:00Z".into(),
-            user: "u".into(),
-            change_status: crate::domain::GistRevisionChangeStatus {
-                total: 2,
-                additions: 2,
-                deletions: 0,
-            },
-        },
-    ]);
-    assert_eq!(state.handle_key(KeyCode::Char('D')), KeyOutcome::None);
-    assert_eq!(state.status.as_deref(), Some("already at current revision"));
-    revision_mut(&mut state).index = 1;
-    assert!(matches!(
-        state.handle_key(KeyCode::Char('D')),
-        KeyOutcome::RevisionDiff { .. }
-    ));
-}
-
-#[test]
-fn revisions_enter_triggers_incremental_diff() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Revisions(Box::default());
-    revision_mut(&mut state).gist_id = Some("g1".into());
-    revision_mut(&mut state).target_file = "a.txt".into();
-    revision_mut(&mut state).index = 0;
-    revision_mut(&mut state).entries = Some(vec![
-        crate::domain::GistRevision {
-            version: "v2".into(),
-            committed_at: "2026-06-10T00:00:00Z".into(),
-            user: "u".into(),
-            change_status: crate::domain::GistRevisionChangeStatus {
-                total: 1,
-                additions: 1,
-                deletions: 0,
-            },
-        },
-        crate::domain::GistRevision {
-            version: "v1".into(),
-            committed_at: "2026-06-01T00:00:00Z".into(),
-            user: "u".into(),
-            change_status: crate::domain::GistRevisionChangeStatus {
-                total: 2,
-                additions: 2,
-                deletions: 0,
-            },
-        },
-    ]);
-    assert!(matches!(
-        state.handle_key(KeyCode::Enter),
-        KeyOutcome::RevisionDiffIncremental { .. }
-    ));
-    revision_mut(&mut state).index = 1;
-    assert!(matches!(
-        state.handle_key(KeyCode::Enter),
-        KeyOutcome::RevisionDiffIncremental { .. }
-    ));
-}
-
-#[test]
-fn revision_diff_omits_download_upload() {
-    let mut state = initial_state();
-    state.pending_return = Some(Screen::Revisions(Box::default()));
-    state.enter_diff("diff".into(), String::new(), PathBuf::new(), PathBuf::new());
-    let footer = diff_footer(&state);
-    assert!(!footer.contains("download"));
-    assert!(!footer.contains("upload"));
-    assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
-    assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::None);
-}
-
-#[test]
-fn revisions_capital_f_cycles_target_file() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Revisions(Box::default());
-    revision_mut(&mut state).gist_id = Some("g1".into());
-    revision_mut(&mut state).target_file = "a.txt".into();
-    revision_mut(&mut state).entries = Some(vec![]);
-    state.handle_key(KeyCode::Char('F'));
-    assert_eq!(revision_ref(&state).target_file, "b.txt");
-    state.handle_key(KeyCode::Char('F'));
-    assert_eq!(revision_ref(&state).target_file, "a.txt");
-    assert_eq!(state.revision_target_file_label(), "a.txt (1/2)");
-}
-
-#[test]
-fn revisions_capital_f_on_single_file_gist_shows_status() {
-    let mut state = initial_state();
-    state.gists = vec![GistFile {
-        gist_id: "g1".into(),
-        description: "solo".into(),
-        filename: "only.txt".into(),
-        public: false,
-        updated_at: "x".into(),
-        created_at: "x".into(),
-        owner_login: String::new(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        node_id: None,
-    }];
-    state.screen = Screen::Revisions(Box::default());
-    revision_mut(&mut state).gist_id = Some("g1".into());
-    revision_mut(&mut state).target_file = "only.txt".into();
-    revision_mut(&mut state).entries = Some(vec![]);
-    state.handle_key(KeyCode::Char('F'));
-    assert_eq!(state.status.as_deref(), Some("only one file in this gist"));
-}
-
-#[test]
 fn vim_j_k_move_list_selection() {
     let mut state = list_state_with_matches();
     state.focus = FocusPane::Gist;
@@ -4650,17 +3137,6 @@ fn vim_h_scrolls_focused_row_left() {
     state.gist_hscroll = 2;
     state.handle_key(KeyCode::Char('h'));
     assert_eq!(state.gist_hscroll, 1);
-}
-
-#[test]
-fn ctrl_f_pages_gist_detail_files() {
-    use crossterm::event::KeyModifiers;
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    detail_mut(&mut state).file_cursor = 0;
-    state.handle_key_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
-    assert_eq!(detail_ref(&state).file_cursor, 1);
 }
 
 #[test]
@@ -4688,51 +3164,6 @@ fn list_page_keys_jump_local_selection() {
 }
 
 #[test]
-fn pins_page_keys_jump_selection() {
-    use crossterm::event::KeyModifiers;
-    let mut state = initial_state();
-    state.screen = Screen::Pins(Box::default());
-    state.pinned = (0..12)
-        .map(|i| PinnedMapping {
-            local_path: PathBuf::from(format!("/cwd/p{i}.txt")),
-            gist_id: format!("g{i}"),
-            gist_filename: format!("f{i}.txt"),
-            direction: None,
-            last_seen_hash: None,
-        })
-        .collect();
-    state.handle_key_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
-    assert_eq!(pins_ref(&state).cursor.index, 10);
-    state.handle_key(KeyCode::PageUp);
-    assert_eq!(pins_ref(&state).cursor.index, 0);
-}
-
-#[test]
-fn gists_page_keys_jump_selection() {
-    let mut state = initial_state();
-    state.screen = Screen::Gists(Box::default());
-    state.gists = (0..12)
-        .map(|i| GistFile {
-            gist_id: format!("g{i}"),
-            description: format!("gist {i}"),
-            filename: "a.txt".into(),
-            public: true,
-            updated_at: "x".into(),
-            created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-            raw_url: None,
-            content_type: None,
-            node_id: None,
-        })
-        .collect();
-    state.handle_key(KeyCode::PageDown);
-    assert_eq!(gists_ref(&state).cursor.index, 10);
-    state.handle_key(KeyCode::PageDown);
-    assert_eq!(gists_ref(&state).cursor.index, 11);
-}
-
-#[test]
 fn list_filter_ctrl_f_pages_without_typing_f() {
     use crossterm::event::KeyModifiers;
     let paths: Vec<String> = (0..12).map(|i| format!("/cwd/f{i:02}.txt")).collect();
@@ -4747,40 +3178,6 @@ fn list_filter_ctrl_f_pages_without_typing_f() {
 }
 
 #[test]
-fn lowercase_h_does_not_open_revision_history() {
-    let mut state = list_state_with_matches();
-    state.focus = FocusPane::Gist;
-    state.gist_index = 0;
-    assert_eq!(state.handle_key(KeyCode::Char('h')), KeyOutcome::None);
-    assert_eq!(state.screen, Screen::List);
-}
-
-#[test]
-fn restore_revision_confirm_prompt_and_y_intent() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Confirm(Box::default());
-    set_pending(
-        &mut state,
-        PendingAction::RestoreRevision {
-            gist_id: "g1".into(),
-            filename: "a.txt".into(),
-            version: "oldsha".into(),
-            version_label: "oldsha (3d ago)".into(),
-            content: "old\n".into(),
-        },
-    );
-    assert_eq!(
-        confirm_modal_style(&state),
-        ("Restore revision", Color::Yellow)
-    );
-    assert!(confirm_prompt(&state).contains("Restore a.txt to revision oldsha (3d ago)"));
-    assert_eq!(
-        state.handle_key(KeyCode::Char('y')),
-        KeyOutcome::ExecuteRestoreRevision
-    );
-}
-
-#[test]
 fn question_mark_opens_contextual_help_from_pins() {
     let mut state = initial_state();
     state.screen = Screen::Pins(Box::default());
@@ -4789,50 +3186,6 @@ fn question_mark_opens_contextual_help_from_pins() {
     assert_eq!(help_ref(&state).topic, HelpTopic::Pins);
     assert!(state.nav_stack.last().is_some_and(Screen::is_pins));
     assert!(!help_ref(&state).index_open);
-}
-
-#[test]
-fn help_topic_view_tab_opens_index_at_current_topic() {
-    let mut state = initial_state();
-    state.screen = Screen::Help(Box::default());
-    help_mut(&mut state).topic = HelpTopic::GistManager; // index 2
-    state.handle_key(KeyCode::Tab);
-    assert!(help_ref(&state).index_open);
-    assert_eq!(help_ref(&state).index_sel, 2);
-}
-
-#[test]
-fn help_topic_view_number_switches_topic() {
-    let mut state = initial_state();
-    state.screen = Screen::Help(Box::default());
-    help_mut(&mut state).topic = HelpTopic::List;
-    help_mut(&mut state).scroll = 5;
-    state.handle_key(KeyCode::Char('2')); // 2 -> Pins (index 1)
-    assert_eq!(help_ref(&state).topic, HelpTopic::Pins);
-    assert_eq!(help_ref(&state).scroll, 0);
-    assert!(!help_ref(&state).index_open);
-}
-
-#[test]
-fn help_topic_view_zero_key_switches_to_about() {
-    let mut state = initial_state();
-    state.screen = Screen::Help(Box::default());
-    help_mut(&mut state).topic = HelpTopic::List;
-    help_mut(&mut state).scroll = 5;
-    state.handle_key(KeyCode::Char('0')); // 0 -> About (index 9, the 10th topic)
-    assert_eq!(help_ref(&state).topic, HelpTopic::About);
-    assert_eq!(help_ref(&state).scroll, 0);
-    assert!(!help_ref(&state).index_open);
-}
-
-#[test]
-fn help_index_zero_key_opens_about_from_the_index_list() {
-    let mut state = initial_state();
-    state.screen = Screen::Help(Box::default());
-    help_mut(&mut state).index_open = true;
-    state.handle_key(KeyCode::Char('0'));
-    assert!(!help_ref(&state).index_open);
-    assert_eq!(help_ref(&state).topic, HelpTopic::About);
 }
 
 #[test]
@@ -4853,20 +3206,6 @@ fn help_topic_view_esc_returns_to_origin() {
     state.nav_stack.push(Screen::Gists(Box::default()));
     state.handle_key(KeyCode::Esc);
     assert!(state.screen.is_gists());
-}
-
-#[test]
-fn help_index_navigates_and_enter_opens_topic() {
-    let mut state = initial_state();
-    state.screen = Screen::Help(Box::default());
-    help_mut(&mut state).index_open = true;
-    help_mut(&mut state).index_sel = 0;
-    state.handle_key(KeyCode::Down); // -> 1
-    state.handle_key(KeyCode::Down); // -> 2 (GistManager)
-    assert_eq!(help_ref(&state).index_sel, 2);
-    state.handle_key(KeyCode::Enter);
-    assert!(!help_ref(&state).index_open);
-    assert_eq!(help_ref(&state).topic, HelpTopic::GistManager);
 }
 
 #[test]
@@ -5191,115 +3530,6 @@ fn starred_filter_lists_only_starred_gists() {
 }
 
 #[test]
-fn fork_key_returns_fork_intent_for_foreign_gist_in_detail() {
-    let mut state = initial_state();
-    state.current_user_login = Some("me".into());
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("foreign".into());
-    state.starred_gists = vec![GistFile {
-        gist_id: "foreign".into(),
-        description: "x".into(),
-        filename: "a.txt".into(),
-        public: true,
-        updated_at: "x".into(),
-        created_at: "x".into(),
-        owner_login: "other".into(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        node_id: None,
-    }];
-    assert!(matches!(
-        state.handle_key(KeyCode::Char('F')),
-        KeyOutcome::ForkGist { .. }
-    ));
-}
-
-#[test]
-fn fork_key_blocked_for_owned_gist_in_detail() {
-    let mut state = initial_state();
-    state.current_user_login = Some("me".into());
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("mine".into());
-    state.gists = vec![GistFile {
-        gist_id: "mine".into(),
-        description: "x".into(),
-        filename: "a.txt".into(),
-        public: true,
-        updated_at: "x".into(),
-        created_at: "x".into(),
-        owner_login: "me".into(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        node_id: None,
-    }];
-    assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::None);
-    assert!(state.status.as_ref().unwrap().contains("already yours"));
-}
-
-#[test]
-fn foreign_detail_mutate_keys_are_silent_noop() {
-    let mut state = initial_state();
-    state.current_user_login = Some("me".into());
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("foreign".into());
-    state.starred_gists = vec![GistFile {
-        gist_id: "foreign".into(),
-        description: "x".into(),
-        filename: "a.txt".into(),
-        public: true,
-        updated_at: "x".into(),
-        created_at: "x".into(),
-        owner_login: "other".into(),
-        fork_of_id: None,
-        raw_url: None,
-        content_type: None,
-        node_id: None,
-    }];
-    assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::None);
-    assert_eq!(state.handle_key(KeyCode::Char('c')), KeyOutcome::None);
-    assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
-    assert!(state.status.is_none());
-}
-
-#[test]
-fn fork_key_ignored_on_list_and_gist_manager() {
-    let mut state = initial_state();
-    state.current_user_login = Some("me".into());
-    state.starred_gists = vec![GistFile {
-        gist_id: "foreign".into(),
-        description: "x".into(),
-        filename: "a.txt".into(),
-        public: true,
-        updated_at: "x".into(),
-        created_at: "x".into(),
-        owner_login: "other".into(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        node_id: None,
-    }];
-    state.gist_type_filter = GistTypeFilter::Starred;
-    state.gist_index = 0;
-    assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::None);
-
-    state.screen = Screen::Gists(Box::default());
-    gists_mut(&mut state).type_filter = GistTypeFilter::Starred;
-    gists_mut(&mut state).cursor.index = 0;
-    assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::None);
-}
-
-#[test]
 fn initial_state_enables_mouse_by_default() {
     assert!(super::initial_state().mouse_enabled);
 }
@@ -5373,28 +3603,6 @@ fn classify_click_at_exact_threshold() {
 // ── handle_mouse tests ────────────────────────────────────────────────────────
 
 #[test]
-fn scroll_down_moves_focused_list_by_one() {
-    let mut state = state_with_local_paths(&["a.rs", "b.rs", "c.rs"]);
-    state.screen = Screen::List;
-    state.focus = FocusPane::Local;
-    state.local_index = 0;
-    let out = state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
-    assert_eq!(out, KeyOutcome::None);
-    assert_eq!(state.local_index, 1);
-}
-
-#[test]
-fn scroll_up_moves_focused_list_by_one() {
-    let mut state = state_with_local_paths(&["a.rs", "b.rs", "c.rs"]);
-    state.screen = Screen::List;
-    state.focus = FocusPane::Local;
-    state.local_index = 2;
-    let out = state.handle_mouse(MouseInput::ScrollUp, &MouseLayout::default());
-    assert_eq!(out, KeyOutcome::None);
-    assert_eq!(state.local_index, 1);
-}
-
-#[test]
 fn scroll_down_moves_content_three_lines() {
     // Set up a Diff screen with enough lines that diff_scroll can reach 3.
     let mut state = state_with_selection();
@@ -5436,135 +3644,6 @@ fn close_button_click_returns_from_help() {
     let out = state.handle_mouse(MouseInput::Click { col: 38, row: 0 }, &layout);
     assert_eq!(out, KeyOutcome::None);
     assert_eq!(state.screen, Screen::List);
-}
-
-#[test]
-fn close_button_click_outside_is_noop() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Help(Box::default());
-    let layout = MouseLayout {
-        close_button: Some(Rect::new(36, 0, 5, 1)),
-        ..Default::default()
-    };
-    // col 35 is just outside the left edge of the close button
-    let out = state.handle_mouse(MouseInput::Click { col: 35, row: 0 }, &layout);
-    assert_eq!(out, KeyOutcome::None);
-    assert!(state.screen.is_help());
-}
-
-#[test]
-fn list_click_selects_and_focuses_gist_pane() {
-    let mut state = state_with_gists();
-    state.screen = Screen::List;
-    state.focus = FocusPane::Local;
-    state.gist_hscroll = 5;
-    let hit = PaneHit {
-        rect: Rect::new(20, 0, 20, 10),
-        offset: 0,
-    };
-    let layout = MouseLayout {
-        gist: Some(hit),
-        ..Default::default()
-    };
-    // row 2 -> content idx 1 (top border is row 0, row 1 = idx 0, row 2 = idx 1)
-    let out = state.handle_mouse(MouseInput::Click { col: 25, row: 2 }, &layout);
-    assert_eq!(out, KeyOutcome::None);
-    assert_eq!(state.focus, FocusPane::Gist);
-    assert_eq!(state.gist_index, 1);
-    assert_eq!(state.gist_hscroll, 0);
-}
-
-#[test]
-fn list_click_selects_and_focuses_local_pane() {
-    let mut state = state_with_local_paths(&["a.rs", "b.rs", "c.rs"]);
-    state.gists = vec![];
-    state.screen = Screen::List;
-    state.focus = FocusPane::Gist;
-    state.local_hscroll = 5;
-    let hit = PaneHit {
-        rect: Rect::new(0, 0, 20, 10),
-        offset: 0,
-    };
-    let layout = MouseLayout {
-        local: Some(hit),
-        ..Default::default()
-    };
-    // row 1 -> idx 0 (first content row after top border)
-    let out = state.handle_mouse(MouseInput::Click { col: 5, row: 1 }, &layout);
-    assert_eq!(out, KeyOutcome::None);
-    assert_eq!(state.focus, FocusPane::Local);
-    assert_eq!(state.local_index, 0);
-    assert_eq!(state.local_hscroll, 0);
-}
-
-#[test]
-fn list_double_click_opens_diff() {
-    let mut state = state_with_gists();
-    state.screen = Screen::List;
-    let hit = PaneHit {
-        rect: Rect::new(20, 0, 20, 10),
-        offset: 0,
-    };
-    let layout = MouseLayout {
-        gist: Some(hit),
-        ..Default::default()
-    };
-    // row 1 -> idx 0 (first gist)
-    let out = state.handle_mouse(MouseInput::DoubleClick { col: 25, row: 1 }, &layout);
-    assert_eq!(state.focus, FocusPane::Gist);
-    assert_eq!(state.gist_index, 0);
-    assert!(matches!(out, KeyOutcome::PreviewDiff { .. }));
-}
-
-#[test]
-fn click_in_pane_blank_focuses_without_selecting() {
-    let mut state = state_with_gists();
-    state.screen = Screen::List;
-    state.focus = FocusPane::Local;
-    state.gist_index = 0;
-    let hit = PaneHit {
-        rect: Rect::new(20, 0, 20, 4),
-        offset: 0,
-    };
-    let layout = MouseLayout {
-        gist: Some(hit),
-        ..Default::default()
-    };
-    // row 0 is the top border (no row there): clicking the gist pane's blank/border area
-    // switches focus to it but selects nothing.
-    let out = state.handle_mouse(MouseInput::Click { col: 25, row: 0 }, &layout);
-    assert_eq!(out, KeyOutcome::None);
-    assert_eq!(state.focus, FocusPane::Gist);
-    assert_eq!(state.gist_index, 0);
-}
-
-#[test]
-fn click_off_list_screen_is_noop() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Help(Box::default());
-    let hit = PaneHit {
-        rect: Rect::new(20, 0, 20, 10),
-        offset: 0,
-    };
-    let layout = MouseLayout {
-        gist: Some(hit),
-        ..Default::default()
-    };
-    let before_screen = state.screen.clone();
-    let out = state.handle_mouse(MouseInput::Click { col: 25, row: 1 }, &layout);
-    assert_eq!(out, KeyOutcome::None);
-    assert_eq!(state.screen, before_screen);
-}
-
-#[test]
-fn scroll_down_clamps_at_list_end() {
-    // Only 1 item in local; scrolling down should clamp (no panic, no index change).
-    let mut state = state_with_local_paths(&["a.rs"]);
-    state.screen = Screen::List;
-    state.focus = FocusPane::Local;
-    state.local_index = 0;
-    state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
-    assert_eq!(state.local_index, 0);
 }
 
 #[test]
@@ -5618,398 +3697,7 @@ fn close_button_click_create_description_cancels_not_types() {
     assert!(state.pending_action().is_none());
 }
 
-#[test]
-fn wheel_step_gist_detail_moves_three() {
-    // GistDetail content pane: one scroll-down tick must advance detail_scroll by 3.
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    // Use Comments focus so detail_nav moves detail_scroll (not the file cursor).
-    detail_mut(&mut state).focus = DetailFocus::Comments;
-    detail_mut(&mut state).comments = Some(Vec::new());
-    assert_eq!(detail_ref(&state).scroll, 0);
-    state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
-    assert_eq!(detail_ref(&state).scroll, 3);
-}
-
-#[test]
-fn wheel_step_help_body_moves_three() {
-    // Help body (help_index_open = false): one scroll-down tick must advance help_scroll by 3.
-    let mut state = initial_state();
-    state.screen = Screen::Help(Box::default());
-    help_mut(&mut state).index_open = false;
-    help_mut(&mut state).scroll = 0;
-    state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
-    assert_eq!(help_ref(&state).scroll, 3);
-}
-
-#[test]
-fn wheel_step_help_index_moves_one() {
-    // Help topic index (help_index_open = true): one scroll-down tick must move index by 1.
-    let mut state = initial_state();
-    state.screen = Screen::Help(Box::default());
-    help_mut(&mut state).index_open = true;
-    help_mut(&mut state).index_sel = 0;
-    state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
-    assert_eq!(help_ref(&state).index_sel, 1);
-}
-
-#[test]
-fn gists_click_selects_and_double_click_matches_enter() {
-    let mut state = gists_screen_state(); // 2 groups, Screen::Gists
-    gists_mut(&mut state).cursor.index = 0;
-    let hit = PaneHit {
-        rect: Rect::new(0, 0, 40, 10),
-        offset: 0,
-    };
-    let layout = MouseLayout {
-        list: Some(hit),
-        ..Default::default()
-    };
-    // Row 2 is the 2nd content row (border at row 0) -> idx 1.
-    let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
-    assert_eq!(out, KeyOutcome::None);
-    assert_eq!(gists_ref(&state).cursor.index, 1);
-    // Double-click activates the same row, exactly as Enter would.
-    let mut by_key = state.clone();
-    let key_out = by_key.handle_key(KeyCode::Enter);
-    let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
-    assert_eq!(by_mouse, key_out);
-    assert!(matches!(by_mouse, KeyOutcome::OpenGistDetail { .. }));
-}
-
-#[test]
-fn pins_click_selects_and_double_click_matches_enter() {
-    let mut state = state_with_pins(&[("a.txt", "g1", "a.txt"), ("b.txt", "g2", "b.txt")]);
-    let hit = PaneHit {
-        rect: Rect::new(0, 0, 40, 10),
-        offset: 0,
-    };
-    let layout = MouseLayout {
-        list: Some(hit),
-        ..Default::default()
-    };
-    let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
-    assert_eq!(out, KeyOutcome::None);
-    assert_eq!(pins_ref(&state).cursor.index, 1);
-    let mut by_key = state.clone();
-    let key_out = by_key.handle_key(KeyCode::Enter);
-    let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
-    assert_eq!(by_mouse, key_out);
-}
-
-#[test]
-fn revisions_click_selects_and_double_click_matches_enter() {
-    let mut state = state_with_gists();
-    state.screen = Screen::Revisions(Box::default());
-    revision_mut(&mut state).gist_id = Some("g1".into());
-    revision_mut(&mut state).target_file = "a.txt".into();
-    revision_mut(&mut state).index = 0;
-    revision_mut(&mut state).entries = Some(vec![
-        crate::domain::GistRevision {
-            version: "v2".into(),
-            committed_at: "2026-06-10T00:00:00Z".into(),
-            user: "u".into(),
-            change_status: crate::domain::GistRevisionChangeStatus {
-                total: 1,
-                additions: 1,
-                deletions: 0,
-            },
-        },
-        crate::domain::GistRevision {
-            version: "v1".into(),
-            committed_at: "2026-06-01T00:00:00Z".into(),
-            user: "u".into(),
-            change_status: crate::domain::GistRevisionChangeStatus {
-                total: 2,
-                additions: 2,
-                deletions: 0,
-            },
-        },
-    ]);
-    let hit = PaneHit {
-        rect: Rect::new(0, 0, 40, 10),
-        offset: 0,
-    };
-    let layout = MouseLayout {
-        list: Some(hit),
-        ..Default::default()
-    };
-    let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
-    assert_eq!(out, KeyOutcome::None);
-    assert_eq!(revision_ref(&state).index, 1);
-    let mut by_key = state.clone();
-    let key_out = by_key.handle_key(KeyCode::Enter);
-    let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
-    assert_eq!(by_mouse, key_out);
-    assert!(matches!(
-        by_mouse,
-        KeyOutcome::RevisionDiffIncremental { .. }
-    ));
-}
-
-#[test]
-fn help_index_click_selects_and_double_click_opens_topic() {
-    let mut state = initial_state();
-    state.screen = Screen::Help(Box::default());
-    help_mut(&mut state).index_open = true;
-    let hit = PaneHit {
-        rect: Rect::new(0, 0, 40, 15),
-        offset: 0,
-    };
-    let layout = MouseLayout {
-        list: Some(hit),
-        ..Default::default()
-    };
-    // Row 2 is the 2nd content row (border at row 0) -> idx 1 (Pins).
-    let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
-    assert_eq!(out, KeyOutcome::None);
-    assert_eq!(help_ref(&state).index_sel, 1);
-    assert!(help_ref(&state).index_open); // a single click only selects, it doesn't open yet
-
-    let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
-    assert_eq!(by_mouse, KeyOutcome::None);
-    assert!(!help_ref(&state).index_open);
-    assert_eq!(help_ref(&state).topic, HelpTopic::Pins);
-}
-
-#[test]
-fn gist_detail_file_click_selects_and_double_previews() {
-    let mut state = state_with_gists(); // g1: a.txt (0), b.txt (1)
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    detail_mut(&mut state).focus = DetailFocus::Comments; // start elsewhere to prove the focus switch
-    let hit = PaneHit {
-        rect: Rect::new(0, 0, 40, 10),
-        offset: 0,
-    };
-    let layout = MouseLayout {
-        detail_files: Some(hit),
-        ..Default::default()
-    };
-    // Click the 2nd file row -> Files focus + cursor 1, but no open yet.
-    let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
-    assert_eq!(out, KeyOutcome::None);
-    assert_eq!(detail_ref(&state).focus, DetailFocus::Files);
-    assert_eq!(detail_ref(&state).file_cursor, 1);
-    // Double-click previews that file (there is no Enter for files).
-    let out = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
-    assert!(matches!(
-        out,
-        KeyOutcome::PreviewContent {
-            file: ref f,
-            ..
-        } if f.gist_id == "g1" && f.filename == "b.txt"
-    ));
-}
-
-#[test]
-fn gist_detail_tab_click_switches_focus() {
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    detail_mut(&mut state).focus = DetailFocus::Files;
-    // Header at chunks[0] y=0: content_x = 2, tabs_y = 2; " Files " (7), " Comments " (10 @ +10).
-    let layout = MouseLayout {
-        detail_tab_files: Some(Rect::new(2, 2, 7, 1)),
-        detail_tab_comments: Some(Rect::new(12, 2, 10, 1)),
-        ..Default::default()
-    };
-    // Click the Comments tab: switches focus and (comments unloaded) requests a fetch.
-    let out = state.handle_mouse(MouseInput::Click { col: 14, row: 2 }, &layout);
-    assert_eq!(detail_ref(&state).focus, DetailFocus::Comments);
-    assert!(matches!(out, KeyOutcome::FetchComments { .. }));
-    // Click the Files tab back.
-    let out = state.handle_mouse(MouseInput::Click { col: 4, row: 2 }, &layout);
-    assert_eq!(detail_ref(&state).focus, DetailFocus::Files);
-    assert_eq!(out, KeyOutcome::None);
-}
-
-#[test]
-fn wheel_step_gist_detail_files_moves_one() {
-    // The file list (Files tab) steps one file per wheel tick, not 3.
-    let mut state = state_with_gists();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    detail_mut(&mut state).focus = DetailFocus::Files;
-    detail_mut(&mut state).file_cursor = 0;
-    state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
-    assert_eq!(detail_ref(&state).file_cursor, 1);
-}
-
-#[test]
-fn comment_lines_count_matches_view_model_thread_lines() {
-    use crate::domain::GistComment;
-    use crate::tui::screens::detail::build_gist_detail_vm;
-    use crate::tui::text::comment_lines_count;
-    use crate::tui::view_model::{CommentLineVm, CommentsPaneVm};
-    let comments = vec![
-        GistComment {
-            author: "alice".into(),
-            created_at: "2026-01-01T00:00:00Z".into(),
-            body: "one line".into(),
-        },
-        GistComment {
-            author: "bob".into(),
-            created_at: "2026-01-02T00:00:00Z".into(),
-            body: "two\nlines".into(),
-        },
-    ];
-    // Each comment: 1 header + body.lines() + 1 blank.
-    // alice: 1 + 1 + 1 = 3 ; bob: 1 + 2 + 1 = 4 ; total 7.
-    assert_eq!(comment_lines_count(&comments), 7);
-
-    let mut state = initial_state();
-    state.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut state).gist_id = Some("g1".into());
-    state.gists = vec![GistFile::for_sync("g1".into(), "a.txt".into(), None)];
-    detail_mut(&mut state).comments = Some(comments);
-    detail_mut(&mut state).comments_loaded_oldest_page = 1;
-    let detail = build_gist_detail_vm(&state);
-    match detail.comments {
-        CommentsPaneVm::Thread { lines, .. } => {
-            assert_eq!(lines.len(), 7);
-            assert!(matches!(lines[0], CommentLineVm::Author { .. }));
-        }
-        other => panic!("expected Thread, got {other:?}"),
-    }
-}
-
-fn sample_comment(author: &str, body: &str) -> crate::domain::GistComment {
-    crate::domain::GistComment {
-        author: author.into(),
-        created_at: "2026-01-01T00:00:00Z".into(),
-        body: body.into(),
-    }
-}
-
-#[test]
-fn apply_initial_comments_sets_window_and_requests_bottom_scroll() {
-    use crate::tui::InitialComments;
-    let mut s = crate::tui::initial_state();
-    detail_mut(&mut s).gist_id = Some("g1".into());
-    s.apply_initial_comments(
-        "g1",
-        Ok(InitialComments {
-            comments: vec![sample_comment("a", "x")],
-            total: 910,
-            oldest_page: 31,
-        }),
-    );
-    assert_eq!(detail_ref(&s).comments_total, Some(910));
-    assert_eq!(detail_ref(&s).comments_loaded_oldest_page, 31);
-    assert!(detail_ref(&s).comments_scroll_to_bottom);
-    assert!(s.can_load_older_comments()); // page 31 > 1
-    assert_eq!(detail_ref(&s).comments.as_ref().unwrap().len(), 1);
-}
-
-#[test]
-fn apply_initial_comments_ignored_when_gist_changed() {
-    use crate::tui::InitialComments;
-    let mut s = crate::tui::initial_state();
-    detail_mut(&mut s).gist_id = Some("g2".into());
-    s.apply_initial_comments(
-        "g1",
-        Ok(InitialComments {
-            comments: vec![],
-            total: 0,
-            oldest_page: 1,
-        }),
-    );
-    assert!(detail_ref(&s).comments.is_none()); // stale response dropped
-}
-
-#[test]
-fn apply_older_comments_prepends_and_compensates_scroll() {
-    use crate::tui::InitialComments;
-    let mut s = crate::tui::initial_state();
-    detail_mut(&mut s).gist_id = Some("g1".into());
-    s.apply_initial_comments(
-        "g1",
-        Ok(InitialComments {
-            comments: vec![sample_comment("newer", "n")],
-            total: 60,
-            oldest_page: 2,
-        }),
-    );
-    detail_mut(&mut s).scroll = 5;
-    // One older comment = 1 header + 1 body + 1 blank = 3 lines prepended.
-    s.apply_older_comments("g1", Ok(vec![sample_comment("older", "o")]));
-    assert_eq!(detail_ref(&s).comments_loaded_oldest_page, 1);
-    assert!(!s.can_load_older_comments()); // reached page 1
-    assert_eq!(detail_ref(&s).comments.as_ref().unwrap()[0].author, "older"); // prepended
-    assert_eq!(detail_ref(&s).scroll, 5 + 3); // viewport held in place
-    assert!(!detail_ref(&s).comments_loading_more);
-}
-
-#[test]
-fn can_load_older_false_while_loading_more() {
-    use crate::tui::InitialComments;
-    let mut s = crate::tui::initial_state();
-    detail_mut(&mut s).gist_id = Some("g1".into());
-    s.apply_initial_comments(
-        "g1",
-        Ok(InitialComments {
-            comments: vec![sample_comment("a", "x")],
-            total: 90,
-            oldest_page: 3,
-        }),
-    );
-    detail_mut(&mut s).comments_loading_more = true;
-    assert!(!s.can_load_older_comments());
-}
-
-#[test]
-fn m_key_loads_older_when_available() {
-    use crate::tui::InitialComments;
-    let mut s = crate::tui::initial_state();
-    s.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut s).focus = DetailFocus::Comments;
-    detail_mut(&mut s).gist_id = Some("g1".into());
-    s.apply_initial_comments(
-        "g1",
-        Ok(InitialComments {
-            comments: vec![sample_comment("a", "x")],
-            total: 90,
-            oldest_page: 3,
-        }),
-    );
-    let out = s.handle_key(KeyCode::Char('m'));
-    assert!(matches!(out, KeyOutcome::LoadOlderComments { .. }));
-}
-
-#[test]
-fn m_key_noop_when_at_oldest_page() {
-    use crate::tui::InitialComments;
-    let mut s = crate::tui::initial_state();
-    s.screen = Screen::GistDetail(Box::default());
-    detail_mut(&mut s).focus = DetailFocus::Comments;
-    detail_mut(&mut s).gist_id = Some("g1".into());
-    s.apply_initial_comments(
-        "g1",
-        Ok(InitialComments {
-            comments: vec![sample_comment("a", "x")],
-            total: 10,
-            oldest_page: 1,
-        }),
-    );
-    let out = s.handle_key(KeyCode::Char('m'));
-    assert!(matches!(out, KeyOutcome::None));
-}
-
 // ── palette tests ─────────────────────────────────────────────────────────────
-
-#[test]
-fn semicolon_opens_menu_palette() {
-    let mut state = crate::tui::initial_state();
-    state.handle_key(KeyCode::Char(';'));
-    assert!(state.screen.is_palette());
-    assert_eq!(
-        state.palette().unwrap().mode,
-        crate::tui::palette::PaletteMode::Menu
-    );
-    assert_eq!(state.palette().unwrap().origin_screen, Screen::List);
-}
 
 #[test]
 fn ctrl_p_opens_command_palette() {
@@ -6020,26 +3708,6 @@ fn ctrl_p_opens_command_palette() {
         state.palette().unwrap().mode,
         crate::tui::palette::PaletteMode::Command
     );
-}
-
-#[test]
-fn palette_esc_returns_to_origin() {
-    let mut state = crate::tui::initial_state();
-    state.screen = Screen::Pins(Box::default());
-    state.open_palette_menu(None);
-    assert!(state.screen.is_palette());
-    state.handle_key(KeyCode::Esc);
-    assert!(state.screen.is_pins());
-}
-
-#[test]
-fn palette_global_openers_do_not_replace_the_active_palette() {
-    let mut state = crate::tui::initial_state();
-    state.open_palette_menu(None);
-    state.handle_key_with(KeyCode::Char('p'), KeyModifiers::CONTROL);
-    assert!(state.screen.is_palette());
-    state.handle_key(KeyCode::Char(';'));
-    assert_eq!(state.screen, Screen::List);
 }
 
 #[test]
@@ -6111,14 +3779,6 @@ fn palette_row_line_aligns_long_keys() {
 }
 
 #[test]
-fn palette_blocked_during_confirm() {
-    let mut state = crate::tui::initial_state();
-    state.screen = Screen::Confirm(Box::default());
-    state.handle_key(KeyCode::Char(';'));
-    assert!(state.screen.is_confirm());
-}
-
-#[test]
 fn bg_task_generation_bumps_on_begin_and_invalidate() {
     let mut state = crate::tui::initial_state();
     assert_eq!(state.bg_task_generation, 0);
@@ -6177,96 +3837,6 @@ fn local_scan_generation_ignores_stale_results() {
 }
 
 #[test]
-fn open_config_does_not_write_config_file() {
-    // Point config_path() at a throwaway XDG dir and assert the *real* path stays absent
-    // after open_config() — not an unrelated tempfile the app never uses.
-    let _guard = crate::config::tests::ENV_MUTEX
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let dir = tempfile::tempdir().unwrap();
-    let prev = std::env::var_os("XDG_CONFIG_HOME");
-    std::env::set_var("XDG_CONFIG_HOME", dir.path());
-    let path = crate::config::config_path().unwrap();
-    assert_eq!(path, dir.path().join("gistui").join("config.toml"));
-    assert!(!path.exists());
-
-    let mut state = initial_state();
-    state.screen = Screen::List;
-    state.open_config();
-    assert!(state.screen.is_config());
-    // Opening alone must not create the file — persist only after a field change.
-    assert!(
-        !path.exists(),
-        "open_config must not create {}",
-        path.display()
-    );
-
-    match prev {
-        Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-        None => std::env::remove_var("XDG_CONFIG_HOME"),
-    }
-}
-
-#[test]
-fn adjust_config_mouse_updates_mouse_enabled_respecting_cli() {
-    let mut state = initial_state();
-    state.open_config();
-    config_mut(&mut state).index = ConfigField::ALL
-        .iter()
-        .position(|f| *f == ConfigField::Mouse)
-        .unwrap();
-    state.no_mouse_cli = false;
-    state.config_mouse = false;
-    state.mouse_enabled = false;
-
-    assert!(state.adjust_config_field(true));
-    assert!(state.config_mouse);
-    assert!(
-        state.mouse_enabled,
-        "toggling mouse on must enable session mouse when CLI does not force off"
-    );
-
-    // CLI --no-mouse still wins for the effective session flag.
-    state.no_mouse_cli = true;
-    state.config_mouse = false;
-    state.mouse_enabled = false;
-    assert!(state.adjust_config_field(true));
-    assert!(state.config_mouse);
-    assert!(
-        !state.mouse_enabled,
-        "--no-mouse must keep mouse_enabled false even when config prefers on"
-    );
-}
-
-#[test]
-fn config_adjust_theme_returns_persist_settings() {
-    let mut state = initial_state();
-    state.open_config();
-    // Theme is index 0
-    config_mut(&mut state).index = 0;
-    assert_eq!(state.theme_choice, crate::config::ThemeChoice::Dark);
-    assert!(state.adjust_config_field(true));
-    assert_eq!(state.theme_choice, crate::config::ThemeChoice::Light);
-    // Space on config screen yields PersistSettings
-    let outcome = state.handle_key(KeyCode::Char(' '));
-    assert_eq!(outcome, KeyOutcome::PersistSettings);
-}
-
-#[test]
-fn config_adjust_scan_depth_clamps_and_reports_change() {
-    let mut state = initial_state();
-    state.open_config();
-    config_mut(&mut state).index = ConfigField::ALL
-        .iter()
-        .position(|f| *f == ConfigField::ScanDepth)
-        .unwrap();
-    state.scan_depth = 0;
-    assert!(!state.adjust_config_field(false)); // already min
-    assert!(state.adjust_config_field(true));
-    assert_eq!(state.scan_depth, 1);
-}
-
-#[test]
 fn config_field_values_round_trip_via_save_config() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
@@ -6296,16 +3866,6 @@ fn config_field_values_round_trip_via_save_config() {
     assert!(!loaded.ignore_trailing_newline);
     assert_eq!(loaded.scan_depth, 5);
     assert_eq!(loaded.diff_context, 7);
-}
-
-#[test]
-fn config_c_key_opens_settings_from_list() {
-    let mut state = initial_state();
-    state.screen = Screen::List;
-    state.handle_key(KeyCode::Char('C'));
-    assert!(state.screen.is_config());
-    state.handle_key(KeyCode::Esc);
-    assert_eq!(state.screen, Screen::List);
 }
 
 #[test]

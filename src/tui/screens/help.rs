@@ -519,3 +519,148 @@ pub(crate) fn help_palette_items() -> Vec<crate::tui::palette::PaletteItem> {
         key_item("q", "Close Help", KeyCode::Char('q'), true),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::*;
+
+    use crate::tui::tests::{help_mut, help_ref, state_with_gists};
+
+    #[test]
+    fn help_topic_view_tab_opens_index_at_current_topic() {
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        help_mut(&mut state).topic = HelpTopic::GistManager; // index 2
+        state.handle_key(KeyCode::Tab);
+        assert!(help_ref(&state).index_open);
+        assert_eq!(help_ref(&state).index_sel, 2);
+    }
+
+    #[test]
+    fn help_topic_view_number_switches_topic() {
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        help_mut(&mut state).topic = HelpTopic::List;
+        help_mut(&mut state).scroll = 5;
+        state.handle_key(KeyCode::Char('2')); // 2 -> Pins (index 1)
+        assert_eq!(help_ref(&state).topic, HelpTopic::Pins);
+        assert_eq!(help_ref(&state).scroll, 0);
+        assert!(!help_ref(&state).index_open);
+    }
+
+    #[test]
+    fn help_topic_view_zero_key_switches_to_about() {
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        help_mut(&mut state).topic = HelpTopic::List;
+        help_mut(&mut state).scroll = 5;
+        state.handle_key(KeyCode::Char('0')); // 0 -> About (index 9, the 10th topic)
+        assert_eq!(help_ref(&state).topic, HelpTopic::About);
+        assert_eq!(help_ref(&state).scroll, 0);
+        assert!(!help_ref(&state).index_open);
+    }
+
+    #[test]
+    fn help_index_zero_key_opens_about_from_the_index_list() {
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        help_mut(&mut state).index_open = true;
+        state.handle_key(KeyCode::Char('0'));
+        assert!(!help_ref(&state).index_open);
+        assert_eq!(help_ref(&state).topic, HelpTopic::About);
+    }
+
+    #[test]
+    fn help_index_navigates_and_enter_opens_topic() {
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        help_mut(&mut state).index_open = true;
+        help_mut(&mut state).index_sel = 0;
+        state.handle_key(KeyCode::Down); // -> 1
+        state.handle_key(KeyCode::Down); // -> 2 (GistManager)
+        assert_eq!(help_ref(&state).index_sel, 2);
+        state.handle_key(KeyCode::Enter);
+        assert!(!help_ref(&state).index_open);
+        assert_eq!(help_ref(&state).topic, HelpTopic::GistManager);
+    }
+
+    #[test]
+    fn close_button_click_outside_is_noop() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Help(Box::default());
+        let layout = MouseLayout {
+            close_button: Some(Rect::new(36, 0, 5, 1)),
+            ..Default::default()
+        };
+        // col 35 is just outside the left edge of the close button
+        let out = state.handle_mouse(MouseInput::Click { col: 35, row: 0 }, &layout);
+        assert_eq!(out, KeyOutcome::None);
+        assert!(state.screen.is_help());
+    }
+
+    #[test]
+    fn click_off_list_screen_is_noop() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Help(Box::default());
+        let hit = PaneHit {
+            rect: Rect::new(20, 0, 20, 10),
+            offset: 0,
+        };
+        let layout = MouseLayout {
+            gist: Some(hit),
+            ..Default::default()
+        };
+        let before_screen = state.screen.clone();
+        let out = state.handle_mouse(MouseInput::Click { col: 25, row: 1 }, &layout);
+        assert_eq!(out, KeyOutcome::None);
+        assert_eq!(state.screen, before_screen);
+    }
+
+    #[test]
+    fn wheel_step_help_body_moves_three() {
+        // Help body (help_index_open = false): one scroll-down tick must advance help_scroll by 3.
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        help_mut(&mut state).index_open = false;
+        help_mut(&mut state).scroll = 0;
+        state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+        assert_eq!(help_ref(&state).scroll, 3);
+    }
+
+    #[test]
+    fn wheel_step_help_index_moves_one() {
+        // Help topic index (help_index_open = true): one scroll-down tick must move index by 1.
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        help_mut(&mut state).index_open = true;
+        help_mut(&mut state).index_sel = 0;
+        state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+        assert_eq!(help_ref(&state).index_sel, 1);
+    }
+
+    #[test]
+    fn help_index_click_selects_and_double_click_opens_topic() {
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        help_mut(&mut state).index_open = true;
+        let hit = PaneHit {
+            rect: Rect::new(0, 0, 40, 15),
+            offset: 0,
+        };
+        let layout = MouseLayout {
+            list: Some(hit),
+            ..Default::default()
+        };
+        // Row 2 is the 2nd content row (border at row 0) -> idx 1 (Pins).
+        let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
+        assert_eq!(out, KeyOutcome::None);
+        assert_eq!(help_ref(&state).index_sel, 1);
+        assert!(help_ref(&state).index_open); // a single click only selects, it doesn't open yet
+
+        let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
+        assert_eq!(by_mouse, KeyOutcome::None);
+        assert!(!help_ref(&state).index_open);
+        assert_eq!(help_ref(&state).topic, HelpTopic::Pins);
+    }
+}

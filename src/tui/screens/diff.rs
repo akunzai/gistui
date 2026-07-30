@@ -221,3 +221,113 @@ pub(crate) fn diff_palette_items(state: &AppState) -> Vec<crate::tui::palette::P
         key_item("q", "Back", KeyCode::Char('q'), true),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::*;
+
+    use crate::tui::tests::{set_diff_body, set_diff_scroll};
+
+    fn set_diff_hscroll(state: &mut AppState, hscroll: u16) {
+        match &mut state.screen {
+            Screen::Diff(d) => d.hscroll = hscroll,
+            Screen::Confirm(c) => c.hscroll = hscroll,
+            _ => {
+                state.screen = Screen::Diff(Box::new(DiffState {
+                    hscroll,
+                    ..DiffState::default()
+                }));
+            }
+        }
+    }
+
+    #[test]
+    fn diff_w_toggles_wrap_and_resets_hscroll() {
+        let mut state = initial_state();
+        state.screen = Screen::Diff(Box::default());
+        set_diff_hscroll(&mut state, 5);
+        assert!(!state.diff_wrap);
+        state.handle_key(KeyCode::Char('w'));
+        assert!(state.diff_wrap);
+        // Horizontal offset is meaningless once wrapping, so it resets.
+        assert_eq!(state.diff_hscroll(), 0);
+        state.handle_key(KeyCode::Char('w'));
+        assert!(!state.diff_wrap);
+    }
+
+    #[test]
+    fn diff_footer_reflects_wrap_toggle() {
+        let mut state = initial_state();
+        state.screen = Screen::Diff(Box::default());
+        assert!(diff_footer(&state).contains("w wrap [off]"));
+        state.diff_wrap = true;
+        let footer = diff_footer(&state);
+        assert!(footer.contains("w wrap [on]"));
+        // The horizontal-scroll arrows are dropped from the hint when wrapping.
+        assert!(!footer.contains("←→"));
+    }
+
+    #[test]
+    fn page_up_saturates_at_top_in_diff() {
+        let mut state = initial_state();
+        state.screen = Screen::Diff(Box::default());
+        set_diff_body(&mut state, "a\nb\nc");
+        set_diff_scroll(&mut state, 1);
+        state.handle_key(KeyCode::PageUp);
+        assert_eq!(state.diff_scroll(), 0);
+    }
+
+    #[test]
+    fn diff_context_toggle_flips_effective_radius() {
+        let mut state = initial_state();
+        state.diff_context = 3;
+        assert_eq!(state.effective_diff_context(), Some(3));
+
+        // Pressing `c` in the diff view flips to full view and resets the scroll.
+        state.screen = Screen::Diff(Box::default());
+        set_diff_scroll(&mut state, 12);
+        let outcome = state.handle_key(KeyCode::Char('c'));
+        assert_eq!(outcome, KeyOutcome::PersistDiffContext);
+        assert!(state.diff_show_full);
+        assert_eq!(state.diff_scroll(), 0);
+        assert_eq!(state.effective_diff_context(), None);
+
+        // Pressing it again returns to the configured radius.
+        state.handle_key(KeyCode::Char('c'));
+        assert!(!state.diff_show_full);
+        assert_eq!(state.effective_diff_context(), Some(3));
+    }
+
+    #[test]
+    fn u_in_diff_screen_returns_upload_intent() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/config"),
+            pinned: false,
+            modified: None,
+        }];
+        state.gists = vec![GistFile {
+            gist_id: "a".into(),
+            description: "x".into(),
+            filename: "settings.json".into(),
+            public: false,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            owner_login: String::new(),
+            fork_of_id: None,
+
+            raw_url: None,
+
+            content_type: None,
+
+            node_id: None,
+        }];
+        state.screen = Screen::Diff(Box::default());
+        // The gist has no "config" file -> case B -> add directly.
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('u')),
+            KeyOutcome::UploadAdd { .. }
+        ));
+    }
+}
