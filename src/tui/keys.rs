@@ -85,9 +85,7 @@ impl AppState {
         // be typed into filters and description editors.
         if code == KeyCode::Char('T')
             && theme_toggle_modifiers_ok(modifiers)
-            && !self.filtering
-            && !self.pins().is_some_and(|p| p.filtering)
-            && !self.gist_manager().is_some_and(|g| g.filtering)
+            && !self.is_any_filtering()
             && !self.editing_description
         {
             self.theme_choice = match self.theme_choice {
@@ -186,11 +184,7 @@ impl AppState {
         }
         // While filtering, arrows/hjkl are typed or handled in the filter branches; page keys
         // still jump the live selection by PAGE_SCROLL.
-        if (self.filtering
-            || self.pins().is_some_and(|p| p.filtering)
-            || self.gist_manager().is_some_and(|g| g.filtering))
-            && !matches!(action, NavAction::PageUp | NavAction::PageDown)
-        {
+        if self.is_any_filtering() && !matches!(action, NavAction::PageUp | NavAction::PageDown) {
             return false;
         }
         // Pins/Gists dispatch before the match below (issue #274: cannot hold `&mut PinsState`

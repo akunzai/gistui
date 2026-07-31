@@ -1144,6 +1144,14 @@ impl AppState {
             .find(|s| tag(s))
     }
 
+    /// True when List, Pins, or the Gists manager has an active filter query (issue #319).
+    /// Centralizes the 3-way guard that was duplicated across `keys.rs` and `palette.rs`.
+    pub fn is_any_filtering(&self) -> bool {
+        self.filtering
+            || self.pins().is_some_and(|p| p.filtering)
+            || self.gist_manager().is_some_and(|g| g.filtering)
+    }
+
     screen_payload_accessor! {
         /// Help payload when Help is active, or when the palette is open over Help (issue #242).
         help, help_mut, is_help, HelpState, help_state, help_state_mut,
