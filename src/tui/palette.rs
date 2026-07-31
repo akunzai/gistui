@@ -50,11 +50,7 @@ pub struct PaletteState {
 impl AppState {
     /// Whether a global palette opener (`;` / `Ctrl+p`) should be ignored right now.
     pub(crate) fn palette_blocked(&self) -> bool {
-        self.screen.is_confirm()
-            || self.filtering
-            || self.pins().is_some_and(|p| p.filtering)
-            || self.gist_manager().is_some_and(|g| g.filtering)
-            || self.editing_description
+        self.screen.is_confirm() || self.is_any_filtering() || self.editing_description
     }
 
     pub(crate) fn open_palette_menu(&mut self, anchor: Option<(u16, u16)>) {
