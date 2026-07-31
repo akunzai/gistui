@@ -410,17 +410,8 @@ pub(super) fn dispatch_outcome(
                 return Ok(LoopFlow::Proceed);
             };
             let m = state.pinned[idx].clone();
-            match state.compute_pin_sync_status(idx) {
-                crate::domain::SyncStatus::Push => spawn_pin_push(state, jobs, &m),
-                crate::domain::SyncStatus::Pull => spawn_pin_pull(state, jobs, &m),
-                crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
-                crate::domain::SyncStatus::Missing => {
-                    state.set_status("local file is missing — use d to pull it back")
-                }
-                crate::domain::SyncStatus::Unknown => {
-                    state.set_status("can't tell which side is newer — use u to push or d to pull")
-                }
-            }
+            let status = state.compute_pin_sync_status(idx);
+            apply_sync_status(state, jobs, &m, status);
         }
         KeyOutcome::SyncPinPush { index } => {
             if let Some(m) = state.pinned.get(index).cloned() {
@@ -436,17 +427,8 @@ pub(super) fn dispatch_outcome(
             let Some(m) = state.pinned.get(index).cloned() else {
                 return Ok(LoopFlow::Proceed);
             };
-            match state.compute_pin_sync_status(index) {
-                crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
-                crate::domain::SyncStatus::Pull => spawn_pin_pull(state, jobs, &m),
-                crate::domain::SyncStatus::Push => spawn_pin_push(state, jobs, &m),
-                crate::domain::SyncStatus::Missing => {
-                    state.set_status("local file is missing — use d to pull it back")
-                }
-                crate::domain::SyncStatus::Unknown => {
-                    state.set_status("can't tell which side is newer — use u to push or d to pull")
-                }
-            }
+            let status = state.compute_pin_sync_status(index);
+            apply_sync_status(state, jobs, &m, status);
         }
         KeyOutcome::PreviewPinDiff { index } => {
             if let Some(m) = state.pinned.get(index).cloned() {
@@ -619,4 +601,26 @@ pub(super) fn dispatch_outcome(
         KeyOutcome::None => {}
     }
     Ok(LoopFlow::Proceed)
+}
+
+/// What to do for each [`crate::domain::SyncStatus`] arm of a pinned mapping (issue #320):
+/// push/pull the resolved side, or report why neither applies. Shared by
+/// `SyncSelectedPair` and `SyncPinAuto`, which only differ in how they resolve `m`.
+fn apply_sync_status(
+    state: &mut AppState,
+    jobs: &mut Jobs,
+    m: &crate::domain::PinnedMapping,
+    status: crate::domain::SyncStatus,
+) {
+    match status {
+        crate::domain::SyncStatus::Push => spawn_pin_push(state, jobs, m),
+        crate::domain::SyncStatus::Pull => spawn_pin_pull(state, jobs, m),
+        crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
+        crate::domain::SyncStatus::Missing => {
+            state.set_status("local file is missing — use d to pull it back")
+        }
+        crate::domain::SyncStatus::Unknown => {
+            state.set_status("can't tell which side is newer — use u to push or d to pull")
+        }
+    }
 }
