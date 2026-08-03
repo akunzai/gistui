@@ -12,5 +12,12 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
+    # Floating major tags already track latest minor/patch at runtime.
+    # Only surface major action upgrades.
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-patch
     commit-message:
       prefix: ci
