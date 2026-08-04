@@ -404,29 +404,11 @@ pub(super) fn footer_with_status(status: Option<&str>, hints: &str) -> (String, 
 
 pub(super) use super::text::hscroll_str;
 
-/// How a file-list row should be flagged: 📌 = an existing pinned pair; same-name = bold; else none.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RowMark {
-    Pinned,
-    SameName,
-    None,
-}
-
-pub(super) fn row_mark(reasons: &[MatchReason]) -> RowMark {
-    if reasons.contains(&MatchReason::Pinned) {
-        RowMark::Pinned
-    } else if reasons.contains(&MatchReason::ExactFilename) {
-        RowMark::SameName
-    } else {
-        RowMark::None
-    }
-}
-
 /// Compose the full list-row string (including pin mark) that paint and hscroll max must share.
-pub(super) fn marked_row_text(base: String, mark: RowMark) -> String {
+pub(super) fn marked_row_text(base: String, mark: crate::ranking::MatchMark) -> String {
     match mark {
-        RowMark::Pinned => format!("📌 {base}"),
-        RowMark::SameName | RowMark::None => base,
+        crate::ranking::MatchMark::Pinned => format!("📌 {base}"),
+        crate::ranking::MatchMark::ExactFilename | crate::ranking::MatchMark::None => base,
     }
 }
 
@@ -659,6 +641,36 @@ pub(super) fn apply_hscroll_spans(spans: Vec<Span<'static>>, hscroll: usize) -> 
     Line::from(visible)
 }
 
+/// Word-level inline highlight for a unified-diff `-`/`+` line.
+/// `bold_tag` is the change side that gets BOLD (`Delete` for del, `Insert` for ins).
+fn inline_change_line(
+    del_line: &str,
+    ins_line: &str,
+    hscroll: usize,
+    color: Color,
+    prefix: char,
+    bold_tag: ChangeTag,
+) -> Line<'static> {
+    let del_content = del_line.get(1..).unwrap_or("");
+    let ins_content = ins_line.get(1..).unwrap_or("");
+    let mut spans = vec![Span::styled(prefix.to_string(), Style::default().fg(color))];
+    for change in TextDiff::from_words(del_content, ins_content).iter_all_changes() {
+        let tag = change.tag();
+        if tag == bold_tag {
+            spans.push(Span::styled(
+                change.value().to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ));
+        } else if tag == ChangeTag::Equal {
+            spans.push(Span::styled(
+                change.value().to_string(),
+                Style::default().fg(color),
+            ));
+        }
+    }
+    apply_hscroll_spans(spans, hscroll)
+}
+
 /// Del line with word-level highlighting: changed words bold-red, unchanged words plain red.
 pub(super) fn inline_del_line(
     del_line: &str,
@@ -666,23 +678,14 @@ pub(super) fn inline_del_line(
     hscroll: usize,
     del_color: Color,
 ) -> Line<'static> {
-    let del_content = del_line.get(1..).unwrap_or("");
-    let ins_content = ins_line.get(1..).unwrap_or("");
-    let mut spans = vec![Span::styled("-", Style::default().fg(del_color))];
-    for change in TextDiff::from_words(del_content, ins_content).iter_all_changes() {
-        match change.tag() {
-            ChangeTag::Delete => spans.push(Span::styled(
-                change.value().to_string(),
-                Style::default().fg(del_color).add_modifier(Modifier::BOLD),
-            )),
-            ChangeTag::Equal => spans.push(Span::styled(
-                change.value().to_string(),
-                Style::default().fg(del_color),
-            )),
-            ChangeTag::Insert => {}
-        }
-    }
-    apply_hscroll_spans(spans, hscroll)
+    inline_change_line(
+        del_line,
+        ins_line,
+        hscroll,
+        del_color,
+        '-',
+        ChangeTag::Delete,
+    )
 }
 
 /// Ins line with word-level highlighting: changed words bold-green, unchanged words plain green.
@@ -692,23 +695,14 @@ pub(super) fn inline_ins_line(
     hscroll: usize,
     ins_color: Color,
 ) -> Line<'static> {
-    let del_content = del_line.get(1..).unwrap_or("");
-    let ins_content = ins_line.get(1..).unwrap_or("");
-    let mut spans = vec![Span::styled("+", Style::default().fg(ins_color))];
-    for change in TextDiff::from_words(del_content, ins_content).iter_all_changes() {
-        match change.tag() {
-            ChangeTag::Insert => spans.push(Span::styled(
-                change.value().to_string(),
-                Style::default().fg(ins_color).add_modifier(Modifier::BOLD),
-            )),
-            ChangeTag::Equal => spans.push(Span::styled(
-                change.value().to_string(),
-                Style::default().fg(ins_color),
-            )),
-            ChangeTag::Delete => {}
-        }
-    }
-    apply_hscroll_spans(spans, hscroll)
+    inline_change_line(
+        del_line,
+        ins_line,
+        hscroll,
+        ins_color,
+        '+',
+        ChangeTag::Insert,
+    )
 }
 
 /// Renders a `--- /+++` header line, tinting the leading `local`/`gist` keyword (yellow/blue)

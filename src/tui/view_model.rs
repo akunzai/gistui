@@ -4,8 +4,8 @@
 //! Builders never touch the filesystem or network (issues #241 / #250).
 
 use super::render::{
-    gist_info_line, gist_row_label, is_json_file, spinner_glyph, unix_now, RowMark,
-    CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX,
+    gist_info_line, gist_row_label, is_json_file, spinner_glyph, unix_now, CREATE_DESC_PREFIX,
+    CREATE_DESC_SUFFIX,
 };
 use super::screens::{
     config::build_config_vm as build_config, confirm::build_confirm_vm as build_confirm,
@@ -19,7 +19,7 @@ use super::{
     AppState, DetailFocus, FocusPane, GistView, PaletteMode, PendingAction, Screen, TextInput,
 };
 use crate::domain::SyncStatus;
-use crate::ranking::RankedGistFile;
+use crate::ranking::{MatchMark, RankedGistFile};
 use ratatui::style::Color;
 
 /// Full-frame presentation contract produced by [`build_view_model`].
@@ -258,7 +258,7 @@ pub enum ListPaneEmpty {
 pub struct ListRowVm {
     /// Full row text including pin mark prefix, before horizontal scroll.
     pub label: String,
-    pub mark: RowMark,
+    pub mark: MatchMark,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -787,7 +787,7 @@ mod tests {
                     .iter()
                     .chain(list.gist.rows.iter())
                     .any(|r| {
-                        matches!(r.mark, RowMark::Pinned | RowMark::SameName)
+                        matches!(r.mark, MatchMark::Pinned | MatchMark::ExactFilename)
                             || r.label.contains('📌')
                     });
                 assert!(

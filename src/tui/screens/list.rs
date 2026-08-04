@@ -204,8 +204,7 @@ impl AppState {
             // (`dispatch.rs`) checks pin membership downstream and reports "pair is not
             // pinned" there. `list_guard`'s `S` case (used by the palette) is stricter.
             KeyCode::Char('S') => {
-                let (Some(local), Some(gist)) = (self.selected_local(), self.selected_gist())
-                else {
+                let (Some(local), Some(gist)) = self.selected_pair() else {
                     return KeyOutcome::None;
                 };
                 return KeyOutcome::SyncSelectedPair {
@@ -517,11 +516,10 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
         local_rows = visible_locals
             .iter()
             .map(|r| {
-                let mark = crate::tui::render::row_mark(&r.reasons);
                 let base = crate::tui::text::local_row_label(&r.candidate.path, &state.cwd);
                 ListRowVm {
-                    label: crate::tui::render::marked_row_text(base, mark),
-                    mark,
+                    label: crate::tui::render::marked_row_text(base, r.mark),
+                    mark: r.mark,
                 }
             })
             .collect();
@@ -569,11 +567,10 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
         gist_rows = ranked
             .iter()
             .map(|g| {
-                let mark = crate::tui::render::row_mark(&g.reasons);
                 let base = crate::tui::gist_row_display(g, state.gist_view, state);
                 ListRowVm {
-                    label: crate::tui::render::marked_row_text(base, mark),
-                    mark,
+                    label: crate::tui::render::marked_row_text(base, g.mark),
+                    mark: g.mark,
                 }
             })
             .collect();
@@ -645,11 +642,10 @@ fn list_pane_items(
             .iter()
             .map(|row| {
                 let item = ListItem::new(crate::tui::render::hscroll_str(&row.label, hscroll));
-                match row.mark {
-                    crate::tui::render::RowMark::SameName => {
-                        item.style(Style::default().add_modifier(Modifier::BOLD))
-                    }
-                    crate::tui::render::RowMark::Pinned | crate::tui::render::RowMark::None => item,
+                if matches!(row.mark, crate::ranking::MatchMark::ExactFilename) {
+                    item.style(Style::default().add_modifier(Modifier::BOLD))
+                } else {
+                    item
                 }
             })
             .collect(),

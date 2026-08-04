@@ -467,6 +467,8 @@ fn compact_in_dir(gist_id: &str, dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Runs a planned command with the real process boundary ([`SystemRunner`]).
+/// Prefer this over spelling `run_command(&SystemRunner, …)` at every write path.
 pub fn execute_command(plan: &CommandPlan) -> Result<String> {
     run_command(&SystemRunner, plan)
 }

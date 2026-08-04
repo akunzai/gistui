@@ -2,7 +2,7 @@ use crate::domain::{
     group_gists, GistComment, GistFile, GistFileRef, GistGroup, GistRevision, LocalCandidate,
     PinnedMapping,
 };
-use crate::ranking::{MatchReason, RankedGistFile, RankedLocal};
+use crate::ranking::{RankedGistFile, RankedLocal};
 use anyhow::Result;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -51,189 +51,83 @@ pub enum Screen {
     Config(Box<ConfigState>),
 }
 
+/// Tag + payload accessors for one `Screen` variant (`is_*` / `*_state` / `*_state_mut`).
+macro_rules! screen_payload {
+    ($is:ident, $variant:ident, $get:ident, $get_mut:ident, $ty:ty) => {
+        pub fn $is(&self) -> bool {
+            matches!(self, Screen::$variant(_))
+        }
+
+        pub fn $get(&self) -> Option<&$ty> {
+            match self {
+                Screen::$variant(p) => Some(p),
+                _ => None,
+            }
+        }
+
+        pub fn $get_mut(&mut self) -> Option<&mut $ty> {
+            match self {
+                Screen::$variant(p) => Some(p),
+                _ => None,
+            }
+        }
+    };
+}
+
 impl Screen {
-    /// Tag equality ignoring payloads (e.g. "are we on Help?" regardless of topic).
-    pub fn is_help(&self) -> bool {
-        matches!(self, Screen::Help(_))
-    }
-
-    pub fn is_config(&self) -> bool {
-        matches!(self, Screen::Config(_))
-    }
-
-    pub fn is_revisions(&self) -> bool {
-        matches!(self, Screen::Revisions(_))
-    }
-
-    pub fn is_pins(&self) -> bool {
-        matches!(self, Screen::Pins(_))
-    }
-
-    pub fn is_gists(&self) -> bool {
-        matches!(self, Screen::Gists(_))
-    }
-
-    pub fn is_gist_detail(&self) -> bool {
-        matches!(self, Screen::GistDetail(_))
-    }
-
-    pub fn is_palette(&self) -> bool {
-        matches!(self, Screen::Palette(_))
-    }
-
-    pub fn is_preview(&self) -> bool {
-        matches!(self, Screen::Preview(_))
-    }
-
-    pub fn is_diff(&self) -> bool {
-        matches!(self, Screen::Diff(_))
-    }
-
-    pub fn is_confirm(&self) -> bool {
-        matches!(self, Screen::Confirm(_))
-    }
-
-    /// Borrow help payload when this is [`Screen::Help`].
-    pub fn help_state(&self) -> Option<&HelpState> {
-        match self {
-            Screen::Help(h) => Some(h),
-            _ => None,
-        }
-    }
-
-    /// Mutable help payload when this is [`Screen::Help`].
-    pub fn help_state_mut(&mut self) -> Option<&mut HelpState> {
-        match self {
-            Screen::Help(h) => Some(h),
-            _ => None,
-        }
-    }
-
-    pub fn config_state(&self) -> Option<&ConfigState> {
-        match self {
-            Screen::Config(c) => Some(c.as_ref()),
-            _ => None,
-        }
-    }
-
-    pub fn config_state_mut(&mut self) -> Option<&mut ConfigState> {
-        match self {
-            Screen::Config(c) => Some(c.as_mut()),
-            _ => None,
-        }
-    }
-
-    pub fn revision_state(&self) -> Option<&RevisionState> {
-        match self {
-            Screen::Revisions(r) => Some(r.as_ref()),
-            _ => None,
-        }
-    }
-
-    pub fn revision_state_mut(&mut self) -> Option<&mut RevisionState> {
-        match self {
-            Screen::Revisions(r) => Some(r.as_mut()),
-            _ => None,
-        }
-    }
-
-    pub fn pins_state(&self) -> Option<&PinsState> {
-        match self {
-            Screen::Pins(p) => Some(p.as_ref()),
-            _ => None,
-        }
-    }
-
-    pub fn pins_state_mut(&mut self) -> Option<&mut PinsState> {
-        match self {
-            Screen::Pins(p) => Some(p.as_mut()),
-            _ => None,
-        }
-    }
-
-    pub fn gists_state(&self) -> Option<&GistsManagerState> {
-        match self {
-            Screen::Gists(g) => Some(g.as_ref()),
-            _ => None,
-        }
-    }
-
-    pub fn gists_state_mut(&mut self) -> Option<&mut GistsManagerState> {
-        match self {
-            Screen::Gists(g) => Some(g.as_mut()),
-            _ => None,
-        }
-    }
-
-    pub fn detail_state(&self) -> Option<&DetailState> {
-        match self {
-            Screen::GistDetail(d) => Some(d.as_ref()),
-            _ => None,
-        }
-    }
-
-    pub fn detail_state_mut(&mut self) -> Option<&mut DetailState> {
-        match self {
-            Screen::GistDetail(d) => Some(d.as_mut()),
-            _ => None,
-        }
-    }
-
-    pub fn palette_state(&self) -> Option<&PaletteState> {
-        match self {
-            Screen::Palette(p) => Some(p.as_ref()),
-            _ => None,
-        }
-    }
-
-    pub fn palette_state_mut(&mut self) -> Option<&mut PaletteState> {
-        match self {
-            Screen::Palette(p) => Some(p.as_mut()),
-            _ => None,
-        }
-    }
-
-    pub fn preview_state(&self) -> Option<&PreviewState> {
-        match self {
-            Screen::Preview(p) => Some(p.as_ref()),
-            _ => None,
-        }
-    }
-
-    pub fn preview_state_mut(&mut self) -> Option<&mut PreviewState> {
-        match self {
-            Screen::Preview(p) => Some(p.as_mut()),
-            _ => None,
-        }
-    }
-
-    pub fn diff_state(&self) -> Option<&DiffState> {
-        match self {
-            Screen::Diff(d) => Some(d.as_ref()),
-            _ => None,
-        }
-    }
-
-    pub fn diff_state_mut(&mut self) -> Option<&mut DiffState> {
-        match self {
-            Screen::Diff(d) => Some(d.as_mut()),
-            _ => None,
-        }
-    }
-
-    pub fn confirm_state(&self) -> Option<&ConfirmState> {
-        match self {
-            Screen::Confirm(c) => Some(c.as_ref()),
-            _ => None,
-        }
-    }
-
-    pub fn confirm_state_mut(&mut self) -> Option<&mut ConfirmState> {
-        match self {
-            Screen::Confirm(c) => Some(c.as_mut()),
-            _ => None,
-        }
-    }
+    // Tag equality ignoring payloads (e.g. "are we on Help?" regardless of topic).
+    screen_payload!(is_help, Help, help_state, help_state_mut, HelpState);
+    screen_payload!(
+        is_config,
+        Config,
+        config_state,
+        config_state_mut,
+        ConfigState
+    );
+    screen_payload!(
+        is_revisions,
+        Revisions,
+        revision_state,
+        revision_state_mut,
+        RevisionState
+    );
+    screen_payload!(is_pins, Pins, pins_state, pins_state_mut, PinsState);
+    screen_payload!(
+        is_gists,
+        Gists,
+        gists_state,
+        gists_state_mut,
+        GistsManagerState
+    );
+    screen_payload!(
+        is_gist_detail,
+        GistDetail,
+        detail_state,
+        detail_state_mut,
+        DetailState
+    );
+    screen_payload!(
+        is_palette,
+        Palette,
+        palette_state,
+        palette_state_mut,
+        PaletteState
+    );
+    screen_payload!(
+        is_preview,
+        Preview,
+        preview_state,
+        preview_state_mut,
+        PreviewState
+    );
+    screen_payload!(is_diff, Diff, diff_state, diff_state_mut, DiffState);
+    screen_payload!(
+        is_confirm,
+        Confirm,
+        confirm_state,
+        confirm_state_mut,
+        ConfirmState
+    );
 }
 
 /// Fields shown on [`Screen::Config`] in order (issue #227).
@@ -1025,7 +919,7 @@ pub struct AppState {
     /// How this binary was installed — resolved once at startup so the update hint can show
     /// the right upgrade command without per-frame IO.
     pub install_method: crate::upgrade::InstallMethod,
-    pub gist_content_cache: crate::lru::LruCache<(String, String), String>,
+    pub(crate) gist_content_cache: crate::lru::LruCache<(String, String), String>,
     pub local_recursive: bool,
     pub skip_dirs: Vec<String>,
     pub scan_depth: u32,
@@ -1931,7 +1825,7 @@ impl AppState {
                 }
             };
         }
-        let (Some(local), Some(gist)) = (self.selected_local(), self.selected_gist()) else {
+        let (Some(local), Some(gist)) = self.selected_pair() else {
             self.status = Some("select a local file and a gist to upload".into());
             return KeyOutcome::None;
         };
@@ -1975,18 +1869,16 @@ impl AppState {
     fn focused_hscroll_max(&self) -> u16 {
         let (visible_locals, ranked) = self.list_pane_snapshots();
         match self.focus {
-            FocusPane::Local => hscroll_max_among(visible_locals.iter().map(|r| {
-                marked_row_text(
-                    local_row_label(&r.candidate.path, &self.cwd),
-                    row_mark(&r.reasons),
-                )
-            })),
-            FocusPane::Gist => hscroll_max_among(ranked.iter().map(|g| {
-                marked_row_text(
-                    gist_row_display(g, self.gist_view, self),
-                    row_mark(&g.reasons),
-                )
-            })),
+            FocusPane::Local => {
+                hscroll_max_among(visible_locals.iter().map(|r| {
+                    marked_row_text(local_row_label(&r.candidate.path, &self.cwd), r.mark)
+                }))
+            }
+            FocusPane::Gist => hscroll_max_among(
+                ranked
+                    .iter()
+                    .map(|g| marked_row_text(gist_row_display(g, self.gist_view, self), g.mark)),
+            ),
         }
     }
 
@@ -2289,11 +2181,11 @@ pub fn load_startup_state(no_mouse: bool, no_update_check: bool) -> Result<AppSt
     state.syntax_highlight = std::env::var_os("NO_COLOR").is_none();
     state.config_mouse = config.mouse;
     state.no_mouse_cli = no_mouse;
-    state.mouse_enabled = crate::config::resolve_mouse_enabled(config.mouse, no_mouse);
+    // `--no-mouse` / `--no-update-check` force off; no flag forces on (edit config instead).
+    state.mouse_enabled = config.mouse && !no_mouse;
     state.config_check_updates = config.check_updates;
     state.no_update_check_cli = no_update_check;
-    state.update_check_enabled =
-        crate::config::resolve_update_check(config.check_updates, no_update_check);
+    state.update_check_enabled = config.check_updates && !no_update_check;
     // Surface a previously-seen newer release immediately (even when the daily check is
     // throttled), so the hint persists across launches without re-hitting the network.
     if state.update_check_enabled {

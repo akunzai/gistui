@@ -10,7 +10,7 @@ use std::hash::Hash;
 /// cache past its capacity, the least-recently-used entry is evicted. Both `get` and `insert`
 /// count as a use (they mark the entry most-recently-used).
 #[derive(Debug, Clone)]
-pub struct LruCache<K, V> {
+pub(crate) struct LruCache<K, V> {
     map: HashMap<K, V>,
     /// Keys ordered least- to most-recently used (back = most recent).
     order: Vec<K>,
@@ -20,7 +20,7 @@ pub struct LruCache<K, V> {
 impl<K: Clone + Eq + Hash, V> LruCache<K, V> {
     /// Create a cache holding at most `capacity` entries. A `capacity` of 0 is clamped to 1 so
     /// the cache always retains at least the most recent entry.
-    pub fn new(capacity: usize) -> Self {
+    pub(crate) fn new(capacity: usize) -> Self {
         Self {
             map: HashMap::new(),
             order: Vec::new(),
@@ -29,17 +29,13 @@ impl<K: Clone + Eq + Hash, V> LruCache<K, V> {
     }
 
     /// Number of entries currently held.
-    pub fn len(&self) -> usize {
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
         self.map.len()
     }
 
-    /// Whether the cache holds no entries.
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
-    }
-
     /// Fetch a value, marking it most-recently-used.
-    pub fn get(&mut self, key: &K) -> Option<&V> {
+    pub(crate) fn get(&mut self, key: &K) -> Option<&V> {
         if self.map.contains_key(key) {
             self.touch(key);
             self.map.get(key)
@@ -50,7 +46,7 @@ impl<K: Clone + Eq + Hash, V> LruCache<K, V> {
 
     /// Insert or replace a value, marking it most-recently-used and evicting the
     /// least-recently-used entry if that pushes the cache past its capacity.
-    pub fn insert(&mut self, key: K, value: V) {
+    pub(crate) fn insert(&mut self, key: K, value: V) {
         if self.map.insert(key.clone(), value).is_some() {
             self.touch(&key);
         } else {
@@ -63,7 +59,7 @@ impl<K: Clone + Eq + Hash, V> LruCache<K, V> {
     }
 
     /// Remove a value, if present, returning it.
-    pub fn remove(&mut self, key: &K) -> Option<V> {
+    pub(crate) fn remove(&mut self, key: &K) -> Option<V> {
         if let Some(pos) = self.order.iter().position(|k| k == key) {
             self.order.remove(pos);
         }
