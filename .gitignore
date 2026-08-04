@@ -1,9 +1,6 @@
 /target/
-.superpowers/
 # JetBrains IDE project files
 /.idea/
 # Python bytecode from the demo harness (scripts/demo/)
 __pycache__/
 *.pyc
-# Superpowers workflow artifacts (brainstorm specs / implementation plans) — kept local only
-/docs/superpowers/
