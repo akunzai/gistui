@@ -119,9 +119,8 @@ pub use comments::{
 mod forks;
 pub use forks::{
     apply_fork_of_ids, collect_gist_fork_counts, collect_gist_fork_counts_with,
-    collect_owned_fork_of_ids, collect_owned_fork_of_ids_with, fetch_forked_gist_ids_graphql,
-    fetch_forked_gist_ids_graphql_with, fetch_gist_fork_count, fetch_gist_fork_count_with,
-    fetch_gist_fork_of_id, fetch_gist_fork_of_id_with, gist_detail_plan,
+    collect_owned_fork_of_ids, collect_owned_fork_of_ids_with, fetch_forked_gist_ids_graphql_with,
+    fetch_gist_fork_count_with, fetch_gist_fork_of_id_with, gist_detail_plan,
     gist_fork_flags_graphql_plan, gist_forks_plan, parse_forked_gist_ids_graphql,
     parse_gist_fork_counts,
 };
@@ -138,10 +137,10 @@ pub use gists::{
 mod revisions;
 pub use revisions::{
     build_gist_revision_raw_url, fetch_gist_commits_json, fetch_gist_commits_json_with,
-    fetch_gist_revision_json, fetch_gist_revision_json_with, fetch_revision_file_text,
-    fetch_revision_file_text_optional, fetch_revision_file_text_optional_with,
-    fetch_revision_file_text_with, fetch_revision_file_with, gist_commits_plan, gist_revision_plan,
-    parse_gist_commits_json, revision_file_content, RevisionFileContent,
+    fetch_gist_revision_json_with, fetch_revision_file_text, fetch_revision_file_text_optional,
+    fetch_revision_file_text_optional_with, fetch_revision_file_text_with,
+    fetch_revision_file_with, gist_commits_plan, gist_revision_plan, parse_gist_commits_json,
+    revision_file_content, RevisionFileContent,
 };
 
 mod stars;

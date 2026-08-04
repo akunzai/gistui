@@ -86,10 +86,6 @@ fn walk_recursive(
     }
 }
 
-pub fn is_empty_candidate_mode(candidates: &[LocalCandidate]) -> bool {
-    candidates.is_empty()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,11 +140,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_candidate_mode_when_nothing_found() {
+    fn empty_dir_yields_no_candidates() {
         let dir = tempfile::tempdir().unwrap();
         let candidates =
             discover_local_candidates(dir.path(), &[], false, &default_skip(), 10).unwrap();
-        assert!(is_empty_candidate_mode(&candidates));
+        assert!(candidates.is_empty());
     }
 
     #[test]

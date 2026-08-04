@@ -79,16 +79,12 @@ impl AppState {
             }
             ConfigField::Mouse => {
                 self.config_mouse = !self.config_mouse;
-                self.mouse_enabled =
-                    crate::config::resolve_mouse_enabled(self.config_mouse, self.no_mouse_cli);
+                self.mouse_enabled = self.config_mouse && !self.no_mouse_cli;
                 true
             }
             ConfigField::CheckUpdates => {
                 self.config_check_updates = !self.config_check_updates;
-                self.update_check_enabled = crate::config::resolve_update_check(
-                    self.config_check_updates,
-                    self.no_update_check_cli,
-                );
+                self.update_check_enabled = self.config_check_updates && !self.no_update_check_cli;
                 true
             }
             ConfigField::IgnoreTrailingNewline => {

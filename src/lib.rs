@@ -5,7 +5,7 @@ pub mod diff;
 pub mod domain;
 pub mod gh;
 pub mod local;
-pub mod lru;
+pub(crate) mod lru;
 pub mod ranking;
 pub mod temp_dir;
 pub mod tui;

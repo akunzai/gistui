@@ -29,10 +29,6 @@ pub fn gist_forks_plan(gist_id: &str) -> CommandPlan {
     }
 }
 
-pub fn fetch_gist_fork_count(gist_id: &str) -> Result<u32> {
-    fetch_gist_fork_count_with(&SystemRunner, gist_id)
-}
-
 pub fn fetch_gist_fork_count_with(runner: &dyn CommandRunner, gist_id: &str) -> Result<u32> {
     let raw = run_command(runner, &gist_forks_plan(gist_id))?;
     let forks: Vec<serde_json::Value> = serde_json::from_str(&raw).context("parse gist forks")?;
@@ -76,10 +72,6 @@ pub fn gist_detail_plan(gist_id: &str) -> CommandPlan {
         program: "gh".into(),
         args: vec!["api".into(), format!("/gists/{gist_id}")],
     }
-}
-
-pub fn fetch_forked_gist_ids_graphql() -> Result<HashSet<String>> {
-    fetch_forked_gist_ids_graphql_with(&SystemRunner)
 }
 
 pub fn fetch_forked_gist_ids_graphql_with(runner: &dyn CommandRunner) -> Result<HashSet<String>> {
@@ -160,10 +152,6 @@ fn parse_fork_flags_page(raw: &str) -> Result<(HashSet<String>, Option<String>)>
 /// Pagination is handled by [`fetch_forked_gist_ids_graphql_with`].
 pub fn parse_forked_gist_ids_graphql(raw: &str) -> Result<HashSet<String>> {
     parse_fork_flags_page(raw).map(|(ids, _)| ids)
-}
-
-pub fn fetch_gist_fork_of_id(gist_id: &str) -> Result<Option<String>> {
-    fetch_gist_fork_of_id_with(&SystemRunner, gist_id)
 }
 
 pub fn fetch_gist_fork_of_id_with(

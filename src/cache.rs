@@ -62,22 +62,6 @@ pub fn save_gist_cache(path: &Path, cache: &GistListCache) {
     }
 }
 
-/// Legacy helper — loads only the owned gist rows from cache.
-pub fn load_cached_gists(path: &Path) -> Vec<GistFile> {
-    load_gist_cache(path).map(|c| c.owned).unwrap_or_default()
-}
-
-/// Legacy helper — saves only owned gist rows (prefer [`save_gist_cache`]).
-pub fn save_cached_gists(path: &Path, gists: &[GistFile]) {
-    save_gist_cache(
-        path,
-        &GistListCache {
-            owned: gists.to_vec(),
-            ..GistListCache::default()
-        },
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

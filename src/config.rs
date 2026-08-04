@@ -196,18 +196,6 @@ pub fn save_config(path: &Path, config: &AppConfig) -> Result<()> {
     fs::write(path, raw).with_context(|| format!("write {}", path.display()))
 }
 
-/// Effective mouse-enabled state: the config value, with the `--no-mouse` CLI flag able
-/// to force it off. There is intentionally no `--mouse` flag — edit the config to force on.
-pub fn resolve_mouse_enabled(config_mouse: bool, no_mouse: bool) -> bool {
-    config_mouse && !no_mouse
-}
-
-/// Effective update-check state: the config value, with the `--no-update-check` CLI flag
-/// able to force it off (no `--update-check` flag — edit the config to force on).
-pub fn resolve_update_check(config_check: bool, no_update_check: bool) -> bool {
-    config_check && !no_update_check
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -461,14 +449,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn resolve_mouse_enabled_truth_table() {
-        assert!(resolve_mouse_enabled(true, false)); // default on, no flag
-        assert!(!resolve_mouse_enabled(true, true)); // flag forces off
-        assert!(!resolve_mouse_enabled(false, false)); // config off
-        assert!(!resolve_mouse_enabled(false, true)); // both off
-    }
-
-    #[test]
     fn check_updates_defaults_to_true_when_absent() {
         // A config file with no `check_updates` key must load as enabled.
         let toml = "scan_depth = 4\n";
@@ -493,13 +473,5 @@ pub(crate) mod tests {
         let text = toml::to_string(&config).unwrap();
         let parsed: AppConfig = toml::from_str(&text).unwrap();
         assert!(!parsed.ignore_trailing_newline);
-    }
-
-    #[test]
-    fn resolve_update_check_truth_table() {
-        assert!(resolve_update_check(true, false)); // default on, no flag
-        assert!(!resolve_update_check(true, true)); // flag forces off
-        assert!(!resolve_update_check(false, false)); // config off
-        assert!(!resolve_update_check(false, true)); // both off
     }
 }

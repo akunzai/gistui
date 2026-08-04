@@ -480,8 +480,7 @@ fn gist_row_label_switches_with_view() {
 
             node_id: None,
         },
-        score: 1,
-        reasons: Vec::new(),
+        mark: crate::ranking::MatchMark::None,
     };
     assert_eq!(
         gist_row_label(&g, GistView::Description),
@@ -571,7 +570,7 @@ fn reverse_ranking_orders_locals_by_selected_gist() {
     // The local pane reverse-ranks against the selected gist (gist_index 0).
     let visible = state.visible_locals();
     assert_eq!(visible[0].candidate.path, PathBuf::from("settings.json"));
-    assert!(visible[0].score > 0);
+    assert_ne!(visible[0].mark, crate::ranking::MatchMark::None);
 }
 
 #[test]
@@ -1185,19 +1184,11 @@ fn confirm_prompt_shows_watching_indicator_for_upload() {
 }
 
 #[test]
-fn row_mark_pinned_beats_same_name() {
-    assert_eq!(
-        row_mark(&[MatchReason::Pinned, MatchReason::ExactFilename]),
-        RowMark::Pinned
-    );
-}
-#[test]
-fn row_mark_same_name_when_exact_filename_only() {
-    assert_eq!(row_mark(&[MatchReason::ExactFilename]), RowMark::SameName);
-}
-#[test]
-fn row_mark_none_for_empty_reasons() {
-    assert_eq!(row_mark(&[]), RowMark::None);
+fn marked_row_text_uses_match_mark_pin_prefix() {
+    use crate::ranking::MatchMark;
+    assert_eq!(marked_row_text("x".into(), MatchMark::Pinned), "📌 x");
+    assert_eq!(marked_row_text("x".into(), MatchMark::ExactFilename), "x");
+    assert_eq!(marked_row_text("x".into(), MatchMark::None), "x");
 }
 
 #[test]
@@ -1219,8 +1210,7 @@ fn gist_row_label_falls_back_to_filename_when_description_empty() {
 
             node_id: None,
         },
-        score: 0,
-        reasons: Vec::new(),
+        mark: crate::ranking::MatchMark::None,
     };
     assert_eq!(gist_row_label(&g, GistView::Description), "config");
 }
@@ -1280,7 +1270,7 @@ fn gist_hscroll_caps_at_longest_row() {
     let ranked = state.ranked_gists();
     let row = marked_row_text(
         gist_row_display(&ranked[0], state.gist_view, &state),
-        row_mark(&ranked[0].reasons),
+        ranked[0].mark,
     );
     let max = super::text::hscroll_max_for_text(&row);
     for _ in 0..200 {
@@ -1325,7 +1315,7 @@ fn gist_hscroll_caps_include_star_prefix() {
         super::text::text_len(&label) + 2
     );
 
-    let row = marked_row_text(display, row_mark(&ranked[0].reasons));
+    let row = marked_row_text(display, ranked[0].mark);
     let max = super::text::hscroll_max_for_text(&row);
     let label_only_max = super::text::hscroll_max_for_text(&label);
     assert!(max > label_only_max, "star must raise the hscroll cap");
@@ -1430,8 +1420,7 @@ fn no_local_selected_lists_all_gists_unranked() {
     assert_eq!(ranked.len(), 2);
     // Order preserved (unranked) and no scoring applied.
     assert_eq!(ranked[0].file.filename, "alpha.json");
-    assert_eq!(ranked[0].score, 0);
-    assert!(ranked[0].reasons.is_empty());
+    assert_eq!(ranked[0].mark, crate::ranking::MatchMark::None);
 }
 
 #[test]

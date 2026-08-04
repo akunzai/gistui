@@ -34,10 +34,6 @@ pub fn fetch_gist_commits_json_with(runner: &dyn CommandRunner, gist_id: &str) -
     run_command(runner, &gist_commits_plan(gist_id))
 }
 
-pub fn fetch_gist_revision_json(gist_id: &str, version: &str) -> Result<String> {
-    fetch_gist_revision_json_with(&SystemRunner, gist_id, version)
-}
-
 pub fn fetch_gist_revision_json_with(
     runner: &dyn CommandRunner,
     gist_id: &str,

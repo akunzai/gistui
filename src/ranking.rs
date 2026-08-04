@@ -1,17 +1,61 @@
 use crate::domain::{GistFile, LocalCandidate, PinnedMapping};
+use std::cmp::Ordering;
 use std::path::Path;
+
+/// How a list row relates to the opposite pane's selection (sort key; UI maps this to style).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchMark {
+    /// No pin / filename match.
+    None,
+    /// Same basename as the opposite selection.
+    ExactFilename,
+    /// Explicit pin mapping (ranks above exact name).
+    Pinned,
+}
+
+impl MatchMark {
+    /// Sort weight: higher wins. Explicit — not derived from variant order.
+    pub const fn rank(self) -> u8 {
+        match self {
+            MatchMark::None => 0,
+            MatchMark::ExactFilename => 1,
+            MatchMark::Pinned => 2,
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RankedGistFile {
     pub file: GistFile,
-    pub score: u16,
-    pub reasons: Vec<MatchReason>,
+    pub mark: MatchMark,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum MatchReason {
-    Pinned,
-    ExactFilename,
+pub struct RankedLocal {
+    pub candidate: LocalCandidate,
+    pub mark: MatchMark,
+}
+
+fn match_mark(
+    local_path: &Path,
+    local_filename: &str,
+    gist_id: &str,
+    gist_filename: &str,
+    pinned: &[PinnedMapping],
+) -> MatchMark {
+    if pinned.iter().any(|m| {
+        m.local_path == local_path && m.gist_id == gist_id && m.gist_filename == gist_filename
+    }) {
+        MatchMark::Pinned
+    } else if local_filename == gist_filename {
+        MatchMark::ExactFilename
+    } else {
+        MatchMark::None
+    }
+}
+
+fn cmp_mark_then(a_mark: MatchMark, b_mark: MatchMark, tie: Ordering) -> Ordering {
+    b_mark.rank().cmp(&a_mark.rank()).then(tie)
 }
 
 pub fn rank_gist_files(
@@ -28,48 +72,22 @@ pub fn rank_gist_files(
         .iter()
         .cloned()
         .map(|file| {
-            let mut score = 0;
-            let mut reasons = Vec::new();
-
-            if pinned.iter().any(|m| {
-                m.local_path == local_path
-                    && m.gist_id == file.gist_id
-                    && m.gist_filename == file.filename
-            }) {
-                score += 10_000;
-                reasons.push(MatchReason::Pinned);
-            }
-
-            if file.filename == local_filename {
-                score += 1_000;
-                reasons.push(MatchReason::ExactFilename);
-            }
-
-            RankedGistFile {
-                file,
-                score,
-                reasons,
-            }
+            let mark = match_mark(
+                local_path,
+                local_filename,
+                &file.gist_id,
+                &file.filename,
+                pinned,
+            );
+            RankedGistFile { file, mark }
         })
         .collect();
 
-    ranked.sort_by(|a, b| {
-        b.score
-            .cmp(&a.score)
-            .then(a.file.filename.cmp(&b.file.filename))
-    });
+    ranked.sort_by(|a, b| cmp_mark_then(a.mark, b.mark, a.file.filename.cmp(&b.file.filename)));
     ranked
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RankedLocal {
-    pub candidate: LocalCandidate,
-    pub score: u16,
-    pub reasons: Vec<MatchReason>,
-}
-
-/// The mirror of [`rank_gist_files`]: scores local files by how well they match a
-/// selected gist (used for the gist-pane-driven reverse ranking).
+/// Scores local files by how well they match a selected gist (gist-pane reverse ranking).
 pub fn rank_local_files(
     gist: &GistFile,
     locals: &[LocalCandidate],
@@ -84,37 +102,34 @@ pub fn rank_local_files(
                 .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or_default();
-            let mut score = 0;
-            let mut reasons = Vec::new();
-
-            if pinned.iter().any(|m| {
-                m.local_path == candidate.path
-                    && m.gist_id == gist.gist_id
-                    && m.gist_filename == gist.filename
-            }) {
-                score += 10_000;
-                reasons.push(MatchReason::Pinned);
-            }
-
-            if local_filename == gist.filename {
-                score += 1_000;
-                reasons.push(MatchReason::ExactFilename);
-            }
-
-            RankedLocal {
-                candidate,
-                score,
-                reasons,
-            }
+            let mark = match_mark(
+                &candidate.path,
+                local_filename,
+                &gist.gist_id,
+                &gist.filename,
+                pinned,
+            );
+            RankedLocal { candidate, mark }
         })
         .collect();
 
-    ranked.sort_by(|a, b| {
-        b.score
-            .cmp(&a.score)
-            .then(a.candidate.path.cmp(&b.candidate.path))
-    });
+    ranked.sort_by(|a, b| cmp_mark_then(a.mark, b.mark, a.candidate.path.cmp(&b.candidate.path)));
     ranked
+}
+
+/// Unranked pane row (no opposite selection driving the score).
+pub fn unranked_gist(file: GistFile) -> RankedGistFile {
+    RankedGistFile {
+        file,
+        mark: MatchMark::None,
+    }
+}
+
+pub fn unranked_local(candidate: LocalCandidate) -> RankedLocal {
+    RankedLocal {
+        candidate,
+        mark: MatchMark::None,
+    }
 }
 
 #[cfg(test)]
@@ -132,11 +147,8 @@ mod tests {
             created_at: "2026-06-08T00:00:00Z".into(),
             owner_login: String::new(),
             fork_of_id: None,
-
             raw_url: None,
-
             content_type: None,
-
             node_id: None,
         }
     }
@@ -158,7 +170,7 @@ mod tests {
 
         let ranked = rank_gist_files(&local, &files, &pinned);
         assert_eq!(ranked[0].file.gist_id, "b");
-        assert!(ranked[0].reasons.contains(&MatchReason::Pinned));
+        assert_eq!(ranked[0].mark, MatchMark::Pinned);
     }
 
     #[test]
@@ -171,10 +183,11 @@ mod tests {
 
         let ranked = rank_gist_files(&local, &files, &[]);
         assert_eq!(ranked[0].file.gist_id, "b");
+        assert_eq!(ranked[0].mark, MatchMark::ExactFilename);
     }
 
     #[test]
-    fn filename_tie_break_ascending_when_scores_are_equal() {
+    fn filename_tie_break_ascending_when_marks_are_equal() {
         let local = PathBuf::from("/Users/me/project/config.json");
         let files = vec![
             gist("a", "unrelated", "zeta.txt"),
@@ -184,6 +197,12 @@ mod tests {
         let ranked = rank_gist_files(&local, &files, &[]);
         assert_eq!(ranked[0].file.filename, "alpha.txt");
         assert_eq!(ranked[1].file.filename, "zeta.txt");
+    }
+
+    #[test]
+    fn mark_rank_is_explicit_not_discriminant_order() {
+        assert!(MatchMark::Pinned.rank() > MatchMark::ExactFilename.rank());
+        assert!(MatchMark::ExactFilename.rank() > MatchMark::None.rank());
     }
 
     fn local(path: &str) -> LocalCandidate {
@@ -207,7 +226,7 @@ mod tests {
             ranked[0].candidate.path,
             PathBuf::from("/Users/me/.claude/settings.json")
         );
-        assert!(ranked[0].reasons.contains(&MatchReason::ExactFilename));
+        assert_eq!(ranked[0].mark, MatchMark::ExactFilename);
     }
 
     #[test]
@@ -225,6 +244,6 @@ mod tests {
 
         let ranked = rank_local_files(&target, &locals, &pinned);
         assert_eq!(ranked[0].candidate.path, pinned_local.path);
-        assert!(ranked[0].reasons.contains(&MatchReason::Pinned));
+        assert_eq!(ranked[0].mark, MatchMark::Pinned);
     }
 }
