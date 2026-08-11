@@ -324,7 +324,7 @@ pub(super) fn dispatch_outcome(
                 return Ok(LoopFlow::Proceed);
             };
             let plan = crate::actions::delete_command(&gist_id);
-            state.back_to_list();
+            state.cancel_confirm_after_delete();
 
             jobs.spawn_action(state, "Deleting gist…", move || {
                 let result = crate::actions::execute_command(&plan)

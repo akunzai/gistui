@@ -1229,6 +1229,16 @@ impl AppState {
         self.leave();
     }
 
+    /// Leave Confirm after executing a whole-gist delete. Like [`Self::cancel_confirm`], but
+    /// pops once more if that lands on `GistDetail` — the just-deleted gist's own (now-stale)
+    /// detail view, since `GistDetail`'s delete key only ever targets itself.
+    pub fn cancel_confirm_after_delete(&mut self) {
+        self.cancel_confirm();
+        if self.screen.is_gist_detail() {
+            self.leave();
+        }
+    }
+
     pub fn upload_local_path(&self) -> Option<std::path::PathBuf> {
         match self.pending_action() {
             Some(PendingAction::Upload { local_path, .. }) => Some(local_path.clone()),
