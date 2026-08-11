@@ -2466,6 +2466,66 @@ fn delete_confirm_y_returns_execute_delete() {
 }
 
 #[test]
+fn delete_from_list_returns_to_list() {
+    let mut state = initial_state();
+    set_pending(
+        &mut state,
+        PendingAction::Delete {
+            gist_id: "abc123".into(),
+            label: "my notes".into(),
+        },
+    );
+    assert_eq!(
+        state.handle_key(KeyCode::Char('y')),
+        KeyOutcome::ExecuteDelete
+    );
+    state.cancel_confirm_after_delete();
+    assert_eq!(state.screen, Screen::List);
+}
+
+#[test]
+fn delete_from_gist_detail_opened_via_gists_returns_to_gists() {
+    let mut state = initial_state();
+    gists_mut(&mut state);
+    state.enter(Screen::GistDetail(Box::default()));
+    detail_mut(&mut state).gist_id = Some("abc123".into());
+    set_pending(
+        &mut state,
+        PendingAction::Delete {
+            gist_id: "abc123".into(),
+            label: "my notes".into(),
+        },
+    );
+    assert_eq!(
+        state.handle_key(KeyCode::Char('y')),
+        KeyOutcome::ExecuteDelete
+    );
+    state.cancel_confirm_after_delete();
+    assert!(state.screen.is_gists());
+}
+
+#[test]
+fn delete_from_gist_detail_opened_via_pins_returns_to_pins() {
+    let mut state = initial_state();
+    pins_mut(&mut state);
+    state.enter(Screen::GistDetail(Box::default()));
+    detail_mut(&mut state).gist_id = Some("abc123".into());
+    set_pending(
+        &mut state,
+        PendingAction::Delete {
+            gist_id: "abc123".into(),
+            label: "my notes".into(),
+        },
+    );
+    assert_eq!(
+        state.handle_key(KeyCode::Char('y')),
+        KeyOutcome::ExecuteDelete
+    );
+    state.cancel_confirm_after_delete();
+    assert!(state.screen.is_pins());
+}
+
+#[test]
 fn input_line_reverses_the_char_under_the_cursor() {
     let mut input = TextInput::from("abc");
     input.left(); // ab|c → cursor on 'c'

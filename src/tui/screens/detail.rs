@@ -179,7 +179,8 @@ impl AppState {
                 }
             }
             // X deletes the whole gist (y/n confirm). Reuses the shared Delete confirm path,
-            // which lands on the list once the gist is gone. Owned gists only (no-op otherwise).
+            // which returns to whichever screen opened this detail view once the gist is gone.
+            // Owned gists only (no-op otherwise).
             KeyCode::Char('X') if detail_guard(self, code) => {
                 if let Some(group) = self
                     .detail()

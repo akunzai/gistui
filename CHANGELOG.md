@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Deleting a gist from its file list view now returns to whichever screen you opened it from (Gist Manager, Pins, etc.) instead of always jumping to the main list.
+
 ## [0.17.1] — 2026-08-04
 
 - Starred gist rows can fully horizontal-scroll again: the scroll limit now uses the same display string as painting (including the `★ ` prefix), so the trailing characters are reachable.
