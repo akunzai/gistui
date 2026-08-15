@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Downloading from a diff against a recursively discovered nested file now preserves that file's directory and keeps it visible after the local list refreshes.
 - Deleting a gist from its file list view now returns to whichever screen you opened it from (Gist Manager, Pins, etc.) instead of always jumping to the main list.
 
 ## [0.17.1] — 2026-08-04

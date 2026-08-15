@@ -287,6 +287,11 @@ impl AppState {
                     .get(self.local_index)
                     .map(|r| r.candidate.path.clone());
                 let filename = gist.file.filename.clone();
+                let target = local_path
+                    .as_deref()
+                    .and_then(std::path::Path::parent)
+                    .unwrap_or(&self.cwd)
+                    .join(&filename);
                 return KeyOutcome::PreviewDiff {
                     local_path,
                     file: crate::domain::GistFileRef::new(
@@ -294,7 +299,7 @@ impl AppState {
                         filename.clone(),
                         gist.file.raw_url.clone(),
                     ),
-                    target: self.cwd.join(&filename),
+                    target,
                     upload_orientation: self.focus == FocusPane::Local,
                 };
             }
