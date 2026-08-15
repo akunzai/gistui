@@ -1746,6 +1746,23 @@ fn enter_in_gist_focus_with_selection_returns_preview() {
 }
 
 #[test]
+fn enter_with_nested_local_targets_its_directory() {
+    let mut state = state_with_selection();
+    state.cwd = PathBuf::from("/tmp");
+    state.locals[0].path = PathBuf::from("/tmp/nested/settings.json");
+
+    let KeyOutcome::PreviewDiff {
+        local_path, target, ..
+    } = state.handle_key(KeyCode::Enter)
+    else {
+        panic!("expected PreviewDiff");
+    };
+
+    assert_eq!(local_path, Some(PathBuf::from("/tmp/nested/settings.json")));
+    assert_eq!(target, PathBuf::from("/tmp/nested/settings.json"));
+}
+
+#[test]
 fn enter_in_local_focus_previews_top_gist() {
     let mut state = state_with_selection();
     state.focus = FocusPane::Local;

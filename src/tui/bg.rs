@@ -931,7 +931,7 @@ pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode)
             if state.screen.is_diff() {
                 state.leave();
             }
-            refresh_locals(state);
+            refresh_locals(state, LocalScanMode::Active, Some(&target));
         }
         Err(error) => {
             state.set_status(format!("download failed: {error}"));
@@ -940,14 +940,24 @@ pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode)
     }
 }
 
-/// Quick flat re-scan used after a download/upload to make the new file visible immediately.
-/// Always non-recursive since downloads only write to cwd root.
-pub(super) fn refresh_locals(state: &mut AppState) {
-    let selected = state.selected_local().map(|c| c.path.clone());
+enum LocalScanMode {
+    Flat,
+    Active,
+}
+
+/// Quick re-scan used after a download/upload to make the target visible immediately.
+fn refresh_locals(
+    state: &mut AppState,
+    scan_mode: LocalScanMode,
+    selection_target: Option<&std::path::Path>,
+) {
+    let selected = selection_target
+        .map(std::path::Path::to_path_buf)
+        .or_else(|| state.selected_local().map(|c| c.path.clone()));
     if let Ok(locals) = crate::local::discover_local_candidates(
         &state.cwd,
         &state.pinned,
-        false,
+        matches!(scan_mode, LocalScanMode::Active) && state.local_recursive,
         &state.skip_dirs,
         state.scan_depth,
     ) {
@@ -1111,7 +1121,7 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
             if let Some(pins) = state.pins_mut() {
                 pins.cursor.clamp_len(len);
             }
-            refresh_locals(state);
+            refresh_locals(state, LocalScanMode::Flat, None);
             state.set_status(format!("Unpinned {label}"));
         }
         Err(error) => state.set_status(format!("unpin failed: {error}")),
@@ -1728,7 +1738,7 @@ impl Jobs {
                                 &remote,
                                 Some(crate::domain::SyncDirection::Download),
                             );
-                            refresh_locals(state);
+                            refresh_locals(state, LocalScanMode::Active, Some(&target));
                         }
                         Err(error) => state.set_status(format!("download failed: {error}")),
                     }
@@ -2593,6 +2603,29 @@ mod tests {
     }
 
     // ---- on_download_selected -------------------------------------------------
+
+    #[test]
+    fn refresh_locals_preserves_nested_selection_in_recursive_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let target = nested.join("settings.json");
+        std::fs::write(&target, "body").unwrap();
+        let compared = nested.join("local.json");
+        std::fs::write(&compared, "local").unwrap();
+        let mut state = initial_state();
+        state.cwd = dir.path().to_path_buf();
+        state.local_recursive = true;
+        state.locals = vec![crate::domain::LocalCandidate {
+            path: compared,
+            pinned: false,
+            modified: None,
+        }];
+
+        refresh_locals(&mut state, LocalScanMode::Active, Some(&target));
+
+        assert_eq!(state.selected_local().map(|file| file.path), Some(target));
+    }
 
     #[test]
     fn on_download_selected_err_sets_status() {
