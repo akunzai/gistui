@@ -1804,6 +1804,17 @@ impl AppState {
         group_gists(&files).into_iter().find(|g| g.id == gist_id)
     }
 
+    /// Title for the preview screen: leads with the gist's description, falling back to its id
+    /// when there is none — consistent with the Gist detail screen's title (issue #347).
+    pub fn preview_title(&self, gist_id: &str, filename: &str) -> String {
+        let identity = self
+            .group_by_id(gist_id)
+            .map(|g| g.description)
+            .filter(|d| !d.trim().is_empty())
+            .unwrap_or_else(|| format!("Gist {gist_id}"));
+        format!("Preview: {identity} / {filename}")
+    }
+
     /// The gist the current screen acts on: the gist-level cursor on `Gists`, the
     /// viewed gist on `GistDetail`, otherwise the gist owning the selected file row.
     /// Screen-aware so IO actions (open-in-browser, compact) target what the user sees.

@@ -271,16 +271,13 @@ pub(super) fn dispatch_outcome(
         KeyOutcome::PreviewContent { mut file } => {
             let key = file.cache_key();
             if let Some(content) = state.gist_content_cache.get(&key).cloned() {
-                state.enter_preview(
-                    format!("Preview: {} / {}", file.gist_id, file.filename),
-                    content,
-                    Some(key),
-                );
+                let preview_title = state.preview_title(&file.gist_id, &file.filename);
+                state.enter_preview(preview_title, content, Some(key));
             } else {
                 if file.raw_url.is_none() {
                     file.raw_url = state.gist_file_raw_url(&file.gist_id, &file.filename);
                 }
-                let preview_title = format!("Preview: {} / {}", file.gist_id, file.filename);
+                let preview_title = state.preview_title(&file.gist_id, &file.filename);
                 jobs.spawn_gist_fetch_action(
                     state,
                     "Loading preview…",
@@ -302,7 +299,7 @@ pub(super) fn dispatch_outcome(
             if file.raw_url.is_none() {
                 file.raw_url = state.gist_file_raw_url(&file.gist_id, &file.filename);
             }
-            let preview_title = format!("Preview: {} / {}", file.gist_id, file.filename);
+            let preview_title = state.preview_title(&file.gist_id, &file.filename);
             jobs.spawn_gist_fetch_action(state, "Loading preview…", file, move |result, file| {
                 BgTaskOutcome::PreviewContent {
                     result,
