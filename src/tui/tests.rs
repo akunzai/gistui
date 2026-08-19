@@ -1034,6 +1034,15 @@ fn header_line_tints_local_yellow_and_gist_blue() {
 }
 
 #[test]
+fn light_theme_keeps_focus_and_diff_header_colours_distinct() {
+    let theme = Theme::LIGHT;
+
+    assert_ne!(theme.accent, theme.dim);
+    assert_ne!(theme.accent, theme.gist_label_color);
+    assert_ne!(theme.dim, theme.gist_label_color);
+}
+
+#[test]
 fn preview_diff_text_flips_with_focus() {
     // Download orientation (gist pane focused): old = local, new = gist.
     let dl = preview_diff_text(false, "local: a", "old\n", "gist b", "new\n", false);

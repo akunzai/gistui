@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Light theme now clearly distinguishes focused-pane and inactive-pane borders, and keeps the diff `gist` label distinct from subdued text.
 - Narrow terminals (down to 80 columns) no longer clip the `?` help body mid-word, cut a footer hint in half (the leave key stays; whole hints drop instead), or drop the hanging indent of wrapped gist comments.
 - Horizontal scroll in list panes now moves only the selected row, capped to that row's content. Other rows stay readable from their start, and a leading ellipsis (`…`) marks when the selection is offset.
 - Clipped list rows and pane titles now end in an ellipsis (`…`) instead of looking like the real, complete value. Truncation follows display width, so wide characters are never split.
