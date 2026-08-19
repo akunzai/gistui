@@ -91,6 +91,49 @@ pub struct AppConfig {
     pub ignore_trailing_newline: bool,
 }
 
+#[derive(Serialize)]
+struct SavedConfig<'a> {
+    pinned: &'a [PinnedMapping],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skip_dirs: Option<&'a [String]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scan_depth: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diff_context: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    diff_show_full: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    theme: Option<ThemeChoice>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mouse: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    check_updates: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ignore_trailing_newline: Option<bool>,
+}
+
+impl<'a> From<&'a AppConfig> for SavedConfig<'a> {
+    fn from(config: &'a AppConfig) -> Self {
+        let defaults = AppConfig::default();
+        Self {
+            pinned: &config.pinned,
+            skip_dirs: (config.skip_dirs != defaults.skip_dirs).then_some(&config.skip_dirs),
+            scan_depth: (config.scan_depth != defaults.scan_depth).then_some(config.scan_depth),
+            diff_context: (config.diff_context != defaults.diff_context)
+                .then_some(config.diff_context),
+            diff_show_full: (config.diff_show_full != defaults.diff_show_full)
+                .then_some(config.diff_show_full),
+            theme: (config.theme != defaults.theme).then_some(config.theme),
+            mouse: (config.mouse != defaults.mouse).then_some(config.mouse),
+            check_updates: (config.check_updates != defaults.check_updates)
+                .then_some(config.check_updates),
+            ignore_trailing_newline: (config.ignore_trailing_newline
+                != defaults.ignore_trailing_newline)
+                .then_some(config.ignore_trailing_newline),
+        }
+    }
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -192,7 +235,7 @@ pub fn save_config(path: &Path, config: &AppConfig) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let raw = toml::to_string_pretty(config)?;
+    let raw = toml::to_string_pretty(&SavedConfig::from(config))?;
     fs::write(path, raw).with_context(|| format!("write {}", path.display()))
 }
 
@@ -260,6 +303,50 @@ pub(crate) mod tests {
         };
 
         save_config(&path, &config).unwrap();
+        assert_eq!(load_config(&path).unwrap(), config);
+    }
+
+    #[test]
+    fn save_config_omits_defaults_and_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = AppConfig::default();
+
+        save_config(&path, &config).unwrap();
+
+        let saved: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let table = saved.as_table().unwrap();
+        assert_eq!(table.len(), 1);
+        assert_eq!(table.get("pinned"), Some(&toml::Value::Array(Vec::new())));
+        assert_eq!(load_config(&path).unwrap(), config);
+    }
+
+    #[test]
+    fn save_config_keeps_only_custom_values() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut config = AppConfig {
+            pinned: vec![PinnedMapping {
+                local_path: PathBuf::from("/tmp/settings.json"),
+                gist_id: "abc".into(),
+                gist_filename: "settings.json".into(),
+                direction: None,
+                last_seen_hash: None,
+            }],
+            scan_depth: 4,
+            mouse: false,
+            ..Default::default()
+        };
+        config.scan_depth = default_scan_depth();
+
+        save_config(&path, &config).unwrap();
+
+        let saved: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        let table = saved.as_table().unwrap();
+        assert_eq!(table.len(), 2);
+        assert!(table.contains_key("pinned"));
+        assert_eq!(table.get("mouse"), Some(&toml::Value::Boolean(false)));
+        assert!(!table.contains_key("scan_depth"));
         assert_eq!(load_config(&path).unwrap(), config);
     }
 
