@@ -1476,11 +1476,29 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    /// `raw_url` from the in-memory gist lists for a `(gist_id, filename)` pair.
-    pub fn gist_file_raw_url(&self, gist_id: &str, filename: &str) -> Option<String> {
+    /// The in-memory owned/starred gist-file row for a `(gist_id, filename)` pair, shared by
+    /// every lookup that needs one field or another off the real list row.
+    fn find_gist_file(&self, gist_id: &str, filename: &str) -> Option<&GistFile> {
         self.all_gist_files()
             .find(|g| g.gist_id == gist_id && g.filename == filename)
+    }
+
+    /// `raw_url` from the in-memory gist lists for a `(gist_id, filename)` pair.
+    pub fn gist_file_raw_url(&self, gist_id: &str, filename: &str) -> Option<String> {
+        self.find_gist_file(gist_id, filename)
             .and_then(|g| g.raw_url.clone())
+    }
+
+    /// Resolves a throwaway `GistFileRef` (the diff/sync identity, which carries none of the
+    /// list-row metadata — see its doc comment) into a full `GistFile` for diff-header display:
+    /// the matching row from the in-memory owned/starred lists when one exists (carrying its
+    /// real `updated_at`, `raw_url`, etc.), else the bare `to_gist_file()` fallback. Without
+    /// this, the diff header's gist side always showed `(unknown)` even when the same gist's
+    /// age was visible in the Gist manager or Pinned Mappings (issue #348).
+    pub fn gist_file_for_diff(&self, file: &GistFileRef) -> GistFile {
+        self.find_gist_file(&file.gist_id, &file.filename)
+            .cloned()
+            .unwrap_or_else(|| file.to_gist_file())
     }
 
     pub fn gist_is_owned(&self, gist_id: &str) -> bool {

@@ -23,7 +23,7 @@ pub(super) fn dispatch_outcome(
         } => {
             // List-originated diff returns to List on Esc.
             state.pending_return = Some(Screen::List);
-            let gist = file.to_gist_file();
+            let gist = state.gist_file_for_diff(&file);
             let (local_label, gist_label) = diff_labels(local_path.as_deref(), &gist);
 
             jobs.spawn_gist_fetch_action(state, "Loading diff…", file, move |result, _file| {
@@ -46,7 +46,7 @@ pub(super) fn dispatch_outcome(
             }
         }
         KeyOutcome::DownloadGist { file, target } => {
-            let gist = file.to_gist_file();
+            let gist = state.gist_file_for_diff(&file);
             let (local_label, gist_label) = diff_labels(Some(&target), &gist);
 
             jobs.spawn_gist_fetch_action(state, "Downloading…", file, move |result, file| {
@@ -176,12 +176,7 @@ pub(super) fn dispatch_outcome(
             if !from_pin_diff {
                 state.pending_return = Some(Screen::List);
             }
-            let gist_file = state
-                .gists
-                .iter()
-                .find(|g| g.gist_id == file.gist_id && g.filename == file.filename)
-                .cloned()
-                .unwrap_or_else(|| file.to_gist_file());
+            let gist_file = state.gist_file_for_diff(&file);
             let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
             // Prefer list-row raw_url when present (may be richer than the outcome's ref).
             let mut file = file;
