@@ -2107,7 +2107,11 @@ fn q_in_list_quits_on_second_press() {
     // First press only arms the quit (and surfaces a hint); it must not exit.
     assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
     assert!(state.quit_armed);
-    assert!(state.status.is_some());
+    // Issue #346: the hint must name every key that confirms the quit, not just `q`.
+    assert_eq!(
+        state.status.as_deref(),
+        Some("Press q or Esc again to quit (any other key cancels)")
+    );
     // Second press confirms.
     assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
 }

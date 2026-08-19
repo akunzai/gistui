@@ -83,16 +83,17 @@ pub(super) fn render_close_button(frame: &mut Frame, outer: Rect, theme: &Theme)
 /// Cross-screen top-bar shortcuts: bracketed hotkey letter + label. Kept in one place so the
 /// click hit-rect math and the rendered text can never drift apart. Order matches the
 /// right-aligned strip: Gists · Pins · Config · Help (Config sits immediately left of Help,
-/// same as duodiff).
+/// same as duodiff). Gists uses lowercase `g` because that is the actual key (unlike Pins/Config,
+/// which require Shift) — see `handle_key_list` in `screens/list.rs`.
 const TOP_BAR_ITEMS: [(&str, &str); 4] =
-    [("G", "ists"), ("P", "ins"), ("C", "onfig"), ("?", "Help")];
+    [("g", "ists"), ("P", "ins"), ("C", "onfig"), ("?", "Help")];
 
 /// Height of the persistent top bar rendered on every screen except the transient `Confirm`
 /// y/n modal (which keeps its full-bleed diff/gist-info background — see `render_confirm`).
 const TOP_BAR_HEIGHT: u16 = 1;
 
 /// Renders the cross-screen top bar — ` gistui` on the left,
-/// `(G)ists (P)ins (C)onfig (?)Help` right-aligned — into the top row of `area`, then returns
+/// `(g)ists (P)ins (C)onfig (?)Help` right-aligned — into the top row of `area`, then returns
 /// the remaining rect below it for the caller's existing content/footer layout (otherwise
 /// unchanged). The icons render as plain text even with the mouse disabled, so the shortcuts
 /// stay visible; their hit-rects are only recorded in `layout` when `mouse_enabled`, matching
@@ -1690,10 +1691,26 @@ mod tests {
         let state = initial_state();
         let text = render_state(&state);
         assert!(text.contains("gistui"));
-        assert!(text.contains("(G)ists"));
+        assert!(text.contains("(g)ists"));
         assert!(text.contains("(P)ins"));
         assert!(text.contains("(C)onfig"));
         assert!(text.contains("(?)Help"));
+    }
+
+    /// Issue #346: a command-palette query matching nothing must not render as an empty
+    /// frame under the input — it needs an explicit "no matches" message.
+    #[test]
+    fn render_screen_vm_command_palette_no_matches_shows_empty_state() {
+        let mut state = initial_state();
+        state.open_palette_command();
+        state
+            .palette_mut()
+            .unwrap()
+            .query
+            .set("zzz_no_such_command");
+        assert!(state.palette_visible_items().is_empty());
+        let text = render_state(&state);
+        assert!(text.contains("no matches"));
     }
 
     /// The Local pane title from the bug report, anchored and filtered.

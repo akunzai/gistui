@@ -195,7 +195,10 @@ pub(crate) fn render_palette_vm(
     }
 
     let area = frame.area();
-    let body_lines = palette.items.len() + usize::from(palette.has_query);
+    // A query with no matches still paints one "(no matches)" placeholder row, so the height
+    // budget must reserve a line for it — otherwise the panel sizes to fit only the query input
+    // and the placeholder is clipped, leaving what looks like an empty frame.
+    let body_lines = palette.items.len().max(1) + usize::from(palette.has_query);
     let longest_row = palette
         .items
         .iter()
