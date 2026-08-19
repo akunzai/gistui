@@ -2,15 +2,16 @@
 //! mouse hit target it records (issue #367).
 //!
 //! Every screen that paints a list of selectable rows goes through [`render_list_pane`] — the
-//! two List panes, Gist manager, and Pinned Mappings. Row geometry is the implementation, not
-//! the interface: callers describe the pane with a [`ListPaneVm`] and never assemble the widget
-//! themselves, so a change to clipping or scrolling lands in one place.
+//! two List panes, Gist manager, Pinned Mappings, and Revisions. The row geometry below is the
+//! implementation, not the interface: callers describe the pane with a [`ListPaneVm`] and never
+//! assemble the widget themselves, so a change to clipping or scrolling lands in one place.
 //!
 //! Settings and Help's topic index deliberately stay out — their chrome differs (a different
 //! highlight symbol, a bottom title, untruncated rows) and two callers would not justify the
 //! seam.
 
-use super::{fit_title, row_hscroll, visible_list_row, LIST_HIGHLIGHT_SYMBOL};
+use super::{cell_width, fit_title, truncate_end, ELLIPSIS};
+use crate::tui::text::hscroll_str;
 use crate::tui::theme::Theme;
 use crate::tui::view_model::{ListPaneEmpty, ListPaneVm, RowEmphasis};
 use crate::tui::PaneHit;
@@ -21,6 +22,14 @@ use ratatui::widgets::{
     ScrollbarOrientation, ScrollbarState,
 };
 use ratatui::Frame;
+
+/// Highlight prefix every row list paints (`▶` plus a space). Kept in one place so the
+/// truncation budget and the widget's `highlight_symbol` cannot drift. Public only because
+/// Help's topic index paints its own list with the same prefix.
+pub(crate) const LIST_HIGHLIGHT_SYMBOL: &str = "▶ ";
+
+/// Borders (2) + `Padding::horizontal(1)` (2) around a list pane's inner rows.
+const LIST_CHROME_CELLS: u16 = 4;
 
 /// Paint one bordered list pane into `area` and, when the mouse is on, record where it landed.
 ///
@@ -128,12 +137,40 @@ fn pane_items(pane: &ListPaneVm, pane_width: u16, theme: &Theme) -> Vec<ListItem
         .collect()
 }
 
+/// Horizontal offset applied to one list row: only the selected row moves (issue #341).
+fn row_hscroll(selected: Option<usize>, index: usize, hscroll: u16) -> u16 {
+    if selected == Some(index) {
+        hscroll
+    } else {
+        0
+    }
+}
+
+/// Visible list-row text: horizontal scroll first, then truncate to the inner content
+/// width (borders, padding, and the highlight symbol) so ratatui cannot silently clip.
+/// A non-zero offset keeps a leading `…` so the skip is visible (issue #341).
+fn visible_list_row(label: &str, hscroll: u16, pane_width: u16) -> String {
+    let inner = pane_width.saturating_sub(LIST_CHROME_CELLS) as usize;
+    let room = inner.saturating_sub(cell_width(LIST_HIGHLIGHT_SYMBOL));
+    let scrolled = hscroll_str(label, hscroll);
+    if hscroll == 0 {
+        return truncate_end(&scrolled, room);
+    }
+    let ellipsis_width = cell_width(ELLIPSIS);
+    if room < ellipsis_width {
+        return String::new();
+    }
+    format!(
+        "{ELLIPSIS}{}",
+        truncate_end(&scrolled, room - ellipsis_width)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::ThemeChoice;
-    use crate::tui::render::tests::{buffer_text, render_state};
-    use crate::tui::render::{cell_width, LIST_CHROME_CELLS};
+    use crate::tui::render::tests::{buffer_text, render_state, render_state_size};
     use crate::tui::view_model::{PaneTitleVm, RowVm};
     use crate::tui::FocusPane;
     use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
@@ -184,6 +221,29 @@ mod tests {
     fn row_label_cell(buffer: &Buffer, width: u16, index: u16) -> ratatui::buffer::Cell {
         let chrome = 2 + cell_width(LIST_HIGHLIGHT_SYMBOL) as u16;
         buffer.content()[((index + 1) * width + chrome) as usize].clone()
+    }
+
+    /// Issue #341: horizontal scroll is applied before end-truncation; an unscrolled
+    /// row that fits is returned unchanged.
+    #[test]
+    fn visible_list_row_leaves_an_unscrolled_value_intact() {
+        let width = list_row_pane_width(20);
+        assert_eq!(visible_list_row("AGENTS.md", 0, width), "AGENTS.md");
+    }
+
+    /// Issue #341: a horizontally offset row keeps a leading `…` so the skip is visible.
+    #[test]
+    fn visible_list_row_marks_a_horizontal_offset_with_a_leading_ellipsis() {
+        let width = list_row_pane_width(20);
+        assert_eq!(visible_list_row("AGENTS.md", 6, width), "….md");
+    }
+
+    /// Issue #341: the offset belongs to the selected row alone.
+    #[test]
+    fn row_hscroll_moves_only_the_selected_row() {
+        assert_eq!(row_hscroll(Some(1), 1, 4), 4);
+        assert_eq!(row_hscroll(Some(1), 0, 4), 0);
+        assert_eq!(row_hscroll(None, 0, 4), 0);
     }
 
     /// Issue #340: a row wider than the pane ends in `…` rather than looking complete.
@@ -274,6 +334,50 @@ mod tests {
             row_label_cell(&focused, 20, 1).style().fg,
             row_label_cell(&unfocused, 20, 1).style().fg,
             "row text brightness must not depend on focus"
+        );
+    }
+
+    /// Issue #367: Revisions used to paint its rows with the raw `hscroll_str`, so neither
+    /// #340 (ellipsis on a clipped row) nor #341 (scroll the selected row only) reached it.
+    /// Routing it through this module applies both.
+    #[test]
+    fn revisions_rows_clip_with_an_ellipsis_and_scroll_only_the_selection() {
+        use crate::domain::{GistRevision, GistRevisionChangeStatus};
+
+        let revision = |user: &str| GistRevision {
+            version: "abc1234def".into(),
+            committed_at: "2026-06-10T00:00:00Z".into(),
+            user: user.into(),
+            change_status: GistRevisionChangeStatus {
+                total: 1,
+                additions: 1,
+                deletions: 0,
+            },
+        };
+        let mut state = crate::tui::tests::state_with_gists();
+        state.screen = crate::tui::Screen::Revisions(Box::default());
+        let rev = state.revision_mut().expect("expected Screen::Revisions");
+        rev.gist_id = Some("g1".into());
+        rev.entries = Some(vec![
+            revision("aaa-FIRSTROW-marker"),
+            revision("bbb-SECONDROW-marker"),
+        ]);
+        rev.index = 1;
+        rev.hscroll = 8;
+
+        let text = render_state_size(&state, 40, 12);
+        assert!(
+            !text.contains("aaa-FIRSTROW-marker"),
+            "unselected row must be clipped to the pane width: {text}"
+        );
+        assert!(text.contains('…'), "clipped row lost its ellipsis: {text}");
+        assert!(
+            text.contains("#1  "),
+            "unselected row lost its start: {text}"
+        );
+        assert!(
+            !text.contains("#2  "),
+            "selected row should have scrolled past its head: {text}"
         );
     }
 

@@ -3,13 +3,14 @@
 
 use crate::tui::bg::revision_version_label;
 use crate::tui::keys::{point_in, NavAction, PAGE_SCROLL};
-use crate::tui::view_model::{ChromeVm, RevisionsEmptyKind, RevisionsVm};
-use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, PaneHit, Screen};
+use crate::tui::render::list_pane::render_list_pane;
+use crate::tui::view_model::{
+    ChromeVm, ListPaneEmpty, ListPaneVm, PaneTitleVm, RevisionsVm, RowEmphasis, RowVm,
+};
+use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, Screen};
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
-    style::{Modifier, Style},
-    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Padding},
     Frame,
 };
 
@@ -360,13 +361,13 @@ pub(crate) fn build_revisions_vm(state: &AppState) -> RevisionsVm {
     let now = crate::tui::render::unix_now();
     let (empty, empty_message, rows, selected) = match &rev.entries {
         None => (
-            RevisionsEmptyKind::Loading,
+            ListPaneEmpty::Loading,
             Some("  ⏳ Loading revisions…".into()),
             Vec::new(),
             None,
         ),
         Some(entries) if entries.is_empty() => (
-            RevisionsEmptyKind::NoRevisions,
+            ListPaneEmpty::NoItems,
             Some("  📭 No revisions found".into()),
             Vec::new(),
             None,
@@ -375,25 +376,32 @@ pub(crate) fn build_revisions_vm(state: &AppState) -> RevisionsVm {
             let rows = entries
                 .iter()
                 .enumerate()
-                .map(|(i, r)| revision_row_label(r, i, now))
+                .map(|(i, r)| RowVm {
+                    label: revision_row_label(r, i, now),
+                    emphasis: RowEmphasis::None,
+                })
                 .collect();
-            (RevisionsEmptyKind::HasRows, None, rows, Some(rev.index))
+            (ListPaneEmpty::HasRows, None, rows, Some(rev.index))
         }
     };
 
     let count = rows.len();
     RevisionsVm {
-        title: format!(
-            "Revisions: {label} {}",
-            crate::tui::render::count_label(count, count)
-        ),
-        empty,
-        empty_message,
-        rows,
-        selected,
+        pane: ListPaneVm {
+            title: PaneTitleVm::new(format!(
+                "Revisions: {label} {}",
+                crate::tui::render::count_label(count, count)
+            )),
+            focused: true,
+            selected,
+            empty,
+            empty_message,
+            rows,
+            hscroll: rev.hscroll,
+            scrollbar: false,
+        },
         footer,
         footer_colored,
-        hscroll: rev.hscroll,
     }
 }
 
@@ -413,49 +421,14 @@ pub(crate) fn render_revisions_vm(
         .constraints([Constraint::Min(3), Constraint::Length(footer_lines)])
         .split(area);
 
-    let items: Vec<ListItem> = match revs.empty {
-        RevisionsEmptyKind::HasRows => revs
-            .rows
-            .iter()
-            .map(|row| ListItem::new(crate::tui::render::hscroll_str(row, revs.hscroll)))
-            .collect(),
-        _ => {
-            let msg = revs.empty_message.clone().unwrap_or_else(|| "  ".into());
-            vec![ListItem::new(msg).style(Style::default().fg(state.theme.dim))]
-        }
-    };
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(crate::tui::render::fit_block_title(
-                    &revs.title,
-                    chunks[0].width,
-                ))
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(state.theme.accent))
-                .style(state.theme.base_style())
-                .padding(Padding::horizontal(1)),
-        )
-        .style(state.theme.base_style())
-        .highlight_style(
-            Style::default()
-                .bg(state.theme.accent)
-                .fg(state.theme.fg_on_accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(crate::tui::render::LIST_HIGHLIGHT_SYMBOL);
-
-    let mut list_state = ListState::default();
-    list_state.select(revs.selected);
-    frame.render_stateful_widget(list, chunks[0], &mut list_state);
-    if chrome.mouse_enabled {
-        layout.list = Some(PaneHit {
-            rect: chunks[0],
-            offset: list_state.offset(),
-        });
-    }
+    render_list_pane(
+        frame,
+        chunks[0],
+        &revs.pane,
+        &state.theme,
+        chrome.mouse_enabled,
+        &mut layout.list,
+    );
     crate::tui::render_footer(
         frame,
         chunks[1],

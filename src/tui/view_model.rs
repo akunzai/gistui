@@ -121,21 +121,9 @@ pub struct PreviewVm {
 /// Revision history list (#250).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevisionsVm {
-    pub title: String,
-    pub empty: RevisionsEmptyKind,
-    pub empty_message: Option<String>,
-    pub rows: Vec<String>,
-    pub selected: Option<usize>,
+    pub pane: ListPaneVm,
     pub footer: String,
     pub footer_colored: bool,
-    pub hscroll: u16,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RevisionsEmptyKind {
-    HasRows,
-    Loading,
-    NoRevisions,
 }
 
 /// Settings screen (#250).
@@ -1060,9 +1048,12 @@ mod tests {
         }];
         match build_view_model(&state).screen {
             ScreenVm::Revisions(r) => {
-                assert_eq!(r.empty, RevisionsEmptyKind::Loading);
+                assert_eq!(r.pane.empty, ListPaneEmpty::Loading);
                 assert!(r.footer.contains("Loading"));
-                assert!(r.title.contains("hist") || r.title.contains("g1"));
+                assert!(
+                    r.pane.title.segments[0].contains("hist")
+                        || r.pane.title.segments[0].contains("g1")
+                );
             }
             other => panic!("expected Revisions, got {other:?}"),
         }
@@ -1082,10 +1073,11 @@ mod tests {
         }
         match build_view_model(&state).screen {
             ScreenVm::Revisions(r) => {
-                assert_eq!(r.empty, RevisionsEmptyKind::HasRows);
-                assert_eq!(r.rows.len(), 1);
-                assert!(r.rows[0].contains("alice") || r.rows[0].contains("abc"));
-                assert_eq!(r.selected, Some(0));
+                assert_eq!(r.pane.empty, ListPaneEmpty::HasRows);
+                assert_eq!(r.pane.rows.len(), 1);
+                let row = &r.pane.rows[0].label;
+                assert!(row.contains("alice") || row.contains("abc"));
+                assert_eq!(r.pane.selected, Some(0));
             }
             other => panic!("expected Revisions, got {other:?}"),
         }

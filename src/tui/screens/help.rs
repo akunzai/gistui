@@ -346,7 +346,7 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
             "\
   Up/Down    move between revisions (also j / k; newest first; row 0 = current)
   PageUp/Dn  page by 10 (also Ctrl+b / Ctrl+f)
-  Left/Right scroll a long row horizontally (also h / l)
+  Left/Right scroll the selected long row horizontally (also h / l)
   Enter      diff this revision vs its parent (incremental; initial = all additions)
   F          cycle the target file (multi-file gists; wraps)
   D          diff the target file: selected revision vs current (read-only; no download/upload)
@@ -458,7 +458,7 @@ pub(crate) fn render_help_vm(
                         .fg(state.theme.fg_on_accent)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol(crate::tui::render::LIST_HIGHLIGHT_SYMBOL);
+                .highlight_symbol(crate::tui::render::list_pane::LIST_HIGHLIGHT_SYMBOL);
             let mut list_state = ListState::default();
             list_state.select(Some(*selected));
             frame.render_stateful_widget(list, area, &mut list_state);

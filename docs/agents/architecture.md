@@ -44,21 +44,33 @@ handle_key (pure) → KeyOutcome → run_loop / dispatch_outcome (IO)
 - Action dispatch may call `compute_pin_sync_status` one-shot; paint uses `cached_pin_sync_status` / the VM only.
 - No mtime watch: staying on Pins after an external editor edit can leave badges stale until the next refresh.
 
-## List-row and title truncation (`@src/tui/render.rs`)
+## List panes (`@src/tui/render/list_pane.rs`)
+
+`render_list_pane` paints **every** bordered list of selectable rows (issue #367): both List panes, Gist manager, Pinned Mappings, Revisions. Callers describe the pane with a `ListPaneVm` and never assemble the widget — clipping, horizontal scroll, empty state, title fit, the scrollbar, and the `PaneHit` all live behind that one call.
+
+- **Row geometry is module-private** (`row_hscroll`, `visible_list_row`, `LIST_CHROME_CELLS`). Only `LIST_HIGHLIGHT_SYMBOL` stays visible, for Help's ad-hoc topic index.
+- **Settings and Help's index are deliberately out**: different highlight symbol, bottom title, untruncated rows. Two callers would not justify the seam — do not fold them in without a third.
+- **Emphasis is a presentation fact, not a paint decision**: builders map their domain reason (`MatchMark::ExactFilename`, `SyncStatus::Missing`) to `RowEmphasis::{Strong, Danger}`. Paint only looks it up — do not reintroduce a domain match on the paint side.
+- **`focused`** drives border colour *and* selection highlight together (solid bar when focused, bold when not); single-pane screens pass `true`. `scrollbar` is `true` only for the two List panes.
+- **Empty state** is `ListPaneEmpty` plus a prebuilt `empty_message` from the builder. No screen hard-codes an empty message at paint time.
+
+List-row horizontal scroll (issue #341) is **per selected row**, not pane-wide: `row_hscroll` applies the pane offset only to the highlighted index; `focused_hscroll_max` / Pins / Gists caps are that row's painted string. A non-zero offset prefixes `…` in `visible_list_row` (then `truncate_end` may still mark a clipped tail). Unselected rows stay at column 0.
+
+List-row budget: inner pane width minus borders+padding (`LIST_CHROME_CELLS`) minus `LIST_HIGHLIGHT_SYMBOL`. ratatui's default `HighlightSpacing::WhenSelected` indents **every** row once any row is selected — these lists always `select(...)` when they have rows, so unselected rows still pay the `▶ ` indent. Keep the widget's `highlight_symbol` and the budget on `LIST_HIGHLIGHT_SYMBOL` so they cannot drift.
+
+## Text fitting (`@src/tui/render/mod.rs`)
 
 Two ellipsis operations — different jobs, do not merge:
 
 - **`truncate_end`** (issue #340) — keep the head, append `…`. List rows (`visible_list_row`), pane/overlay titles (`fit_block_title`), and a `fit_title` head that itself cannot fit.
 - **`elide_start`** (issue #338) — keep the tail, leading `…`. Only `fit_title`'s trailing context (the Local pane cwd).
 
-Narrow-terminal reflow (issue #342), also in `@src/tui/render.rs` — different jobs from ellipsis, do not merge:
+Titles reaching `render_list_pane` are always `PaneTitleVm`; a single-segment title is equivalent to `fit_block_title` (both end in `truncate_end` at width − 2).
+
+Narrow-terminal reflow (issue #342), also in `@src/tui/render/mod.rs` — different jobs from ellipsis, do not merge:
 
 - **`wrap_hanging`** — wrap a line to width, continuing at the source line's leading whitespace. Help body and gist-comment bodies (pre-wrap at paint; do not use `Paragraph` wrap, which drops indent).
 - **`fit_hints`** — drop whole ` · `-separated footer items so a coloured hint line stays one row; the last item (leave key) is kept. Status messages still wrap via `wrap_line_count`.
-
-List-row horizontal scroll (issue #341) is **per selected row**, not pane-wide: `row_hscroll` applies the pane offset only to the highlighted index; `focused_hscroll_max` / Pins / Gists caps are that row's painted string. A non-zero offset prefixes `…` in `visible_list_row` (then `truncate_end` may still mark a clipped tail). Unselected rows stay at column 0.
-
-List-row budget: inner pane width minus borders+padding (`LIST_CHROME_CELLS`) minus `LIST_HIGHLIGHT_SYMBOL`. ratatui's default `HighlightSpacing::WhenSelected` indents **every** row once any row is selected — these lists always `select(...)` when they have rows, so unselected rows still pay the `▶ ` indent. Keep the widget's `highlight_symbol` and the budget on `LIST_HIGHLIGHT_SYMBOL` so they cannot drift.
 
 ## Terminal lifecycle
 
