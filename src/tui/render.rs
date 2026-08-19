@@ -1,3 +1,4 @@
+use super::view_model::PaneTitleVm;
 use super::{
     screens::{
         config::render_config_vm as render_config, confirm::render_confirm_vm as render_confirm,
@@ -161,6 +162,135 @@ pub(super) fn count_label(shown: usize, total: usize) -> String {
     } else {
         format!("({total})")
     }
+}
+
+/// Separator between the segments of a pane title.
+const TITLE_SEP: &str = " · ";
+
+/// Shortest elided context worth painting: `…` plus at least three cells.
+const MIN_ELIDED_WIDTH: usize = 4;
+
+/// Width of `text` in terminal cells — the same measure ratatui truncates a title by, so a
+/// double-width glyph (`⚓`) is not silently clipped by the block after we let it through.
+fn cell_width(text: &str) -> usize {
+    ratatui::text::Span::raw(text).width()
+}
+
+/// Join a [`PaneTitleVm`] into at most `width` cells (issue #338) — that type documents which
+/// part gives way first.
+///
+/// A segment that does not fit is dropped whole, together with its separator and everything
+/// after it, so a narrow title never ends in a dangling `·` and never half-shows a state value.
+/// The context is appended last and is the only part that shrinks, keeping its tail behind a
+/// leading `…` — for a path, the half naming the directory.
+///
+/// Below the width the full head needs, an available `short_head` is spent — but only when the
+/// cells it frees actually buy back a state segment. Shortening the head to win nothing but a
+/// longer cwd would trade a label the user reads for context they can already see in the shell.
+pub(super) fn fit_title(title: &PaneTitleVm, width: usize) -> String {
+    let full = fit_segments(&title.segments, width);
+    let fitted = match title.short_head.as_deref() {
+        Some(short) if full.shown < title.segments.len() => {
+            let mut segments = title.segments.clone();
+            segments[0] = short.to_string();
+            let abbreviated = fit_segments(&segments, width);
+            // Ties go to the full head: same state, more of the pane's name.
+            if abbreviated.shown > full.shown {
+                abbreviated
+            } else {
+                full
+            }
+        }
+        _ => full,
+    };
+
+    let mut text = fitted.text;
+    // A head that had to be clipped has already taken the whole width; anything after it would
+    // overflow. An absent or empty context must not leave its separator behind either.
+    if fitted.shown == 0 {
+        return text;
+    }
+    let Some(context) = title.context.as_deref().filter(|c| !c.is_empty()) else {
+        return text;
+    };
+    let sep = if text.is_empty() { "" } else { TITLE_SEP };
+    let room = width.saturating_sub(fitted.used + cell_width(sep));
+    if cell_width(context) <= room {
+        text.push_str(sep);
+        text.push_str(context);
+    } else if room >= MIN_ELIDED_WIDTH {
+        text.push_str(sep);
+        text.push_str(&elide_start(context, room));
+    }
+    text
+}
+
+/// How much of `segments` fits `width`, and what that cost.
+struct FittedSegments {
+    text: String,
+    used: usize,
+    /// Segments joined whole. Fewer than `segments.len()` means state was dropped.
+    shown: usize,
+}
+
+/// Join `segments` greedily, stopping at the first one that does not fit.
+fn fit_segments(segments: &[String], width: usize) -> FittedSegments {
+    let mut text = String::new();
+    let mut used = 0usize;
+    for (i, segment) in segments.iter().enumerate() {
+        let sep = if i == 0 { "" } else { TITLE_SEP };
+        let cost = cell_width(sep) + cell_width(segment);
+        if used + cost > width {
+            // Too narrow even for the head: clip it like the block itself would, rather than
+            // painting a bare border.
+            if i == 0 {
+                text.push_str(&clip_end(segment, width));
+                used = cell_width(&text);
+            }
+            return FittedSegments {
+                text,
+                used,
+                shown: i,
+            };
+        }
+        text.push_str(sep);
+        text.push_str(segment);
+        used += cost;
+    }
+    FittedSegments {
+        text,
+        used,
+        shown: segments.len(),
+    }
+}
+
+/// `text` shortened to `room` cells by dropping its head behind a leading `…`.
+fn elide_start(text: &str, room: usize) -> String {
+    let tail_budget = room.saturating_sub(1);
+    // The leftmost byte offset whose suffix fits is the longest tail we can keep.
+    let start = text
+        .char_indices()
+        .map(|(i, _)| i)
+        .find(|&i| cell_width(&text[i..]) <= tail_budget)
+        .unwrap_or(text.len());
+    format!("…{}", &text[start..])
+}
+
+/// The longest prefix of `text` fitting `width` cells, trimmed so it cannot end in a space.
+fn clip_end(text: &str, width: usize) -> String {
+    let mut clipped = String::new();
+    let mut used = 0usize;
+    let mut buf = [0u8; 4];
+    for ch in text.chars() {
+        let cells = cell_width(ch.encode_utf8(&mut buf));
+        if used + cells > width {
+            break;
+        }
+        clipped.push(ch);
+        used += cells;
+    }
+    clipped.truncate(clipped.trim_end().len());
+    clipped
 }
 
 fn gist_badge_prefix(starred: bool, forked: bool) -> String {
@@ -1201,6 +1331,249 @@ mod tests {
         assert!(text.contains("(P)ins"));
         assert!(text.contains("(C)onfig"));
         assert!(text.contains("(?)Help"));
+    }
+
+    /// The Local pane title from the bug report, anchored and filtered.
+    fn local_title() -> PaneTitleVm {
+        let mut title = PaneTitleVm::new("[1] Local (6/15) ⚓".into());
+        title.short_head = Some("[1] (6/15) ⚓".into());
+        title.push("sort:match");
+        title.push_filter("md");
+        title.context = Some("~/code/gistui".into());
+        title
+    }
+
+    /// A sweep probe: the width at or above which `fit_title` still shows `needle`.
+    fn narrowest_width_showing(title: &PaneTitleVm, needle: &str) -> usize {
+        (0..=80)
+            .find(|&w| fit_title(title, w).contains(needle))
+            .expect("needle never appears")
+    }
+
+    /// #338 follow-up: the pane *name* is the head's cheapest part to lose — `[1]` and the
+    /// layout still say which pane this is — so a narrow title spends it on `sort:`.
+    #[test]
+    fn fit_title_drops_the_pane_name_to_keep_a_state_segment() {
+        // 26 cells: too narrow for `[1] Local (6/15) ⚓ · sort:match` (32), wide enough once
+        // the name goes.
+        assert_eq!(fit_title(&local_title(), 26), "[1] (6/15) ⚓ · sort:match");
+        assert_eq!(narrowest_width_showing(&local_title(), "sort:match"), 26);
+    }
+
+    /// The name is spent on state, never on more cwd — dropping it to widen re-derivable
+    /// context would trade something the reader needs for something they already know.
+    #[test]
+    fn fit_title_keeps_the_pane_name_when_dropping_it_buys_no_state() {
+        for width in 19..=25 {
+            let fitted = fit_title(&local_title(), width);
+            assert_eq!(fitted, "[1] Local (6/15) ⚓", "width {width}");
+        }
+        // Wide enough for everything: the name is back even though eliding it would leave
+        // room for a longer path.
+        assert!(fit_title(&local_title(), 38).starts_with("[1] Local (6/15) ⚓"));
+    }
+
+    /// Below the full head's own width the short head is a better answer than a clipped one:
+    /// a whole abbreviated head beats `[1] Local (6`.
+    #[test]
+    fn fit_title_prefers_a_whole_short_head_over_a_clipped_full_one() {
+        for width in 13..=18 {
+            assert_eq!(
+                fit_title(&local_title(), width),
+                "[1] (6/15) ⚓",
+                "width {width}"
+            );
+        }
+    }
+
+    /// A title with no short head keeps the original single-head behaviour.
+    #[test]
+    fn fit_title_without_a_short_head_is_unchanged() {
+        let mut title = local_title();
+        title.short_head = None;
+        assert_eq!(fit_title(&title, 26), "[1] Local (6/15) ⚓ · …tui");
+    }
+
+    #[test]
+    fn fit_title_joins_every_segment_when_it_fits() {
+        let full = "[1] Local (6/15) ⚓ · sort:match · /md · ~/code/gistui";
+        assert_eq!(fit_title(&local_title(), 200), full);
+        // `⚓` is two cells wide, so the exact fit is one wider than the character count.
+        assert_eq!(fit_title(&local_title(), cell_width(full)), full);
+        assert_ne!(fit_title(&local_title(), full.chars().count()), full);
+    }
+
+    /// #338: the state a keypress just changed outlives the cwd when the title is too narrow.
+    #[test]
+    fn fit_title_drops_the_cwd_before_the_state_segments() {
+        assert_eq!(
+            fit_title(&local_title(), 38),
+            "[1] Local (6/15) ⚓ · sort:match · /md"
+        );
+    }
+
+    #[test]
+    fn fit_title_elides_the_context_when_part_of_it_fits() {
+        let mut title = PaneTitleVm::new("[1] Local (6/15)".into());
+        title.push("sort:match");
+        title.context = Some("~/code/some-org/proj".into());
+        let fitted = fit_title(&title, 40);
+        assert_eq!(fitted, "[1] Local (6/15) · sort:match · …rg/proj");
+        assert_eq!(cell_width(&fitted), 40);
+    }
+
+    /// #338: only the context shrinks. A pane with none (the Gists pane) drops whole segments,
+    /// so a sort mode or filter is never half-shown — no segment here carries a `…` of its own,
+    /// so any `…` in the output could only have come from eliding one.
+    #[test]
+    fn fit_title_never_elides_a_state_segment() {
+        let mut title = PaneTitleVm::new("[2] Gists (2)".into());
+        title.push("all");
+        title.push("match");
+        title.push_filter("somequery");
+        for width in 0..60 {
+            let fitted = fit_title(&title, width);
+            assert!(
+                !fitted.contains('…'),
+                "state segment elided at width {width}: {fitted:?}"
+            );
+        }
+        assert_eq!(fit_title(&title, 24), "[2] Gists (2) · all");
+    }
+
+    #[test]
+    fn fit_title_never_ends_in_a_dangling_separator() {
+        let mut blank_context = local_title();
+        blank_context.context = Some(String::new());
+        for title in [local_title(), blank_context] {
+            for width in 0..80 {
+                let fitted = fit_title(&title, width);
+                assert!(cell_width(&fitted) <= width, "overflowed at width {width}");
+                assert!(
+                    !fitted.ends_with('·') && !fitted.ends_with(' '),
+                    "dangling separator at width {width}: {fitted:?}"
+                );
+                assert!(
+                    !fitted.starts_with('·') && !fitted.starts_with(' '),
+                    "leading separator at width {width}: {fitted:?}"
+                );
+            }
+        }
+    }
+
+    /// #338: too narrow even for the head clips it, rather than painting an empty title.
+    #[test]
+    fn fit_title_clips_the_head_when_nothing_fits() {
+        assert_eq!(fit_title(&local_title(), 0), "");
+        // Narrower than the short head too, so there is nothing left but a clipped head.
+        assert_eq!(fit_title(&local_title(), 9), "[1] Local");
+        // The anchor is two cells wide and will not split, but at 17 cells the short head
+        // fits whole — keeping the marker costs the pane name rather than the marker.
+        assert_eq!(fit_title(&local_title(), 17), "[1] (6/15) ⚓");
+    }
+
+    /// #338: the anchor lives in the head, so flipping it changes the title at every width the
+    /// head itself survives.
+    #[test]
+    fn fit_title_keeps_the_anchor_marker_at_every_width_the_head_fits() {
+        let anchored = local_title();
+        let mut plain = anchored.clone();
+        // The real builder derives both heads from the same state, so a control that strips the
+        // anchor has to strip it from the fallback too — otherwise the short head smuggles it
+        // back in at the widths where it is used.
+        plain.segments[0] = "[1] Local (6/15)".into();
+        plain.short_head = Some("[1] (6/15)".into());
+        for width in cell_width(&anchored.segments[0])..80 {
+            let with = fit_title(&anchored, width);
+            let without = fit_title(&plain, width);
+            assert!(
+                with.contains('⚓'),
+                "anchor dropped at width {width}: {with}"
+            );
+            assert!(!without.contains('⚓'), "phantom anchor at width {width}");
+        }
+    }
+
+    /// #338: in the terminal width from the bug report the Local title keeps sort / filter /
+    /// anchor and lets the cwd take the truncation, so flipping the anchor is visible on screen.
+    #[test]
+    fn render_screen_vm_list_title_keeps_state_over_cwd() {
+        let mut state = initial_state();
+        state.cwd = std::path::PathBuf::from("/cwd/some-org/some-project");
+        state.locals = vec![
+            crate::domain::LocalCandidate {
+                path: state.cwd.join("notes.md"),
+                pinned: false,
+                modified: None,
+            },
+            crate::domain::LocalCandidate {
+                path: state.cwd.join("a.txt"),
+                pinned: false,
+                modified: None,
+            },
+        ];
+        state.local_filter_query = "md".into();
+        state.anchor = FocusPane::Local;
+
+        // 137 columns as reported; the Local pane gets 40% of that.
+        let backend = TestBackend::new(137, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let vm = super::super::build_view_model(&state);
+        let mut layout = MouseLayout::default();
+        terminal
+            .draw(|frame| render_screen_vm(frame, &state, &vm.screen, &vm.chrome, &mut layout))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+
+        // A wide glyph owns two cells, so the anchor is followed by a filler cell in the dump.
+        assert!(
+            text.contains("[1] Local (1/2) ⚓"),
+            "local title missing the anchor: {text}"
+        );
+        assert!(
+            text.contains("· sort:match · /md ·"),
+            "local title missing state segments: {text}"
+        );
+        // The cwd is what shortened: only its tail survived, behind an ellipsis.
+        assert!(text.contains("…some-project"), "cwd not elided: {text}");
+    }
+
+    /// #338 follow-up: in a terminal too narrow for the full head, the pane *name* is what the
+    /// title gives up — `sort:` and the anchor survive, and `[1]` still says which pane it is.
+    #[test]
+    fn render_screen_vm_list_title_drops_the_pane_name_when_narrow() {
+        let mut state = initial_state();
+        state.cwd = std::path::PathBuf::from("/cwd/some-org/some-project");
+        state.locals = vec![crate::domain::LocalCandidate {
+            path: state.cwd.join("notes.md"),
+            pinned: false,
+            modified: None,
+        }];
+        state.anchor = FocusPane::Local;
+
+        // 70 columns: the Local pane's 40% share cannot hold `[1] Local (1) ⚓ · sort:match`.
+        let backend = TestBackend::new(70, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let vm = super::super::build_view_model(&state);
+        let mut layout = MouseLayout::default();
+        terminal
+            .draw(|frame| render_screen_vm(frame, &state, &vm.screen, &vm.chrome, &mut layout))
+            .unwrap();
+        let text = buffer_text(terminal.backend().buffer());
+
+        // A wide glyph owns two cells, so the anchor is followed by a filler cell in the dump.
+        assert!(
+            text.contains("[1] (1) ⚓"),
+            "narrow local title lost the anchor: {text}"
+        );
+        assert!(
+            text.contains("· sort:match"),
+            "narrow local title lost the sort mode: {text}"
+        );
+        assert!(
+            !text.contains("[1] Local"),
+            "pane name should have given way: {text}"
+        );
     }
 
     #[test]
