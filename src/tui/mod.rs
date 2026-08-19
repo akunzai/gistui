@@ -136,16 +136,18 @@ pub enum ConfigField {
     Theme,
     Mouse,
     CheckUpdates,
+    DiffShowFull,
     IgnoreTrailingNewline,
     ScanDepth,
     DiffContext,
 }
 
 impl ConfigField {
-    pub const ALL: [ConfigField; 6] = [
+    pub const ALL: [ConfigField; 7] = [
         ConfigField::Theme,
         ConfigField::Mouse,
         ConfigField::CheckUpdates,
+        ConfigField::DiffShowFull,
         ConfigField::IgnoreTrailingNewline,
         ConfigField::ScanDepth,
         ConfigField::DiffContext,
@@ -156,6 +158,7 @@ impl ConfigField {
             ConfigField::Theme => "Theme",
             ConfigField::Mouse => "Mouse support",
             ConfigField::CheckUpdates => "Check for updates",
+            ConfigField::DiffShowFull => "Show full diff",
             ConfigField::IgnoreTrailingNewline => "Ignore trailing newline",
             ConfigField::ScanDepth => "Recursive scan depth",
             ConfigField::DiffContext => "Diff context lines",
@@ -164,6 +167,18 @@ impl ConfigField {
 
     pub fn is_numeric(self) -> bool {
         matches!(self, ConfigField::ScanDepth | ConfigField::DiffContext)
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            ConfigField::Theme => "terminal colours",
+            ConfigField::Mouse => "click and wheel input",
+            ConfigField::CheckUpdates => "daily GitHub version check",
+            ConfigField::DiffShowFull => "open Diff expanded",
+            ConfigField::IgnoreTrailingNewline => "hide newline-only diffs",
+            ConfigField::ScanDepth => "directory levels to scan",
+            ConfigField::DiffContext => "unchanged lines around edits",
+        }
     }
 }
 

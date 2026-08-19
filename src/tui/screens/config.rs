@@ -87,6 +87,10 @@ impl AppState {
                 self.update_check_enabled = self.config_check_updates && !self.no_update_check_cli;
                 true
             }
+            ConfigField::DiffShowFull => {
+                self.diff_show_full = !self.diff_show_full;
+                true
+            }
             ConfigField::IgnoreTrailingNewline => {
                 self.ignore_trailing_newline = !self.ignore_trailing_newline;
                 true
@@ -172,7 +176,7 @@ pub(crate) fn build_config_vm(state: &AppState) -> ConfigVm {
             } else {
                 "Enter"
             };
-            format!("  {label:<28} {value:<8}  ({hint})")
+            format!("  {label:<23} {value:<5} {} ({hint})", field.description())
         })
         .collect();
     ConfigVm {
@@ -193,7 +197,11 @@ pub(crate) fn render_config_vm(
     let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .constraints([
+            Constraint::Min(3),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
         .split(area);
     let items: Vec<ListItem> = config
         .rows
@@ -240,6 +248,13 @@ pub(crate) fn render_config_vm(
             chunks[1],
         );
     }
+    frame.render_widget(
+        Paragraph::new(
+            " File-only: skip_dirs · ~/.config/gistui/config.toml (or $XDG_CONFIG_HOME)",
+        )
+        .style(Style::default().fg(state.theme.dim)),
+        chunks[2],
+    );
 }
 
 pub(crate) fn config_palette_items() -> Vec<crate::tui::palette::PaletteItem> {
@@ -320,5 +335,18 @@ mod tests {
         assert!(!state.adjust_config_field(false)); // already min
         assert!(state.adjust_config_field(true));
         assert_eq!(state.scan_depth, 1);
+    }
+
+    #[test]
+    fn config_toggles_show_full_diff() {
+        let mut state = initial_state();
+        state.open_config();
+        config_mut(&mut state).index = ConfigField::ALL
+            .iter()
+            .position(|field| *field == ConfigField::DiffShowFull)
+            .unwrap();
+        assert!(!state.diff_show_full);
+        assert!(state.adjust_config_field(true));
+        assert!(state.diff_show_full);
     }
 }

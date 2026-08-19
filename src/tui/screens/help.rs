@@ -398,9 +398,12 @@ Fields
   Theme                  dark / light (also global T)
   Mouse support          on / off (session still respects --no-mouse)
   Check for updates      on / off (session still respects --no-update-check)
+  Show full diff         on / off (opens Diff expanded; c still toggles it)
   Ignore trailing newline  on / off (diff + overwrite confirm)
   Recursive scan depth   0–20 (r recursive discovery)
-  Diff context lines     0–50 (c in Diff still toggles full vs this radius)"
+  Diff context lines     0–50 (c in Diff still toggles full vs this radius)
+
+File-only: skip_dirs — ~/.config/gistui/config.toml (or $XDG_CONFIG_HOME)"
         }
         HelpTopic::General => {
             "\
