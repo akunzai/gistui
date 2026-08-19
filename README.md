@@ -76,7 +76,8 @@ without resetting order. Pinned pairs show `📌`; same-filename candidates are 
 | `C` | open Settings (theme, mouse, update check, scan depth, …) |
 
 Press **`?`** anytime for the **full, contextual keymap** — it opens the current screen's
-topic; `Tab` browses all topics (List, Pins, Gist manager, Settings, …).
+topic; `Tab` browses all topics (List, Pins, Gist manager, Settings, …), where `1`–`9`,
+`g` (General), and `0` (About) select their displayed topic.
 Idle footers show contextual screen actions; every screen also shows a
 `(G)ists (P)ins (C)onfig (?)Help` shortcut bar in the top-right corner (click, or use the
 underlying key). Press `;` (or right-click) for a context menu of actions valid on

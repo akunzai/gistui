@@ -174,7 +174,7 @@ pub struct ConfigState {
 }
 
 /// A help topic — one per key-dense area, plus `About` (version/repo/update info, not tied
-/// to a screen). Ordered for the index list and `1`-`9`,`0` quick-jump.
+/// to a screen). Ordered for the index list and `1`-`9`, `g`, `0` quick-jump.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum HelpTopic {
     #[default]

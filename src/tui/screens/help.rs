@@ -14,6 +14,33 @@ use ratatui::{
 };
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::List;
+const HELP_INDEX_TITLE: &str = "Help — pick a topic (1-9,g,0 / ↑↓ Enter · Esc back)";
+const HELP_INDEX_SHORTCUTS: &[(char, HelpTopic)] = &[
+    ('1', HelpTopic::List),
+    ('2', HelpTopic::Pins),
+    ('3', HelpTopic::GistManager),
+    ('4', HelpTopic::GistDetail),
+    ('5', HelpTopic::Revisions),
+    ('6', HelpTopic::Diff),
+    ('7', HelpTopic::Preview),
+    ('8', HelpTopic::Upload),
+    ('9', HelpTopic::Config),
+    ('g', HelpTopic::General),
+    ('0', HelpTopic::About),
+];
+
+fn help_index_shortcut(topic: HelpTopic) -> char {
+    HELP_INDEX_SHORTCUTS
+        .iter()
+        .find_map(|&(key, mapped)| (mapped == topic).then_some(key))
+        .expect("every help topic has an index shortcut")
+}
+
+fn help_topic_for_index_shortcut(key: char) -> Option<HelpTopic> {
+    HELP_INDEX_SHORTCUTS
+        .iter()
+        .find_map(|&(mapped, topic)| (mapped == key).then_some(topic))
+}
 
 pub(crate) fn help_topic() -> HelpTopic {
     HELP_TOPIC
@@ -48,14 +75,8 @@ impl AppState {
                         help.index_open = false;
                         help.scroll = 0;
                     }
-                    KeyCode::Char(c @ '1'..='9') if (c as u8 - b'1') < topics.len() as u8 => {
-                        help.topic = topics[(c as u8 - b'1') as usize];
-                        help.index_open = false;
-                        help.scroll = 0;
-                    }
-                    // `0` always jumps to About (last topic), independent of total count.
-                    KeyCode::Char('0') if topics.contains(&HelpTopic::About) => {
-                        help.topic = HelpTopic::About;
+                    KeyCode::Char(key) if let Some(topic) = help_topic_for_index_shortcut(key) => {
+                        help.topic = topic;
                         help.index_open = false;
                         help.scroll = 0;
                     }
@@ -68,12 +89,8 @@ impl AppState {
                         help.index_sel = topics.iter().position(|&t| t == help.topic).unwrap_or(0);
                         help.index_open = true;
                     }
-                    KeyCode::Char(c @ '1'..='9') if (c as u8 - b'1') < topics.len() as u8 => {
-                        help.topic = topics[(c as u8 - b'1') as usize];
-                        help.scroll = 0;
-                    }
-                    KeyCode::Char('0') if topics.contains(&HelpTopic::About) => {
-                        help.topic = HelpTopic::About;
+                    KeyCode::Char(key) if let Some(topic) = help_topic_for_index_shortcut(key) => {
+                        help.topic = topic;
                         help.scroll = 0;
                     }
                     KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?') => {}
@@ -149,17 +166,9 @@ pub(crate) fn build_help_vm(state: &AppState) -> HelpVm {
     let mode = if help.index_open {
         let items = HelpTopic::all()
             .iter()
-            .enumerate()
-            .map(|(i, t)| {
-                let key = if *t == HelpTopic::About {
-                    "0".to_string()
-                } else {
-                    (i + 1).to_string()
-                };
-                HelpIndexItemVm {
-                    key,
-                    title: t.title().to_string(),
-                }
+            .map(|&topic| HelpIndexItemVm {
+                key: help_index_shortcut(topic).to_string(),
+                title: topic.title().to_string(),
             })
             .collect();
         HelpModeVm::Index {
@@ -425,13 +434,13 @@ pub(crate) fn render_help_vm(
         HelpModeVm::Index { items, selected } => {
             let list_items: Vec<ListItem> = items
                 .iter()
-                .map(|item| ListItem::new(format!("  {}  {}", item.key, item.title)))
+                .map(|item| ListItem::new(format!("  {:>2}  {}", item.key, item.title)))
                 .collect();
             let list = List::new(list_items)
                 .block(
                     Block::default()
                         .title(crate::tui::render::fit_block_title(
-                            "Help — pick a topic (1-9,0 / ↑↓ Enter · Esc back)",
+                            HELP_INDEX_TITLE,
                             area.width,
                         ))
                         .borders(Borders::ALL)
@@ -591,7 +600,7 @@ mod tests {
         state.screen = Screen::Help(Box::default());
         help_mut(&mut state).topic = HelpTopic::List;
         help_mut(&mut state).scroll = 5;
-        state.handle_key(KeyCode::Char('0')); // 0 -> About (index 9, the 10th topic)
+        state.handle_key(KeyCode::Char('0')); // 0 -> About (index 10, the 11th topic)
         assert_eq!(help_ref(&state).topic, HelpTopic::About);
         assert_eq!(help_ref(&state).scroll, 0);
         assert!(!help_ref(&state).index_open);
@@ -608,17 +617,50 @@ mod tests {
     }
 
     #[test]
-    fn help_index_navigates_and_enter_opens_topic() {
+    fn each_help_index_shortcut_opens_its_displayed_topic() {
         let mut state = initial_state();
-        state.screen = Screen::Help(Box::default());
-        help_mut(&mut state).index_open = true;
-        help_mut(&mut state).index_sel = 0;
-        state.handle_key(KeyCode::Down); // -> 1
-        state.handle_key(KeyCode::Down); // -> 2 (GistManager)
-        assert_eq!(help_ref(&state).index_sel, 2);
-        state.handle_key(KeyCode::Enter);
-        assert!(!help_ref(&state).index_open);
-        assert_eq!(help_ref(&state).topic, HelpTopic::GistManager);
+        state.screen = Screen::Help(Box::new(HelpState {
+            index_open: true,
+            ..HelpState::default()
+        }));
+        let HelpModeVm::Index { items, .. } = build_help_vm(&state).mode else {
+            panic!("expected help topic index");
+        };
+        assert_eq!(items.len(), HelpTopic::all().len());
+        assert!(HELP_INDEX_TITLE.contains("1-9,g,0"));
+
+        for (item, topic) in items.iter().zip(HelpTopic::all()) {
+            assert_eq!(item.key.chars().count(), 1, "{}", item.title);
+            let key = item
+                .key
+                .chars()
+                .next()
+                .expect("every index row has a shortcut");
+            state.screen = Screen::Help(Box::new(HelpState {
+                index_open: true,
+                ..HelpState::default()
+            }));
+            state.handle_key(KeyCode::Char(key));
+            assert_eq!(help_ref(&state).topic, topic, "{}", item.title);
+            assert!(!help_ref(&state).index_open, "{}", item.title);
+        }
+    }
+
+    #[test]
+    fn help_index_navigation_and_enter_open_every_topic() {
+        for (index, topic) in HelpTopic::all().into_iter().enumerate() {
+            let mut state = initial_state();
+            state.screen = Screen::Help(Box::default());
+            help_mut(&mut state).index_open = true;
+
+            for _ in 0..index {
+                state.handle_key(KeyCode::Down);
+            }
+            assert_eq!(help_ref(&state).index_sel, index);
+            state.handle_key(KeyCode::Enter);
+            assert!(!help_ref(&state).index_open);
+            assert_eq!(help_ref(&state).topic, topic);
+        }
     }
 
     #[test]
