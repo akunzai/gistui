@@ -92,7 +92,9 @@ impl Theme {
     pub const LIGHT: Theme = Theme {
         bg: Color::Gray, // ANSI 7 — light-grey canvas
         fg: Color::Black,
-        accent: Color::DarkGray, // ANSI 8 — selection bar, focused borders
+        // Fixed dark shades keep the focused border and selection bar distinct from dimmed
+        // chrome on the light-grey canvas (bright ANSI hues can be terminal-dependent here).
+        accent: Color::Indexed(24), // #005f87 dark blue — focused borders, selection bar
         fg_on_accent: Color::White,
         dim: Color::DarkGray,
         // Bright ANSI Green / Blue wash out on the grey canvas; pin a fixed dark navy
@@ -101,7 +103,7 @@ impl Theme {
         write_color: Color::Indexed(20),
         ins_color: Color::Indexed(20),
         del_color: Color::Indexed(124), // #af0000 dark red — bright ANSI red is too light here
-        gist_label_color: Color::DarkGray,
+        gist_label_color: Color::Indexed(19), // #0000af dark navy — diff gist header label
         notice_color: Color::Indexed(94), // #875f00 dark amber
         syntax: SyntaxPalette::LIGHT,
     };
