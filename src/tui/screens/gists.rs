@@ -13,6 +13,7 @@ use ratatui::{
 };
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::GistManager;
+const GISTS_HINTS: &str = "↑↓ move  ·  Enter detail  ·  * star  ·  o browser  ·  y copy URL  ·  H revisions  ·  s sort  ·  v visibility  ·  / filter  ·  Esc/q back";
 
 pub(crate) fn help_topic() -> HelpTopic {
     HELP_TOPIC
@@ -148,7 +149,7 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
         )
     } else {
         let (footer, colored) =
-            crate::tui::footer_with_status(state.status.as_deref(), crate::tui::MINIMAL_HINT);
+            crate::tui::footer_with_status(state.status.as_deref(), GISTS_HINTS);
         (String::new(), footer, colored)
     };
 

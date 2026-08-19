@@ -77,7 +77,7 @@ without resetting order. Pinned pairs show `📌`; same-filename candidates are 
 
 Press **`?`** anytime for the **full, contextual keymap** — it opens the current screen's
 topic; `Tab` browses all topics (List, Pins, Gist manager, Settings, …).
-The idle footer shows `; Menu · Ctrl+p Palette`; every screen also shows a
+Idle footers show contextual screen actions; every screen also shows a
 `(G)ists (P)ins (C)onfig (?)Help` shortcut bar in the top-right corner (click, or use the
 underlying key). Press `;` (or right-click) for a context menu of actions valid on
 the current screen and selection; press `Ctrl+p` for the full command palette with

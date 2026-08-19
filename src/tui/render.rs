@@ -793,8 +793,9 @@ pub(super) fn footer_height(text: &str, width: u16, title: &str, colored: bool) 
 /// whole label words so e.g. `pins` does not read as the `pin` action.
 pub(super) fn action_color(label: &str, theme: &Theme) -> Color {
     const DESTRUCTIVE: [&str; 3] = ["delete", "remove", "unpin"];
-    const WRITE: [&str; 10] = [
+    const WRITE: [&str; 11] = [
         "download", "upload", "create", "new", "sync", "push", "pull", "pin", "edit", "desc",
+        "star",
     ];
     let mut color = theme.accent;
     for word in label.split_whitespace() {
@@ -2202,6 +2203,22 @@ mod tests {
                 "mid-hint clip in narrow diff footer ({item:?}): {footer:?}"
             );
         }
+    }
+
+    #[test]
+    fn key_dense_screen_footers_keep_whole_hints_at_eighty_columns() {
+        let mut list = initial_state();
+        let list_text = render_rows(&list, 80, 24).join("\n");
+        assert!(list_text.contains("Enter diff") && list_text.contains("Esc/q back"));
+
+        let mut pins = initial_state();
+        pins.screen = Screen::Pins(Box::default());
+        let pins_text = render_rows(&pins, 80, 24).join("\n");
+        assert!(pins_text.contains("✓ synced") && pins_text.contains("Esc/q back"));
+
+        list.screen = Screen::Gists(Box::default());
+        let gists_text = render_rows(&list, 80, 24).join("\n");
+        assert!(gists_text.contains("Enter detail") && gists_text.contains("Esc/q back"));
     }
 
     /// Issue #342: a wrapped comment continuation keeps the source line's indent.

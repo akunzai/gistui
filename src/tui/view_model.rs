@@ -865,6 +865,33 @@ mod tests {
     }
 
     #[test]
+    fn key_dense_screens_expose_contextual_action_hints() {
+        let mut state = initial_state();
+        let ScreenVm::List(list) = build_view_model(&state).screen else {
+            panic!("expected List");
+        };
+        let ListFooterVm::Hints { text } = list.footer else {
+            panic!("expected List hints");
+        };
+        assert!(text.contains("Enter diff") && text.contains("d download"));
+
+        state.screen = Screen::Pins(Box::default());
+        let ScreenVm::Pins(pins) = build_view_model(&state).screen else {
+            panic!("expected Pins");
+        };
+        assert!(pins.footer.contains("s sync") && pins.footer.contains("x unpin"));
+        assert!(
+            pins.footer_title.contains("✓ synced") && pins.footer_title.contains("↓ remote newer")
+        );
+
+        state.screen = Screen::Gists(Box::default());
+        let ScreenVm::Gists(gists) = build_view_model(&state).screen else {
+            panic!("expected Gists");
+        };
+        assert!(gists.footer.contains("Enter detail") && gists.footer.contains("H revisions"));
+    }
+
+    #[test]
     fn gists_vm_empty_and_rows() {
         use crate::domain::GistFile;
 

@@ -12,6 +12,7 @@ use crate::tui::{
 use crossterm::event::KeyCode;
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::List;
+const LIST_HINTS: &str = "↑↓ move  ·  Tab panes  ·  Enter diff  ·  d download  ·  u upload  ·  n new gist  ·  p pin  ·  P pins  ·  g gists  ·  / filter  ·  Esc/q back";
 
 pub(crate) fn help_topic() -> HelpTopic {
     HELP_TOPIC
@@ -624,7 +625,7 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
         }
     } else {
         ListFooterVm::Hints {
-            text: crate::tui::MINIMAL_HINT.to_string(),
+            text: LIST_HINTS.to_string(),
         }
     };
 
