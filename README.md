@@ -132,7 +132,7 @@ pin a file or toggle the theme with `T`. All fields are optional.
 | `mouse` | `bool` | Enable mouse support (wheel scroll, click/double-click, close button). Default `true`; `--no-mouse` forces it off for one session. |
 | `check_updates` | `bool` | Check GitHub once a day on startup for a newer release and surface it on the `?` Help → About topic. Default `true`; `--no-update-check` forces it off for one session. |
 | `ignore_trailing_newline` | `bool` | Treat a difference that is *only* a file-final newline as no change in the diff view and the overwrite-confirm gate. Default `true`; set `false` for strict, byte-exact diffs. |
-| `skip_dirs` | `[string]` | Directory names skipped during recursive discovery (`r` key). Defaults to common build/dependency dirs (`node_modules`, `target`, …). Hidden dirs (`.`-prefix) are always skipped. |
+| `skip_dirs` | `[string]` | Directory names skipped during recursive discovery (`r` key). Defaults to common build/dependency dirs (`node_modules`, `target`, …). Hidden files and directories are included; `.git`, `.hg`, and `.svn` are always skipped. |
 | `[[pinned]]` | `table array` | Local-file ↔ gist mappings managed by the `p`/`P` keys. Can also be edited by hand. |
 
 Copy [`config.example.toml`](config.example.toml) from the repo for an annotated

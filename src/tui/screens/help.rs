@@ -240,7 +240,7 @@ Navigation
 
 List screen
   Footer     shows the primary screen actions; narrow terminals keep whole hints and the leave key
-  r          toggle recursive file discovery (skips hidden + configured dirs)
+  r          toggle recursive file discovery (includes hidden paths; skips configured dirs)
   /          filter the focused pane (Local = path/filename, Gist = description/id)
              while filtering: type to match · ↑↓ move · PgUp/PgDn page · Tab apply + switch pane
              · Enter apply · Esc clear · ←/→/Home/End move · Del
