@@ -35,8 +35,8 @@ check_updates = true
 ignore_trailing_newline = true
 
 # Directories skipped when recursive local file discovery is active (r key).
-# Hidden directories (names starting with ".") are always skipped regardless
-# of this list. Add project-specific build output dirs here as needed.
+# Hidden directories are included unless listed here. Git metadata directories
+# (.git, .hg, .svn) are always skipped. Add project-specific output dirs here.
 skip_dirs = [
   "node_modules",
   "target",       # Rust
