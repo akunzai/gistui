@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Narrow List panes no longer clip the sort mode, filter, or `⚓` anchor out of their titles: the working directory gives way first and the pane name (`Local` / `Gists`) second, without leaving a dangling `·` behind.
 - Downloading from a diff against a recursively discovered nested file now preserves that file's directory and keeps it visible after the local list refreshes.
 - Deleting a gist from its file list view now returns to whichever screen you opened it from (Gist Manager, Pins, etc.) instead of always jumping to the main list.
 

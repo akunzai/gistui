@@ -3,7 +3,7 @@
 
 use crate::tui::keys::{apply_filter_edit, diff_pair_previewable, point_in, FilterKey, NavAction};
 use crate::tui::view_model::{
-    ChromeVm, ListFooterVm, ListPaneEmpty, ListPaneVm, ListRowVm, ListVm,
+    ChromeVm, ListFooterVm, ListPaneEmpty, ListPaneVm, ListRowVm, ListVm, PaneTitleVm,
 };
 use crate::tui::{
     AppState, FocusPane, GistView, HelpTopic, KeyOutcome, MouseLayout, PaneHit, PendingAction,
@@ -493,6 +493,15 @@ impl AppState {
     }
 }
 
+/// The ` ⚓` suffix for whichever pane drives the match ranking, empty for the other one.
+fn anchor_marker(state: &AppState, pane: FocusPane) -> &'static str {
+    if state.anchor == pane {
+        " ⚓"
+    } else {
+        ""
+    }
+}
+
 /// List body only — usable while `state.screen` is List **or** Palette-over-List (#250).
 pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
     let (visible_locals, ranked) = state.list_pane_snapshots();
@@ -532,20 +541,24 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
 
     let recursive_marker = if state.local_recursive { " [↓]" } else { "" };
     let scanning_marker = if state.local_scanning { " …" } else { "" };
-    let mut local_title = format!(
-        "[1] Local {} · {}{}{} · sort:{}",
-        crate::tui::render::count_label(visible_locals.len(), state.locals.len()),
-        crate::config::display_path(&state.cwd),
-        recursive_marker,
-        scanning_marker,
-        state.local_sort.label()
-    );
-    if !state.local_filter_query.is_empty() {
-        local_title.push_str(&format!(" · /{}", state.local_filter_query));
-    }
-    if state.anchor == FocusPane::Local {
-        local_title.push_str(" · ⚓");
-    }
+    // Order per `PaneTitleVm` (#338): the anchor rides in the head so pressing `a` always shows,
+    // the state a keypress just changed follows, and the cwd is the context that gives way.
+    // The pane name is the one part of the head a reader can re-derive from `[1]` and the
+    // layout, so it is what a narrow pane gives up to keep `sort:` visible.
+    let local_head = |name: &str| {
+        format!(
+            "[1] {name}{}{}{}{}",
+            crate::tui::render::count_label(visible_locals.len(), state.locals.len()),
+            anchor_marker(state, FocusPane::Local),
+            recursive_marker,
+            scanning_marker
+        )
+    };
+    let mut local_title = PaneTitleVm::new(local_head("Local "));
+    local_title.short_head = Some(local_head(""));
+    local_title.push(format!("sort:{}", state.local_sort.label()));
+    local_title.push_filter(&state.local_filter_query);
+    local_title.context = Some(crate::config::display_path(&state.cwd));
 
     let gist_empty;
     let gist_empty_message;
@@ -581,18 +594,20 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
             .collect();
     }
 
-    let mut gist_title = format!(
-        "[2] Gists {} · {} · {}",
-        crate::tui::render::count_label(ranked.len(), state.gists.len()),
-        state.gist_type_filter.label(),
-        state.gist_sort.label()
-    );
-    if !state.filter_query.is_empty() {
-        gist_title.push_str(&format!(" · /{}", state.filter_query));
-    }
-    if state.anchor == FocusPane::Gist {
-        gist_title.push_str(" · ⚓");
-    }
+    // Same order as the Local pane (#338). No re-derivable context here, so nothing is ever
+    // shortened — a segment either fits whole or is dropped.
+    let gist_head = |name: &str| {
+        format!(
+            "[2] {name}{}{}",
+            crate::tui::render::count_label(ranked.len(), state.gists.len()),
+            anchor_marker(state, FocusPane::Gist)
+        )
+    };
+    let mut gist_title = PaneTitleVm::new(gist_head("Gists "));
+    gist_title.short_head = Some(gist_head(""));
+    gist_title.push(state.gist_type_filter.label());
+    gist_title.push(state.gist_sort.label());
+    gist_title.push_filter(&state.filter_query);
 
     let footer = if state.filtering {
         let query = match state.focus {
@@ -664,13 +679,16 @@ fn list_pane_items(
 fn render_pane(
     frame: &mut Frame,
     area: ratatui::layout::Rect,
-    title: &str,
+    title: &PaneTitleVm,
     items: Vec<ListItem>,
     focused: bool,
     selected: Option<usize>,
     theme: &crate::tui::Theme,
 ) -> usize {
     let item_count = items.len();
+    // Titles sit between the two border corners; segments that do not fit are dropped here
+    // rather than clipped mid-word by the block (#338).
+    let title = crate::tui::render::fit_title(title, area.width.saturating_sub(2) as usize);
     let border_style = if focused {
         Style::default().fg(theme.accent)
     } else {
@@ -690,7 +708,7 @@ fn render_pane(
     let list = List::new(items)
         .block(
             Block::default()
-                .title(title)
+                .title(title.as_str())
                 // Pin title to theme fg so it stays legible in both dark and light modes.
                 .title_style(Style::default().fg(theme.fg))
                 .borders(Borders::ALL)
@@ -940,6 +958,68 @@ mod tests {
         if state.screen.is_confirm() {
             state.screen = Screen::List;
         }
+    }
+
+    /// #338: the Local pane title keeps the anchor in its head, puts the sort and filter next,
+    /// and hands the cwd to `context` — the only part a narrow pane shortens.
+    #[test]
+    fn local_title_puts_the_cwd_in_the_shrinkable_context() {
+        let mut state = state_with_local_paths(&["/cwd/notes.md", "/cwd/a.txt"]);
+        state.cwd = std::path::PathBuf::from("/cwd/some-org/some-project");
+        state.local_filter_query = "md".into();
+        state.anchor = FocusPane::Local;
+
+        let title = build_list_vm(&state).local.title;
+        assert_eq!(
+            title.segments,
+            vec![
+                "[1] Local (1/2) ⚓".to_string(),
+                "sort:match".to_string(),
+                "/md".to_string(),
+            ]
+        );
+        assert_eq!(
+            title.context.as_deref(),
+            Some(crate::config::display_path(&state.cwd).as_str())
+        );
+    }
+
+    /// #338: flipping the anchor must change the pane title. The marker rides in the head, so it
+    /// survives at every width the head does — `render::fit_title` owns the width side of that.
+    #[test]
+    fn anchor_key_puts_the_marker_in_the_title_head() {
+        let mut state = state_with_local_paths(&["/cwd/notes.md", "/cwd/a.txt"]);
+        state.cwd = std::path::PathBuf::from("/cwd/some-org/some-project");
+        state.local_filter_query = "md".into();
+        state.anchor = FocusPane::Gist;
+
+        let before = build_list_vm(&state).local.title;
+        state.handle_key(KeyCode::Char('a'));
+        let after = build_list_vm(&state).local.title;
+
+        assert_eq!(state.anchor, FocusPane::Local);
+        assert!(!before.segments[0].contains('⚓'), "{:?}", before.segments);
+        assert!(after.segments[0].contains('⚓'), "{:?}", after.segments);
+    }
+
+    /// #338: the Gist pane title is built from the same ordered segments, with no context.
+    #[test]
+    fn gist_title_segments_follow_the_same_order() {
+        let mut state = state_with_gists();
+        state.filter_query = "a".into();
+        state.anchor = FocusPane::Gist;
+
+        let title = build_list_vm(&state).gist.title;
+        assert_eq!(
+            title.segments,
+            vec![
+                "[2] Gists (1/2) ⚓".to_string(),
+                "all".to_string(),
+                "match".to_string(),
+                "/a".to_string(),
+            ]
+        );
+        assert_eq!(title.context, None);
     }
 
     #[test]
