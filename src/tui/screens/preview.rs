@@ -121,7 +121,10 @@ pub(crate) fn render_preview_vm(
     // When wrapping, horizontal scroll is meaningless — pin the x offset to 0 so long lines
     // wrap into view instead of being scrolled off-screen.
     let block = Block::default()
-        .title(preview.title.clone())
+        .title(crate::tui::render::fit_block_title(
+            &preview.title,
+            chunks[0].width,
+        ))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .style(state.theme.base_style())

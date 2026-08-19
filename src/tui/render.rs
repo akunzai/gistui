@@ -241,10 +241,10 @@ fn fit_segments(segments: &[String], width: usize) -> FittedSegments {
         let sep = if i == 0 { "" } else { TITLE_SEP };
         let cost = cell_width(sep) + cell_width(segment);
         if used + cost > width {
-            // Too narrow even for the head: clip it like the block itself would, rather than
+            // Too narrow even for the head: clip it (marked with `…`, #340) rather than
             // painting a bare border.
             if i == 0 {
-                text.push_str(&clip_end(segment, width));
+                text.push_str(&truncate_end(segment, width));
                 used = cell_width(&text);
             }
             return FittedSegments {
@@ -273,24 +273,61 @@ fn elide_start(text: &str, room: usize) -> String {
         .map(|(i, _)| i)
         .find(|&i| cell_width(&text[i..]) <= tail_budget)
         .unwrap_or(text.len());
-    format!("…{}", &text[start..])
+    format!("{ELLIPSIS}{}", &text[start..])
 }
 
-/// The longest prefix of `text` fitting `width` cells, trimmed so it cannot end in a space.
-fn clip_end(text: &str, width: usize) -> String {
+/// Ellipsis marking that a value was clipped (issue #340). One cell in `cell_width`.
+const ELLIPSIS: &str = "…";
+
+/// Highlight prefix every row list paints (`▶` plus a space). Kept in one place so the
+/// truncation budget and the widget's `highlight_symbol` cannot drift.
+pub(super) const LIST_HIGHLIGHT_SYMBOL: &str = "▶ ";
+
+/// Borders (2) + `Padding::horizontal(1)` (2) around a list pane's inner rows.
+const LIST_CHROME_CELLS: u16 = 4;
+
+/// Width-aware end truncation (issue #340): a value that fits is returned unchanged; a
+/// value that does not is cut on a character boundary and marked with `…`. Wide glyphs
+/// are never split — a leftover cell is left empty rather than showing half a character.
+pub(super) fn truncate_end(text: &str, width: usize) -> String {
+    if cell_width(text) <= width {
+        return text.to_string();
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let ellipsis_width = cell_width(ELLIPSIS);
+    if width < ellipsis_width {
+        return String::new();
+    }
+    let budget = width - ellipsis_width;
     let mut clipped = String::new();
     let mut used = 0usize;
     let mut buf = [0u8; 4];
     for ch in text.chars() {
         let cells = cell_width(ch.encode_utf8(&mut buf));
-        if used + cells > width {
+        if used + cells > budget {
             break;
         }
         clipped.push(ch);
         used += cells;
     }
     clipped.truncate(clipped.trim_end().len());
+    clipped.push_str(ELLIPSIS);
     clipped
+}
+
+/// Title sitting on a bordered block: the two corner glyphs are not available.
+pub(super) fn fit_block_title(title: &str, area_width: u16) -> String {
+    truncate_end(title, area_width.saturating_sub(2) as usize)
+}
+
+/// Visible list-row text: horizontal scroll first, then truncate to the inner content
+/// width (borders, padding, and the highlight symbol) so ratatui cannot silently clip.
+pub(super) fn visible_list_row(label: &str, hscroll: u16, pane_width: u16) -> String {
+    let inner = pane_width.saturating_sub(LIST_CHROME_CELLS) as usize;
+    let room = inner.saturating_sub(cell_width(LIST_HIGHLIGHT_SYMBOL));
+    truncate_end(&hscroll_str(label, hscroll), room)
 }
 
 fn gist_badge_prefix(starred: bool, forked: bool) -> String {
@@ -508,7 +545,7 @@ pub(super) fn render_compact_gist_bg_vm(
     frame.render_widget(
         Paragraph::new(lines).style(theme.base_style()).block(
             Block::default()
-                .title(bg.block_title.clone())
+                .title(fit_block_title(&bg.block_title, area.width))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme.accent))
@@ -1014,7 +1051,7 @@ pub(super) fn render_diff_pane_vm(
     theme: &Theme,
 ) {
     let block = Block::default()
-        .title(diff.title.clone())
+        .title(fit_block_title(&diff.title, area.width))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .style(theme.base_style())
@@ -1078,9 +1115,9 @@ fn centered_modal_rect(area: Rect, body: &str) -> Rect {
     }
 }
 
-fn modal_block(title: &str, border: Color, theme: &Theme) -> Block<'static> {
+fn modal_block(title: &str, area_width: u16, border: Color, theme: &Theme) -> Block<'static> {
     Block::default()
-        .title(title.to_string())
+        .title(fit_block_title(title, area_width))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border))
@@ -1101,7 +1138,7 @@ pub(super) fn render_centered_modal(
         Paragraph::new(body.to_string())
             .style(theme.base_style())
             .wrap(Wrap { trim: true })
-            .block(modal_block(title, border, theme)),
+            .block(modal_block(title, rect.width, border, theme)),
         rect,
     );
     rect
@@ -1126,7 +1163,7 @@ pub(super) fn render_centered_modal_input(
         Paragraph::new(input_line(prefix, input, suffix))
             .style(theme.base_style())
             .wrap(Wrap { trim: true })
-            .block(modal_block(title, border, theme)),
+            .block(modal_block(title, rect.width, border, theme)),
         rect,
     );
     rect
@@ -1307,6 +1344,28 @@ mod tests {
         buffer.content().iter().map(|c| c.symbol()).collect()
     }
 
+    /// Issue #340: a value that fits, including exactly, is left untouched.
+    #[test]
+    fn truncate_end_leaves_a_fitting_value_untouched() {
+        assert_eq!(truncate_end("", 0), "");
+        assert_eq!(truncate_end("hello", 5), "hello");
+        assert_eq!(truncate_end("hello", 10), "hello");
+        assert_eq!(truncate_end("日本語", 6), "日本語");
+    }
+
+    /// Issue #340: clipping appends `…` and never splits a wide glyph.
+    #[test]
+    fn truncate_end_marks_a_clipped_value_with_an_ellipsis() {
+        assert_eq!(truncate_end("hello", 0), "");
+        assert_eq!(truncate_end("hello", 1), "…");
+        assert_eq!(truncate_end("hello", 4), "hel…");
+        // Each CJK cell is two wide; a leftover cell is not filled by splitting the next glyph.
+        assert_eq!(truncate_end("日本語テスト", 5), "日本…");
+        assert_eq!(truncate_end("日本語", 2), "…");
+        assert_eq!(truncate_end("日本語", 3), "日…");
+        assert_eq!(cell_width(&truncate_end("日本語テスト", 5)), 5);
+    }
+
     /// Builds a real `ScreenVm` from `state` (same seam `render()` uses) and paints it through
     /// `render_screen_vm` — the dispatch under test. Panics (e.g. an unreachable match arm, an
     /// out-of-bounds slice on empty data) fail the test; the returned buffer text lets callers
@@ -1423,8 +1482,8 @@ mod tests {
     }
 
     /// #338: only the context shrinks. A pane with none (the Gists pane) drops whole segments,
-    /// so a sort mode or filter is never half-shown — no segment here carries a `…` of its own,
-    /// so any `…` in the output could only have come from eliding one.
+    /// so a sort mode or filter is never half-shown. #340: a head that itself cannot fit is
+    /// marked with a trailing `…` — that is the only ellipsis this pane can produce.
     #[test]
     fn fit_title_never_elides_a_state_segment() {
         let mut title = PaneTitleVm::new("[2] Gists (2)".into());
@@ -1433,10 +1492,12 @@ mod tests {
         title.push_filter("somequery");
         for width in 0..60 {
             let fitted = fit_title(&title, width);
-            assert!(
-                !fitted.contains('…'),
-                "state segment elided at width {width}: {fitted:?}"
-            );
+            if fitted.contains('…') {
+                assert!(
+                    fitted.ends_with('…') && !fitted.contains(" · "),
+                    "state segment elided at width {width}: {fitted:?}"
+                );
+            }
         }
         assert_eq!(fit_title(&title, 24), "[2] Gists (2) · all");
     }
@@ -1462,11 +1523,12 @@ mod tests {
     }
 
     /// #338: too narrow even for the head clips it, rather than painting an empty title.
+    /// #340: that clipped head is marked with `…` so it does not read as the real value.
     #[test]
     fn fit_title_clips_the_head_when_nothing_fits() {
         assert_eq!(fit_title(&local_title(), 0), "");
         // Narrower than the short head too, so there is nothing left but a clipped head.
-        assert_eq!(fit_title(&local_title(), 9), "[1] Local");
+        assert_eq!(fit_title(&local_title(), 9), "[1] Loca…");
         // The anchor is two cells wide and will not split, but at 17 cells the short head
         // fits whole — keeping the marker costs the pane name rather than the marker.
         assert_eq!(fit_title(&local_title(), 17), "[1] (6/15) ⚓");
@@ -1573,6 +1635,128 @@ mod tests {
         assert!(
             !text.contains("[1] Local"),
             "pane name should have given way: {text}"
+        );
+    }
+
+    fn gist_file(filename: &str, description: &str) -> crate::domain::GistFile {
+        crate::domain::GistFile {
+            gist_id: "abc123def".into(),
+            description: description.into(),
+            filename: filename.into(),
+            public: false,
+            updated_at: "2024-01-01T00:00:00Z".into(),
+            created_at: "2024-01-01T00:00:00Z".into(),
+            owner_login: String::new(),
+            fork_of_id: None,
+            raw_url: None,
+            content_type: None,
+            node_id: None,
+        }
+    }
+
+    fn render_state_size(state: &AppState, width: u16, height: u16) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let vm = super::super::build_view_model(state);
+        let mut layout = MouseLayout::default();
+        terminal
+            .draw(|frame| render_screen_vm(frame, state, &vm.screen, &vm.chrome, &mut layout))
+            .unwrap();
+        buffer_text(terminal.backend().buffer())
+    }
+
+    /// Issue #340: a long gist-pane description is marked with `…` instead of reading as
+    /// the real value. Reproduces on the 137-column terminal from the report.
+    #[test]
+    fn render_screen_vm_list_row_marks_clipped_description() {
+        let mut state = initial_state();
+        state.gists = vec![gist_file(
+            "MicrosoftDateTimeJsonConverter.cs",
+            "System.Text.Json deserialize legacy JSON data TAILMARKER",
+        )];
+        let text = render_state_size(&state, 137, 20);
+        assert!(
+            text.contains("MicrosoftDateTimeJsonConverter.cs"),
+            "filename missing: {text}"
+        );
+        assert!(text.contains('…'), "clipped row has no ellipsis: {text}");
+        assert!(
+            !text.contains("TAILMARKER"),
+            "clipped tail still visible: {text}"
+        );
+    }
+
+    /// Issue #340: a wide-character filename is clipped on a character boundary, not mid-glyph.
+    #[test]
+    fn render_screen_vm_list_row_does_not_split_a_wide_character() {
+        let mut state = initial_state();
+        state.gists = vec![gist_file(
+            "日本語テストファイル名前がとても長いです.txt",
+            "desc",
+        )];
+        let text = render_state_size(&state, 80, 16);
+        assert!(text.contains('…'), "wide-char row has no ellipsis: {text}");
+        assert!(
+            !text.contains("です.txt"),
+            "wide-char tail still visible (or a split glyph leaked the suffix): {text}"
+        );
+    }
+
+    /// Issue #340: a value that fits the pane is left untouched — no ellipsis.
+    #[test]
+    fn render_screen_vm_list_row_leaves_a_fitting_label_untouched() {
+        let mut state = initial_state();
+        state.gists = vec![gist_file("a.txt", "short")];
+        let text = render_state_size(&state, 137, 20);
+        assert!(
+            text.contains("a.txt — short"),
+            "fitting label missing: {text}"
+        );
+        assert!(!text.contains('…'), "fitting label was clipped: {text}");
+    }
+
+    /// Issue #340: Gist manager rows use the same truncation as the List pane.
+    #[test]
+    fn render_screen_vm_gists_row_marks_clipped_description() {
+        let mut state = initial_state();
+        state.screen = Screen::Gists(Box::default());
+        state.gists = vec![gist_file(
+            "file.txt",
+            "a very long gist description that must not survive a narrow manager row TAILMARKER",
+        )];
+        let text = render_state_size(&state, 60, 16);
+        assert!(
+            text.contains('…'),
+            "clipped gist row has no ellipsis: {text}"
+        );
+        assert!(
+            !text.contains("TAILMARKER"),
+            "clipped gist tail still visible: {text}"
+        );
+    }
+
+    /// Issue #340: Pinned Mappings rows use the same truncation as the List pane.
+    #[test]
+    fn render_screen_vm_pins_row_marks_clipped_path() {
+        let mut state = initial_state();
+        state.screen = Screen::Pins(Box::default());
+        state.pinned = vec![crate::domain::PinnedMapping {
+            local_path: std::path::PathBuf::from(
+                "/cwd/very/deeply/nested/project/with/a/long/path/config.json",
+            ),
+            gist_id: "abc123def456".into(),
+            gist_filename: "config.json".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+        let text = render_state_size(&state, 50, 16);
+        assert!(
+            text.contains('…'),
+            "clipped pin row has no ellipsis: {text}"
+        );
+        assert!(
+            !text.contains("config.json"),
+            "clipped pin tail still visible: {text}"
         );
     }
 

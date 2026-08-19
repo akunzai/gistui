@@ -13,7 +13,7 @@ Toolchains and task wrappers live in [`mise.toml`](mise.toml); run `mise install
 
 ## Pointers
 
-- Architecture, state-machine, jobs, IO boundaries, and safety seams: `@docs/agents/architecture.md`
+- Architecture, state-machine, jobs, IO boundaries, safety seams, and truncation: `@docs/agents/architecture.md`
 - Agent-only contribution and release conventions: `@docs/agents/conventions.md`
 - Human contribution flow: `@CONTRIBUTING.md`
 - Release runbook: `@RELEASING.md`

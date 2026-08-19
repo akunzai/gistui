@@ -245,7 +245,13 @@ pub(crate) fn render_gists_vm(
         GistsEmptyKind::HasRows => gists
             .rows
             .iter()
-            .map(|row| ListItem::new(crate::tui::render::hscroll_str(&row.label, gists.hscroll)))
+            .map(|row| {
+                ListItem::new(crate::tui::render::visible_list_row(
+                    &row.label,
+                    gists.hscroll,
+                    chunks[0].width,
+                ))
+            })
             .collect(),
         _ => {
             let msg = gists.empty_message.clone().unwrap_or_else(|| "  ".into());
@@ -256,7 +262,10 @@ pub(crate) fn render_gists_vm(
     let list = List::new(items)
         .block(
             Block::default()
-                .title(gists.title.clone())
+                .title(crate::tui::render::fit_block_title(
+                    &gists.title,
+                    chunks[0].width,
+                ))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(state.theme.accent))
@@ -270,7 +279,7 @@ pub(crate) fn render_gists_vm(
                 .fg(state.theme.fg_on_accent)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("▶ ");
+        .highlight_symbol(crate::tui::render::LIST_HIGHLIGHT_SYMBOL);
 
     let mut list_state = ListState::default();
     list_state.select(gists.selected);

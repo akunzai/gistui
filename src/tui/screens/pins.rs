@@ -290,7 +290,11 @@ pub(crate) fn render_pins_vm(
             .rows
             .iter()
             .map(|row| {
-                let item = ListItem::new(crate::tui::render::hscroll_str(&row.label, pins.hscroll));
+                let item = ListItem::new(crate::tui::render::visible_list_row(
+                    &row.label,
+                    pins.hscroll,
+                    chunks[0].width,
+                ));
                 if row.status == crate::domain::SyncStatus::Missing {
                     item.style(Style::default().fg(state.theme.del_color))
                 } else {
@@ -303,7 +307,10 @@ pub(crate) fn render_pins_vm(
     let list = List::new(items)
         .block(
             Block::default()
-                .title(pins.title.clone())
+                .title(crate::tui::render::fit_block_title(
+                    &pins.title,
+                    chunks[0].width,
+                ))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(state.theme.accent))
@@ -317,7 +324,7 @@ pub(crate) fn render_pins_vm(
                 .fg(state.theme.fg_on_accent)
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("▶ ");
+        .highlight_symbol(crate::tui::render::LIST_HIGHLIGHT_SYMBOL);
 
     let mut list_state = ListState::default();
     list_state.select(pins.selected);

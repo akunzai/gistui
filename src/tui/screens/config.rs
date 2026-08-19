@@ -204,7 +204,10 @@ pub(crate) fn render_config_vm(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .title(" Settings ")
+        .title(crate::tui::render::fit_block_title(
+            " Settings ",
+            chunks[0].width,
+        ))
         .title_bottom(Line::from(
             " Esc close · Enter/←/→ change · saved on change ",
         ))
