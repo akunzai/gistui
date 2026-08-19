@@ -779,6 +779,7 @@ pub(crate) fn render_list_vm(
                 &footer_body,
                 area.width,
                 "",
+                footer_is_command,
             )),
         ])
         .split(area);

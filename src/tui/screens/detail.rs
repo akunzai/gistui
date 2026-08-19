@@ -29,7 +29,7 @@ use crossterm::event::KeyCode;
 use ratatui::{
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Padding, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Padding, Paragraph},
     Frame,
 };
 
@@ -652,6 +652,7 @@ pub(crate) fn render_gist_detail_vm(
                 &detail.footer,
                 area.width,
                 "",
+                detail.footer_colored,
             )),
         ])
         .split(area);
@@ -791,6 +792,9 @@ fn render_gist_comments_vm(
     let mut affordance_present = false;
     let mut title = "Comments".to_string();
     let mut scroll = 0u16;
+    // Borders only (no padding): wrap body lines to the inner width so a
+    // continuation keeps the source line's indent (#342).
+    let inner_width = area.width.saturating_sub(2) as usize;
 
     match comments {
         CommentsPaneVm::Loading => body.push(Line::from(Span::styled(
@@ -832,11 +836,19 @@ fn render_gist_comments_vm(
             body.push(Line::from(""));
             for line in lines {
                 match line {
-                    CommentLineVm::Author { text } => body.push(Line::from(Span::styled(
-                        text.clone(),
-                        Style::default().fg(theme.accent),
-                    ))),
-                    CommentLineVm::Body { text } => body.push(Line::from(text.clone())),
+                    CommentLineVm::Author { text } => {
+                        for part in crate::tui::render::wrap_hanging(text, inner_width) {
+                            body.push(Line::from(Span::styled(
+                                part,
+                                Style::default().fg(theme.accent),
+                            )));
+                        }
+                    }
+                    CommentLineVm::Body { text } => {
+                        for part in crate::tui::render::wrap_hanging(text, inner_width) {
+                            body.push(Line::from(part));
+                        }
+                    }
                     CommentLineVm::Blank => body.push(Line::from("")),
                 }
             }
@@ -862,7 +874,6 @@ fn render_gist_comments_vm(
         Paragraph::new(body)
             .style(theme.base_style())
             .scroll((scroll, 0))
-            .wrap(Wrap { trim: false })
             .block(
                 Block::default()
                     .title(crate::tui::render::fit_block_title(&title, area.width))

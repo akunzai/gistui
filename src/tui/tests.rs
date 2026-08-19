@@ -1071,10 +1071,11 @@ fn wrap_line_count_is_responsive_to_width() {
 
 #[test]
 fn footer_height_collapses_to_zero_when_empty_else_wraps() {
-    assert_eq!(footer_height("", 100, ""), 0);
-    assert_eq!(footer_height("? Help", 100, ""), 1);
-    assert_eq!(footer_height("aaa bbb ccc", 9, ""), 2); // 2 wrapped lines at inner width 7
-    assert_eq!(footer_height("/x_", 100, "Filter"), 2); // title row + 1 content line
+    assert_eq!(footer_height("", 100, "", false), 0);
+    assert_eq!(footer_height("? Help", 100, "", false), 1);
+    assert_eq!(footer_height("aaa bbb ccc", 9, "", false), 2); // 2 wrapped lines at inner width 7
+    assert_eq!(footer_height("/x_", 100, "Filter", false), 2); // title row + 1 content line
+    assert_eq!(footer_height("aaa bbb ccc", 9, "", true), 1); // hints stay one row (#342)
 }
 
 #[test]

@@ -237,6 +237,7 @@ pub(crate) fn render_gists_vm(
                 &gists.footer,
                 area.width,
                 &gists.footer_title,
+                gists.footer_colored,
             )),
         ])
         .split(area);
