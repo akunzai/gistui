@@ -23,6 +23,8 @@ use ratatui::{
 };
 use similar::{ChangeTag, TextDiff};
 
+pub(crate) mod list_pane;
+
 pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     *layout = MouseLayout::default();
     // Paint the full canvas so every unfilled cell uses the theme background (no-op for dark
@@ -285,7 +287,7 @@ const ELLIPSIS: &str = "…";
 pub(super) const LIST_HIGHLIGHT_SYMBOL: &str = "▶ ";
 
 /// Borders (2) + `Padding::horizontal(1)` (2) around a list pane's inner rows.
-const LIST_CHROME_CELLS: u16 = 4;
+pub(super) const LIST_CHROME_CELLS: u16 = 4;
 
 /// Width-aware end truncation (issue #340): a value that fits is returned unchanged; a
 /// value that does not is cut on a character boundary and marked with `…`. Wide glyphs
@@ -1524,7 +1526,7 @@ mod tests {
 
     /// Concatenates every cell's symbol in row-major order (no separators) — enough to assert
     /// a known label/title landed somewhere in the frame without pinning exact coordinates.
-    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+    pub(super) fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
         buffer.content().iter().map(|c| c.symbol()).collect()
     }
 
@@ -1556,34 +1558,12 @@ mod tests {
         assert_eq!(visible_list_row("AGENTS.md", 6, width), "….md");
     }
 
-    /// Issue #341: scrolling the selected long path must not eat the start of its siblings.
+    /// Issue #341: the offset belongs to the selected row alone.
     #[test]
-    fn list_hscroll_leaves_unselected_rows_readable_from_their_start() {
-        let mut state = crate::tui::tests::state_with_local_paths(&[
-            "/cwd/AGENTS.md",
-            "/cwd/docs/adr/0001-appstate-field-visibility.md",
-            "/cwd/CHANGELOG.md",
-        ]);
-        state.focus = FocusPane::Local;
-        state.local_index = 1;
-        state.local_hscroll = 6;
-        let text = render_state(&state);
-        assert!(
-            text.contains("AGENTS.md"),
-            "unselected short row lost its start: {text}"
-        );
-        assert!(
-            text.contains("CHANGELOG.md"),
-            "unselected short row lost its start: {text}"
-        );
-        assert!(
-            text.contains("…dr/0001"),
-            "selected row must show a leading ellipsis at this offset: {text}"
-        );
-        assert!(
-            !text.contains("docs/adr/0001-appstate-field-visibility.md"),
-            "selected row should have scrolled past its head: {text}"
-        );
+    fn row_hscroll_moves_only_the_selected_row() {
+        assert_eq!(row_hscroll(Some(1), 1, 4), 4);
+        assert_eq!(row_hscroll(Some(1), 0, 4), 0);
+        assert_eq!(row_hscroll(None, 0, 4), 0);
     }
 
     /// Issue #340: clipping appends `…` and never splits a wide glyph.
@@ -1697,7 +1677,7 @@ mod tests {
     /// `render_screen_vm` — the dispatch under test. Panics (e.g. an unreachable match arm, an
     /// out-of-bounds slice on empty data) fail the test; the returned buffer text lets callers
     /// additionally assert on painted content.
-    fn render_state(state: &AppState) -> String {
+    pub(super) fn render_state(state: &AppState) -> String {
         let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         let vm = super::super::build_view_model(state);
