@@ -460,26 +460,34 @@ pub(crate) fn render_help_vm(
             scroll,
             about_repo_line,
         } => {
+            // Borders + horizontal padding: wrap to the inner width so a narrow
+            // pane reflows instead of clipping mid-word (#342).
+            let inner_width = area.width.saturating_sub(4) as usize;
             let body_lines: Vec<Line<'static>> = lines
                 .iter()
                 .enumerate()
-                .map(|(i, text)| {
-                    if about_repo_line == &Some(i) {
-                        let repo = text.trim_start();
-                        let indent_len = text.len() - repo.len();
-                        let indent = text[..indent_len].to_string();
-                        Line::from(vec![
-                            Span::raw(indent),
-                            Span::styled(
-                                repo.to_string(),
-                                Style::default()
-                                    .fg(state.theme.fg)
-                                    .add_modifier(Modifier::UNDERLINED),
-                            ),
-                        ])
-                    } else {
-                        Line::from(text.clone())
-                    }
+                .flat_map(|(i, text)| {
+                    let underline = about_repo_line == &Some(i);
+                    crate::tui::render::wrap_hanging(text, inner_width)
+                        .into_iter()
+                        .map(move |part| {
+                            if underline {
+                                let repo = part.trim_start();
+                                let indent_len = part.len() - repo.len();
+                                let indent = part[..indent_len].to_string();
+                                Line::from(vec![
+                                    Span::raw(indent),
+                                    Span::styled(
+                                        repo.to_string(),
+                                        Style::default()
+                                            .fg(state.theme.fg)
+                                            .add_modifier(Modifier::UNDERLINED),
+                                    ),
+                                ])
+                            } else {
+                                Line::from(part)
+                            }
+                        })
                 })
                 .collect();
             frame.render_widget(

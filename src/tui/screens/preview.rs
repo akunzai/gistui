@@ -111,8 +111,11 @@ pub(crate) fn render_preview_vm(
 ) {
     let area = frame.area();
     let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
-    let footer_lines =
-        crate::tui::wrap_line_count(&preview.footer, area.width.saturating_sub(2)).max(1);
+    let footer_lines = if preview.footer_colored {
+        1
+    } else {
+        crate::tui::wrap_line_count(&preview.footer, area.width.saturating_sub(2)).max(1)
+    };
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(footer_lines)])

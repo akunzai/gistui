@@ -271,6 +271,7 @@ pub(crate) fn render_pins_vm(
                 &pins.footer,
                 area.width,
                 &pins.footer_title,
+                pins.footer_colored,
             )),
         ])
         .split(area);

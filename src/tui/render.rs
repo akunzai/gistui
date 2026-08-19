@@ -317,6 +317,136 @@ pub(super) fn truncate_end(text: &str, width: usize) -> String {
     clipped
 }
 
+/// Soft-wrap `text` to `width` cells, continuing each overflow row at the source
+/// line's leading whitespace (issue #342). A line that fits is returned unchanged.
+pub(super) fn wrap_hanging(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return Vec::new();
+    }
+    if cell_width(text) <= width {
+        return vec![text.to_string()];
+    }
+    let indent_bytes = text.len() - text.trim_start().len();
+    let indent = &text[..indent_bytes];
+    let rest = &text[indent_bytes..];
+    let indent_w = cell_width(indent);
+    let hang = if indent_w > 0 && indent_w < width {
+        indent
+    } else {
+        ""
+    };
+
+    let mut lines = Vec::new();
+    let mut remaining = rest;
+    let mut first = true;
+    while !remaining.is_empty() {
+        let prefix = if first {
+            if indent_w < width {
+                indent
+            } else {
+                ""
+            }
+        } else {
+            hang
+        };
+        first = false;
+        let budget = width.saturating_sub(cell_width(prefix));
+        let (take, rest_after) = take_fitting(remaining, budget);
+        if take.is_empty() {
+            // Nothing fits next to the prefix (wide glyph, leftover cell): take one
+            // character so the loop always advances.
+            let ch_end = remaining
+                .chars()
+                .next()
+                .map(char::len_utf8)
+                .unwrap_or(remaining.len());
+            lines.push(format!("{prefix}{}", &remaining[..ch_end]));
+            remaining = &remaining[ch_end..];
+            continue;
+        }
+        lines.push(format!("{prefix}{take}"));
+        remaining = rest_after;
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+/// Longest prefix of `text` that fits `budget` cells, preferring a trailing space as the
+/// break. The returned remainder has leading spaces stripped (the break itself).
+fn take_fitting(text: &str, budget: usize) -> (&str, &str) {
+    if budget == 0 {
+        return ("", text);
+    }
+    if cell_width(text) <= budget {
+        return (text, "");
+    }
+    let mut used = 0usize;
+    let mut last_break: Option<usize> = None;
+    let mut end = 0usize;
+    let mut buf = [0u8; 4];
+    for (i, ch) in text.char_indices() {
+        let cells = cell_width(ch.encode_utf8(&mut buf));
+        if used + cells > budget {
+            break;
+        }
+        used += cells;
+        end = i + ch.len_utf8();
+        if ch == ' ' {
+            last_break = Some(i);
+        }
+    }
+    let split_at = last_break.unwrap_or(end);
+    if split_at == 0 {
+        return ("", text);
+    }
+    let take = &text[..split_at];
+    let rest = text[split_at..].trim_start();
+    (take, rest)
+}
+
+/// Trim a ` · `-separated hint line to `width` cells by dropping whole items,
+/// keeping the last (leave-key) item (issue #342). A line that fits is unchanged.
+pub(super) fn fit_hints(text: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    if cell_width(text) <= width {
+        return text.to_string();
+    }
+    let sep = if text.contains("  ·  ") {
+        "  ·  "
+    } else {
+        " · "
+    };
+    let items: Vec<&str> = text.split(sep).filter(|item| !item.is_empty()).collect();
+    if items.is_empty() {
+        return truncate_end(text, width);
+    }
+    let last = items[items.len() - 1];
+    if cell_width(last) > width {
+        return truncate_end(last, width);
+    }
+    let sep_w = cell_width(sep);
+    let mut prefix: Vec<&str> = Vec::new();
+    let mut used = cell_width(last);
+    for item in &items[..items.len() - 1] {
+        let extra = cell_width(item) + sep_w;
+        if used + extra > width {
+            break;
+        }
+        prefix.push(item);
+        used += extra;
+    }
+    let mut out = prefix.join(sep);
+    if !out.is_empty() {
+        out.push_str(sep);
+    }
+    out.push_str(last);
+    out
+}
+
 /// Title sitting on a bordered block: the two corner glyphs are not available.
 pub(super) fn fit_block_title(title: &str, area_width: u16) -> String {
     truncate_end(title, area_width.saturating_sub(2) as usize)
@@ -642,12 +772,15 @@ pub(super) fn wrap_line_count(text: &str, width: u16) -> u16 {
 /// Height to reserve for a screen's footer `Layout` row: `0` when both `text` and `title` are
 /// empty (the footer fully collapses), else the wrapped line count for `text` plus one row when
 /// `title` is non-empty (ratatui's [`Block::title`] always consumes a row, even without borders).
-pub(super) fn footer_height(text: &str, width: u16, title: &str) -> u16 {
+pub(super) fn footer_height(text: &str, width: u16, title: &str, colored: bool) -> u16 {
     if text.is_empty() && title.is_empty() {
         return 0;
     }
     let content = if text.is_empty() {
         0
+    } else if colored {
+        // Coloured hint lines are trimmed to one row by [`fit_hints`] (#342).
+        1
     } else {
         wrap_line_count(text, width.saturating_sub(2)).max(1)
     };
@@ -739,10 +872,16 @@ pub(super) fn render_footer(
     theme: &Theme,
     _layout: &mut MouseLayout,
 ) {
-    let para = if colored {
-        Paragraph::new(hint_line(text, theme))
+    let inner = area.width.saturating_sub(2) as usize;
+    let text = if colored {
+        fit_hints(text, inner)
     } else {
-        Paragraph::new(text.to_string())
+        text.to_string()
+    };
+    let para = if colored {
+        Paragraph::new(hint_line(&text, theme))
+    } else {
+        Paragraph::new(text)
     };
     frame.render_widget(
         para.style(theme.base_style())
@@ -1436,6 +1575,100 @@ mod tests {
         assert_eq!(cell_width(&truncate_end("日本語テスト", 5)), 5);
     }
 
+    /// Issue #342: a line that already fits is left as a single row.
+    #[test]
+    fn wrap_hanging_leaves_a_fitting_line_untouched() {
+        assert_eq!(wrap_hanging("  hello", 20), vec!["  hello".to_string()]);
+        assert_eq!(wrap_hanging("", 10), vec![String::new()]);
+        assert!(wrap_hanging("hello", 0).is_empty());
+    }
+
+    /// Issue #342: a wrap continues at the source line's leading whitespace, so a list
+    /// item does not drop to column zero.
+    #[test]
+    fn wrap_hanging_continues_at_the_source_indent() {
+        assert_eq!(
+            wrap_hanging("  hello world", 10),
+            vec!["  hello".to_string(), "  world".to_string()]
+        );
+        assert_eq!(
+            wrap_hanging("    - long list item", 14),
+            vec!["    - long".to_string(), "    list item".to_string()]
+        );
+    }
+
+    /// Issue #342: a token wider than the remaining budget is split on a cell boundary
+    /// rather than overflowing or vanishing.
+    #[test]
+    fn wrap_hanging_breaks_a_word_that_exceeds_the_width() {
+        assert_eq!(
+            wrap_hanging("  abcdefghij", 6),
+            vec![
+                "  abcd".to_string(),
+                "  efgh".to_string(),
+                "  ij".to_string()
+            ]
+        );
+        assert_eq!(
+            wrap_hanging("日本語", 5),
+            vec!["日本".to_string(), "語".to_string()]
+        );
+        // Indent leaves one leftover cell; a 2-cell glyph still advances.
+        let parts = wrap_hanging("    日", 5);
+        assert!(parts.iter().any(|p| p.contains('日')), "{parts:?}");
+    }
+
+    /// Issue #342: every authored help line reflows to the 80-column inner width.
+    #[test]
+    fn wrap_hanging_help_topics_fit_an_eighty_column_inner_width() {
+        const INNER: usize = 76; // 80 − borders − padding
+        for topic in HelpTopic::all() {
+            if topic == HelpTopic::About {
+                continue;
+            }
+            for (i, line) in super::super::screens::help::help_topic_body(topic)
+                .lines()
+                .enumerate()
+            {
+                for part in wrap_hanging(line, INNER) {
+                    assert!(
+                        cell_width(&part) <= INNER,
+                        "{topic:?} line {i} overflowed: {part:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Issue #342: a footer that already fits is left untouched.
+    #[test]
+    fn fit_hints_leaves_a_fitting_line_untouched() {
+        let text = "↑↓ scroll  ·  d download  ·  Esc/q back";
+        assert_eq!(fit_hints(text, 80), text);
+        assert_eq!(fit_hints("", 10), "");
+        assert_eq!(fit_hints("Esc/q back", 0), "");
+    }
+
+    /// Issue #342: whole hints drop so the leave key stays, rather than the line being
+    /// cut through `Esc/q`.
+    #[test]
+    fn fit_hints_drops_middle_items_to_keep_the_leave_key() {
+        let text = "↑↓ scroll  ·  d download  ·  Esc/q back";
+        // 30 cells: "↑↓ scroll  ·  Esc/q back" is 24; adding download (15 + sep 5) does not fit.
+        assert_eq!(fit_hints(text, 30), "↑↓ scroll  ·  Esc/q back");
+        assert_eq!(fit_hints(text, 12), "Esc/q back");
+    }
+
+    /// Issue #342: a single hint that cannot fit is marked, never shown half-cut.
+    #[test]
+    fn fit_hints_marks_a_leave_key_that_itself_cannot_fit() {
+        assert_eq!(fit_hints("Esc/q back", 6), "Esc/q…");
+        assert_eq!(
+            fit_hints("↑↓←→ PgUp/Dn scroll  ·  Esc/q back", 8),
+            "Esc/q b…"
+        );
+    }
+
     /// Builds a real `ScreenVm` from `state` (same seam `render()` uses) and paints it through
     /// `render_screen_vm` — the dispatch under test. Panics (e.g. an unreachable match arm, an
     /// out-of-bounds slice on empty data) fail the test; the returned buffer text lets callers
@@ -1895,6 +2128,147 @@ mod tests {
         let mut state = initial_state();
         state.screen = Screen::Help(Box::default());
         render_state(&state);
+    }
+
+    /// Issue #342: at 80 columns the List help body re-wraps the long "read-only" line
+    /// instead of clipping it mid-word (`pin/uploa`).
+    #[test]
+    fn render_help_body_rewraps_instead_of_clipping_at_eighty_columns() {
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        let text = render_state_size(&state, 80, 60);
+        assert!(
+            text.contains("pin/upload/delete"),
+            "help body clipped mid-word at 80 columns: {text}"
+        );
+    }
+
+    fn pane_content_indent(row: &str) -> usize {
+        let inner = row
+            .trim_end()
+            .strip_prefix('│')
+            .unwrap_or(row)
+            .strip_suffix('│')
+            .unwrap_or(row);
+        inner.len() - inner.trim_start().len()
+    }
+
+    fn buffer_rows(buffer: &ratatui::buffer::Buffer) -> Vec<String> {
+        let width = buffer.area().width;
+        let height = buffer.area().height;
+        (0..height)
+            .map(|y| {
+                (0..width)
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn render_rows(state: &AppState, width: u16, height: u16) -> Vec<String> {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let vm = super::super::build_view_model(state);
+        let mut layout = MouseLayout::default();
+        terminal
+            .draw(|frame| render_screen_vm(frame, state, &vm.screen, &vm.chrome, &mut layout))
+            .unwrap();
+        buffer_rows(terminal.backend().buffer())
+    }
+
+    /// Issue #342: a Diff footer that cannot fit every hint drops whole items and keeps
+    /// the leave key, rather than cutting `Esc/q back` mid-hint.
+    #[test]
+    fn render_diff_footer_keeps_whole_hints_including_leave_at_eighty_columns() {
+        let mut state = initial_state();
+        state.screen = Screen::Diff(Box::default());
+        let rows = render_rows(&state, 80, 24);
+        let footer = rows
+            .last()
+            .expect("diff screen has a footer row")
+            .trim_end();
+        let above = rows[rows.len() - 2].trim_end();
+        assert!(
+            above.contains('─'),
+            "footer should be one trimmed row, not wrapped:\n{above}\n{footer}"
+        );
+        assert!(
+            footer.contains("Esc/q") && footer.contains("back"),
+            "leave key missing from narrow diff footer: {footer:?}"
+        );
+        for item in footer.split('·').map(str::trim).filter(|s| !s.is_empty()) {
+            assert!(
+                !item.ends_with('…') || item == footer.trim(),
+                "mid-hint clip in narrow diff footer ({item:?}): {footer:?}"
+            );
+        }
+    }
+
+    /// Issue #342: a wrapped comment continuation keeps the source line's indent.
+    #[test]
+    fn render_comments_keep_hanging_indent_at_eighty_columns() {
+        let mut state = initial_state();
+        state.screen = Screen::GistDetail(Box::default());
+        state.gists = vec![crate::domain::GistFile::for_sync(
+            "g1".into(),
+            "a.txt".into(),
+            None,
+        )];
+        if let Some(d) = state.detail_mut() {
+            d.gist_id = Some("g1".into());
+            d.focus = DetailFocus::Comments;
+            d.comments = Some(vec![crate::domain::GistComment {
+                author: "alice".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                body: "- a list item that is long enough to wrap at eighty columns and must keep hanging indent WRAPTAIL"
+                    .into(),
+            }]);
+            d.comments_loaded_oldest_page = 1;
+        }
+        let rows = render_rows(&state, 80, 24);
+        let first = rows
+            .iter()
+            .find(|row| row.contains("list item that is long"))
+            .unwrap_or_else(|| panic!("comment body missing: {rows:?}"));
+        let cont = rows
+            .iter()
+            .find(|row| row.contains("WRAPTAIL"))
+            .unwrap_or_else(|| panic!("wrapped tail missing: {rows:?}"));
+        let first_indent = pane_content_indent(first);
+        let cont_indent = pane_content_indent(cont);
+        assert_eq!(
+            first_indent, cont_indent,
+            "wrapped comment lost hanging indent\n{first}\n{cont}"
+        );
+        assert!(
+            first_indent >= 2,
+            "comment body should keep its indent: {first:?}"
+        );
+    }
+
+    /// Issue #342: every screen paints at the 80-column floor without panicking.
+    #[test]
+    fn render_screen_vm_all_screens_paint_at_eighty_columns() {
+        let screens = [
+            Screen::List,
+            Screen::Gists(Box::default()),
+            Screen::GistDetail(Box::default()),
+            Screen::Revisions(Box::default()),
+            Screen::Config(Box::default()),
+            Screen::Diff(Box::default()),
+            Screen::Preview(Box::default()),
+            Screen::Pins(Box::default()),
+            Screen::Confirm(Box::default()),
+            Screen::Help(Box::default()),
+        ];
+        for screen in screens {
+            let mut state = initial_state();
+            state.screen = screen.clone();
+            let _ = render_state_size(&state, 80, 24);
+        }
+        let mut palette = initial_state();
+        palette.open_palette_menu(None);
+        let _ = render_state_size(&palette, 80, 24);
     }
 
     #[test]

@@ -187,8 +187,8 @@ pub(crate) fn render_diff_vm(
 ) {
     let area = frame.area();
     let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
-    let footer_lines =
-        crate::tui::wrap_line_count(&diff.footer, area.width.saturating_sub(2)).max(1);
+    // Hint lines are trimmed to one row (#342); they never wrap.
+    let footer_lines = 1;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Min(5), Constraint::Length(footer_lines)])
