@@ -146,6 +146,7 @@ fn run_command_executes_planned_write_action() {
         fork_of_id: None,
         raw_url: None,
         content_type: None,
+        size: 0,
         node_id: None,
     };
     let plan = upload_command(PathBuf::from("/tmp/settings.json").as_path(), &target);

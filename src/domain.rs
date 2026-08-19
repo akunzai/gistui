@@ -90,6 +90,9 @@ pub struct GistFile {
     /// MIME type from the gist list API (`files[].type`), when present.
     #[serde(default)]
     pub content_type: Option<String>,
+    /// Byte size from the gist list API (`files[].size`), or 0 when unavailable.
+    #[serde(default)]
+    pub size: u64,
     /// GraphQL global id from the gist list API (`node_id`), for stargazer counts.
     #[serde(default)]
     pub node_id: Option<String>,
@@ -288,6 +291,7 @@ impl GistFile {
             fork_of_id: None,
             raw_url,
             content_type: None,
+            size: 0,
             node_id: None,
         }
     }
@@ -599,6 +603,7 @@ mod tests {
 
             raw_url: None,
             content_type: None,
+            size: 0,
             node_id: None,
         }
     }

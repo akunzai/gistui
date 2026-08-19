@@ -512,6 +512,8 @@ mod tests {
 
                 content_type: None,
 
+                size: 0,
+
                 node_id: None,
             },
             GistFile {
@@ -527,6 +529,8 @@ mod tests {
                 raw_url: None,
 
                 content_type: None,
+
+                size: 0,
 
                 node_id: None,
             },
@@ -571,6 +575,8 @@ mod tests {
 
                 content_type: None,
 
+                size: 0,
+
                 node_id: None,
             },
             GistFile {
@@ -586,6 +592,8 @@ mod tests {
                 raw_url: None,
 
                 content_type: None,
+
+                size: 0,
 
                 node_id: None,
             },
@@ -645,6 +653,7 @@ mod tests {
                 fork_of_id: None,
                 raw_url: None,
                 content_type: None,
+                size: 0,
                 node_id: None,
             })
             .collect();
@@ -671,6 +680,8 @@ mod tests {
             raw_url: None,
 
             content_type: None,
+
+            size: 0,
 
             node_id: None,
         }];

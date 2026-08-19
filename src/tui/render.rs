@@ -1954,6 +1954,7 @@ mod tests {
             fork_of_id: None,
             raw_url: None,
             content_type: None,
+            size: 0,
             node_id: None,
         }
     }
@@ -2076,6 +2077,24 @@ mod tests {
         let mut state = initial_state();
         state.screen = Screen::GistDetail(Box::default());
         render_state(&state);
+    }
+
+    #[test]
+    fn render_gist_detail_metadata_fits_at_eighty_columns() {
+        let mut state = initial_state();
+        state.screen = Screen::GistDetail(Box::default());
+        state.gists = vec![crate::domain::GistFile {
+            content_type: Some("text/plain".into()),
+            size: 1_536,
+            ..gist_file("notes.txt", "metadata")
+        }];
+        state.detail_mut().unwrap().gist_id = Some("abc123def".into());
+        state.gist_comment_counts.insert("abc123def".into(), 3);
+
+        let text = render_state_size(&state, 80, 24);
+        assert!(text.contains("notes.txt · 1.5 KiB · text/plain"), "{text}");
+        assert!(text.contains("Files (1): 1.5 KiB total"), "{text}");
+        assert!(text.contains("Comments (3)"), "{text}");
     }
 
     #[test]

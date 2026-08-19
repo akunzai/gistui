@@ -510,7 +510,9 @@ pub(crate) fn build_gist_detail_vm(state: &AppState) -> GistDetailVm {
             info_line: String::new(),
             focus: detail.focus,
             files: Vec::new(),
+            files_title: String::new(),
             file_cursor: 0,
+            comments_count: 0,
             comments: CommentsPaneVm::PromptLoad,
             footer,
             footer_colored,
@@ -526,7 +528,9 @@ pub(crate) fn build_gist_detail_vm(state: &AppState) -> GistDetailVm {
             info_line: String::new(),
             focus: detail.focus,
             files: Vec::new(),
+            files_title: String::new(),
             file_cursor: 0,
+            comments_count: 0,
             comments: CommentsPaneVm::PromptLoad,
             footer,
             footer_colored,
@@ -549,8 +553,19 @@ pub(crate) fn build_gist_detail_vm(state: &AppState) -> GistDetailVm {
         state.gist_counts(gist_id),
     );
     let files = state.gist_file_display_names(gist_id);
+    let total_size: u64 = state
+        .all_gist_files()
+        .filter(|file| file.gist_id == gist_id)
+        .map(|file| file.size)
+        .sum();
+    let files_title = format!(
+        "Files ({}): {} total",
+        files.len(),
+        crate::tui::format_file_size(total_size)
+    );
     let file_cursor = detail.file_cursor.min(files.len().saturating_sub(1));
     let comments = build_comments_pane_vm(state);
+    let comments_count = state.gist_counts(gist_id).0;
 
     let description_input = state
         .editing_description
@@ -562,7 +577,9 @@ pub(crate) fn build_gist_detail_vm(state: &AppState) -> GistDetailVm {
         info_line,
         focus: detail.focus,
         files,
+        files_title,
         file_cursor,
+        comments_count,
         comments,
         footer,
         footer_colored,
@@ -717,7 +734,7 @@ fn render_detail_header_vm(
 ) {
     let lines = vec![
         Line::from(detail.info_line.clone()),
-        detail_focus_tabs_line(detail.focus, theme),
+        detail_focus_tabs_line(detail.focus, detail.comments_count, theme),
     ];
     frame.render_widget(
         Paragraph::new(lines).style(theme.base_style()).block(
@@ -736,13 +753,18 @@ fn render_detail_header_vm(
     );
     if chrome.mouse_enabled {
         // Tab line is the 2nd content row (border + gist-info line above it); content starts
-        // after the left border (1) + horizontal padding (1). Labels: " Files " (7), " │ " (3),
-        // " Comments " (10) — see detail_focus_tabs_line.
+        // after the left border (1) + horizontal padding (1). The comments label includes its
+        // count, so derive its click target from the same formatted label as the renderer.
         let content_x = area.x + 2;
         let tabs_y = area.y + 2;
         layout.detail_tab_files = Some(ratatui::layout::Rect::new(content_x, tabs_y, 7, 1));
-        layout.detail_tab_comments =
-            Some(ratatui::layout::Rect::new(content_x + 10, tabs_y, 10, 1));
+        let comments_width = format!(" Comments ({}) ", detail.comments_count).len() as u16;
+        layout.detail_tab_comments = Some(ratatui::layout::Rect::new(
+            content_x + 10,
+            tabs_y,
+            comments_width,
+            1,
+        ));
     }
 }
 
@@ -755,6 +777,10 @@ fn render_gist_file_list_vm(
     theme: &crate::tui::Theme,
     layout: &mut MouseLayout,
 ) {
+    let file_list_height = u16::try_from(detail.files.len().saturating_add(2))
+        .unwrap_or(u16::MAX)
+        .clamp(3, area.height.max(3));
+    let area = ratatui::layout::Rect::new(area.x, area.y, area.width, file_list_height);
     let files = &detail.files;
     let cursor = detail.file_cursor.min(files.len().saturating_sub(1));
     let visible_rows = (area.height as usize).saturating_sub(2);
@@ -767,7 +793,7 @@ fn render_gist_file_list_vm(
         Paragraph::new(lines).style(theme.base_style()).block(
             Block::default()
                 .title(crate::tui::render::fit_block_title(
-                    &format!("Files ({})", files.len()),
+                    &detail.files_title,
                     area.width,
                 ))
                 .borders(Borders::ALL)
@@ -901,6 +927,7 @@ pub(crate) fn detail_focus_tab(focus: DetailFocus) -> usize {
 /// strip, so the active focus is visible without a disconnected top row.
 pub(crate) fn detail_focus_tabs_line(
     focus: DetailFocus,
+    comments_count: u32,
     theme: &crate::tui::Theme,
 ) -> Line<'static> {
     let active = detail_focus_tab(focus);
@@ -910,7 +937,8 @@ pub(crate) fn detail_focus_tabs_line(
         .add_modifier(Modifier::BOLD);
     let idle_style = Style::default().fg(theme.dim);
     let mut spans = Vec::new();
-    for (i, label) in ["Files", "Comments"].iter().enumerate() {
+    let comments = format!("Comments ({comments_count})");
+    for (i, label) in ["Files".to_string(), comments].iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled(" │ ", idle_style));
         }
@@ -1016,6 +1044,8 @@ mod tests {
                 raw_url: None,
 
                 content_type: None,
+
+                size: 0,
 
                 node_id: None,
             })
@@ -1302,6 +1332,8 @@ mod tests {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         }];
         assert!(matches!(
@@ -1330,6 +1362,8 @@ mod tests {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         }];
         assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::None);
@@ -1353,6 +1387,7 @@ mod tests {
             fork_of_id: None,
             raw_url: None,
             content_type: None,
+            size: 0,
             node_id: None,
         }];
         assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::None);

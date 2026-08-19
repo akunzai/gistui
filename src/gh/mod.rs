@@ -45,6 +45,8 @@ struct GhGistFile {
     raw_url: Option<String>,
     #[serde(default, rename = "type")]
     content_type: Option<String>,
+    #[serde(default)]
+    size: u64,
 }
 
 /// Plan for `gh --version` (used to confirm `gh` is installed and runnable).
