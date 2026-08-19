@@ -902,6 +902,25 @@ fn space_on_selected_gist_returns_preview_content() {
     ));
 }
 
+/// Issue #347: the Preview screen titles itself with the gist's description, consistent
+/// with the Gist detail screen, rather than the raw id.
+#[test]
+fn preview_title_uses_gist_description() {
+    let state = state_with_gists();
+    assert_eq!(state.preview_title("g1", "a.txt"), "Preview: demo / a.txt");
+}
+
+/// Issue #347: without a known description, the preview title still identifies the gist
+/// (falling back to its id) instead of silently showing just the filename.
+#[test]
+fn preview_title_falls_back_to_id_without_description() {
+    let state = initial_state();
+    assert_eq!(
+        state.preview_title("unknown-id", "a.txt"),
+        "Preview: Gist unknown-id / a.txt"
+    );
+}
+
 #[test]
 fn space_blocks_preview_for_image_gist_file() {
     let mut state = state_with_two_gists();
@@ -2926,6 +2945,7 @@ fn pin_row_label_shows_home_as_tilde() {
         icon: "✓",
         local_path: &home.join("code/gistui"),
         gist_id: "abc123",
+        gist_description: None,
         gist_filename: "notes.txt",
         local_age: "2h",
         gist_age: "3h",
@@ -2935,6 +2955,51 @@ fn pin_row_label_shows_home_as_tilde() {
         "expected ~ home in label, got {label}"
     );
     assert!(!label.contains(home.to_string_lossy().as_ref()));
+}
+
+/// Issue #347: the gist description leads the identity (before the filename), and the full id
+/// is demoted to a trailing, `#`-prefixed abbreviation rather than sitting between the local
+/// path and the filename.
+#[test]
+fn pin_row_label_leads_with_description_and_abbreviates_id() {
+    let label = pin_row_label(PinLabelParams {
+        icon: "✓",
+        local_path: std::path::Path::new("/tmp/x"),
+        gist_id: "abcdef0123456789abcdef0123456789",
+        gist_description: Some("My cool gist"),
+        gist_filename: "notes.txt",
+        local_age: "2h",
+        gist_age: "3h",
+    });
+    assert!(
+        label.contains("My cool gist / notes.txt"),
+        "description should lead the filename: {label}"
+    );
+    assert!(
+        !label.contains("abcdef0123456789abcdef0123456789"),
+        "full id must not appear: {label}"
+    );
+    assert!(
+        label.contains("#abcdef0"),
+        "abbreviated id should still be reachable: {label}"
+    );
+}
+
+/// Issue #347: without a known description, the identity falls back to the filename alone
+/// (not a redundant "filename / filename").
+#[test]
+fn pin_row_label_falls_back_to_filename_without_description() {
+    let label = pin_row_label(PinLabelParams {
+        icon: "✓",
+        local_path: std::path::Path::new("/tmp/x"),
+        gist_id: "abc123",
+        gist_description: None,
+        gist_filename: "notes.txt",
+        local_age: "2h",
+        gist_age: "3h",
+    });
+    assert!(label.contains("↔  notes.txt "), "got {label}");
+    assert!(!label.contains("notes.txt / notes.txt"));
 }
 
 #[test]
@@ -3142,6 +3207,91 @@ fn gist_group_row_shows_star_marker_only_when_present() {
     assert!(
         gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 3, 0), false, None)
             .contains("☆ 3")
+    );
+}
+
+/// Issue #347: the description leads the row (after the fixed-width badge/owner columns), and
+/// the full 32-char id no longer dominates it — only a short, `#`-prefixed abbreviation trails.
+#[test]
+fn gist_group_row_description_leads_and_id_is_abbreviated() {
+    let group = GistGroup {
+        id: "abcdef0123456789abcdef0123456789".into(),
+        description: "My cool gist".into(),
+        public: false,
+        updated_at: "2026-06-10T00:00:00Z".into(),
+        created_at: "2026-06-01T00:00:00Z".into(),
+        file_count: 2,
+        owner_login: String::new(),
+        fork_of_id: None,
+    };
+    let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+    let row = gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), false, None);
+    assert!(
+        row.trim_start().starts_with("My cool gist"),
+        "description should lead the row, got {row}"
+    );
+    assert!(!row.contains(&group.id), "full id must not appear: {row}");
+    assert!(
+        row.contains(&format!("#{}", &group.id[..7])),
+        "abbreviated id should still be reachable inline: {row}"
+    );
+}
+
+/// Issue #347: the badge column is fixed-width, so a starred row's description starts at the
+/// same column as an unstarred row's.
+#[test]
+fn gist_group_row_badge_column_is_fixed_width() {
+    let group = GistGroup {
+        id: "g1".into(),
+        description: "demo".into(),
+        public: false,
+        updated_at: "2026-06-10T00:00:00Z".into(),
+        created_at: "2026-06-01T00:00:00Z".into(),
+        file_count: 1,
+        owner_login: String::new(),
+        fork_of_id: None,
+    };
+    let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+    let unbadged =
+        gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), false, None);
+    let starred = gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), true, None);
+    // Compare by char count, not byte offset — `★` is multi-byte, so a byte-offset comparison
+    // would report misalignment even though the two rows line up on screen.
+    let char_col = |s: &str| s.find("demo").map(|byte_idx| s[..byte_idx].chars().count());
+    assert_eq!(
+        char_col(&unbadged),
+        char_col(&starred),
+        "description column must align with and without a badge: {unbadged:?} vs {starred:?}"
+    );
+}
+
+/// Issue #347: a legacy (shorter than the abbreviation width) gist id still pads the id column
+/// out to its usual width, so the `📄` segment that follows stays aligned across rows.
+#[test]
+fn gist_group_row_legacy_short_id_still_aligns() {
+    let short = GistGroup {
+        id: "abc12".into(),
+        description: "demo".into(),
+        public: false,
+        updated_at: "2026-06-10T00:00:00Z".into(),
+        created_at: "2026-06-01T00:00:00Z".into(),
+        file_count: 1,
+        owner_login: String::new(),
+        fork_of_id: None,
+    };
+    let long = GistGroup {
+        id: "abcdef0123456789".into(),
+        ..short.clone()
+    };
+    let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+    let short_row =
+        gist_group_row_label(&short, now, GistGroupSort::Updated, (0, 0, 0), false, None);
+    let long_row = gist_group_row_label(&long, now, GistGroupSort::Updated, (0, 0, 0), false, None);
+    assert_eq!(
+        short_row.find('📄'),
+        long_row.find('📄'),
+        "the file-count marker must land at the same column regardless of id length: \
+         {short_row:?} vs {long_row:?}"
     );
 }
 

@@ -152,6 +152,7 @@ pub(crate) struct PinLabelParams<'a> {
     pub icon: &'a str,
     pub local_path: &'a std::path::Path,
     pub gist_id: &'a str,
+    pub gist_description: Option<&'a str>,
     pub gist_filename: &'a str,
     pub local_age: &'a str,
     pub gist_age: &'a str,
@@ -160,15 +161,23 @@ pub(crate) struct PinLabelParams<'a> {
 /// Builds a single Pins-screen row. The local path is rendered with `display_path`
 /// (home → `~`) so it stays readable; the full row is horizontally scrollable. Pure so
 /// the path-shortening is unit-testable without a frame.
+///
+/// The gist description leads the identity (falling back to the filename alone when the gist
+/// has none), and the id trails as a fixed-width abbreviation — the full id no longer sits
+/// between the local path and filename dominating the row (issue #347).
 pub(crate) fn pin_row_label(params: PinLabelParams<'_>) -> String {
+    let identity = match params.gist_description.filter(|d| !d.trim().is_empty()) {
+        Some(desc) => format!("{desc} / {}", params.gist_filename),
+        None => params.gist_filename.to_string(),
+    };
     format!(
-        "{}  {}  ↔  {} / {}   (local {} · gist {})",
+        "{}  {}  ↔  {}   (local {} · gist {} · #{})",
         params.icon,
         crate::config::display_path(params.local_path),
-        params.gist_id,
-        params.gist_filename,
+        identity,
         params.local_age,
         params.gist_age,
+        crate::tui::render::short_gist_id(params.gist_id),
     )
 }
 
@@ -212,10 +221,12 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
                 } else {
                     age(entry.local_ts)
                 };
+                let gist_description = state.group_by_id(&m.gist_id).map(|g| g.description);
                 let label = pin_row_label(PinLabelParams {
                     icon: status.icon(),
                     local_path: &m.local_path,
                     gist_id: &m.gist_id,
+                    gist_description: gist_description.as_deref(),
                     gist_filename: &m.gist_filename,
                     local_age: &local_age,
                     gist_age: &age(entry.remote_ts),

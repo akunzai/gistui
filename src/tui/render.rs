@@ -495,6 +495,28 @@ fn gist_badge_prefix(starred: bool, forked: bool) -> String {
     prefix
 }
 
+/// Fixed-width badge column (★ starred, ⑂ forked, or blank) for the Gist manager row, so the
+/// segment that follows — the owner prefix, then the description — starts at the same column
+/// whether or not a row carries a badge (issue #347). Distinct from [`gist_badge_prefix`],
+/// which the List screen's Gist pane uses and which stays variable-width there.
+fn gist_manager_badge_prefix(starred: bool, forked: bool) -> String {
+    let star = if starred { '★' } else { ' ' };
+    let fork = if forked { '⑂' } else { ' ' };
+    format!("{star}{fork} ")
+}
+
+/// Width of the abbreviated-id column used by [`gist_group_row_label`] and the Pins row —
+/// long enough to disambiguate at a glance, fixed so a legacy (shorter) gist id still lines up
+/// with the columns that follow it (issue #347).
+const SHORT_ID_WIDTH: usize = 7;
+
+/// A fixed-width, left-aligned abbreviation of a gist id — the id stays reachable inline
+/// without dominating the row the way the full 32-character id did.
+pub(super) fn short_gist_id(id: &str) -> String {
+    let short: String = id.chars().take(SHORT_ID_WIDTH).collect();
+    format!("{short:<SHORT_ID_WIDTH$}")
+}
+
 fn gist_owner_prefix(group: &GistGroup, current_user: Option<&str>) -> String {
     if group.owner_login.is_empty() {
         return String::new();
@@ -547,11 +569,11 @@ pub(super) fn gist_group_row_label(
         String::new()
     };
     format!(
-        "{}{}{}  {}  📄 {}{}{}{}  🕒 {}",
-        gist_badge_prefix(starred, g.fork_of_id.is_some()),
+        "{}{}{}  #{}  📄 {}{}{}{}  🕒 {}",
+        gist_manager_badge_prefix(starred, g.fork_of_id.is_some()),
         gist_owner_prefix(g, current_user),
-        g.id,
         desc,
+        short_gist_id(&g.id),
         g.file_count,
         comments_seg,
         stars_seg,
