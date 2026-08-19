@@ -453,7 +453,8 @@ pub(super) fn spawn_pin_push(
     // Upload Confirm is opened when UploadPreview completes (staged return is Pins).
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
     let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
-    let (local_label, gist_label) = diff_labels(Some(&local_path), &file.to_gist_file());
+    let (local_label, gist_label) =
+        diff_labels(Some(&local_path), &state.gist_file_for_diff(&file));
     jobs.spawn_gist_fetch_action(state, "Loading diff…", file, move |result, file| {
         BgTaskOutcome::UploadPreview {
             result,
@@ -478,7 +479,7 @@ pub(super) fn spawn_pin_pull(
     let filename = m.gist_filename.clone();
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
     let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
-    let (local_label, gist_label) = diff_labels(Some(&target), &file.to_gist_file());
+    let (local_label, gist_label) = diff_labels(Some(&target), &state.gist_file_for_diff(&file));
     jobs.spawn_gist_fetch_action(state, "Downloading…", file, move |result, file| {
         BgTaskOutcome::DownloadSelected {
             result,
@@ -501,22 +502,10 @@ pub(super) fn spawn_pin_diff(
     let filename = m.gist_filename.clone();
     // Stage pin identity so enter_diff copies it onto DiffState (is_pin_diff_context).
     state.staged_diff_gist = Some((gist_id.clone(), filename.clone()));
-    // Pull the real `updated_at` from the loaded gists so the diff header shows the
-    // gist mtime (matching the Pins list) instead of "unknown".
-    let updated_at = state
-        .gists
-        .iter()
-        .find(|g| g.gist_id == gist_id && g.filename == filename)
-        .map(|g| g.updated_at.clone())
-        .unwrap_or_default();
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
-    let gist_file = GistFile {
-        updated_at,
-        ..GistFile::for_sync(gist_id.clone(), filename.clone(), raw_url.clone())
-    };
-    let (local_label, gist_label) = diff_labels(Some(&local_abs), &gist_file);
-    let target = local_abs.clone();
     let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
+    let (local_label, gist_label) = diff_labels(Some(&local_abs), &state.gist_file_for_diff(&file));
+    let target = local_abs.clone();
     jobs.spawn_gist_fetch_action(state, "Loading diff…", file, move |result, _file| {
         BgTaskOutcome::PreviewDiff {
             result,

@@ -144,6 +144,61 @@ pub(super) fn state_with_local_paths(paths: &[&str]) -> AppState {
     state
 }
 
+/// Issue #348: the diff header's gist side must show the real update time when the gist is
+/// already loaded in memory (e.g. it's listed in Gist manager or Pinned Mappings), not
+/// `(unknown)` — the throwaway `GistFileRef` used to fetch/sync carries no `updated_at` of
+/// its own, so `gist_file_for_diff` must fill it in from the owned/starred lists.
+#[test]
+fn gist_file_for_diff_fills_updated_at_from_loaded_gists() {
+    let state = state_with_gists();
+    let file = GistFileRef::id_name("g1", "a.txt");
+    let resolved = state.gist_file_for_diff(&file);
+    assert_eq!(resolved.updated_at, "2026-06-10T00:00:00Z");
+
+    let (_, gist_label) = diff_labels(None, &resolved);
+    assert!(
+        gist_label.contains("2026-06-10 00:00 UTC"),
+        "expected the real timestamp in the header, got {gist_label}"
+    );
+    assert!(!gist_label.contains("unknown"), "got {gist_label}");
+}
+
+/// Issue #348: `(unknown)` is still shown, but only when the gist genuinely isn't loaded
+/// anywhere in memory — not as the default for every diff.
+#[test]
+fn gist_file_for_diff_falls_back_to_unknown_for_an_unloaded_gist() {
+    let state = initial_state();
+    let file = GistFileRef::id_name("never-loaded", "a.txt");
+    let resolved = state.gist_file_for_diff(&file);
+    let (_, gist_label) = diff_labels(None, &resolved);
+    assert!(gist_label.contains("(unknown)"), "got {gist_label}");
+}
+
+/// Issue #348: the lookup must also cover starred (not just owned) gists — one of the call
+/// sites this fix replaced only checked `state.gists`, so a starred gist's diff header still
+/// showed `(unknown)` even though its age was visible in Pinned Mappings.
+#[test]
+fn gist_file_for_diff_finds_a_starred_gist_too() {
+    let mut state = initial_state();
+    state.starred_gists = vec![GistFile {
+        gist_id: "s1".into(),
+        description: "starred demo".into(),
+        filename: "notes.md".into(),
+        public: true,
+        updated_at: "2026-06-12T08:00:00Z".into(),
+        created_at: "2026-06-01T00:00:00Z".into(),
+        owner_login: "someone-else".into(),
+        fork_of_id: None,
+        raw_url: None,
+        content_type: None,
+        size: 0,
+        node_id: None,
+    }];
+    let file = GistFileRef::id_name("s1", "notes.md");
+    let resolved = state.gist_file_for_diff(&file);
+    assert_eq!(resolved.updated_at, "2026-06-12T08:00:00Z");
+}
+
 #[test]
 fn local_filter_matches_filename_and_relative_path() {
     let mut state =

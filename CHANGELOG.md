@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The quit prompt now names every key that confirms it (`q` and `Esc`), the top-bar `(g)ists` mnemonic now matches the lowercase key that actually opens it, and a command-palette query with no matches now shows an explicit "no matches" message instead of an empty frame.
 - Preview now titles itself with the gist's description (consistent with Gist detail); Gist manager and Pinned Mappings rows now lead with the description instead of the raw id, which is demoted to a fixed-width, `#`-abbreviated column that stays aligned even with a starred/forked badge or a legacy short id.
+- The diff header now shows the gist file's real update time (matching Gist manager and Pinned Mappings) whenever it's already loaded in memory, instead of always showing `(unknown)`.
 - Gist detail now shows every file's size and type, the total size in its Files title, and the comment total in its tab.
 - Saving configuration now records only changed settings (plus pinned mappings), so later default changes apply to users who have not overridden them.
 - Recursive file discovery now includes hidden files and directories like the flat view, skips only configured directories plus `.git`, `.hg`, and `.svn`, and collapses symlink aliases without losing pinned paths.
