@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- The quit prompt now names every key that confirms it (`q` and `Esc`), the top-bar `(g)ists` mnemonic now matches the lowercase key that actually opens it, and a command-palette query with no matches now shows an explicit "no matches" message instead of an empty frame.
 - Gist detail now shows every file's size and type, the total size in its Files title, and the comment total in its tab.
 - Saving configuration now records only changed settings (plus pinned mappings), so later default changes apply to users who have not overridden them.
 - Recursive file discovery now includes hidden files and directories like the flat view, skips only configured directories plus `.git`, `.hg`, and `.svn`, and collapses symlink aliases without losing pinned paths.

@@ -367,7 +367,7 @@ impl AppState {
                         };
                     }
                 }
-                // Top-bar (G)ists / (P)ins / (C)onfig / (?)Help — same effect as pressing
+                // Top-bar (g)ists / (P)ins / (C)onfig / (?)Help — same effect as pressing
                 // the key, from any screen (not just wherever that key happens to be bound).
                 if let Some(rect) = layout.top_bar_gists {
                     if point_in(rect, col, row) {

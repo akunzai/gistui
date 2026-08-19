@@ -279,7 +279,7 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   Dbl-click  open the clicked row (diff / detail / pin diff / preview)
   Tab click  switch Files / Comments on the Gist details screen
   [✕] btn    close / go back on any pop-up screen
-  Top bar    click (G)ists / (P)ins / (C)onfig / (?)Help (top-right, every screen)
+  Top bar    click (g)ists / (P)ins / (C)onfig / (?)Help (top-right, every screen)
   Right-click  open the context menu at the click (same as ;)
   ; / Ctrl+p   open the menu / command palette from the keyboard (see General)"
         }

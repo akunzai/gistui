@@ -149,7 +149,7 @@ impl AppState {
                     return KeyOutcome::Quit;
                 }
                 self.quit_armed = true;
-                self.status = Some("Press q again to quit (any other key cancels)".into());
+                self.status = Some("Press q or Esc again to quit (any other key cancels)".into());
             }
             KeyCode::Tab => {
                 self.focus = match self.focus {
