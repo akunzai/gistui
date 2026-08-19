@@ -1198,6 +1198,8 @@ mod tests {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         }];
         // Removing the only file would leave a fileless gist, which GitHub forbids.

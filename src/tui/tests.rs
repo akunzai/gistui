@@ -103,6 +103,8 @@ pub(super) fn state_with_gists() -> AppState {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         },
         GistFile {
@@ -118,6 +120,8 @@ pub(super) fn state_with_gists() -> AppState {
             raw_url: None,
 
             content_type: None,
+
+            size: 0,
 
             node_id: None,
         },
@@ -206,6 +210,8 @@ pub(super) fn list_state_with_matches() -> AppState {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         },
         GistFile {
@@ -221,6 +227,8 @@ pub(super) fn list_state_with_matches() -> AppState {
             raw_url: None,
 
             content_type: None,
+
+            size: 0,
 
             node_id: None,
         },
@@ -479,6 +487,8 @@ fn gist_row_label_switches_with_view() {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         },
         mark: crate::ranking::MatchMark::None,
@@ -553,6 +563,8 @@ fn reverse_ranking_orders_locals_by_selected_gist() {
         raw_url: None,
 
         content_type: None,
+
+        size: 0,
 
         node_id: None,
     }];
@@ -651,6 +663,8 @@ fn ranking_helpers_terminate_in_either_anchor() {
 
         content_type: None,
 
+        size: 0,
+
         node_id: None,
     }];
     state.locals = vec![LocalCandidate {
@@ -685,6 +699,8 @@ fn sort_by_name_and_recent_reorders_gists() {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         },
         GistFile {
@@ -700,6 +716,8 @@ fn sort_by_name_and_recent_reorders_gists() {
             raw_url: None,
 
             content_type: None,
+
+            size: 0,
 
             node_id: None,
         },
@@ -733,6 +751,8 @@ fn gist_type_filter_limits_ranked_gists() {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         },
         GistFile {
@@ -748,6 +768,8 @@ fn gist_type_filter_limits_ranked_gists() {
             raw_url: None,
 
             content_type: None,
+
+            size: 0,
 
             node_id: None,
         },
@@ -782,6 +804,8 @@ pub(super) fn state_with_two_gists() -> AppState {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         },
         GistFile {
@@ -797,6 +821,8 @@ pub(super) fn state_with_two_gists() -> AppState {
             raw_url: None,
 
             content_type: None,
+
+            size: 0,
 
             node_id: None,
         },
@@ -1219,6 +1245,8 @@ fn gist_row_label_falls_back_to_filename_when_description_empty() {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         },
         mark: crate::ranking::MatchMark::None,
@@ -1242,6 +1270,8 @@ fn left_right_scrolls_focused_gist_pane() {
         raw_url: None,
 
         content_type: None,
+
+        size: 0,
 
         node_id: None,
     }];
@@ -1272,6 +1302,8 @@ fn gist_hscroll_caps_at_painted_row() {
         raw_url: None,
 
         content_type: None,
+
+        size: 0,
 
         node_id: None,
     }];
@@ -1306,6 +1338,7 @@ fn gist_hscroll_follows_the_selected_row() {
             fork_of_id: None,
             raw_url: None,
             content_type: None,
+            size: 0,
             node_id: None,
         },
         GistFile {
@@ -1319,6 +1352,7 @@ fn gist_hscroll_follows_the_selected_row() {
             fork_of_id: None,
             raw_url: None,
             content_type: None,
+            size: 0,
             node_id: None,
         },
     ];
@@ -1404,6 +1438,7 @@ fn gist_hscroll_caps_include_star_prefix() {
         fork_of_id: None,
         raw_url: None,
         content_type: None,
+        size: 0,
         node_id: None,
     }];
     state.starred_gist_ids.insert("starred-id".into());
@@ -1458,6 +1493,8 @@ fn moving_gist_selection_resets_hscroll() {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         },
         GistFile {
@@ -1473,6 +1510,8 @@ fn moving_gist_selection_resets_hscroll() {
             raw_url: None,
 
             content_type: None,
+
+            size: 0,
 
             node_id: None,
         },
@@ -1508,6 +1547,8 @@ fn no_local_selected_lists_all_gists_unranked() {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         },
         GistFile {
@@ -1523,6 +1564,8 @@ fn no_local_selected_lists_all_gists_unranked() {
             raw_url: None,
 
             content_type: None,
+
+            size: 0,
 
             node_id: None,
         },
@@ -1550,6 +1593,8 @@ fn enter_with_no_local_but_gist_selected_returns_preview() {
         raw_url: None,
 
         content_type: None,
+
+        size: 0,
 
         node_id: None,
     }];
@@ -1591,6 +1636,8 @@ fn local_selection_changes_ranked_gists() {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         },
         GistFile {
@@ -1606,6 +1653,8 @@ fn local_selection_changes_ranked_gists() {
             raw_url: None,
 
             content_type: None,
+
+            size: 0,
 
             node_id: None,
         },
@@ -1648,6 +1697,7 @@ fn selected_accessors_track_recomputed_lists_with_no_cache() {
             fork_of_id: None,
             raw_url: None,
             content_type: None,
+            size: 0,
             node_id: None,
         },
         GistFile {
@@ -1661,6 +1711,7 @@ fn selected_accessors_track_recomputed_lists_with_no_cache() {
             fork_of_id: None,
             raw_url: None,
             content_type: None,
+            size: 0,
             node_id: None,
         },
     ];
@@ -1736,6 +1787,7 @@ fn list_pane_snapshots_match_public_accessors() {
             fork_of_id: None,
             raw_url: None,
             content_type: None,
+            size: 0,
             node_id: None,
         },
         GistFile {
@@ -1749,6 +1801,7 @@ fn list_pane_snapshots_match_public_accessors() {
             fork_of_id: None,
             raw_url: None,
             content_type: None,
+            size: 0,
             node_id: None,
         },
     ];
@@ -1823,6 +1876,8 @@ fn state_with_selection() -> AppState {
         raw_url: None,
 
         content_type: None,
+
+        size: 0,
 
         node_id: None,
     }];
@@ -2170,6 +2225,8 @@ fn u_adds_when_gist_lacks_filename() {
 
         content_type: None,
 
+        size: 0,
+
         node_id: None,
     }];
     state.focus = FocusPane::Gist;
@@ -2200,6 +2257,8 @@ fn u_previews_when_gist_has_same_filename() {
         raw_url: None,
 
         content_type: None,
+
+        size: 0,
 
         node_id: None,
     }];
@@ -2528,6 +2587,8 @@ fn x_removes_selected_file_from_a_multifile_gist() {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         },
         GistFile {
@@ -2543,6 +2604,8 @@ fn x_removes_selected_file_from_a_multifile_gist() {
             raw_url: None,
 
             content_type: None,
+
+            size: 0,
 
             node_id: None,
         },
@@ -2945,6 +3008,8 @@ fn list_screen_capital_s_syncs_selected_pair() {
 
         content_type: None,
 
+        size: 0,
+
         node_id: None,
     }];
     assert!(matches!(
@@ -3115,6 +3180,7 @@ fn gist_filenames_dedupes_owned_gist_that_is_also_starred() {
         fork_of_id: None,
         raw_url: None,
         content_type: None,
+        size: 0,
         node_id: None,
     };
     let mut state = initial_state();
@@ -3582,6 +3648,8 @@ fn forked_filter_shows_only_forks() {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         },
         GistFile {
@@ -3597,6 +3665,8 @@ fn forked_filter_shows_only_forks() {
             raw_url: None,
 
             content_type: None,
+
+            size: 0,
 
             node_id: None,
         },
@@ -3634,6 +3704,8 @@ fn foreign_gist_blocks_pin() {
 
         content_type: None,
 
+        size: 0,
+
         node_id: None,
     }];
     state.local_index = 0;
@@ -3658,6 +3730,8 @@ fn star_key_returns_toggle_intent() {
         raw_url: None,
 
         content_type: None,
+
+        size: 0,
 
         node_id: None,
     }];
@@ -3684,6 +3758,7 @@ fn starred_filter_lists_only_starred_gists() {
         fork_of_id: None,
         raw_url: None,
         content_type: None,
+        size: 0,
         node_id: None,
     }];
     state.starred_gists = vec![GistFile {
@@ -3697,6 +3772,7 @@ fn starred_filter_lists_only_starred_gists() {
         fork_of_id: None,
         raw_url: None,
         content_type: None,
+        size: 0,
         node_id: None,
     }];
     state.gist_type_filter = GistTypeFilter::Starred;

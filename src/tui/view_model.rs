@@ -156,7 +156,9 @@ pub struct GistDetailVm {
     pub info_line: String,
     pub focus: DetailFocus,
     pub files: Vec<String>,
+    pub files_title: String,
     pub file_cursor: usize,
+    pub comments_count: u32,
     pub comments: CommentsPaneVm,
     pub footer: String,
     pub footer_colored: bool,
@@ -989,6 +991,8 @@ mod tests {
         state.gists = vec![
             GistFile {
                 description: "demo".into(),
+                content_type: Some("text/plain".into()),
+                size: 1_536,
                 ..GistFile::for_sync("g1".into(), "a.txt".into(), None)
             },
             GistFile::for_sync("g1".into(), "b.txt".into(), None),
@@ -998,6 +1002,7 @@ mod tests {
             d.focus = DetailFocus::Files;
             d.file_cursor = 1;
         }
+        state.gist_comment_counts.insert("g1".into(), 3);
 
         match build_view_model(&state).screen {
             ScreenVm::GistDetail(d) => {
@@ -1009,6 +1014,9 @@ mod tests {
                         || d.info_line.contains("public")
                 );
                 assert_eq!(d.files.len(), 2);
+                assert_eq!(d.files[0], "a.txt · 1.5 KiB · text/plain");
+                assert_eq!(d.files_title, "Files (2): 1.5 KiB total");
+                assert_eq!(d.comments_count, 3);
                 assert_eq!(d.file_cursor, 1);
                 assert_eq!(d.focus, DetailFocus::Files);
                 assert!(matches!(d.comments, CommentsPaneVm::PromptLoad));

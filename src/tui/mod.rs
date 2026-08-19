@@ -1719,14 +1719,23 @@ impl AppState {
 
     /// Detail-view file labels; non-text files are tagged `(binary)`.
     pub fn gist_file_display_names(&self, gist_id: &str) -> Vec<String> {
-        self.gist_filenames(gist_id)
-            .into_iter()
-            .map(|f| {
-                if self.gist_file_is_text_previewable(gist_id, &f) {
-                    f
+        self.all_gist_files()
+            .filter(|file| file.gist_id == gist_id)
+            .map(|file| {
+                let kind = file.content_type.as_deref().unwrap_or("unknown type");
+                let binary = if crate::domain::gist_file_is_text_previewable(
+                    &file.filename,
+                    file.content_type.as_deref(),
+                ) {
+                    ""
                 } else {
-                    format!("{f} (binary)")
-                }
+                    " · binary"
+                };
+                format!(
+                    "{} · {} · {kind}{binary}",
+                    file.filename,
+                    format_file_size(file.size)
+                )
             })
             .collect()
     }
@@ -2120,6 +2129,14 @@ impl AppState {
         } else {
             Some(self.diff_context as usize)
         }
+    }
+}
+
+pub(crate) fn format_file_size(bytes: u64) -> String {
+    match bytes {
+        0..=1023 => format!("{bytes} B"),
+        1024..=1_048_575 => format!("{:.1} KiB", bytes as f64 / 1024.0),
+        _ => format!("{:.1} MiB", bytes as f64 / 1_048_576.0),
     }
 }
 

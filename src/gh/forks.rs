@@ -313,6 +313,7 @@ mod tests {
                 fork_of_id: None,
                 raw_url: None,
                 content_type: None,
+                size: 0,
                 node_id: None,
             },
             GistFile {
@@ -326,6 +327,7 @@ mod tests {
                 fork_of_id: None,
                 raw_url: None,
                 content_type: None,
+                size: 0,
                 node_id: None,
             },
         ];

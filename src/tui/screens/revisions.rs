@@ -663,6 +663,8 @@ mod tests {
 
             content_type: None,
 
+            size: 0,
+
             node_id: None,
         }];
         state.screen = Screen::Revisions(Box::default());

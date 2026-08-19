@@ -81,6 +81,7 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
                 fork_of_id: fork_of_id.clone(),
                 raw_url: file.raw_url.clone(),
                 content_type: file.content_type.clone(),
+                size: file.size,
                 node_id: gist.node_id.clone(),
             });
         }
@@ -192,6 +193,7 @@ mod tests {
         assert!(!files[0].public);
         assert_eq!(files[0].owner_login, "akunzai");
         assert_eq!(files[0].content_type.as_deref(), Some("application/json"));
+        assert_eq!(files[0].size, 42);
         assert_eq!(files[1].filename, "statusline.sh");
         assert_eq!(files[1].content_type.as_deref(), Some("text/x-shellscript"));
         let notes = files.iter().find(|f| f.filename == "notes.md").unwrap();

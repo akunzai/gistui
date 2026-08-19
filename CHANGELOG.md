@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Gist detail now shows every file's size and type, the total size in its Files title, and the comment total in its tab.
 - Saving configuration now records only changed settings (plus pinned mappings), so later default changes apply to users who have not overridden them.
 - Recursive file discovery now includes hidden files and directories like the flat view, skips only configured directories plus `.git`, `.hg`, and `.svn`, and collapses symlink aliases without losing pinned paths.
 - Help's topic index now gives General a working `g` shortcut, keeps every shortcut to one key, and aligns topic names.

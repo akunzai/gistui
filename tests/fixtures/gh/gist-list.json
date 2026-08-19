@@ -8,7 +8,7 @@
     "comments": 2,
     "owner": { "login": "akunzai" },
     "files": {
-      "settings.json": { "filename": "settings.json", "type": "application/json" },
+      "settings.json": { "filename": "settings.json", "type": "application/json", "size": 42 },
       "statusline.sh": { "filename": "statusline.sh", "type": "text/x-shellscript" }
     }
   },
