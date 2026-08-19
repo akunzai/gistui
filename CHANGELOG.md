@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Horizontal scroll in list panes now moves only the selected row, capped to that row's content. Other rows stay readable from their start, and a leading ellipsis (`…`) marks when the selection is offset.
 - Clipped list rows and pane titles now end in an ellipsis (`…`) instead of looking like the real, complete value. Truncation follows display width, so wide characters are never split.
 - Narrow List panes no longer clip the sort mode, filter, or `⚓` anchor out of their titles: the working directory gives way first and the pane name (`Local` / `Gists`) second, without leaving a dangling `·` behind.
 - Downloading from a diff against a recursively discovered nested file now preserves that file's directory and keeps it visible after the local list refreshes.

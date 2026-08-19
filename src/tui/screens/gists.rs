@@ -245,10 +245,11 @@ pub(crate) fn render_gists_vm(
         GistsEmptyKind::HasRows => gists
             .rows
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(i, row)| {
                 ListItem::new(crate::tui::render::visible_list_row(
                     &row.label,
-                    gists.hscroll,
+                    crate::tui::render::row_hscroll(gists.selected, i, gists.hscroll),
                     chunks[0].width,
                 ))
             })

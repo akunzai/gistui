@@ -289,10 +289,11 @@ pub(crate) fn render_pins_vm(
         PinsEmptyKind::HasRows => pins
             .rows
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(i, row)| {
                 let item = ListItem::new(crate::tui::render::visible_list_row(
                     &row.label,
-                    pins.hscroll,
+                    crate::tui::render::row_hscroll(pins.selected, i, pins.hscroll),
                     chunks[0].width,
                 ));
                 if row.status == crate::domain::SyncStatus::Missing {

@@ -661,9 +661,12 @@ fn list_pane_items(
         ListPaneEmpty::HasRows => pane
             .rows
             .iter()
-            .map(|row| {
+            .enumerate()
+            .map(|(i, row)| {
                 let item = ListItem::new(crate::tui::render::visible_list_row(
-                    &row.label, hscroll, pane_width,
+                    &row.label,
+                    crate::tui::render::row_hscroll(pane.selected, i, hscroll),
+                    pane_width,
                 ));
                 if matches!(row.mark, crate::ranking::MatchMark::ExactFilename) {
                     item.style(Style::default().add_modifier(Modifier::BOLD))
