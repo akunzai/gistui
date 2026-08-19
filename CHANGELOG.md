@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Help's topic index now gives General a working `g` shortcut, keeps every shortcut to one key, and aligns topic names.
 - List, Pinned Mappings, and Gist manager now show contextual action hints; Pinned Mappings also explains its sync-status glyphs in the footer.
 - Light theme now clearly distinguishes focused-pane and inactive-pane borders, and keeps the diff `gist` label distinct from subdued text.
 - Narrow terminals (down to 80 columns) no longer clip the `?` help body mid-word, cut a footer hint in half (the leave key stays; whole hints drop instead), or drop the hanging indent of wrapped gist comments.
