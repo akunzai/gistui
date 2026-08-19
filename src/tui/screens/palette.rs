@@ -263,7 +263,10 @@ pub(crate) fn render_palette_vm(
     frame.render_widget(
         Paragraph::new(lines).style(state.theme.base_style()).block(
             Block::default()
-                .title(palette.title)
+                .title(crate::tui::render::fit_block_title(
+                    palette.title,
+                    rect.width,
+                ))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(state.theme.accent))

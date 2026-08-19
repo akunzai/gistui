@@ -721,7 +721,10 @@ fn render_detail_header_vm(
     frame.render_widget(
         Paragraph::new(lines).style(theme.base_style()).block(
             Block::default()
-                .title(detail.block_title.clone())
+                .title(crate::tui::render::fit_block_title(
+                    &detail.block_title,
+                    area.width,
+                ))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme.accent))
@@ -762,7 +765,10 @@ fn render_gist_file_list_vm(
     frame.render_widget(
         Paragraph::new(lines).style(theme.base_style()).block(
             Block::default()
-                .title(format!("Files ({})", files.len()))
+                .title(crate::tui::render::fit_block_title(
+                    &format!("Files ({})", files.len()),
+                    area.width,
+                ))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(theme.accent))
@@ -859,7 +865,7 @@ fn render_gist_comments_vm(
             .wrap(Wrap { trim: false })
             .block(
                 Block::default()
-                    .title(title)
+                    .title(crate::tui::render::fit_block_title(&title, area.width))
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .style(theme.base_style()),

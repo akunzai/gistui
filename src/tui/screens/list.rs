@@ -655,13 +655,16 @@ fn list_pane_items(
     pane: &ListPaneVm,
     hscroll: u16,
     theme: &crate::tui::Theme,
+    pane_width: u16,
 ) -> Vec<ListItem<'static>> {
     match pane.empty {
         ListPaneEmpty::HasRows => pane
             .rows
             .iter()
             .map(|row| {
-                let item = ListItem::new(crate::tui::render::hscroll_str(&row.label, hscroll));
+                let item = ListItem::new(crate::tui::render::visible_list_row(
+                    &row.label, hscroll, pane_width,
+                ));
                 if matches!(row.mark, crate::ranking::MatchMark::ExactFilename) {
                     item.style(Style::default().add_modifier(Modifier::BOLD))
                 } else {
@@ -719,7 +722,7 @@ fn render_pane(
         )
         .style(theme.base_style())
         .highlight_style(highlight_style)
-        .highlight_symbol("▶ ");
+        .highlight_symbol(crate::tui::render::LIST_HIGHLIGHT_SYMBOL);
 
     let mut list_state = ListState::default();
     list_state.select(selected);
@@ -781,7 +784,12 @@ pub(crate) fn render_list_vm(
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(chunks[0]);
 
-    let local_items = list_pane_items(&list.local, list.local_hscroll, &state.theme);
+    let local_items = list_pane_items(
+        &list.local,
+        list.local_hscroll,
+        &state.theme,
+        columns[0].width,
+    );
     let local_offset = render_pane(
         frame,
         columns[0],
@@ -798,7 +806,12 @@ pub(crate) fn render_list_vm(
         });
     }
 
-    let gist_items = list_pane_items(&list.gist, list.gist_hscroll, &state.theme);
+    let gist_items = list_pane_items(
+        &list.gist,
+        list.gist_hscroll,
+        &state.theme,
+        columns[1].width,
+    );
     let gist_offset = render_pane(
         frame,
         columns[1],

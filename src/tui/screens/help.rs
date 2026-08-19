@@ -427,7 +427,10 @@ pub(crate) fn render_help_vm(
             let list = List::new(list_items)
                 .block(
                     Block::default()
-                        .title("Help — pick a topic (1-9,0 / ↑↓ Enter · Esc back)")
+                        .title(crate::tui::render::fit_block_title(
+                            "Help — pick a topic (1-9,0 / ↑↓ Enter · Esc back)",
+                            area.width,
+                        ))
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
                         .style(state.theme.base_style())
@@ -440,7 +443,7 @@ pub(crate) fn render_help_vm(
                         .fg(state.theme.fg_on_accent)
                         .add_modifier(Modifier::BOLD),
                 )
-                .highlight_symbol("▶ ");
+                .highlight_symbol(crate::tui::render::LIST_HIGHLIGHT_SYMBOL);
             let mut list_state = ListState::default();
             list_state.select(Some(*selected));
             frame.render_stateful_widget(list, area, &mut list_state);
@@ -485,7 +488,7 @@ pub(crate) fn render_help_vm(
                     .scroll((*scroll, 0))
                     .block(
                         Block::default()
-                            .title(title.clone())
+                            .title(crate::tui::render::fit_block_title(title, area.width))
                             .borders(Borders::ALL)
                             .border_type(BorderType::Rounded)
                             .style(state.theme.base_style())
