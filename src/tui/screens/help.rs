@@ -226,7 +226,7 @@ Navigation
   Tab        switch pane (Local / Gists)
   1 / 2      jump to the Local / Gist pane
   Up/Down    move the selection (also j / k)
-  Left/Right scroll a long row horizontally (also h / l)
+  Left/Right scroll the selected long row horizontally (also h / l)
   Ctrl+b/f   page up / down by 10 (also PageUp / PageDown)
 
 List screen
@@ -277,7 +277,7 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
             "\
   Up/Down    move between pins (also j / k)
   PageUp/Dn  page by 10 (also Ctrl+b / Ctrl+f)
-  Left/Right scroll a long local path horizontally (also h / l; ~ = home)
+  Left/Right scroll the selected long local path horizontally (also h / l; ~ = home)
   /          filter pins by path or filename (↑↓ move · PgUp/PgDn page · Enter apply · Esc clear)
              ←/→/Home/End move the text cursor · Del deletes ahead
   o          cycle sort: default / local path / gist filename
@@ -293,7 +293,7 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
             "\
   Up/Down    move between gists (also j / k)
   PageUp/Dn  page by 10 (also Ctrl+b / Ctrl+f)
-  Left/Right scroll a long description horizontally (also h / l)
+  Left/Right scroll the selected long description horizontally (also h / l)
   /          filter gists by description or id (↑↓ move · PgUp/PgDn page · Enter apply · Esc clear)
   s          cycle sort: updated / created
   v          cycle visibility: all / public / secret / starred / forked

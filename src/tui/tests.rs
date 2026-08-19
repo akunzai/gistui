@@ -1246,7 +1246,7 @@ fn left_right_scrolls_focused_gist_pane() {
 }
 
 #[test]
-fn gist_hscroll_caps_at_longest_row() {
+fn gist_hscroll_caps_at_painted_row() {
     let mut state = initial_state();
     state.gists = vec![GistFile {
         gist_id: "a".into(),
@@ -1277,6 +1277,106 @@ fn gist_hscroll_caps_at_longest_row() {
         state.handle_key(KeyCode::Right);
     }
     assert_eq!(state.gist_hscroll, max);
+}
+
+#[test]
+fn gist_hscroll_follows_the_selected_row() {
+    let mut state = initial_state();
+    state.gist_sort = GistSort::Name;
+    state.gists = vec![
+        GistFile {
+            gist_id: "short".into(),
+            description: "ab".into(),
+            filename: "a.txt".into(),
+            public: false,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            owner_login: String::new(),
+            fork_of_id: None,
+            raw_url: None,
+            content_type: None,
+            node_id: None,
+        },
+        GistFile {
+            gist_id: "long".into(),
+            description: "a fairly long description for scrolling".into(),
+            filename: "b.txt".into(),
+            public: false,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            owner_login: String::new(),
+            fork_of_id: None,
+            raw_url: None,
+            content_type: None,
+            node_id: None,
+        },
+    ];
+    state.focus = FocusPane::Gist;
+    let ranked = state.ranked_gists();
+    let short_max = super::text::hscroll_max_for_text(&marked_row_text(
+        gist_row_display(&ranked[0], state.gist_view, &state),
+        ranked[0].mark,
+    ));
+    let long_max = super::text::hscroll_max_for_text(&marked_row_text(
+        gist_row_display(&ranked[1], state.gist_view, &state),
+        ranked[1].mark,
+    ));
+    assert!(
+        short_max < long_max,
+        "fixture must make a.txt shorter than b.txt"
+    );
+    for _ in 0..200 {
+        state.handle_key(KeyCode::Right);
+    }
+    assert_eq!(
+        state.gist_hscroll, short_max,
+        "Right must stop at the selected row, not the longest row in the pane"
+    );
+    state.handle_key(KeyCode::Down);
+    for _ in 0..200 {
+        state.handle_key(KeyCode::Right);
+    }
+    assert_eq!(state.gist_hscroll, long_max);
+    state.handle_key(KeyCode::Up);
+    assert_eq!(state.gist_index, 0);
+    assert!(
+        state.gist_hscroll <= short_max,
+        "selected row must not stay scrolled past its own content (hscroll {}, max {})",
+        state.gist_hscroll,
+        short_max
+    );
+}
+
+#[test]
+fn local_hscroll_caps_at_selected_row_not_the_longest() {
+    let mut state = state_with_local_paths(&[
+        "/cwd/ab.txt",
+        "/cwd/a-fairly-long-filename-for-scrolling.md",
+    ]);
+    state.focus = FocusPane::Local;
+    state.local_index = 0;
+    let locals = state.visible_locals();
+    let short_row = marked_row_text(
+        super::text::local_row_label(&locals[0].candidate.path, &state.cwd),
+        locals[0].mark,
+    );
+    let long_row = marked_row_text(
+        super::text::local_row_label(&locals[1].candidate.path, &state.cwd),
+        locals[1].mark,
+    );
+    let short_max = super::text::hscroll_max_for_text(&short_row);
+    let long_max = super::text::hscroll_max_for_text(&long_row);
+    assert!(
+        short_max < long_max,
+        "fixture must make the selected row shorter than its sibling"
+    );
+    for _ in 0..200 {
+        state.handle_key(KeyCode::Right);
+    }
+    assert_eq!(
+        state.local_hscroll, short_max,
+        "Right must stop at the selected local row, not the longest row in the pane"
+    );
 }
 
 #[test]

@@ -1554,35 +1554,41 @@ impl AppState {
         self.visible_gist_groups().into_iter().nth(idx)
     }
 
-    /// Highest horizontal-scroll offset for the gist-level view, based on its longest
-    /// visible row (mirrors `focused_hscroll_max` for the main panes).
+    /// Highest horizontal-scroll offset for the gist-level view, based on its selected
+    /// visible row (mirrors `focused_hscroll_max` for the main panes; issue #341).
     fn gists_hscroll_max(&self) -> u16 {
         let sort = self.gist_manager().map(|g| g.sort).unwrap_or_default();
-        hscroll_max_among(self.visible_gist_groups().iter().map(|g| {
-            gist_group_row_label(
-                g,
-                unix_now(),
-                sort,
-                (
-                    self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
-                    self.gist_star_counts.get(&g.id).copied().unwrap_or(0),
-                    self.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
-                ),
-                self.gist_is_starred(&g.id),
-                self.current_user_login.as_deref(),
-            )
-        }))
+        let idx = self.gist_manager().map(|g| g.cursor.index).unwrap_or(0);
+        self.visible_gist_groups()
+            .get(idx)
+            .map(|g| {
+                gist_group_row_label(
+                    g,
+                    unix_now(),
+                    sort,
+                    (
+                        self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
+                        self.gist_star_counts.get(&g.id).copied().unwrap_or(0),
+                        self.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
+                    ),
+                    self.gist_is_starred(&g.id),
+                    self.current_user_login.as_deref(),
+                )
+            })
+            .map(|t| hscroll_max_for_text(&t))
+            .unwrap_or(0)
     }
 
-    /// Highest horizontal-scroll offset for the Pins screen, bounded by the longest
-    /// displayed local path (the only variable-length, overflow-prone field in a pin row).
+    /// Highest horizontal-scroll offset for the Pins screen, bounded by the selected
+    /// row's displayed local path (the only variable-length, overflow-prone field).
     /// Pure helper modeled on `gists_hscroll_max`.
     fn pins_hscroll_max(&self) -> u16 {
-        hscroll_max_among(
-            self.pinned
-                .iter()
-                .map(|m| crate::config::display_path(&m.local_path)),
-        )
+        let idx = self.pins().map(|p| p.cursor.index).unwrap_or(0);
+        self.visible_pin_indices()
+            .get(idx)
+            .and_then(|&i| self.pinned.get(i))
+            .map(|m| hscroll_max_for_text(&crate::config::display_path(&m.local_path)))
+            .unwrap_or(0)
     }
 
     /// Indices into `self.pinned` that match the Pins-screen text filter, in sort order.
@@ -1870,26 +1876,24 @@ impl AppState {
         }
     }
 
-    /// Highest horizontal-scroll offset for the focused pane, based on its longest row
+    /// Highest horizontal-scroll offset for the focused pane's **selected** row
     /// (viewport width is unknown to the pure key logic, mirroring the diff scroll cap).
     ///
     /// Must measure the **same** string the list paint path draws (`gist_row_display` /
     /// local label + pin mark), not a star-less or mark-less variant — otherwise starred
     /// or pinned rows cannot scroll far enough to reveal their trailing characters (#247).
+    /// Capping to the selected row (not the longest in the pane) is issue #341.
     fn focused_hscroll_max(&self) -> u16 {
         let (visible_locals, ranked) = self.list_pane_snapshots();
-        match self.focus {
-            FocusPane::Local => {
-                hscroll_max_among(visible_locals.iter().map(|r| {
-                    marked_row_text(local_row_label(&r.candidate.path, &self.cwd), r.mark)
-                }))
-            }
-            FocusPane::Gist => hscroll_max_among(
-                ranked
-                    .iter()
-                    .map(|g| marked_row_text(gist_row_display(g, self.gist_view, self), g.mark)),
-            ),
-        }
+        let text = match self.focus {
+            FocusPane::Local => visible_locals
+                .get(self.local_index)
+                .map(|r| marked_row_text(local_row_label(&r.candidate.path, &self.cwd), r.mark)),
+            FocusPane::Gist => ranked
+                .get(self.gist_index)
+                .map(|g| marked_row_text(gist_row_display(g, self.gist_view, self), g.mark)),
+        };
+        text.map(|t| hscroll_max_for_text(&t)).unwrap_or(0)
     }
 
     fn scroll_focused_right(&mut self) {
@@ -2272,7 +2276,7 @@ use render::*;
 mod screens;
 pub use screens::detail::InitialComments;
 mod text;
-use text::{hscroll_max_among, local_row_label};
+use text::{hscroll_max_among, hscroll_max_for_text, local_row_label};
 mod bg;
 mod dispatch;
 mod keys;
