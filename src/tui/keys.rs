@@ -163,6 +163,7 @@ impl AppState {
                     "off".into()
                 }
             }
+            ConfigField::DiffShowFull => if self.diff_show_full { "on" } else { "off" }.into(),
             ConfigField::IgnoreTrailingNewline => {
                 if self.ignore_trailing_newline {
                     "on".into()
