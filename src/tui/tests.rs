@@ -420,6 +420,7 @@ fn action_color_matches_whole_words_only() {
     );
     assert_eq!(action_color("remove file", &Theme::DARK), Color::Red);
     assert_eq!(action_color("pin", &Theme::DARK), Color::Green);
+    assert_eq!(action_color("star", &Theme::DARK), Color::Green);
 }
 
 #[test]

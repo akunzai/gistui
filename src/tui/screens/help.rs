@@ -230,6 +230,7 @@ Navigation
   Ctrl+b/f   page up / down by 10 (also PageUp / PageDown)
 
 List screen
+  Footer     shows the primary screen actions; narrow terminals keep whole hints and the leave key
   r          toggle recursive file discovery (skips hidden + configured dirs)
   /          filter the focused pane (Local = path/filename, Gist = description/id)
              while filtering: type to match · ↑↓ move · PgUp/PgDn page · Tab apply + switch pane
@@ -274,8 +275,7 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   ; / Ctrl+p   open the menu / command palette from the keyboard (see General)"
         }
         HelpTopic::Pins => {
-            "\
-  Up/Down    move between pins (also j / k)
+            r#"  Up/Down    move between pins (also j / k)
   PageUp/Dn  page by 10 (also Ctrl+b / Ctrl+f)
   Left/Right scroll the selected long local path horizontally (also h / l; ~ = home)
   /          filter pins by path or filename (↑↓ move · PgUp/PgDn page · Enter apply · Esc clear)
@@ -286,11 +286,13 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   u          force push  (upload local → gist)
   d          force pull  (download gist → local, diff + y/n confirm)
   x          unpin the selected pair
+  Footer     shows sync actions; the status row explains the glyphs
   status     ✓ synced · ↑ local newer · ↓ remote newer · ✕ missing · ? unknown
-  Each row shows (local <age> · gist <age>) relative modification times."
+  Each row shows (local <age> · gist <age>) relative modification times.
+"#
         }
         HelpTopic::GistManager => {
-            "\
+            r#"  Footer     shows the primary screen actions; narrow terminals keep whole hints and the leave key
   Up/Down    move between gists (also j / k)
   PageUp/Dn  page by 10 (also Ctrl+b / Ctrl+f)
   Left/Right scroll the selected long description horizontally (also h / l)
@@ -305,7 +307,8 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   q / Esc    back to the list
              (edit description, compact, delete: gist detail only, owned gists)
   Rows show ☆ N (stargazers), ⑂ N (forks), 💬 N (comments) when non-zero;
-  ★ prefix = you starred it; ⑂ prefix = this gist is a fork."
+  ★ prefix = you starred it; ⑂ prefix = this gist is a fork.
+"#
         }
         HelpTopic::GistDetail => {
             "\
@@ -537,6 +540,28 @@ mod tests {
     use crate::tui::*;
 
     use crate::tui::tests::{help_mut, help_ref, state_with_gists};
+
+    #[test]
+    fn footer_help_rows_align_with_the_key_column() {
+        let pins = help_topic_body(HelpTopic::Pins);
+        let legend = "✓ synced · ↑ local newer · ↓ remote newer · ✕ missing · ? unknown";
+        assert_eq!(pins.matches(legend).count(), 1);
+
+        let pin_lines: Vec<_> = pins.lines().collect();
+        let footer = pin_lines
+            .iter()
+            .position(|line| {
+                *line == "  Footer     shows sync actions; the status row explains the glyphs"
+            })
+            .expect("Pins footer");
+        let status = pin_lines
+            .iter()
+            .position(|line| line.starts_with("  status"))
+            .expect("Pins status");
+        assert_eq!(footer + 1, status);
+
+        assert!(help_topic_body(HelpTopic::GistManager).starts_with("  Footer"));
+    }
 
     #[test]
     fn help_topic_view_tab_opens_index_at_current_topic() {

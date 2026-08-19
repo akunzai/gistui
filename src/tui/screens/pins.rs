@@ -13,6 +13,9 @@ use ratatui::{
 };
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::Pins;
+const PINS_HINTS: &str = "↑↓ move  ·  Enter diff  ·  s sync  ·  u push  ·  d pull  ·  x unpin  ·  o sort  ·  / filter  ·  Esc/q back";
+const PINS_STATUS_LEGEND: &str =
+    "✓ synced · ↑ local newer · ↓ remote newer · ✕ missing · ? unknown";
 
 pub(crate) fn help_topic() -> HelpTopic {
     HELP_TOPIC
@@ -179,9 +182,8 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
             false,
         )
     } else {
-        let (footer, colored) =
-            crate::tui::footer_with_status(state.status.as_deref(), crate::tui::MINIMAL_HINT);
-        (String::new(), footer, colored)
+        let (footer, colored) = crate::tui::footer_with_status(state.status.as_deref(), PINS_HINTS);
+        (PINS_STATUS_LEGEND.to_string(), footer, colored)
     };
 
     let visible = state.visible_pin_indices();
