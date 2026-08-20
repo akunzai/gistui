@@ -4,8 +4,7 @@
 //! Builders never touch the filesystem or network (issues #241 / #250).
 
 use super::render::{
-    gist_info_line, gist_row_label, is_json_file, spinner_glyph, unix_now, CREATE_DESC_PREFIX,
-    CREATE_DESC_SUFFIX,
+    gist_info_line, gist_row_label, spinner_glyph, unix_now, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX,
 };
 use super::screens::lookup;
 use super::{
@@ -483,7 +482,7 @@ pub(crate) fn confirm_prompt(state: &AppState) -> String {
                 ""
             };
             let mut opts = format!("y yes  n/Esc cancel  e edit{edited_status}");
-            if is_json_file(local_path) {
+            if AppState::is_json_file(local_path) {
                 let pretty_status = if state.upload.json_pretty {
                     " [on]"
                 } else {

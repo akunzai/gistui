@@ -95,7 +95,7 @@ List-row horizontal scroll (issue #341) is **per selected row**, not pane-wide: 
 
 List-row budget: inner pane width minus borders+padding (`LIST_CHROME_CELLS`) minus `LIST_HIGHLIGHT_SYMBOL`. ratatui's default `HighlightSpacing::WhenSelected` indents **every** row once any row is selected — these lists always `select(...)` when they have rows, so unselected rows still pay the `▶ ` indent. Keep the widget's `highlight_symbol` and the budget on `LIST_HIGHLIGHT_SYMBOL` so they cannot drift.
 
-## Text fitting (`@src/tui/render/mod.rs`)
+## Text fitting (`@src/tui/render/text_fit.rs`)
 
 Two ellipsis operations — different jobs, do not merge:
 
@@ -104,11 +104,16 @@ Two ellipsis operations — different jobs, do not merge:
 
 Titles reaching `render_list_pane` are always `PaneTitleVm`; a single-segment title is equivalent to `fit_block_title` (both end in `truncate_end` at width − 2).
 
-Narrow-terminal reflow (issue #342), also in `@src/tui/render/mod.rs` — different jobs from ellipsis, do not merge:
+Narrow-terminal reflow (issue #342), also in `@src/tui/render/text_fit.rs` — different jobs from ellipsis, do not merge:
 
 - **`wrap_hanging`** — wrap a line to width, continuing at the source line's leading whitespace. Help body and gist-comment bodies (pre-wrap at paint; do not use `Paragraph` wrap, which drops indent).
 - **`fit_hints`** — drop whole ` · `-separated footer items so a coloured hint line stays one row; the last item (leave key) is kept. Status messages still wrap via `wrap_line_count`.
 - **`fit_top_bar`** (issue #371) — the right-aligned shortcuts keep the row; the `gistui` brand is decoration and is dropped whole when the leftover cannot hold it plus a one-cell gap. Whole shortcuts drop from the left if they cannot all fit; the last remaining shortcut is marked with `truncate_end` if even it cannot fit (same last-survivor rule as `fit_hints`). Do not reuse `truncate_end` on the brand — `gis…` is worse than no name.
+
+## Render modules
+
+`@src/tui/render/mod.rs` is the rendering façade: it paints the canvas and dispatches `ScreenVm`.
+Keep focused helpers in its children: `@src/tui/render/labels.rs` owns gist/file/time and diff labels; `@src/tui/render/diff_view.rs` owns highlighted diff painting (screens enter through `render_diff_pane_vm`); and `@src/tui/render/chrome.rs` owns top bars, footers, modals, loading overlays, and palette rows.
 
 ## Terminal lifecycle
 

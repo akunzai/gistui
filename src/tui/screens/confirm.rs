@@ -71,11 +71,11 @@ impl AppState {
                     self.set_status("editor already open");
                 }
                 KeyCode::Char('e') => return KeyOutcome::EditUpload,
-                KeyCode::Char('p') if crate::tui::render::is_json_file(local_path) => {
+                KeyCode::Char('p') if AppState::is_json_file(local_path) => {
                     self.upload.json_pretty = !self.upload.json_pretty;
                     self.update_upload_diff();
                 }
-                KeyCode::Char('s') if crate::tui::render::is_json_file(local_path) => {
+                KeyCode::Char('s') if AppState::is_json_file(local_path) => {
                     self.upload.json_sort = !self.upload.json_sort;
                     self.update_upload_diff();
                 }
