@@ -1012,6 +1012,11 @@ macro_rules! screen_payload_accessor {
 }
 
 impl AppState {
+    pub(crate) fn is_json_file(path: &std::path::Path) -> bool {
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("json"))
+    }
     /// Finds the nearest screen (current, then Palette's origin if the overlay is open, then
     /// `nav_stack` from most to least recent) matching `tag` (issue #271). Replaces the
     /// hand-nested "walk return_screen" chains each payload accessor used to write for itself —
@@ -1233,7 +1238,7 @@ impl AppState {
             .as_ref()
             .unwrap_or(&self.upload.original_content);
         if let Some(local_path) = self.upload_local_path() {
-            if is_json_file(&local_path) {
+            if Self::is_json_file(&local_path) {
                 if let Ok(transformed) = crate::domain::transform_json(
                     base,
                     self.upload.json_pretty,

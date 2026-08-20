@@ -1333,13 +1333,6 @@ pub(super) fn render_diff_pane_vm(
     }
 }
 
-pub(super) fn is_json_file(path: &std::path::Path) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| ext.eq_ignore_ascii_case("json"))
-        .unwrap_or(false)
-}
-
 /// Centered modal rect sized to fit `body` (clamped to the frame).
 fn centered_modal_rect(area: Rect, body: &str) -> Rect {
     let max_width = area.width.saturating_sub(2).max(1);
