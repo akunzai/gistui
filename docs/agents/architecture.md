@@ -52,7 +52,9 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
 - Action jobs and local scans use **generation supersession** (issue #221).
 - Call sites: `jobs.spawn_action` / `request_*` — do not own ad-hoc channel fields on `AppState`.
 - `run_loop` only **polls** `jobs.absorb`.
-- **Action jobs carry their apply** (issue #375, ADR-0002's async-response half): `spawn_action(run, apply)` runs `run` off-thread and boxes `apply(value)` for the event-loop tick. There is no `BgTaskOutcome` enum. `on_action_outcome` is a generation-guard shell that calls the closure. The named `on_*` handlers stay — they are the apply bodies and the unit-test seam (#298); do not inline them into dispatch closures (`dispatch_outcome` is not a unit-test surface). `KeyOutcome` / `dispatch_outcome` stay plain data (ADR-0002).
+- **Action jobs carry their apply** (issue #375, ADR-0002's async-response half): `spawn_action(run, apply)` runs `run` off-thread and boxes `apply(value)` for the event-loop tick. There is no `BgTaskOutcome` enum. `on_action_outcome` is a generation-guard shell that calls the closure. `KeyOutcome` / `dispatch_outcome` stay plain data (ADR-0002).
+- **`on_*` is the apply seam** (#298, #375): named handlers are the apply bodies and the unit-test surface. `dispatch_outcome` needs a `Terminal`, so it is not one. A new action is a spawn site plus an `on_*` when the apply is worth testing.
+- **Shared spawn payload** (#375): a value both `run` and `apply` need is part of `run`'s return, unpacked by `apply`. That is how identity (`gist_id`, `fetch_id`, labels) crosses the thread boundary without a second clone.
 
 ## Pin-sync presentation (`@src/tui/pin_sync.rs`)
 
