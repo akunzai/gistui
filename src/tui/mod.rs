@@ -897,6 +897,11 @@ pub struct AppState {
     pub cwd: PathBuf,
     pub status: Option<String>,
     pub loading: bool,
+    /// Apply marked the gist list out of date; `Jobs::absorb` respawns the fetch.
+    /// Apply only marks; only the registry spawns (issue #383).
+    pub gist_list_stale: bool,
+    /// Apply marked this gist's revision list out of date; `Jobs::absorb` respawns the fetch.
+    pub revisions_stale: Option<String>,
     /// Soft line-wrapping in the full-screen preview, toggled with `w` (remembered for the
     /// session). When on, long lines wrap instead of needing horizontal scroll.
     pub preview_wrap: bool,
@@ -2186,6 +2191,8 @@ pub fn initial_state() -> AppState {
         cwd: PathBuf::from("."),
         status: None,
         loading: false,
+        gist_list_stale: false,
+        revisions_stale: None,
         preview_wrap: false,
         syntax_highlight: true,
         config_mouse: true,
@@ -2322,6 +2329,7 @@ use palette::{PaletteMode, PaletteState};
 
 mod render;
 use render::*;
+mod gist_mutation;
 mod screens;
 pub use screens::detail::InitialComments;
 mod text;

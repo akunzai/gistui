@@ -1,7 +1,7 @@
-//! `Screen::Revisions` — key handling, view-model, paint, and palette items colocated in
-//! one file (issue #287, Phase 2).
+//! `Screen::Revisions` — key handling, view-model, paint, palette items, and apply handlers
+//! colocated in one file (issue #287, Phase 2; issue #383).
 
-use crate::tui::bg::revision_version_label;
+use crate::tui::bg::{revision_version_label, Jobs, LoopFlow};
 use crate::tui::keys::{point_in, NavAction, PAGE_SCROLL};
 use crate::tui::render::list_pane::render_list_pane;
 use crate::tui::view_model::{
@@ -443,8 +443,98 @@ pub(crate) fn render_revisions_vm(
     }
 }
 
+/// `RevisionsFetched` outcome. Returns [`LoopFlow::SkipIteration`] if the fetch belongs to
+/// a gist the Revisions screen has since navigated away from.
+pub(crate) fn on_revisions_fetched(
+    state: &mut AppState,
+    gist_id: String,
+    result: std::result::Result<Vec<crate::domain::GistRevision>, String>,
+) -> LoopFlow {
+    if state.revision().and_then(|r| r.gist_id.as_deref()) != Some(gist_id.as_str()) {
+        return LoopFlow::SkipIteration;
+    }
+    match result {
+        Ok(entries) => {
+            let short = entries.len() <= 1;
+            if let Some(rev) = state.revision_mut() {
+                rev.fetch_error = None;
+                rev.entries = Some(entries);
+            }
+            if short {
+                state.set_status("only one revision — nothing to restore");
+            }
+        }
+        Err(error) => {
+            if let Some(rev) = state.revision_mut() {
+                rev.entries = Some(Vec::new());
+                rev.fetch_error = Some(error);
+            }
+        }
+    }
+    LoopFlow::Proceed
+}
+
+/// Re-fetch revision history for `gist_id`. Shared by `KeyOutcome::FetchRevisions` and
+/// `Jobs::absorb` when apply set `revisions_stale` (issue #383).
+pub(crate) fn request_revisions(jobs: &mut Jobs, state: &mut AppState, gist_id: String) {
+    jobs.spawn_action(
+        state,
+        "Loading revisions…",
+        move || {
+            let result = crate::gh::fetch_gist_commits_json(&gist_id)
+                .map_err(|e| e.to_string())
+                .and_then(|raw| {
+                    crate::gh::parse_gist_commits_json(&raw).map_err(|e| e.to_string())
+                });
+            (result, gist_id)
+        },
+        move |(result, gist_id), state| on_revisions_fetched(state, gist_id, result),
+    );
+}
+
+/// `RestoreRevisionDone` outcome: return to the Revisions screen and re-fetch both the
+/// gist list and the revision history for the restored gist.
+pub(crate) fn on_restore_revision_done(
+    state: &mut AppState,
+    result: std::result::Result<(), String>,
+    gist_id: String,
+    filename: String,
+) -> LoopFlow {
+    match result {
+        Ok(()) => {
+            state
+                .gist_content_cache
+                .remove(&(gist_id.clone(), filename.clone()));
+            state.set_status(format!(
+                "Restored {filename} from old revision (new revision created)"
+            ));
+            // Return to the revisions list `enter_confirm` parked when the
+            // restore confirm was entered.
+            state.leave();
+            if !state.screen.is_revisions() {
+                state.screen = Screen::Revisions(Box::default());
+            }
+            let gist_id = state.revision_mut().and_then(|rev| {
+                rev.index = 0;
+                rev.entries = None;
+                rev.fetch_error = None;
+                rev.gist_id.clone()
+            });
+            state.gist_list_stale = true;
+            state.revisions_stale = gist_id;
+        }
+        Err(error) => {
+            state.set_status(format!("restore failed: {error}"));
+            // Stay on Confirm payload if still open.
+        }
+    }
+
+    LoopFlow::Proceed
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::tui::screens::diff::diff_footer;
     use crate::tui::test_support::{
         detail_mut, list_state_with_matches, revision_ref, state_with_gists,
@@ -678,5 +768,113 @@ mod tests {
         assert_eq!(revision_ref(&state).target_file, "b.txt");
         assert!(state.nav_stack.last().is_some_and(Screen::is_gist_detail));
         assert!(revision_ref(&state).entries.is_none());
+    }
+
+    #[test]
+    fn on_revisions_fetched_returns_skip_iteration_on_gist_mismatch() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            ..Default::default()
+        }));
+
+        let flow = on_revisions_fetched(&mut state, "other-gist".into(), Ok(Vec::new()));
+
+        assert!(matches!(flow, LoopFlow::SkipIteration));
+        // Not applied — still no entries.
+        assert!(state.revision().unwrap().entries.is_none());
+    }
+
+    #[test]
+    fn on_revisions_fetched_ok_sets_entries() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            ..Default::default()
+        }));
+        let entry = GistRevision {
+            version: "abc123".into(),
+            committed_at: "2026-01-01T00:00:00Z".into(),
+            user: "alice".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 1,
+                additions: 1,
+                deletions: 0,
+            },
+        };
+
+        let flow = on_revisions_fetched(&mut state, "g1".into(), Ok(vec![entry.clone(), entry]));
+
+        assert!(matches!(flow, LoopFlow::Proceed));
+        assert_eq!(state.revision().unwrap().entries.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn on_revisions_fetched_err_sets_fetch_error() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            ..Default::default()
+        }));
+
+        on_revisions_fetched(&mut state, "g1".into(), Err("boom".into()));
+
+        let rev = state.revision().unwrap();
+        assert_eq!(rev.fetch_error.as_deref(), Some("boom"));
+        assert_eq!(rev.entries, Some(Vec::new()));
+    }
+
+    #[test]
+    fn on_restore_revision_done_err_sets_status() {
+        let mut state = initial_state();
+
+        on_restore_revision_done(&mut state, Err("boom".into()), "g1".into(), "a.txt".into());
+
+        assert_eq!(state.status.as_deref(), Some("restore failed: boom"));
+        assert!(!state.gist_list_stale);
+        assert!(state.revisions_stale.is_none());
+    }
+
+    #[test]
+    fn on_restore_revision_done_ok_returns_to_revisions_and_marks_stale() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            index: 3,
+            entries: Some(Vec::new()),
+            fetch_error: Some("old".into()),
+            ..Default::default()
+        }));
+        state.enter_confirm(
+            PendingAction::RestoreRevision {
+                gist_id: "g1".into(),
+                filename: "a.txt".into(),
+                version: "abc".into(),
+                version_label: "abc (1d ago)".into(),
+                content: "old".into(),
+            },
+            String::new(),
+        );
+        state
+            .gist_content_cache
+            .insert(("g1".into(), "a.txt".into()), "stale".into());
+
+        on_restore_revision_done(&mut state, Ok(()), "g1".into(), "a.txt".into());
+
+        assert!(state.gist_list_stale);
+        assert_eq!(state.revisions_stale.as_deref(), Some("g1"));
+        assert!(state.screen.is_revisions());
+        let rev = state.revision().unwrap();
+        assert_eq!(rev.index, 0);
+        assert!(rev.entries.is_none());
+        assert!(rev.fetch_error.is_none());
+        assert_eq!(
+            state.status.as_deref(),
+            Some("Restored a.txt from old revision (new revision created)")
+        );
+        assert!(state
+            .gist_content_cache
+            .get(&("g1".into(), "a.txt".into()))
+            .is_none());
     }
 }

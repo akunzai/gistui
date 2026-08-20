@@ -1,6 +1,8 @@
-//! `Screen::Diff` — key handling, view-model, paint, and palette items colocated in one
-//! file (issue #287, Phase 2).
+//! `Screen::Diff` — key handling, view-model, paint, palette items, and apply handlers
+//! colocated in one file (issue #287, Phase 2; issue #383).
 
+use crate::tui::bg::{record_pin_sync, refresh_locals, LocalScanMode, LoopFlow};
+use crate::tui::render::preview_diff_text;
 use crate::tui::view_model::{ChromeVm, DiffVm};
 use crate::tui::{AppState, HelpTopic, KeyOutcome, PendingAction};
 use crossterm::event::KeyCode;
@@ -8,6 +10,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     Frame,
 };
+use std::path::PathBuf;
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::List;
 
@@ -210,10 +213,181 @@ pub(crate) fn render_diff_vm(
     }
 }
 
+/// `PreviewDiff` outcome: build the local-vs-gist preview diff and, if the two sides are
+/// byte-identical, opportunistically refresh the pin-sync cache with the content already
+/// fetched (see the inline comment below for why).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn on_preview_diff(
+    state: &mut AppState,
+    result: std::result::Result<String, String>,
+    local_path: Option<PathBuf>,
+    local_label: String,
+    gist_label: String,
+    target: PathBuf,
+    upload_orientation: bool,
+) -> LoopFlow {
+    match result {
+        Ok(remote) => {
+            match local_path
+                .as_ref()
+                .map(|p| crate::domain::read_text_file_capped(p))
+                .transpose()
+            {
+                Ok(local) => {
+                    let local_content = local.unwrap_or_default();
+                    let diff = preview_diff_text(
+                        upload_orientation,
+                        &local_label,
+                        &local_content,
+                        &gist_label,
+                        &remote,
+                        state.ignore_trailing_newline,
+                    );
+                    let identical = crate::diff::content_eq(
+                        &local_content,
+                        &remote,
+                        state.ignore_trailing_newline,
+                    );
+                    state.enter_diff(diff, remote, local_path.unwrap_or_default(), target);
+                    set_diff_identical(state, identical);
+                    // A pin diff that turns out identical confirms the cached
+                    // last_seen_hash is (still) accurate — refresh it for free
+                    // using the content we already fetched, so the Pins list's
+                    // content-hash check (AppState::compute_pin_sync_status) stays
+                    // correct even if the gist changed elsewhere since the last
+                    // real sync. Hash the LOCAL content's raw bytes (not the
+                    // trailing-newline-normalized `identical` comparison), so
+                    // this matches the raw-byte hashing compute_pin_sync_status does.
+                    if identical {
+                        let pin = state.diff().and_then(|d| {
+                            Some((
+                                d.gist_id.clone()?,
+                                d.gist_filename.clone()?,
+                                d.local_path.clone(),
+                            ))
+                        });
+                        if let Some((gid, fname, local_abs)) = pin {
+                            record_pin_sync(state, &local_abs, &gid, &fname, &local_content, None);
+                        }
+                    }
+                }
+                Err(error) => state.set_status(format!("read failed: {error}")),
+            }
+        }
+        Err(error) => state.set_status(format!("fetch failed: {error}")),
+    }
+
+    LoopFlow::Proceed
+}
+
+/// `DownloadSelected` outcome: diff against an existing local file, or write a new one.
+pub(crate) fn on_download_selected(
+    state: &mut AppState,
+    result: std::result::Result<String, String>,
+    target: PathBuf,
+    local_label: String,
+    gist_label: String,
+    file: crate::domain::GistFileRef,
+) -> LoopFlow {
+    match result {
+        Ok(remote) => {
+            if target.exists() {
+                match crate::domain::read_text_file_capped(&target) {
+                    Ok(local_content) => {
+                        let diff = crate::diff::unified_diff(
+                            &local_label,
+                            &local_content,
+                            &gist_label,
+                            &remote,
+                            state.ignore_trailing_newline,
+                        );
+                        let identical = crate::diff::content_eq(
+                            &local_content,
+                            &remote,
+                            state.ignore_trailing_newline,
+                        );
+                        state.staged_diff_gist =
+                            Some((file.gist_id.clone(), file.filename.clone()));
+                        state.enter_diff(diff, remote, target.clone(), target);
+                        set_diff_identical(state, identical);
+                    }
+                    Err(error) => state.set_status(error),
+                }
+            } else {
+                match crate::actions::execute_download(
+                    &target,
+                    &remote,
+                    crate::actions::DownloadMode::CreateNew,
+                ) {
+                    Ok(()) => {
+                        state.set_status(format!(
+                            "Downloaded {}",
+                            target
+                                .file_name()
+                                .unwrap_or(target.as_os_str())
+                                .to_string_lossy()
+                        ));
+                        record_pin_sync(
+                            state,
+                            &target,
+                            &file.gist_id,
+                            &file.filename,
+                            &remote,
+                            Some(crate::domain::SyncDirection::Download),
+                        );
+                        refresh_locals(state, LocalScanMode::Active, Some(&target));
+                    }
+                    Err(error) => state.set_status(format!("download failed: {error}")),
+                }
+            }
+        }
+        Err(error) => state.set_status(format!("fetch failed: {error}")),
+    }
+
+    LoopFlow::Proceed
+}
+
+/// `RevisionDiff` outcome: diff two historical revisions of the same file.
+pub(crate) fn on_revision_diff(
+    state: &mut AppState,
+    result: std::result::Result<(String, String), String>,
+    old_label: String,
+    new_label: String,
+) -> LoopFlow {
+    match result {
+        Ok((old_content, new_content)) => {
+            let diff = crate::diff::unified_diff(
+                &old_label,
+                &old_content,
+                &new_label,
+                &new_content,
+                state.ignore_trailing_newline,
+            );
+            let identical = old_content == new_content;
+            // `enter_diff` (via `enter`) parks the live Revisions screen so Esc
+            // restores list cursor/entries.
+            state.enter_diff(diff, String::new(), PathBuf::new(), PathBuf::new());
+            set_diff_identical(state, identical);
+        }
+        Err(error) => state.set_status(error),
+    }
+
+    LoopFlow::Proceed
+}
+
+/// Set `state`'s diff-payload `identical` flag, if a diff payload is currently open. Shared by
+/// the three action outcomes that build a diff and check content identity byte-for-byte:
+/// [`on_preview_diff`], [`on_download_selected`], [`on_revision_diff`].
+fn set_diff_identical(state: &mut AppState, identical: bool) {
+    if let Some(d) = state.diff_mut() {
+        d.identical = identical;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::test_support::{set_diff_body, set_diff_scroll, set_pending};
+    use crate::tui::test_support::{gist_file_ref, set_diff_body, set_diff_scroll, set_pending};
     use crate::tui::*;
     use crossterm::event::KeyCode;
     use std::path::PathBuf;
@@ -462,5 +636,105 @@ mod tests {
             home.join("b.txt"),
         );
         assert_eq!(diff_title(&state), "Diff: ~/src/a.txt → ~/b.txt");
+    }
+
+    #[test]
+    fn on_preview_diff_err_sets_status() {
+        let mut state = initial_state();
+
+        on_preview_diff(
+            &mut state,
+            Err("boom".into()),
+            None,
+            "local".into(),
+            "gist".into(),
+            PathBuf::from("target"),
+            false,
+        );
+
+        assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
+    }
+
+    #[test]
+    fn on_preview_diff_ok_without_local_enters_diff() {
+        let mut state = initial_state();
+
+        on_preview_diff(
+            &mut state,
+            Ok("remote body".into()),
+            None,
+            "local".into(),
+            "gist".into(),
+            PathBuf::from("target"),
+            false,
+        );
+
+        let diff = state.diff().expect("expected Screen::Diff");
+        assert_eq!(diff.remote_content, "remote body");
+        assert!(!diff.identical);
+    }
+
+    #[test]
+    fn on_download_selected_err_sets_status() {
+        let mut state = initial_state();
+
+        on_download_selected(
+            &mut state,
+            Err("boom".into()),
+            PathBuf::from("target"),
+            "local".into(),
+            "gist".into(),
+            gist_file_ref("g1", "a.txt"),
+        );
+
+        assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
+    }
+
+    #[test]
+    fn on_download_selected_ok_existing_target_enters_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("a.txt");
+        std::fs::write(&target, "local body").unwrap();
+        let mut state = initial_state();
+
+        on_download_selected(
+            &mut state,
+            Ok("remote body".into()),
+            target.clone(),
+            "local".into(),
+            "gist".into(),
+            gist_file_ref("g1", "a.txt"),
+        );
+
+        let diff = state.diff().expect("expected Screen::Diff");
+        assert_eq!(diff.remote_content, "remote body");
+        // `enter_diff` takes `staged_diff_gist` and moves it onto the `DiffState` itself.
+        assert_eq!(diff.gist_id.as_deref(), Some("g1"));
+        assert_eq!(diff.gist_filename.as_deref(), Some("a.txt"));
+        assert!(state.staged_diff_gist.is_none());
+    }
+
+    #[test]
+    fn on_revision_diff_ok_enters_diff() {
+        let mut state = initial_state();
+
+        on_revision_diff(
+            &mut state,
+            Ok(("old body".into(), "new body".into())),
+            "old".into(),
+            "new".into(),
+        );
+
+        let diff = state.diff().expect("expected Screen::Diff");
+        assert!(!diff.identical);
+    }
+
+    #[test]
+    fn on_revision_diff_err_sets_status() {
+        let mut state = initial_state();
+
+        on_revision_diff(&mut state, Err("boom".into()), "old".into(), "new".into());
+
+        assert_eq!(state.status.as_deref(), Some("boom"));
     }
 }
