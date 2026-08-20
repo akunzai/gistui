@@ -1,9 +1,12 @@
-//! `Screen::Confirm` — key handling, view-model, and paint colocated in one file (issue #287, Phase 2).
+//! `Screen::Confirm` — key handling, view-model, paint, and apply handlers colocated in
+//! one file (issue #287, Phase 2; issue #383).
 
+use crate::tui::bg::LoopFlow;
 use crate::tui::view_model::{ConfirmBackgroundVm, ConfirmModalKind, ConfirmVm};
 use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, PendingAction, Screen};
 use crossterm::event::KeyCode;
 use ratatui::{style::Color, Frame};
+use std::path::PathBuf;
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::List;
 
@@ -229,12 +232,128 @@ pub(crate) fn render_confirm_vm(
     }
 }
 
+/// `UploadPreview` outcome: stage the pending Upload action and open Confirm with the
+/// local-vs-gist diff.
+pub(crate) fn on_upload_preview(
+    state: &mut AppState,
+    result: std::result::Result<String, String>,
+    file: crate::domain::GistFileRef,
+    local_path: PathBuf,
+    local_label: String,
+    gist_label: String,
+) -> LoopFlow {
+    match result {
+        Ok(remote) => {
+            // Keep staged pin/list return; enter_confirm consumes it.
+            let action = PendingAction::Upload {
+                gist_id: file.gist_id,
+                filename: file.filename,
+                local_path: local_path.clone(),
+            };
+            match state.init_upload_state(&local_path, Some(remote), local_label, gist_label) {
+                Ok(()) => {
+                    // init_upload_state writes via update_upload_diff only when
+                    // Confirm is already open; open Confirm first with empty
+                    // body, then rebuild the upload diff into the payload.
+                    state.enter_confirm(action, String::new());
+                    state.update_upload_diff();
+                }
+                Err(error) => {
+                    state.set_status(format!(
+                        "cannot read {}: {error}",
+                        crate::config::display_path(&local_path)
+                    ));
+                }
+            }
+        }
+        Err(error) => state.set_status(format!("fetch failed: {error}")),
+    }
+
+    LoopFlow::Proceed
+}
+
+/// `CompactAnalyze` outcome: a single-revision gist has nothing to compact; otherwise open
+/// the Confirm warning before compacting.
+pub(crate) fn on_compact_analyze(
+    state: &mut AppState,
+    result: std::result::Result<usize, String>,
+    gist_id: String,
+    label: String,
+) -> LoopFlow {
+    match result {
+        Ok(count) if count <= 1 => state.set_status(format!(
+            "\"{label}\" already has a single revision — nothing to compact"
+        )),
+        Ok(count) => {
+            // `pending_return` was staged at the 'c' keypress (keys.rs); `enter`
+            // (inside `enter_confirm`) consumes it as the Confirm cancel path.
+            state.enter_confirm(
+                PendingAction::CompactGist {
+                    gist_id: gist_id.clone(),
+                    label: label.clone(),
+                    count,
+                },
+                format!(
+                    "Compact gist {gist_id} (\"{label}\").\n\nIt has {count} revisions. Compacting clones it to a temp dir, squashes the history to a single commit, and force-pushes — the {} older revisions are gone for good.",
+                    count - 1
+                ),
+            );
+        }
+        Err(error) => state.set_status(format!("revision check failed: {error}")),
+    }
+
+    LoopFlow::Proceed
+}
+
+/// `RestoreRevisionReady` outcome. Returns [`LoopFlow::SkipIteration`] when the revision
+/// content matches current (nothing to restore).
+pub(crate) fn on_restore_revision_ready(
+    state: &mut AppState,
+    result: std::result::Result<(String, String), String>,
+    gist_id: String,
+    filename: String,
+    version: String,
+    version_label: String,
+) -> LoopFlow {
+    match result {
+        Ok((revision_content, current_content)) => {
+            if revision_content == current_content {
+                state.set_status("revision matches current — nothing to restore");
+                return LoopFlow::SkipIteration;
+            }
+            let old_label = format!("revision {version_label}");
+            let new_label = format!("current {filename}");
+            let diff = crate::diff::unified_diff(
+                &old_label,
+                &revision_content,
+                &new_label,
+                &current_content,
+                state.ignore_trailing_newline,
+            );
+            // `enter_confirm` (via `enter`) parks the live Revisions screen so
+            // cancel restores cursor/entries.
+            state.enter_confirm(
+                PendingAction::RestoreRevision {
+                    gist_id,
+                    filename,
+                    version,
+                    version_label,
+                    content: revision_content,
+                },
+                diff,
+            );
+        }
+        Err(error) => state.set_status(error),
+    }
+    LoopFlow::Proceed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tui::test_support::{
-        detail_mut, gists_mut, pins_mut, set_diff_body, set_pending, state_ready_to_create,
-        state_with_gists,
+        detail_mut, gist_file_ref, gists_mut, pins_mut, set_diff_body, set_pending,
+        state_ready_to_create, state_with_gists,
     };
     use crate::tui::view_model::confirm_prompt;
     use crate::tui::*;
@@ -713,5 +832,136 @@ mod tests {
             state.handle_key(KeyCode::Char('s')),
             KeyOutcome::Create(false)
         );
+    }
+
+    #[test]
+    fn on_upload_preview_err_sets_status() {
+        let mut state = initial_state();
+
+        on_upload_preview(
+            &mut state,
+            Err("boom".into()),
+            gist_file_ref("g1", "a.txt"),
+            PathBuf::from("a.txt"),
+            "local".into(),
+            "gist".into(),
+        );
+
+        assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
+    }
+
+    #[test]
+    fn on_upload_preview_ok_enters_confirm() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_path = dir.path().join("a.txt");
+        std::fs::write(&local_path, "local body").unwrap();
+        let mut state = initial_state();
+
+        on_upload_preview(
+            &mut state,
+            Ok("remote body".into()),
+            gist_file_ref("g1", "a.txt"),
+            local_path.clone(),
+            "local".into(),
+            "gist".into(),
+        );
+
+        assert!(state.screen.is_confirm());
+        assert!(matches!(
+            state.pending_action(),
+            Some(PendingAction::Upload { gist_id, filename, .. })
+                if gist_id == "g1" && filename == "a.txt"
+        ));
+    }
+
+    #[test]
+    fn on_compact_analyze_single_revision_sets_status() {
+        let mut state = initial_state();
+
+        on_compact_analyze(&mut state, Ok(1), "g1".into(), "demo".into());
+
+        assert_eq!(
+            state.status.as_deref(),
+            Some("\"demo\" already has a single revision — nothing to compact")
+        );
+    }
+
+    #[test]
+    fn on_compact_analyze_multi_revision_enters_confirm() {
+        let mut state = initial_state();
+
+        on_compact_analyze(&mut state, Ok(4), "g1".into(), "demo".into());
+
+        assert!(matches!(
+            state.pending_action(),
+            Some(PendingAction::CompactGist { gist_id, count, .. })
+                if gist_id == "g1" && *count == 4
+        ));
+    }
+
+    #[test]
+    fn on_compact_analyze_err_sets_status() {
+        let mut state = initial_state();
+
+        on_compact_analyze(&mut state, Err("boom".into()), "g1".into(), "demo".into());
+
+        assert_eq!(state.status.as_deref(), Some("revision check failed: boom"));
+    }
+
+    #[test]
+    fn on_restore_revision_ready_returns_skip_iteration_when_identical() {
+        let mut state = initial_state();
+
+        let flow = on_restore_revision_ready(
+            &mut state,
+            Ok(("same".into(), "same".into())),
+            "g1".into(),
+            "a.txt".into(),
+            "abc123".into(),
+            "abc1234".into(),
+        );
+
+        assert!(matches!(flow, LoopFlow::SkipIteration));
+        assert_eq!(
+            state.status.as_deref(),
+            Some("revision matches current — nothing to restore")
+        );
+    }
+
+    #[test]
+    fn on_restore_revision_ready_ok_enters_confirm_when_different() {
+        let mut state = initial_state();
+
+        let flow = on_restore_revision_ready(
+            &mut state,
+            Ok(("old".into(), "new".into())),
+            "g1".into(),
+            "a.txt".into(),
+            "abc123".into(),
+            "abc1234".into(),
+        );
+
+        assert!(matches!(flow, LoopFlow::Proceed));
+        assert!(matches!(
+            state.pending_action(),
+            Some(PendingAction::RestoreRevision { gist_id, filename, .. })
+                if gist_id == "g1" && filename == "a.txt"
+        ));
+    }
+
+    #[test]
+    fn on_restore_revision_ready_err_sets_status() {
+        let mut state = initial_state();
+
+        on_restore_revision_ready(
+            &mut state,
+            Err("boom".into()),
+            "g1".into(),
+            "a.txt".into(),
+            "abc123".into(),
+            "abc1234".into(),
+        );
+
+        assert_eq!(state.status.as_deref(), Some("boom"));
     }
 }

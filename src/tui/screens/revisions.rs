@@ -1,7 +1,7 @@
-//! `Screen::Revisions` — key handling, view-model, paint, and palette items colocated in
-//! one file (issue #287, Phase 2).
+//! `Screen::Revisions` — key handling, view-model, paint, palette items, and apply handlers
+//! colocated in one file (issue #287, Phase 2; issue #383).
 
-use crate::tui::bg::revision_version_label;
+use crate::tui::bg::{revision_version_label, LoopFlow};
 use crate::tui::keys::{point_in, NavAction, PAGE_SCROLL};
 use crate::tui::render::list_pane::render_list_pane;
 use crate::tui::view_model::{
@@ -443,8 +443,40 @@ pub(crate) fn render_revisions_vm(
     }
 }
 
+/// `RevisionsFetched` outcome. Returns [`LoopFlow::SkipIteration`] if the fetch belongs to
+/// a gist the Revisions screen has since navigated away from.
+pub(crate) fn on_revisions_fetched(
+    state: &mut AppState,
+    gist_id: String,
+    result: std::result::Result<Vec<crate::domain::GistRevision>, String>,
+) -> LoopFlow {
+    if state.revision().and_then(|r| r.gist_id.as_deref()) != Some(gist_id.as_str()) {
+        return LoopFlow::SkipIteration;
+    }
+    match result {
+        Ok(entries) => {
+            let short = entries.len() <= 1;
+            if let Some(rev) = state.revision_mut() {
+                rev.fetch_error = None;
+                rev.entries = Some(entries);
+            }
+            if short {
+                state.set_status("only one revision — nothing to restore");
+            }
+        }
+        Err(error) => {
+            if let Some(rev) = state.revision_mut() {
+                rev.entries = Some(Vec::new());
+                rev.fetch_error = Some(error);
+            }
+        }
+    }
+    LoopFlow::Proceed
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::tui::screens::diff::diff_footer;
     use crate::tui::test_support::{
         detail_mut, list_state_with_matches, revision_ref, state_with_gists,
@@ -678,5 +710,59 @@ mod tests {
         assert_eq!(revision_ref(&state).target_file, "b.txt");
         assert!(state.nav_stack.last().is_some_and(Screen::is_gist_detail));
         assert!(revision_ref(&state).entries.is_none());
+    }
+
+    #[test]
+    fn on_revisions_fetched_returns_skip_iteration_on_gist_mismatch() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            ..Default::default()
+        }));
+
+        let flow = on_revisions_fetched(&mut state, "other-gist".into(), Ok(Vec::new()));
+
+        assert!(matches!(flow, LoopFlow::SkipIteration));
+        // Not applied — still no entries.
+        assert!(state.revision().unwrap().entries.is_none());
+    }
+
+    #[test]
+    fn on_revisions_fetched_ok_sets_entries() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            ..Default::default()
+        }));
+        let entry = GistRevision {
+            version: "abc123".into(),
+            committed_at: "2026-01-01T00:00:00Z".into(),
+            user: "alice".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 1,
+                additions: 1,
+                deletions: 0,
+            },
+        };
+
+        let flow = on_revisions_fetched(&mut state, "g1".into(), Ok(vec![entry.clone(), entry]));
+
+        assert!(matches!(flow, LoopFlow::Proceed));
+        assert_eq!(state.revision().unwrap().entries.as_ref().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn on_revisions_fetched_err_sets_fetch_error() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            ..Default::default()
+        }));
+
+        on_revisions_fetched(&mut state, "g1".into(), Err("boom".into()));
+
+        let rev = state.revision().unwrap();
+        assert_eq!(rev.fetch_error.as_deref(), Some("boom"));
+        assert_eq!(rev.entries, Some(Vec::new()));
     }
 }

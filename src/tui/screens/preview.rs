@@ -1,6 +1,7 @@
-//! `Screen::Preview` — key handling, view-model, paint, and palette items colocated in one
-//! file (issue #287, Phase 2).
+//! `Screen::Preview` — key handling, view-model, paint, palette items, and apply handlers
+//! colocated in one file (issue #287, Phase 2; issue #383).
 
+use crate::tui::bg::LoopFlow;
 use crate::tui::view_model::{ChromeVm, PreviewVm};
 use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout};
 use crossterm::event::KeyCode;
@@ -179,9 +180,31 @@ pub(crate) fn render_preview_vm(
     }
 }
 
+/// `PreviewContent` outcome: cache the fetched content and open the read-only preview.
+pub(crate) fn on_preview_content(
+    state: &mut AppState,
+    result: std::result::Result<String, String>,
+    file: crate::domain::GistFileRef,
+    preview_title: String,
+) -> LoopFlow {
+    match result {
+        Ok(content) => {
+            let key = file.cache_key();
+            state
+                .gist_content_cache
+                .insert(key.clone(), content.clone());
+            state.enter_preview(preview_title, content, Some(key));
+        }
+        Err(error) => state.set_status(format!("fetch failed: {error}")),
+    }
+
+    LoopFlow::Proceed
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::tui::test_support::state_with_gists;
+    use super::*;
+    use crate::tui::test_support::{gist_file_ref, state_with_gists};
     use crate::tui::*;
     use crossterm::event::KeyCode;
 
@@ -343,5 +366,34 @@ mod tests {
             state.preview_title("unknown-id", "a.txt"),
             "Preview: Gist unknown-id / a.txt"
         );
+    }
+
+    #[test]
+    fn on_preview_content_ok_caches_and_enters_preview() {
+        let mut state = initial_state();
+        let file = gist_file_ref("g1", "a.txt");
+
+        on_preview_content(&mut state, Ok("body".into()), file.clone(), "a.txt".into());
+
+        assert_eq!(
+            state.gist_content_cache.get(&file.cache_key()),
+            Some(&"body".to_string())
+        );
+        let preview = state.preview().expect("expected Screen::Preview");
+        assert_eq!(preview.text, "body");
+    }
+
+    #[test]
+    fn on_preview_content_err_sets_status() {
+        let mut state = initial_state();
+
+        on_preview_content(
+            &mut state,
+            Err("boom".into()),
+            gist_file_ref("g1", "a.txt"),
+            "a.txt".into(),
+        );
+
+        assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
     }
 }

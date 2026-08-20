@@ -4,6 +4,10 @@
 use super::*;
 use std::path::PathBuf;
 
+pub(super) fn gist_file_ref(gist_id: &str, filename: &str) -> GistFileRef {
+    GistFileRef::new(gist_id, filename, None)
+}
+
 /// Test helper: mutable HelpState when on Help (creates empty Help if needed).
 pub(super) fn help_mut(state: &mut AppState) -> &mut HelpState {
     if !state.screen.is_help() {

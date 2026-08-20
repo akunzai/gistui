@@ -1,7 +1,8 @@
-//! `Screen::GistDetail` — key handling, view-model, paint, and palette items colocated in
-//! one file (issue #287, Phase 2).
+//! `Screen::GistDetail` — key handling, view-model, paint, palette items, and apply handlers
+//! colocated in one file (issue #287, Phase 2; issue #383).
 
 use crate::domain::GistComment;
+use crate::tui::bg::LoopFlow;
 use crate::tui::keys::{point_in, NavAction};
 use crate::tui::text::comment_lines_count;
 use crate::tui::view_model::{
@@ -952,6 +953,28 @@ pub(crate) fn detail_focus_tabs_line(
     Line::from(spans)
 }
 
+/// `CommentsInitialLoaded` outcome.
+pub(crate) fn on_comments_initial_loaded(
+    state: &mut AppState,
+    gist_id: String,
+    result: Result<crate::tui::InitialComments, String>,
+) -> LoopFlow {
+    state.apply_initial_comments(&gist_id, result);
+
+    LoopFlow::Proceed
+}
+
+/// `CommentsOlderLoaded` outcome.
+pub(crate) fn on_comments_older_loaded(
+    state: &mut AppState,
+    gist_id: String,
+    result: Result<Vec<GistComment>, String>,
+) -> LoopFlow {
+    state.apply_older_comments(&gist_id, result);
+
+    LoopFlow::Proceed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1561,5 +1584,48 @@ mod tests {
         // `c` on the main list is not a compaction trigger.
         let mut list = state_with_two_gists();
         assert_eq!(list.handle_key(KeyCode::Char('c')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn on_comments_initial_loaded_ok_dispatches_to_detail() {
+        let mut state = initial_state();
+        state.screen = Screen::GistDetail(Box::new(DetailState {
+            gist_id: Some("g1".into()),
+            comments_loading: true,
+            ..Default::default()
+        }));
+
+        on_comments_initial_loaded(
+            &mut state,
+            "g1".into(),
+            Ok(crate::tui::InitialComments {
+                comments: vec![GistComment {
+                    author: "alice".into(),
+                    created_at: "2026-01-01T00:00:00Z".into(),
+                    body: "hi".into(),
+                }],
+                total: 1,
+                oldest_page: 1,
+            }),
+        );
+
+        let detail = state.detail().expect("expected Screen::GistDetail");
+        assert!(!detail.comments_loading);
+        assert_eq!(detail.comments_total, Some(1));
+    }
+
+    #[test]
+    fn on_comments_older_loaded_err_dispatches_to_detail() {
+        let mut state = initial_state();
+        state.screen = Screen::GistDetail(Box::new(DetailState {
+            gist_id: Some("g1".into()),
+            comments_loading_more: true,
+            ..Default::default()
+        }));
+
+        on_comments_older_loaded(&mut state, "g1".into(), Err("boom".into()));
+
+        let detail = state.detail().expect("expected Screen::GistDetail");
+        assert!(!detail.comments_loading_more);
     }
 }

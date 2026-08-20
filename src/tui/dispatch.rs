@@ -30,8 +30,8 @@ pub(super) fn dispatch_outcome(
                 state,
                 "Loading diff…",
                 file,
-                move |result, _file, jobs, state| {
-                    jobs.on_preview_diff(
+                move |result, _file, _jobs, state| {
+                    screens::diff::on_preview_diff(
                         state,
                         result,
                         local_path,
@@ -59,8 +59,15 @@ pub(super) fn dispatch_outcome(
                 state,
                 "Downloading…",
                 file,
-                move |result, file, jobs, state| {
-                    jobs.on_download_selected(state, result, target, local_label, gist_label, file)
+                move |result, file, _jobs, state| {
+                    screens::diff::on_download_selected(
+                        state,
+                        result,
+                        target,
+                        local_label,
+                        gist_label,
+                        file,
+                    )
                 },
             );
         }
@@ -92,8 +99,8 @@ pub(super) fn dispatch_outcome(
                     let result = load_initial_comments(&fetch_id);
                     (result, fetch_id)
                 },
-                move |(result, fetch_id), jobs, state| {
-                    jobs.on_comments_initial_loaded(state, fetch_id, result)
+                move |(result, fetch_id), _jobs, state| {
+                    screens::detail::on_comments_initial_loaded(state, fetch_id, result)
                 },
             );
         }
@@ -120,8 +127,8 @@ pub(super) fn dispatch_outcome(
                     });
                     (result, fetch_id)
                 },
-                move |(result, fetch_id), jobs, state| {
-                    jobs.on_comments_older_loaded(state, fetch_id, result)
+                move |(result, fetch_id), _jobs, state| {
+                    screens::detail::on_comments_older_loaded(state, fetch_id, result)
                 },
             );
         }
@@ -140,8 +147,8 @@ pub(super) fn dispatch_outcome(
                     });
                     (result, gist_id, label)
                 },
-                move |(result, gist_id, label), jobs, state| {
-                    jobs.on_compact_analyze(state, result, gist_id, label)
+                move |(result, gist_id, label), _jobs, state| {
+                    screens::confirm::on_compact_analyze(state, result, gist_id, label)
                 },
             );
         }
@@ -204,8 +211,15 @@ pub(super) fn dispatch_outcome(
                 state,
                 "Loading diff…",
                 file,
-                move |result, file, jobs, state| {
-                    jobs.on_upload_preview(state, result, file, local_path, local_label, gist_label)
+                move |result, file, _jobs, state| {
+                    screens::confirm::on_upload_preview(
+                        state,
+                        result,
+                        file,
+                        local_path,
+                        local_label,
+                        gist_label,
+                    )
                 },
             );
         }
@@ -295,8 +309,8 @@ pub(super) fn dispatch_outcome(
                     state,
                     "Loading preview…",
                     file,
-                    move |result, file, jobs, state| {
-                        jobs.on_preview_content(state, result, file, preview_title)
+                    move |result, file, _jobs, state| {
+                        screens::preview::on_preview_content(state, result, file, preview_title)
                     },
                 );
             }
@@ -315,8 +329,8 @@ pub(super) fn dispatch_outcome(
                 state,
                 "Loading preview…",
                 file,
-                move |result, file, jobs, state| {
-                    jobs.on_preview_content(state, result, file, preview_title)
+                move |result, file, _jobs, state| {
+                    screens::preview::on_preview_content(state, result, file, preview_title)
                 },
             );
         }
@@ -468,8 +482,8 @@ pub(super) fn dispatch_outcome(
                         });
                     (result, gist_id)
                 },
-                move |(result, gist_id), jobs, state| {
-                    jobs.on_revisions_fetched(state, gist_id, result)
+                move |(result, gist_id), _jobs, state| {
+                    screens::revisions::on_revisions_fetched(state, gist_id, result)
                 },
             );
         }
@@ -494,8 +508,8 @@ pub(super) fn dispatch_outcome(
                         &owner_login,
                     )
                 },
-                move |result, jobs, state| {
-                    jobs.on_revision_diff(state, result, old_label, new_label)
+                move |result, _jobs, state| {
+                    screens::diff::on_revision_diff(state, result, old_label, new_label)
                 },
             );
         }
@@ -523,8 +537,8 @@ pub(super) fn dispatch_outcome(
                     );
                     (result, old_label, new_label)
                 },
-                move |(result, old_label, new_label), jobs, state| {
-                    jobs.on_revision_diff(state, result, old_label, new_label)
+                move |(result, old_label, new_label), _jobs, state| {
+                    screens::diff::on_revision_diff(state, result, old_label, new_label)
                 },
             );
         }
@@ -549,8 +563,8 @@ pub(super) fn dispatch_outcome(
                     );
                     (result, gist_id, filename, version)
                 },
-                move |(result, gist_id, filename, version), jobs, state| {
-                    jobs.on_restore_revision_ready(
+                move |(result, gist_id, filename, version), _jobs, state| {
+                    screens::confirm::on_restore_revision_ready(
                         state,
                         result,
                         gist_id,
