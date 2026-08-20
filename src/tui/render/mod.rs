@@ -23,6 +23,8 @@ use ratatui::{
 };
 use similar::{ChangeTag, TextDiff};
 
+pub(crate) mod list_pane;
+
 pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
     *layout = MouseLayout::default();
     // Paint the full canvas so every unfilled cell uses the theme background (no-op for dark
@@ -280,13 +282,6 @@ fn elide_start(text: &str, room: usize) -> String {
 /// Ellipsis marking that a value was clipped (issue #340). One cell in `cell_width`.
 const ELLIPSIS: &str = "…";
 
-/// Highlight prefix every row list paints (`▶` plus a space). Kept in one place so the
-/// truncation budget and the widget's `highlight_symbol` cannot drift.
-pub(super) const LIST_HIGHLIGHT_SYMBOL: &str = "▶ ";
-
-/// Borders (2) + `Padding::horizontal(1)` (2) around a list pane's inner rows.
-const LIST_CHROME_CELLS: u16 = 4;
-
 /// Width-aware end truncation (issue #340): a value that fits is returned unchanged; a
 /// value that does not is cut on a character boundary and marked with `…`. Wide glyphs
 /// are never split — a leftover cell is left empty rather than showing half a character.
@@ -451,35 +446,6 @@ pub(super) fn fit_hints(text: &str, width: usize) -> String {
 /// Title sitting on a bordered block: the two corner glyphs are not available.
 pub(super) fn fit_block_title(title: &str, area_width: u16) -> String {
     truncate_end(title, area_width.saturating_sub(2) as usize)
-}
-
-/// Horizontal offset applied to one list row: only the selected row moves (issue #341).
-pub(super) fn row_hscroll(selected: Option<usize>, index: usize, hscroll: u16) -> u16 {
-    if selected == Some(index) {
-        hscroll
-    } else {
-        0
-    }
-}
-
-/// Visible list-row text: horizontal scroll first, then truncate to the inner content
-/// width (borders, padding, and the highlight symbol) so ratatui cannot silently clip.
-/// A non-zero offset keeps a leading `…` so the skip is visible (issue #341).
-pub(super) fn visible_list_row(label: &str, hscroll: u16, pane_width: u16) -> String {
-    let inner = pane_width.saturating_sub(LIST_CHROME_CELLS) as usize;
-    let room = inner.saturating_sub(cell_width(LIST_HIGHLIGHT_SYMBOL));
-    let scrolled = hscroll_str(label, hscroll);
-    if hscroll == 0 {
-        return truncate_end(&scrolled, room);
-    }
-    let ellipsis_width = cell_width(ELLIPSIS);
-    if room < ellipsis_width {
-        return String::new();
-    }
-    format!(
-        "{ELLIPSIS}{}",
-        truncate_end(&scrolled, room - ellipsis_width)
-    )
 }
 
 fn gist_badge_prefix(starred: bool, forked: bool) -> String {
@@ -742,8 +708,6 @@ pub(super) fn footer_with_status(status: Option<&str>, hints: &str) -> (String, 
         None => (hints.to_string(), true),
     }
 }
-
-pub(super) use super::text::hscroll_str;
 
 /// Compose the full list-row string (including pin mark) that paint and hscroll max must share.
 pub(super) fn marked_row_text(base: String, mark: crate::ranking::MatchMark) -> String {
@@ -1524,7 +1488,7 @@ mod tests {
 
     /// Concatenates every cell's symbol in row-major order (no separators) — enough to assert
     /// a known label/title landed somewhere in the frame without pinning exact coordinates.
-    fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
+    pub(super) fn buffer_text(buffer: &ratatui::buffer::Buffer) -> String {
         buffer.content().iter().map(|c| c.symbol()).collect()
     }
 
@@ -1535,55 +1499,6 @@ mod tests {
         assert_eq!(truncate_end("hello", 5), "hello");
         assert_eq!(truncate_end("hello", 10), "hello");
         assert_eq!(truncate_end("日本語", 6), "日本語");
-    }
-
-    fn list_row_pane_width(content_cells: u16) -> u16 {
-        LIST_CHROME_CELLS + cell_width(LIST_HIGHLIGHT_SYMBOL) as u16 + content_cells
-    }
-
-    /// Issue #341: horizontal scroll is applied before end-truncation; an unscrolled
-    /// row that fits is returned unchanged.
-    #[test]
-    fn visible_list_row_leaves_an_unscrolled_value_intact() {
-        let width = list_row_pane_width(20);
-        assert_eq!(visible_list_row("AGENTS.md", 0, width), "AGENTS.md");
-    }
-
-    /// Issue #341: a horizontally offset row keeps a leading `…` so the skip is visible.
-    #[test]
-    fn visible_list_row_marks_a_horizontal_offset_with_a_leading_ellipsis() {
-        let width = list_row_pane_width(20);
-        assert_eq!(visible_list_row("AGENTS.md", 6, width), "….md");
-    }
-
-    /// Issue #341: scrolling the selected long path must not eat the start of its siblings.
-    #[test]
-    fn list_hscroll_leaves_unselected_rows_readable_from_their_start() {
-        let mut state = crate::tui::tests::state_with_local_paths(&[
-            "/cwd/AGENTS.md",
-            "/cwd/docs/adr/0001-appstate-field-visibility.md",
-            "/cwd/CHANGELOG.md",
-        ]);
-        state.focus = FocusPane::Local;
-        state.local_index = 1;
-        state.local_hscroll = 6;
-        let text = render_state(&state);
-        assert!(
-            text.contains("AGENTS.md"),
-            "unselected short row lost its start: {text}"
-        );
-        assert!(
-            text.contains("CHANGELOG.md"),
-            "unselected short row lost its start: {text}"
-        );
-        assert!(
-            text.contains("…dr/0001"),
-            "selected row must show a leading ellipsis at this offset: {text}"
-        );
-        assert!(
-            !text.contains("docs/adr/0001-appstate-field-visibility.md"),
-            "selected row should have scrolled past its head: {text}"
-        );
     }
 
     /// Issue #340: clipping appends `…` and never splits a wide glyph.
@@ -1697,7 +1612,7 @@ mod tests {
     /// `render_screen_vm` — the dispatch under test. Panics (e.g. an unreachable match arm, an
     /// out-of-bounds slice on empty data) fail the test; the returned buffer text lets callers
     /// additionally assert on painted content.
-    fn render_state(state: &AppState) -> String {
+    pub(super) fn render_state(state: &AppState) -> String {
         let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         let vm = super::super::build_view_model(state);
@@ -1998,7 +1913,7 @@ mod tests {
         }
     }
 
-    fn render_state_size(state: &AppState, width: u16, height: u16) -> String {
+    pub(super) fn render_state_size(state: &AppState, width: u16, height: u16) -> String {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         let vm = super::super::build_view_model(state);

@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Revision history rows now behave like every other list screen: a clipped row ends in an
+  ellipsis (`…`) instead of looking complete, rows are clamped to the pane width, and
+  `←`/`→` scrolls only the selected row behind a leading `…` rather than shifting the
+  whole list.
 - The quit prompt now names every key that confirms it (`q` and `Esc`), the top-bar `(g)ists` mnemonic now matches the lowercase key that actually opens it, and a command-palette query with no matches now shows an explicit "no matches" message instead of an empty frame.
 - Preview now titles itself with the gist's description (consistent with Gist detail); Gist manager and Pinned Mappings rows now lead with the description instead of the raw id, which is demoted to a fixed-width, `#`-abbreviated column that stays aligned even with a starred/forked badge or a legacy short id.
 - The diff header now shows the gist file's real update time (matching Gist manager and Pinned Mappings) whenever it's already loaded in memory, instead of always showing `(unknown)`.

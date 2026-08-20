@@ -2,13 +2,14 @@
 //! file (issue #287, Phase 2).
 
 use crate::tui::keys::{apply_list_cursor_nav, point_in, NavAction};
-use crate::tui::view_model::{ChromeVm, PinRowVm, PinsEmptyKind, PinsVm};
-use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, PaneHit, Screen};
+use crate::tui::render::list_pane::render_list_pane;
+use crate::tui::view_model::{
+    ChromeVm, ListPaneEmpty, ListPaneVm, PaneTitleVm, PinsVm, RowEmphasis, RowVm,
+};
+use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, Screen};
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
-    style::{Modifier, Style},
-    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Padding},
     Frame,
 };
 
@@ -201,10 +202,18 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
 
-    let (empty, rows) = if state.pinned.is_empty() {
-        (PinsEmptyKind::NoMappings, Vec::new())
+    let (empty, empty_message, rows) = if state.pinned.is_empty() {
+        (
+            ListPaneEmpty::NoItems,
+            Some("  📌 No pinned mappings found (use p to pin a pair)".to_string()),
+            Vec::new(),
+        )
     } else if visible.is_empty() {
-        (PinsEmptyKind::NoFilterMatch, Vec::new())
+        (
+            ListPaneEmpty::NoFilterMatch,
+            Some("  🔍 No pins match the filter".to_string()),
+            Vec::new(),
+        )
     } else {
         let rows = visible
             .iter()
@@ -231,14 +240,17 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
                     local_age: &local_age,
                     gist_age: &age(entry.remote_ts),
                 });
-                PinRowVm {
-                    pin_index: i,
-                    status,
+                RowVm {
                     label,
+                    emphasis: if status == crate::domain::SyncStatus::Missing {
+                        RowEmphasis::Danger
+                    } else {
+                        RowEmphasis::None
+                    },
                 }
             })
             .collect();
-        (PinsEmptyKind::HasRows, rows)
+        (ListPaneEmpty::HasRows, None, rows)
     };
 
     let mut title = format!(
@@ -253,16 +265,21 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
     }
 
     PinsVm {
-        title,
-        empty,
-        rows,
-        selected: (!visible.is_empty()).then_some(pins.cursor.index),
+        pane: ListPaneVm {
+            title: PaneTitleVm::new(title),
+            focused: true,
+            selected: (!visible.is_empty()).then_some(pins.cursor.index),
+            empty,
+            empty_message,
+            rows,
+            hscroll: pins.cursor.hscroll,
+            scrollbar: false,
+        },
         filtering: pins.filtering,
         filter_query: pins.filter_query.clone(),
         footer_title,
         footer,
         footer_colored,
-        hscroll: pins.cursor.hscroll,
     }
 }
 
@@ -289,67 +306,14 @@ pub(crate) fn render_pins_vm(
         ])
         .split(area);
 
-    let items: Vec<ListItem> = match pins.empty {
-        PinsEmptyKind::NoMappings => {
-            vec![
-                ListItem::new("  📌 No pinned mappings found (use p to pin a pair)")
-                    .style(Style::default().fg(state.theme.dim)),
-            ]
-        }
-        PinsEmptyKind::NoFilterMatch => {
-            vec![ListItem::new("  🔍 No pins match the filter")
-                .style(Style::default().fg(state.theme.dim))]
-        }
-        PinsEmptyKind::HasRows => pins
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(i, row)| {
-                let item = ListItem::new(crate::tui::render::visible_list_row(
-                    &row.label,
-                    crate::tui::render::row_hscroll(pins.selected, i, pins.hscroll),
-                    chunks[0].width,
-                ));
-                if row.status == crate::domain::SyncStatus::Missing {
-                    item.style(Style::default().fg(state.theme.del_color))
-                } else {
-                    item
-                }
-            })
-            .collect(),
-    };
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(crate::tui::render::fit_block_title(
-                    &pins.title,
-                    chunks[0].width,
-                ))
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(state.theme.accent))
-                .style(state.theme.base_style())
-                .padding(Padding::horizontal(1)),
-        )
-        .style(state.theme.base_style())
-        .highlight_style(
-            Style::default()
-                .bg(state.theme.accent)
-                .fg(state.theme.fg_on_accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(crate::tui::render::LIST_HIGHLIGHT_SYMBOL);
-
-    let mut list_state = ListState::default();
-    list_state.select(pins.selected);
-    frame.render_stateful_widget(list, chunks[0], &mut list_state);
-    if chrome.mouse_enabled {
-        layout.list = Some(PaneHit {
-            rect: chunks[0],
-            offset: list_state.offset(),
-        });
-    }
+    render_list_pane(
+        frame,
+        chunks[0],
+        &pins.pane,
+        &state.theme,
+        chrome.mouse_enabled,
+        &mut layout.list,
+    );
 
     if pins.filtering {
         crate::tui::render::render_footer_line(

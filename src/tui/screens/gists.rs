@@ -2,13 +2,14 @@
 //! file (issue #287, Phase 2).
 
 use crate::tui::keys::{apply_list_cursor_nav, point_in, NavAction};
-use crate::tui::view_model::{ChromeVm, GistGroupRowVm, GistsEmptyKind, GistsVm};
-use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, PaneHit, Screen};
+use crate::tui::render::list_pane::render_list_pane;
+use crate::tui::view_model::{
+    ChromeVm, GistsVm, ListPaneEmpty, ListPaneVm, PaneTitleVm, RowEmphasis, RowVm,
+};
+use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, Screen};
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
-    style::{Modifier, Style},
-    widgets::{Block, BorderType, Borders, List, ListItem, ListState, Padding},
     Frame,
 };
 
@@ -160,13 +161,13 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
     let (empty, empty_message, rows) = if groups.is_empty() {
         if total_groups == 0 {
             (
-                GistsEmptyKind::NoGists,
+                ListPaneEmpty::NoItems,
                 Some("  📭 No gists found".into()),
                 Vec::new(),
             )
         } else {
             (
-                GistsEmptyKind::NoFilterMatch,
+                ListPaneEmpty::NoFilterMatch,
                 Some("  🔍 No gists match the filter".into()),
                 Vec::new(),
             )
@@ -174,8 +175,8 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
     } else {
         let rows = groups
             .iter()
-            .map(|g| GistGroupRowVm {
-                gist_id: g.id.clone(),
+            .map(|g| RowVm {
+                emphasis: RowEmphasis::None,
                 label: crate::tui::render::gist_group_row_label(
                     g,
                     now,
@@ -190,7 +191,7 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
                 ),
             })
             .collect();
-        (GistsEmptyKind::HasRows, None, rows)
+        (ListPaneEmpty::HasRows, None, rows)
     };
 
     let mut title = format!(
@@ -206,17 +207,21 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
     }
 
     GistsVm {
-        title,
-        empty,
-        empty_message,
-        rows,
-        selected: (!groups.is_empty()).then_some(gm.cursor.index),
+        pane: ListPaneVm {
+            title: PaneTitleVm::new(title),
+            focused: true,
+            selected: (!groups.is_empty()).then_some(gm.cursor.index),
+            empty,
+            empty_message,
+            rows,
+            hscroll: gm.cursor.hscroll,
+            scrollbar: false,
+        },
         filtering: gm.filtering,
         filter_query: gm.filter_query.clone(),
         footer_title,
         footer,
         footer_colored,
-        hscroll: gm.cursor.hscroll,
     }
 }
 
@@ -243,56 +248,14 @@ pub(crate) fn render_gists_vm(
         ])
         .split(area);
 
-    let items: Vec<ListItem> = match gists.empty {
-        GistsEmptyKind::HasRows => gists
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(i, row)| {
-                ListItem::new(crate::tui::render::visible_list_row(
-                    &row.label,
-                    crate::tui::render::row_hscroll(gists.selected, i, gists.hscroll),
-                    chunks[0].width,
-                ))
-            })
-            .collect(),
-        _ => {
-            let msg = gists.empty_message.clone().unwrap_or_else(|| "  ".into());
-            vec![ListItem::new(msg).style(Style::default().fg(state.theme.dim))]
-        }
-    };
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(crate::tui::render::fit_block_title(
-                    &gists.title,
-                    chunks[0].width,
-                ))
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(state.theme.accent))
-                .style(state.theme.base_style())
-                .padding(Padding::horizontal(1)),
-        )
-        .style(state.theme.base_style())
-        .highlight_style(
-            Style::default()
-                .bg(state.theme.accent)
-                .fg(state.theme.fg_on_accent)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol(crate::tui::render::LIST_HIGHLIGHT_SYMBOL);
-
-    let mut list_state = ListState::default();
-    list_state.select(gists.selected);
-    frame.render_stateful_widget(list, chunks[0], &mut list_state);
-    if chrome.mouse_enabled {
-        layout.list = Some(PaneHit {
-            rect: chunks[0],
-            offset: list_state.offset(),
-        });
-    }
+    render_list_pane(
+        frame,
+        chunks[0],
+        &gists.pane,
+        &state.theme,
+        chrome.mouse_enabled,
+        &mut layout.list,
+    );
 
     if gists.filtering {
         crate::tui::render::render_footer_line(

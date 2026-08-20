@@ -1,13 +1,14 @@
 //! `Screen::List` — key handling, view-model, paint, and palette items colocated in one
 //! file (issue #287, Phase 2).
 
+use crate::ranking::MatchMark;
 use crate::tui::keys::{apply_filter_edit, diff_pair_previewable, point_in, FilterKey, NavAction};
+use crate::tui::render::list_pane::render_list_pane;
 use crate::tui::view_model::{
-    ChromeVm, ListFooterVm, ListPaneEmpty, ListPaneVm, ListRowVm, ListVm, PaneTitleVm,
+    ChromeVm, ListFooterVm, ListPaneEmpty, ListPaneVm, ListVm, PaneTitleVm, RowEmphasis, RowVm,
 };
 use crate::tui::{
-    AppState, FocusPane, GistView, HelpTopic, KeyOutcome, MouseLayout, PaneHit, PendingAction,
-    Screen,
+    AppState, FocusPane, GistView, HelpTopic, KeyOutcome, MouseLayout, PendingAction, Screen,
 };
 use crossterm::event::KeyCode;
 
@@ -22,12 +23,7 @@ pub(crate) fn wheel_step() -> usize {
     1
 }
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Margin},
-    style::{Modifier, Style},
-    widgets::{
-        Block, BorderType, Borders, List, ListItem, ListState, Padding, Scrollbar,
-        ScrollbarOrientation, ScrollbarState,
-    },
+    layout::{Constraint, Direction, Layout},
     Frame,
 };
 
@@ -532,9 +528,9 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
             .iter()
             .map(|r| {
                 let base = crate::tui::text::local_row_label(&r.candidate.path, &state.cwd);
-                ListRowVm {
+                RowVm {
                     label: crate::tui::render::marked_row_text(base, r.mark),
-                    mark: r.mark,
+                    emphasis: row_emphasis(r.mark),
                 }
             })
             .collect();
@@ -587,9 +583,9 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
             .iter()
             .map(|g| {
                 let base = crate::tui::gist_row_display(g, state.gist_view, state);
-                ListRowVm {
+                RowVm {
                     label: crate::tui::render::marked_row_text(base, g.mark),
-                    mark: g.mark,
+                    emphasis: row_emphasis(g.mark),
                 }
             })
             .collect();
@@ -637,6 +633,8 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
             empty: local_empty,
             empty_message: local_empty_message,
             rows: local_rows,
+            hscroll: state.local_hscroll,
+            scrollbar: true,
         },
         gist: ListPaneVm {
             title: gist_title,
@@ -645,110 +643,21 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
             empty: gist_empty,
             empty_message: gist_empty_message,
             rows: gist_rows,
+            hscroll: state.gist_hscroll,
+            scrollbar: true,
         },
-        local_hscroll: state.local_hscroll,
-        gist_hscroll: state.gist_hscroll,
         footer,
     }
 }
 
-fn list_pane_items(
-    pane: &ListPaneVm,
-    hscroll: u16,
-    theme: &crate::tui::Theme,
-    pane_width: u16,
-) -> Vec<ListItem<'static>> {
-    match pane.empty {
-        ListPaneEmpty::HasRows => pane
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(i, row)| {
-                let item = ListItem::new(crate::tui::render::visible_list_row(
-                    &row.label,
-                    crate::tui::render::row_hscroll(pane.selected, i, hscroll),
-                    pane_width,
-                ));
-                if matches!(row.mark, crate::ranking::MatchMark::ExactFilename) {
-                    item.style(Style::default().add_modifier(Modifier::BOLD))
-                } else {
-                    item
-                }
-            })
-            .collect(),
-        _ => {
-            let msg = pane.empty_message.clone().unwrap_or_else(|| "  ".into());
-            vec![ListItem::new(msg).style(Style::default().fg(theme.dim))]
-        }
-    }
-}
-
-fn render_pane(
-    frame: &mut Frame,
-    area: ratatui::layout::Rect,
-    title: &PaneTitleVm,
-    items: Vec<ListItem>,
-    focused: bool,
-    selected: Option<usize>,
-    theme: &crate::tui::Theme,
-) -> usize {
-    let item_count = items.len();
-    // Titles sit between the two border corners; segments that do not fit are dropped here
-    // rather than clipped mid-word by the block (#338).
-    let title = crate::tui::render::fit_title(title, area.width.saturating_sub(2) as usize);
-    let border_style = if focused {
-        Style::default().fg(theme.accent)
+/// A matched filename is the only List row that stands out on its own; the pin mark rides in
+/// the label instead (see `render::marked_row_text`).
+fn row_emphasis(mark: MatchMark) -> RowEmphasis {
+    if matches!(mark, MatchMark::ExactFilename) {
+        RowEmphasis::Strong
     } else {
-        Style::default().fg(theme.dim)
-    };
-    // The border colour alone signals which pane is active; row text stays at full
-    // brightness in both panes so it is always legible.
-    // Focused selection is a solid bar (whole row); unfocused just bolds the row.
-    let highlight_style = if focused {
-        Style::default()
-            .bg(theme.accent)
-            .fg(theme.fg_on_accent)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme.fg).add_modifier(Modifier::BOLD)
-    };
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .title(title.as_str())
-                // Pin title to theme fg so it stays legible in both dark and light modes.
-                .title_style(Style::default().fg(theme.fg))
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(border_style)
-                .style(theme.base_style())
-                .padding(Padding::horizontal(1)),
-        )
-        .style(theme.base_style())
-        .highlight_style(highlight_style)
-        .highlight_symbol(crate::tui::render::LIST_HIGHLIGHT_SYMBOL);
-
-    let mut list_state = ListState::default();
-    list_state.select(selected);
-    frame.render_stateful_widget(list, area, &mut list_state);
-    let offset = list_state.offset();
-
-    // Show a scrollbar when the list overflows its viewport.
-    let viewport = area.height.saturating_sub(2) as usize;
-    if viewport > 0 && item_count > viewport {
-        let mut scrollbar_state = ScrollbarState::new(item_count).position(selected.unwrap_or(0));
-        frame.render_stateful_widget(
-            Scrollbar::new(ScrollbarOrientation::VerticalRight)
-                .begin_symbol(None)
-                .end_symbol(None),
-            area.inner(Margin {
-                vertical: 1,
-                horizontal: 0,
-            }),
-            &mut scrollbar_state,
-        );
+        RowEmphasis::None
     }
-    offset
 }
 
 pub(crate) fn render_list_vm(
@@ -789,49 +698,22 @@ pub(crate) fn render_list_vm(
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
         .split(chunks[0]);
 
-    let local_items = list_pane_items(
-        &list.local,
-        list.local_hscroll,
-        &state.theme,
-        columns[0].width,
-    );
-    let local_offset = render_pane(
+    render_list_pane(
         frame,
         columns[0],
-        &list.local.title,
-        local_items,
-        list.local.focused,
-        list.local.selected,
+        &list.local,
         &state.theme,
+        chrome.mouse_enabled,
+        &mut layout.local,
     );
-    if chrome.mouse_enabled {
-        layout.local = Some(PaneHit {
-            rect: columns[0],
-            offset: local_offset,
-        });
-    }
-
-    let gist_items = list_pane_items(
-        &list.gist,
-        list.gist_hscroll,
-        &state.theme,
-        columns[1].width,
-    );
-    let gist_offset = render_pane(
+    render_list_pane(
         frame,
         columns[1],
-        &list.gist.title,
-        gist_items,
-        list.gist.focused,
-        list.gist.selected,
+        &list.gist,
         &state.theme,
+        chrome.mouse_enabled,
+        &mut layout.gist,
     );
-    if chrome.mouse_enabled {
-        layout.gist = Some(PaneHit {
-            rect: columns[1],
-            offset: gist_offset,
-        });
-    }
 
     match &list.footer {
         ListFooterVm::Filtering { focus, query } => {

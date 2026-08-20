@@ -18,8 +18,7 @@ use super::screens::{
 use super::{
     AppState, DetailFocus, FocusPane, GistView, PaletteMode, PendingAction, Screen, TextInput,
 };
-use crate::domain::SyncStatus;
-use crate::ranking::{MatchMark, RankedGistFile};
+use crate::ranking::RankedGistFile;
 use ratatui::style::Color;
 
 /// Full-frame presentation contract produced by [`build_view_model`].
@@ -122,21 +121,9 @@ pub struct PreviewVm {
 /// Revision history list (#250).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevisionsVm {
-    pub title: String,
-    pub empty: RevisionsEmptyKind,
-    pub empty_message: Option<String>,
-    pub rows: Vec<String>,
-    pub selected: Option<usize>,
+    pub pane: ListPaneVm,
     pub footer: String,
     pub footer_colored: bool,
-    pub hscroll: u16,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RevisionsEmptyKind {
-    HasRows,
-    Loading,
-    NoRevisions,
 }
 
 /// Settings screen (#250).
@@ -199,31 +186,12 @@ pub enum CommentLineVm {
 /// Gist-manager list presentation (#250).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GistsVm {
-    pub title: String,
-    pub empty: GistsEmptyKind,
-    pub empty_message: Option<String>,
-    pub rows: Vec<GistGroupRowVm>,
-    pub selected: Option<usize>,
+    pub pane: ListPaneVm,
     pub filtering: bool,
     pub filter_query: crate::tui::text_input::TextInput,
     pub footer_title: String,
     pub footer: String,
     pub footer_colored: bool,
-    pub hscroll: u16,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GistsEmptyKind {
-    HasRows,
-    NoGists,
-    NoFilterMatch,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GistGroupRowVm {
-    pub gist_id: String,
-    /// Full row label before horizontal scroll.
-    pub label: String,
 }
 
 /// Main dual-pane List screen presentation (#250).
@@ -231,8 +199,6 @@ pub struct GistGroupRowVm {
 pub struct ListVm {
     pub local: ListPaneVm,
     pub gist: ListPaneVm,
-    pub local_hscroll: u16,
-    pub gist_hscroll: u16,
     pub footer: ListFooterVm,
 }
 
@@ -279,12 +245,18 @@ impl PaneTitleVm {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListPaneVm {
     pub title: PaneTitleVm,
+    /// Accent border plus a solid highlight bar. `false` paints a dim border and bolds the
+    /// selected row instead; screens with a single pane are always focused.
     pub focused: bool,
     pub selected: Option<usize>,
     pub empty: ListPaneEmpty,
     /// Prebuilt empty/loading/filter-miss message when [`Self::empty`] is not [`HasRows`].
     pub empty_message: Option<String>,
-    pub rows: Vec<ListRowVm>,
+    pub rows: Vec<RowVm>,
+    /// Horizontal offset, applied to the selected row only (#341).
+    pub hscroll: u16,
+    /// Paint a scrollbar when the rows overflow the viewport.
+    pub scrollbar: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,10 +269,23 @@ pub enum ListPaneEmpty {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ListRowVm {
-    /// Full row text including pin mark prefix, before horizontal scroll.
+pub struct RowVm {
+    /// Full row text including any mark prefix, before horizontal scroll.
     pub label: String,
-    pub mark: MatchMark,
+    pub emphasis: RowEmphasis,
+}
+
+/// How one row stands out from its neighbours. Resolved by the view-model builder so the paint
+/// side only looks it up — the domain reasons behind it (an exact filename match, a pinned
+/// mapping with a missing side) stay on this side of the seam.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RowEmphasis {
+    #[default]
+    None,
+    /// Bolded row — List's exact-filename match.
+    Strong,
+    /// Painted in the delete colour — a pinned mapping whose local side is missing.
+    Danger,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,33 +303,12 @@ pub enum ListFooterVm {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PinsVm {
-    pub title: String,
-    pub empty: PinsEmptyKind,
-    pub rows: Vec<PinRowVm>,
-    /// Selected index into [`Self::rows`] (not the raw pin index).
-    pub selected: Option<usize>,
+    pub pane: ListPaneVm,
     pub filtering: bool,
     pub filter_query: crate::tui::text_input::TextInput,
     pub footer_title: String,
     pub footer: String,
     pub footer_colored: bool,
-    pub hscroll: u16,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PinsEmptyKind {
-    /// Has rows to show.
-    HasRows,
-    NoMappings,
-    NoFilterMatch,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PinRowVm {
-    pub pin_index: usize,
-    pub status: SyncStatus,
-    /// Full row label before horizontal scroll (paint and hscroll share this string).
-    pub label: String,
 }
 
 /// Confirm modal + which background to paint under it.
@@ -616,11 +580,11 @@ mod tests {
         let vm = build_view_model(&state);
         match vm.screen {
             ScreenVm::Pins(pins) => {
-                assert_eq!(pins.empty, PinsEmptyKind::HasRows);
-                assert_eq!(pins.rows.len(), 1);
-                assert_eq!(pins.rows[0].status, SyncStatus::InSync);
-                assert!(pins.rows[0].label.contains('✓'));
-                assert!(pins.rows[0].label.contains("notes.txt"));
+                assert_eq!(pins.pane.empty, ListPaneEmpty::HasRows);
+                assert_eq!(pins.pane.rows.len(), 1);
+                assert_eq!(pins.pane.rows[0].emphasis, RowEmphasis::None);
+                assert!(pins.pane.rows[0].label.contains('✓'));
+                assert!(pins.pane.rows[0].label.contains("notes.txt"));
             }
             other => panic!("expected Pins, got {other:?}"),
         }
@@ -641,8 +605,8 @@ mod tests {
         let vm = build_view_model(&state);
         match vm.screen {
             ScreenVm::Pins(pins) => {
-                assert_eq!(pins.rows[0].status, SyncStatus::Unknown);
-                assert!(pins.rows[0].label.starts_with('?'));
+                assert_eq!(pins.pane.rows[0].emphasis, RowEmphasis::None);
+                assert!(pins.pane.rows[0].label.starts_with('?'));
             }
             other => panic!("expected Pins, got {other:?}"),
         }
@@ -654,7 +618,7 @@ mod tests {
         state.screen = Screen::Pins(Box::default());
         let vm = build_view_model(&state);
         match vm.screen {
-            ScreenVm::Pins(pins) => assert_eq!(pins.empty, PinsEmptyKind::NoMappings),
+            ScreenVm::Pins(pins) => assert_eq!(pins.pane.empty, ListPaneEmpty::NoItems),
             other => panic!("expected Pins, got {other:?}"),
         }
 
@@ -671,7 +635,7 @@ mod tests {
         state.pin_sync_cache = vec![crate::tui::PinSyncCacheEntry::default()];
         let vm = build_view_model(&state);
         match vm.screen {
-            ScreenVm::Pins(pins) => assert_eq!(pins.empty, PinsEmptyKind::NoFilterMatch),
+            ScreenVm::Pins(pins) => assert_eq!(pins.pane.empty, ListPaneEmpty::NoFilterMatch),
             other => panic!("expected Pins, got {other:?}"),
         }
     }
@@ -828,10 +792,7 @@ mod tests {
                     .rows
                     .iter()
                     .chain(list.gist.rows.iter())
-                    .any(|r| {
-                        matches!(r.mark, MatchMark::Pinned | MatchMark::ExactFilename)
-                            || r.label.contains('📌')
-                    });
+                    .any(|r| matches!(r.emphasis, RowEmphasis::Strong) || r.label.contains('📌'));
                 assert!(
                     marked,
                     "local={:?} gist={:?}",
@@ -901,13 +862,14 @@ mod tests {
         state.screen = Screen::Gists(Box::default());
         match build_view_model(&state).screen {
             ScreenVm::Gists(g) => {
-                assert_eq!(g.empty, GistsEmptyKind::NoGists);
+                assert_eq!(g.pane.empty, ListPaneEmpty::NoItems);
                 assert!(g
+                    .pane
                     .empty_message
                     .as_deref()
                     .unwrap_or("")
                     .contains("No gists found"));
-                assert!(g.title.contains("Gists"));
+                assert!(g.pane.title.segments[0].contains("Gists"));
             }
             other => panic!("expected Gists, got {other:?}"),
         }
@@ -926,10 +888,14 @@ mod tests {
         state.gist_comment_counts.insert("g1".into(), 2);
         match build_view_model(&state).screen {
             ScreenVm::Gists(g) => {
-                assert_eq!(g.empty, GistsEmptyKind::HasRows);
-                assert_eq!(g.rows.len(), 2);
-                assert!(g.rows.iter().any(|r| r.gist_id == "g1"));
-                let starred = g.rows.iter().find(|r| r.gist_id == "g1").unwrap();
+                assert_eq!(g.pane.empty, ListPaneEmpty::HasRows);
+                assert_eq!(g.pane.rows.len(), 2);
+                let starred = g
+                    .pane
+                    .rows
+                    .iter()
+                    .find(|r| r.label.contains("alpha"))
+                    .expect("g1's row");
                 assert!(
                     starred.label.contains('★') || starred.label.contains("g1"),
                     "row: {}",
@@ -952,7 +918,7 @@ mod tests {
             gm.filter_query = crate::tui::TextInput::from("zzz-nope");
         }
         match build_view_model(&state).screen {
-            ScreenVm::Gists(g) => assert_eq!(g.empty, GistsEmptyKind::NoFilterMatch),
+            ScreenVm::Gists(g) => assert_eq!(g.pane.empty, ListPaneEmpty::NoFilterMatch),
             other => panic!("expected Gists, got {other:?}"),
         }
 
@@ -1082,9 +1048,12 @@ mod tests {
         }];
         match build_view_model(&state).screen {
             ScreenVm::Revisions(r) => {
-                assert_eq!(r.empty, RevisionsEmptyKind::Loading);
+                assert_eq!(r.pane.empty, ListPaneEmpty::Loading);
                 assert!(r.footer.contains("Loading"));
-                assert!(r.title.contains("hist") || r.title.contains("g1"));
+                assert!(
+                    r.pane.title.segments[0].contains("hist")
+                        || r.pane.title.segments[0].contains("g1")
+                );
             }
             other => panic!("expected Revisions, got {other:?}"),
         }
@@ -1104,10 +1073,11 @@ mod tests {
         }
         match build_view_model(&state).screen {
             ScreenVm::Revisions(r) => {
-                assert_eq!(r.empty, RevisionsEmptyKind::HasRows);
-                assert_eq!(r.rows.len(), 1);
-                assert!(r.rows[0].contains("alice") || r.rows[0].contains("abc"));
-                assert_eq!(r.selected, Some(0));
+                assert_eq!(r.pane.empty, ListPaneEmpty::HasRows);
+                assert_eq!(r.pane.rows.len(), 1);
+                let row = &r.pane.rows[0].label;
+                assert!(row.contains("alice") || row.contains("abc"));
+                assert_eq!(r.pane.selected, Some(0));
             }
             other => panic!("expected Revisions, got {other:?}"),
         }
