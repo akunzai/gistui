@@ -30,7 +30,7 @@ pub(super) fn dispatch_outcome(
                 state,
                 "Loading diff…",
                 file,
-                move |result, _file, _jobs, state| {
+                move |result, _file, state| {
                     screens::diff::on_preview_diff(
                         state,
                         result,
@@ -59,7 +59,7 @@ pub(super) fn dispatch_outcome(
                 state,
                 "Downloading…",
                 file,
-                move |result, file, _jobs, state| {
+                move |result, file, state| {
                     screens::diff::on_download_selected(
                         state,
                         result,
@@ -99,7 +99,7 @@ pub(super) fn dispatch_outcome(
                     let result = load_initial_comments(&fetch_id);
                     (result, fetch_id)
                 },
-                move |(result, fetch_id), _jobs, state| {
+                move |(result, fetch_id), state| {
                     screens::detail::on_comments_initial_loaded(state, fetch_id, result)
                 },
             );
@@ -127,7 +127,7 @@ pub(super) fn dispatch_outcome(
                     });
                     (result, fetch_id)
                 },
-                move |(result, fetch_id), _jobs, state| {
+                move |(result, fetch_id), state| {
                     screens::detail::on_comments_older_loaded(state, fetch_id, result)
                 },
             );
@@ -147,7 +147,7 @@ pub(super) fn dispatch_outcome(
                     });
                     (result, gist_id, label)
                 },
-                move |(result, gist_id, label), _jobs, state| {
+                move |(result, gist_id, label), state| {
                     screens::confirm::on_compact_analyze(state, result, gist_id, label)
                 },
             );
@@ -211,7 +211,7 @@ pub(super) fn dispatch_outcome(
                 state,
                 "Loading diff…",
                 file,
-                move |result, file, _jobs, state| {
+                move |result, file, state| {
                     screens::confirm::on_upload_preview(
                         state,
                         result,
@@ -271,7 +271,7 @@ pub(super) fn dispatch_outcome(
                     drop(scratch);
                     result
                 },
-                move |result, _jobs, state| gist_mutation::on_upload_replace(state, result, file),
+                move |result, state| gist_mutation::on_upload_replace(state, result, file),
             );
         }
         KeyOutcome::EditUpload => {
@@ -292,7 +292,7 @@ pub(super) fn dispatch_outcome(
                         .map(|_| ())
                         .map_err(|e| e.to_string())
                 },
-                move |result, _jobs, state| {
+                move |result, state| {
                     gist_mutation::on_create_gist(state, result, local_path, public)
                 },
             );
@@ -311,7 +311,7 @@ pub(super) fn dispatch_outcome(
                     state,
                     "Loading preview…",
                     file,
-                    move |result, file, _jobs, state| {
+                    move |result, file, state| {
                         screens::preview::on_preview_content(state, result, file, preview_title)
                     },
                 );
@@ -331,7 +331,7 @@ pub(super) fn dispatch_outcome(
                 state,
                 "Loading preview…",
                 file,
-                move |result, file, _jobs, state| {
+                move |result, file, state| {
                     screens::preview::on_preview_content(state, result, file, preview_title)
                 },
             );
@@ -359,7 +359,7 @@ pub(super) fn dispatch_outcome(
                         .map(|_| ())
                         .map_err(|e| e.to_string())
                 },
-                move |result, _jobs, state| gist_mutation::on_delete_gist(state, result, gist_id),
+                move |result, state| gist_mutation::on_delete_gist(state, result, gist_id),
             );
         }
         KeyOutcome::ExecuteRemoveFile => {
@@ -380,7 +380,7 @@ pub(super) fn dispatch_outcome(
                         .map(|_| ())
                         .map_err(|e| e.to_string())
                 },
-                move |result, _jobs, state| {
+                move |result, state| {
                     gist_mutation::on_remove_file(state, result, gist_id, filename)
                 },
             );
@@ -400,9 +400,7 @@ pub(super) fn dispatch_outcome(
                 state,
                 "Compacting revisions…",
                 move || crate::actions::execute_compact_gist(&gist_id).map_err(|e| e.to_string()),
-                move |result, _jobs, state| {
-                    gist_mutation::on_compact_gist(state, result, label, count)
-                },
+                move |result, state| gist_mutation::on_compact_gist(state, result, label, count),
             );
         }
         KeyOutcome::ApplyDescription {
@@ -421,9 +419,7 @@ pub(super) fn dispatch_outcome(
                         .map(|_| ())
                         .map_err(|e| e.to_string())
                 },
-                move |result, _jobs, state| {
-                    gist_mutation::on_apply_description(state, result, gist_id)
-                },
+                move |result, state| gist_mutation::on_apply_description(state, result, gist_id),
             );
         }
         KeyOutcome::RefreshLocals => {
@@ -479,21 +475,7 @@ pub(super) fn dispatch_outcome(
         }
         KeyOutcome::ThemeToggle => persist_theme(state),
         KeyOutcome::FetchRevisions { gist_id } => {
-            jobs.spawn_action(
-                state,
-                "Loading revisions…",
-                move || {
-                    let result = crate::gh::fetch_gist_commits_json(&gist_id)
-                        .map_err(|e| e.to_string())
-                        .and_then(|raw| {
-                            crate::gh::parse_gist_commits_json(&raw).map_err(|e| e.to_string())
-                        });
-                    (result, gist_id)
-                },
-                move |(result, gist_id), _jobs, state| {
-                    screens::revisions::on_revisions_fetched(state, gist_id, result)
-                },
-            );
+            screens::revisions::request_revisions(jobs, state, gist_id);
         }
         KeyOutcome::RevisionDiffIncremental {
             gist_id,
@@ -516,7 +498,7 @@ pub(super) fn dispatch_outcome(
                         &owner_login,
                     )
                 },
-                move |result, _jobs, state| {
+                move |result, state| {
                     screens::diff::on_revision_diff(state, result, old_label, new_label)
                 },
             );
@@ -545,7 +527,7 @@ pub(super) fn dispatch_outcome(
                     );
                     (result, old_label, new_label)
                 },
-                move |(result, old_label, new_label), _jobs, state| {
+                move |(result, old_label, new_label), state| {
                     screens::diff::on_revision_diff(state, result, old_label, new_label)
                 },
             );
@@ -571,7 +553,7 @@ pub(super) fn dispatch_outcome(
                     );
                     (result, gist_id, filename, version)
                 },
-                move |(result, gist_id, filename, version), _jobs, state| {
+                move |(result, gist_id, filename, version), state| {
                     screens::confirm::on_restore_revision_ready(
                         state,
                         result,
@@ -617,8 +599,8 @@ pub(super) fn dispatch_outcome(
                     drop(scratch);
                     result
                 },
-                move |result, jobs, state| {
-                    jobs.on_restore_revision_done(state, result, gist_id, filename)
+                move |result, state| {
+                    screens::revisions::on_restore_revision_done(state, result, gist_id, filename)
                 },
             );
         }
@@ -641,7 +623,7 @@ pub(super) fn dispatch_outcome(
                         .map(|_| ())
                         .map_err(|e| e.to_string())
                 },
-                move |result, _jobs, state| {
+                move |result, state| {
                     gist_mutation::on_gist_star_toggle(state, result, gist_id, starring)
                 },
             );
@@ -660,7 +642,7 @@ pub(super) fn dispatch_outcome(
                         .map(|_| ())
                         .map_err(|e| e.to_string())
                 },
-                move |result, _jobs, state| gist_mutation::on_fork_gist(state, result, gist_id),
+                move |result, state| gist_mutation::on_fork_gist(state, result, gist_id),
             );
         }
         KeyOutcome::None => {}

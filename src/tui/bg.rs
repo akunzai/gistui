@@ -293,7 +293,7 @@ fn spawn_local_scan(
 /// Work that ran off-thread, ready to apply on the event-loop tick (issue #375).
 /// The boxed closure captures the worker's result; [`Jobs::on_action_outcome`]
 /// calls it after the generation guard.
-type ActionApply = Box<dyn FnOnce(&mut Jobs, &mut AppState) -> LoopFlow + Send>;
+type ActionApply = Box<dyn FnOnce(&mut AppState) -> LoopFlow + Send>;
 
 /// Background per-action apply, stamped with the generation active at spawn time.
 type ActionRx = Option<std::sync::mpsc::Receiver<(u64, ActionApply)>>;
@@ -362,7 +362,7 @@ pub(super) fn spawn_pin_push(
         state,
         "Loading diff…",
         file,
-        move |result, file, _jobs, state| {
+        move |result, file, state| {
             screens::confirm::on_upload_preview(
                 state,
                 result,
@@ -389,21 +389,9 @@ pub(super) fn spawn_pin_pull(
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
     let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
     let (local_label, gist_label) = diff_labels(Some(&target), &state.gist_file_for_diff(&file));
-    jobs.spawn_gist_fetch_action(
-        state,
-        "Downloading…",
-        file,
-        move |result, file, _jobs, state| {
-            screens::diff::on_download_selected(
-                state,
-                result,
-                target,
-                local_label,
-                gist_label,
-                file,
-            )
-        },
-    );
+    jobs.spawn_gist_fetch_action(state, "Downloading…", file, move |result, file, state| {
+        screens::diff::on_download_selected(state, result, target, local_label, gist_label, file)
+    });
 }
 
 /// Spawn a read-only diff (gist vs local) for a pin, landing on `Screen::Diff`.
@@ -425,7 +413,7 @@ pub(super) fn spawn_pin_diff(
         state,
         "Loading diff…",
         file,
-        move |result, _file, _jobs, state| {
+        move |result, _file, state| {
             // Pin diffs originate from the Pins screen (no focused pane); keep the
             // historical download orientation (old = local, new = gist).
             screens::diff::on_preview_diff(
@@ -1038,7 +1026,8 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
     }
 }
 
-/// Background job registry (issue #243).
+/// Background job registry (issue #243): spawn / absorb / cancel. Apply handlers live
+/// on the screen (or gist-mutation) module that owns the state they mutate (issue #383).
 ///
 /// Call sites start work via methods on this type; the event loop only polls
 /// [`Jobs::absorb`]. Receivers stay private so new job kinds extend the registry
@@ -1103,7 +1092,7 @@ impl Jobs {
     ) where
         T: Send + 'static,
         R: FnOnce() -> T + Send + 'static,
-        A: FnOnce(T, &mut Jobs, &mut AppState) -> LoopFlow + Send + 'static,
+        A: FnOnce(T, &mut AppState) -> LoopFlow + Send + 'static,
     {
         let generation = state.begin_bg_task();
         state.bg_task_msg = Some(msg.into());
@@ -1111,7 +1100,7 @@ impl Jobs {
         self.action = Some(rx);
         std::thread::spawn(move || {
             let value = run();
-            let boxed: ActionApply = Box::new(move |jobs, state| apply(value, jobs, state));
+            let boxed: ActionApply = Box::new(move |state| apply(value, state));
             let _ = tx.send((generation, boxed));
         });
     }
@@ -1131,7 +1120,6 @@ impl Jobs {
         A: FnOnce(
                 std::result::Result<String, String>,
                 crate::domain::GistFileRef,
-                &mut Jobs,
                 &mut AppState,
             ) -> LoopFlow
             + Send
@@ -1145,7 +1133,7 @@ impl Jobs {
                     fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
                 (result, file)
             },
-            move |(result, file), jobs, state| apply(result, file, jobs, state),
+            move |(result, file), state| apply(result, file, state),
         );
     }
 
@@ -1211,7 +1199,7 @@ impl Jobs {
             self.gist = Some(spawn_gist_fetch());
         }
         if let Some(gist_id) = state.revisions_stale.take() {
-            request_revisions(self, state, gist_id);
+            screens::revisions::request_revisions(self, state, gist_id);
         }
         Ok(flow)
     }
@@ -1224,26 +1212,6 @@ impl Jobs {
 /// Only covers channels that receive a single unstamped result (`gist`, `fork`, `star`,
 /// `fork_meta`, `update`). The generation-stamped channels (`local`, `action`) and the
 /// multi-message `upload_edit_watch` drain have different shapes and stay hand-rolled.
-/// Re-fetch revision history for `gist_id`. Spawned from `Jobs::absorb` when apply
-/// set `revisions_stale` (issue #383).
-fn request_revisions(jobs: &mut Jobs, state: &mut AppState, gist_id: String) {
-    jobs.spawn_action(
-        state,
-        "Loading revisions…",
-        move || {
-            let result = crate::gh::fetch_gist_commits_json(&gist_id)
-                .map_err(|e| e.to_string())
-                .and_then(|raw| {
-                    crate::gh::parse_gist_commits_json(&raw).map_err(|e| e.to_string())
-                });
-            (result, gist_id)
-        },
-        move |(result, gist_id), _jobs, state| {
-            screens::revisions::on_revisions_fetched(state, gist_id, result)
-        },
-    );
-}
-
 fn poll_channel<T>(slot: &mut Option<std::sync::mpsc::Receiver<T>>) -> Option<T> {
     let value = slot.as_ref()?.try_recv().ok()?;
     *slot = None;
@@ -1429,52 +1397,11 @@ impl Jobs {
         self.action = None;
         if state.is_current_bg_generation(generation) {
             state.bg_task_msg = None;
-            apply(self, state)
+            apply(state)
         } else {
             // Stale outcomes are dropped without applying.
             LoopFlow::Proceed
         }
-    }
-
-    /// `RestoreRevisionDone` outcome: return to the Revisions screen and re-fetch both the
-    /// gist list and the revision history for the restored gist.
-    pub(super) fn on_restore_revision_done(
-        &mut self,
-        state: &mut AppState,
-        result: std::result::Result<(), String>,
-        gist_id: String,
-        filename: String,
-    ) -> LoopFlow {
-        match result {
-            Ok(_) => {
-                state
-                    .gist_content_cache
-                    .remove(&(gist_id.clone(), filename.clone()));
-                state.set_status(format!(
-                    "Restored {filename} from old revision (new revision created)"
-                ));
-                // Return to the revisions list `enter_confirm` parked when the
-                // restore confirm was entered.
-                state.leave();
-                if !state.screen.is_revisions() {
-                    state.screen = Screen::Revisions(Box::default());
-                }
-                let gist_id = state.revision_mut().and_then(|rev| {
-                    rev.index = 0;
-                    rev.entries = None;
-                    rev.fetch_error = None;
-                    rev.gist_id.clone()
-                });
-                state.gist_list_stale = true;
-                state.revisions_stale = gist_id;
-            }
-            Err(error) => {
-                state.set_status(format!("restore failed: {error}"));
-                // Stay on Confirm payload if still open.
-            }
-        }
-
-        LoopFlow::Proceed
     }
 }
 
@@ -1823,7 +1750,7 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         tx.send((
             stale,
-            Box::new(|_jobs: &mut Jobs, state: &mut AppState| {
+            Box::new(|state: &mut AppState| {
                 gist_mutation::on_delete_gist(state, Ok(()), "g1".into())
             }) as ActionApply,
         ))
@@ -1865,16 +1792,6 @@ mod tests {
         refresh_locals(&mut state, LocalScanMode::Active, Some(&target));
 
         assert_eq!(state.selected_local().map(|file| file.path), Some(target));
-    }
-
-    #[test]
-    fn on_restore_revision_done_err_sets_status() {
-        let mut state = initial_state();
-        let mut jobs = empty_jobs();
-
-        jobs.on_restore_revision_done(&mut state, Err("boom".into()), "g1".into(), "a.txt".into());
-
-        assert_eq!(state.status.as_deref(), Some("restore failed: boom"));
     }
 
     #[test]

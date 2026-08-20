@@ -7,3 +7,5 @@ We decided to scope the collapse to the **async-response side only** — `BgTask
 **Revisit if**: a case shows `handle_key`'s tests never actually depend on `KeyOutcome`'s data shape (e.g. tests only assert side effects, never match on payload fields), or the `KeyOutcome` variant count itself is shown to cause a concrete bug — narrow scope to that case at that point, not by reopening the whole boundary.
 
 **Shipped as #375.** The enum-plus-match is gone (`spawn_action(run, apply)` + a generation-guard shell). Apply was not inlined into `dispatch.rs`: by then #298 had made the `on_*` handlers a unit-test seam, so the "never a test surface" premise no longer held. The `KeyOutcome` half of this ADR is unchanged.
+
+**Apply handlers left `Jobs` as #383.** The `on_*` apply seam stayed named and unit-tested; it moved out of `impl Jobs` onto the screen (or gist-mutation) module that owns the state it mutates. `ActionApply` narrowed to `FnOnce(&mut AppState)`. Apply only marks stale; only the registry spawns. `KeyOutcome` / `dispatch_outcome` stay plain data.

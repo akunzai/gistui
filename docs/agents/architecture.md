@@ -7,7 +7,7 @@ Index: [`AGENTS.md`](../../AGENTS.md). Source of truth for types lives in the mo
 | Kind | Modules | Testing |
 | --- | --- | --- |
 | **Pure** (unit-tested) | `domain`, `config`, `ranking`, `local`, `diff`, actions **plan/guard**, `tui::view_model`, `tui::list_ranking` | In-crate unit tests |
-| **Impure** (thin IO) | `gh`, actions **execute**, `tui::run_loop` / `tui::bg` / `tui::pin_sync` | No live `gh`. Spawn/absorb is thin IO; action-job `on_*` apply handlers in `bg.rs` are unit-tested (#298) |
+| **Impure** (thin IO) | `gh`, actions **execute**, `tui::run_loop` / `tui::bg` / `tui::pin_sync` | No live `gh`. Spawn/absorb is thin IO; action-job `on_*` apply handlers (screen modules / `gist_mutation.rs`) are unit-tested (#298, #383) |
 
 `build_view_model` (`@src/tui/view_model.rs`): `AppState` + pin-sync cache → presentation facts. Paint helpers apply theme/layout only — no business rules, FS, or network.
 
@@ -59,12 +59,13 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
 
 ## Background jobs
 
-- **`Jobs`** is the single registry: spawn / absorb / cancel (`@src/tui/bg.rs`, issue #243).
+- **`Jobs`** is the single registry: spawn / absorb / cancel (`@src/tui/bg.rs`, issue #243). It keeps seven methods: `startup`, `spawn_action`, `spawn_gist_fetch_action`, `cancel_action`, `request_local_scan`, `set_upload_edit_watch`, `absorb`.
+- **Apply only marks; only the registry spawns** (issue #383). `on_*` handlers are free functions (`fn on_x(state: &mut AppState, ...) -> LoopFlow`) on the screen module that owns the payload they mutate, or on `@src/tui/gist_mutation.rs` when the outcome belongs to no single screen. They set `gist_list_stale` / `revisions_stale`; `Jobs::absorb` consumes those flags immediately after `on_action_outcome` and spawns. Do not spawn from apply. **Revisit** when a third kind of stale need appears: replace the flags with a described follow-up value rather than adding a third field.
 - Action jobs and local scans use **generation supersession** (issue #221).
-- Call sites: `jobs.spawn_action` / `request_*` — do not own ad-hoc channel fields on `AppState`.
+- Call sites start work via `Jobs` methods (`spawn_action`, `request_local_scan`, …) or `screens::revisions::request_revisions` — do not own ad-hoc channel fields on `AppState`.
 - `run_loop` only **polls** `jobs.absorb`.
-- **Action jobs carry their apply** (issue #375, ADR-0002's async-response half): `spawn_action(run, apply)` runs `run` off-thread and boxes `apply(value)` for the event-loop tick. There is no `BgTaskOutcome` enum. `on_action_outcome` is a generation-guard shell that calls the closure. `KeyOutcome` / `dispatch_outcome` stay plain data (ADR-0002).
-- **`on_*` is the apply seam** (#298, #375): named handlers are the apply bodies and the unit-test surface. `dispatch_outcome` needs a `Terminal`, so it is not one. A new action is a spawn site plus an `on_*` when the apply is worth testing.
+- **Action jobs carry their apply** (issue #375, ADR-0002's async-response half): `spawn_action(run, apply)` runs `run` off-thread and boxes `apply(value)` for the event-loop tick. There is no `BgTaskOutcome` enum. `ActionApply` is `FnOnce(&mut AppState) -> LoopFlow`. `on_action_outcome` is a generation-guard shell that calls the closure. `KeyOutcome` / `dispatch_outcome` stay plain data (ADR-0002).
+- **`on_*` is the apply seam** (#298, #375, #383): named handlers are the apply bodies and the unit-test surface. They do not live on `Jobs`. `dispatch_outcome` needs a `Terminal`, so it is not one. A new action is a spawn site plus an `on_*` when the apply is worth testing.
 - **Shared spawn payload** (#375): a value both `run` and `apply` need is part of `run`'s return, unpacked by `apply`. That is how identity (`gist_id`, `fetch_id`, labels) crosses the thread boundary without a second clone.
 
 ## Pin-sync presentation (`@src/tui/pin_sync.rs`)

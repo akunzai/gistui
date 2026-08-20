@@ -1,7 +1,7 @@
 //! `Screen::Revisions` — key handling, view-model, paint, palette items, and apply handlers
 //! colocated in one file (issue #287, Phase 2; issue #383).
 
-use crate::tui::bg::{revision_version_label, LoopFlow};
+use crate::tui::bg::{revision_version_label, Jobs, LoopFlow};
 use crate::tui::keys::{point_in, NavAction, PAGE_SCROLL};
 use crate::tui::render::list_pane::render_list_pane;
 use crate::tui::view_model::{
@@ -474,6 +474,64 @@ pub(crate) fn on_revisions_fetched(
     LoopFlow::Proceed
 }
 
+/// Re-fetch revision history for `gist_id`. Shared by `KeyOutcome::FetchRevisions` and
+/// `Jobs::absorb` when apply set `revisions_stale` (issue #383).
+pub(crate) fn request_revisions(jobs: &mut Jobs, state: &mut AppState, gist_id: String) {
+    jobs.spawn_action(
+        state,
+        "Loading revisions…",
+        move || {
+            let result = crate::gh::fetch_gist_commits_json(&gist_id)
+                .map_err(|e| e.to_string())
+                .and_then(|raw| {
+                    crate::gh::parse_gist_commits_json(&raw).map_err(|e| e.to_string())
+                });
+            (result, gist_id)
+        },
+        move |(result, gist_id), state| on_revisions_fetched(state, gist_id, result),
+    );
+}
+
+/// `RestoreRevisionDone` outcome: return to the Revisions screen and re-fetch both the
+/// gist list and the revision history for the restored gist.
+pub(crate) fn on_restore_revision_done(
+    state: &mut AppState,
+    result: std::result::Result<(), String>,
+    gist_id: String,
+    filename: String,
+) -> LoopFlow {
+    match result {
+        Ok(()) => {
+            state
+                .gist_content_cache
+                .remove(&(gist_id.clone(), filename.clone()));
+            state.set_status(format!(
+                "Restored {filename} from old revision (new revision created)"
+            ));
+            // Return to the revisions list `enter_confirm` parked when the
+            // restore confirm was entered.
+            state.leave();
+            if !state.screen.is_revisions() {
+                state.screen = Screen::Revisions(Box::default());
+            }
+            let gist_id = state.revision_mut().and_then(|rev| {
+                rev.index = 0;
+                rev.entries = None;
+                rev.fetch_error = None;
+                rev.gist_id.clone()
+            });
+            state.gist_list_stale = true;
+            state.revisions_stale = gist_id;
+        }
+        Err(error) => {
+            state.set_status(format!("restore failed: {error}"));
+            // Stay on Confirm payload if still open.
+        }
+    }
+
+    LoopFlow::Proceed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -764,5 +822,59 @@ mod tests {
         let rev = state.revision().unwrap();
         assert_eq!(rev.fetch_error.as_deref(), Some("boom"));
         assert_eq!(rev.entries, Some(Vec::new()));
+    }
+
+    #[test]
+    fn on_restore_revision_done_err_sets_status() {
+        let mut state = initial_state();
+
+        on_restore_revision_done(&mut state, Err("boom".into()), "g1".into(), "a.txt".into());
+
+        assert_eq!(state.status.as_deref(), Some("restore failed: boom"));
+        assert!(!state.gist_list_stale);
+        assert!(state.revisions_stale.is_none());
+    }
+
+    #[test]
+    fn on_restore_revision_done_ok_returns_to_revisions_and_marks_stale() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            index: 3,
+            entries: Some(Vec::new()),
+            fetch_error: Some("old".into()),
+            ..Default::default()
+        }));
+        state.enter_confirm(
+            PendingAction::RestoreRevision {
+                gist_id: "g1".into(),
+                filename: "a.txt".into(),
+                version: "abc".into(),
+                version_label: "abc (1d ago)".into(),
+                content: "old".into(),
+            },
+            String::new(),
+        );
+        state
+            .gist_content_cache
+            .insert(("g1".into(), "a.txt".into()), "stale".into());
+
+        on_restore_revision_done(&mut state, Ok(()), "g1".into(), "a.txt".into());
+
+        assert!(state.gist_list_stale);
+        assert_eq!(state.revisions_stale.as_deref(), Some("g1"));
+        assert!(state.screen.is_revisions());
+        let rev = state.revision().unwrap();
+        assert_eq!(rev.index, 0);
+        assert!(rev.entries.is_none());
+        assert!(rev.fetch_error.is_none());
+        assert_eq!(
+            state.status.as_deref(),
+            Some("Restored a.txt from old revision (new revision created)")
+        );
+        assert!(state
+            .gist_content_cache
+            .get(&("g1".into(), "a.txt".into()))
+            .is_none());
     }
 }
