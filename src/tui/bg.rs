@@ -1143,12 +1143,6 @@ impl Jobs {
         state.set_status("Cancelled");
     }
 
-    /// Replace any in-flight gist list fetch with a new one (also sets `state.loading`).
-    pub(super) fn request_gist_fetch(&mut self, state: &mut AppState) {
-        state.loading = true;
-        self.gist = Some(spawn_gist_fetch());
-    }
-
     /// Start a local file scan stamped with a new generation.
     pub(super) fn request_local_scan(&mut self, state: &mut AppState) {
         let generation = state.begin_local_scan();
@@ -1197,7 +1191,15 @@ impl Jobs {
         self.on_local_scan_ready(state);
         self.on_update_check_ready(state, update_check_path);
         self.on_upload_watch_events(state);
-        Ok(self.on_action_outcome(state))
+        let flow = self.on_action_outcome(state);
+        if std::mem::take(&mut state.gist_list_stale) {
+            state.loading = true;
+            self.gist = Some(spawn_gist_fetch());
+        }
+        if let Some(gist_id) = state.revisions_stale.take() {
+            request_revisions(self, state, gist_id);
+        }
+        Ok(flow)
     }
 }
 
@@ -1208,6 +1210,24 @@ impl Jobs {
 /// Only covers channels that receive a single unstamped result (`gist`, `fork`, `star`,
 /// `fork_meta`, `update`). The generation-stamped channels (`local`, `action`) and the
 /// multi-message `upload_edit_watch` drain have different shapes and stay hand-rolled.
+/// Re-fetch revision history for `gist_id`. Spawned from `Jobs::absorb` when apply
+/// set `revisions_stale` (issue #383).
+fn request_revisions(jobs: &mut Jobs, state: &mut AppState, gist_id: String) {
+    jobs.spawn_action(
+        state,
+        "Loading revisions…",
+        move || {
+            let result = crate::gh::fetch_gist_commits_json(&gist_id)
+                .map_err(|e| e.to_string())
+                .and_then(|raw| {
+                    crate::gh::parse_gist_commits_json(&raw).map_err(|e| e.to_string())
+                });
+            (result, gist_id)
+        },
+        move |(result, gist_id), jobs, state| jobs.on_revisions_fetched(state, gist_id, result),
+    );
+}
+
 fn poll_channel<T>(slot: &mut Option<std::sync::mpsc::Receiver<T>>) -> Option<T> {
     let value = slot.as_ref()?.try_recv().ok()?;
     *slot = None;
@@ -1614,7 +1634,7 @@ impl Jobs {
                 // for a pin push) instead of always snapping to List.
                 state.staged_diff_gist = None;
                 state.leave();
-                self.request_gist_fetch(state);
+                state.gist_list_stale = true;
             }
             Err(error) => {
                 state.set_status(format!("upload failed: {error}"));
@@ -1643,7 +1663,7 @@ impl Jobs {
                 ));
                 state.description_input.clear();
                 state.back_to_list();
-                self.request_gist_fetch(state);
+                state.gist_list_stale = true;
             }
             Err(error) => {
                 state.set_status(format!("create failed: {error}"));
@@ -1687,7 +1707,7 @@ impl Jobs {
         match result {
             Ok(_) => {
                 state.set_status(format!("Deleted gist {gist_id}"));
-                self.request_gist_fetch(state);
+                state.gist_list_stale = true;
             }
             Err(error) => state.set_status(format!("delete failed: {error}")),
         }
@@ -1709,7 +1729,7 @@ impl Jobs {
                     .gist_content_cache
                     .remove(&(gist_id.clone(), filename.clone()));
                 state.set_status(format!("Removed {filename} from gist {gist_id}"));
-                self.request_gist_fetch(state);
+                state.gist_list_stale = true;
             }
             Err(error) => state.set_status(format!("remove failed: {error}")),
         }
@@ -1727,7 +1747,7 @@ impl Jobs {
         match result {
             Ok(_) => {
                 state.set_status(format!("Updated description for gist {gist_id}"));
-                self.request_gist_fetch(state);
+                state.gist_list_stale = true;
             }
             Err(error) => state.set_status(format!("description update failed: {error}")),
         }
@@ -1780,7 +1800,7 @@ impl Jobs {
         match result {
             Ok(_) => {
                 state.set_status(format!("Compacted \"{label}\" ({count} → 1 revision)"));
-                self.request_gist_fetch(state);
+                state.gist_list_stale = true;
             }
             Err(error) => state.set_status(format!("compact failed: {error}")),
         }
@@ -1934,7 +1954,7 @@ impl Jobs {
                     state.starred_gist_ids.remove(&gist_id);
                     state.set_status(format!("unstarred {gist_id}"));
                 }
-                self.request_gist_fetch(state);
+                state.gist_list_stale = true;
             }
             Err(error) => state.set_status(format!("star toggle failed: {error}")),
         }
@@ -1952,7 +1972,7 @@ impl Jobs {
         match result {
             Ok(()) => {
                 state.set_status(format!("forked {gist_id} into your account"));
-                self.request_gist_fetch(state);
+                state.gist_list_stale = true;
             }
             Err(error) => state.set_status(format!("fork failed: {error}")),
         }
@@ -1989,25 +2009,8 @@ impl Jobs {
                     rev.fetch_error = None;
                     rev.gist_id.clone()
                 });
-                self.request_gist_fetch(state);
-                if let Some(gist_id) = gist_id {
-                    self.spawn_action(
-                        state,
-                        "Loading revisions…",
-                        move || {
-                            let result = crate::gh::fetch_gist_commits_json(&gist_id)
-                                .map_err(|e| e.to_string())
-                                .and_then(|raw| {
-                                    crate::gh::parse_gist_commits_json(&raw)
-                                        .map_err(|e| e.to_string())
-                                });
-                            (result, gist_id)
-                        },
-                        move |(result, gist_id), jobs, state| {
-                            jobs.on_revisions_fetched(state, gist_id, result)
-                        },
-                    );
-                }
+                state.gist_list_stale = true;
+                state.revisions_stale = gist_id;
             }
             Err(error) => {
                 state.set_status(format!("restore failed: {error}"));
@@ -2551,13 +2554,9 @@ mod tests {
     // on_apply_description / on_compact_gist / on_gist_star_toggle / on_fork_gist /
     // on_restore_revision_done — Err arms only.
     //
-    // Every Ok arm of these methods ends by calling `request_gist_fetch`, which
-    // spawns a real background gist fetch (`spawn_gist_fetch`): it shells out to `gh`
-    // (`check_gh_ready` + list/starred/user-login fetches) on success. That is a live
-    // `gh`/network call this project's tests must not make, and there is no injectable
-    // seam for it (unlike `update_check_path`). `on_restore_revision_done`'s Ok arm
-    // additionally spawns a second live `gh` call via `spawn_action`. Only the
-    // side-effect-free Err arms are covered directly.
+    // Ok arms set `gist_list_stale` (and restore also `revisions_stale`); absorb
+    // consumes those into live `gh` fetches. Only the side-effect-free Err arms
+    // are covered directly here.
 
     #[test]
     fn on_upload_replace_err_sets_status() {
