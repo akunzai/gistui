@@ -972,22 +972,9 @@ mod tests {
         let mut state = initial_state();
         state.focus = FocusPane::Gist;
         state.gists = vec![GistFile {
-            gist_id: "abc123".into(),
-            description: String::new(),
-            filename: "notes.md".into(),
-            public: false,
             updated_at: "2026-01-01T00:00:00Z".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("abc123", "notes.md")
         }];
         // Removing the only file would leave a fileless gist, which GitHub forbids.
         assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);

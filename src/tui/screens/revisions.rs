@@ -586,22 +586,10 @@ mod tests {
     fn revisions_capital_f_on_single_file_gist_shows_status() {
         let mut state = initial_state();
         state.gists = vec![GistFile {
-            gist_id: "g1".into(),
             description: "solo".into(),
-            filename: "only.txt".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("g1", "only.txt")
         }];
         state.screen = Screen::Revisions(Box::default());
         revision_mut(&mut state).gist_id = Some("g1".into());

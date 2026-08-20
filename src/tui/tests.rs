@@ -90,40 +90,16 @@ pub(super) fn state_with_gists() -> AppState {
     let mut state = initial_state();
     state.gists = vec![
         GistFile {
-            gist_id: "g1".into(),
             description: "demo".into(),
-            filename: "a.txt".into(),
-            public: false,
             updated_at: "2026-06-10T00:00:00Z".into(),
             created_at: "2026-06-01T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("g1", "a.txt")
         },
         GistFile {
-            gist_id: "g1".into(),
             description: "demo".into(),
-            filename: "b.txt".into(),
-            public: false,
             updated_at: "2026-06-10T00:00:00Z".into(),
             created_at: "2026-06-01T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("g1", "b.txt")
         },
     ];
     gists_mut(&mut state).cursor.index = 0;
@@ -181,18 +157,12 @@ fn gist_file_for_diff_falls_back_to_unknown_for_an_unloaded_gist() {
 fn gist_file_for_diff_finds_a_starred_gist_too() {
     let mut state = initial_state();
     state.starred_gists = vec![GistFile {
-        gist_id: "s1".into(),
         description: "starred demo".into(),
-        filename: "notes.md".into(),
         public: true,
         updated_at: "2026-06-12T08:00:00Z".into(),
         created_at: "2026-06-01T00:00:00Z".into(),
         owner_login: "someone-else".into(),
-        fork_of_id: None,
-        raw_url: None,
-        content_type: None,
-        size: 0,
-        node_id: None,
+        ..GistFile::fixture("s1", "notes.md")
     }];
     let file = GistFileRef::id_name("s1", "notes.md");
     let resolved = state.gist_file_for_diff(&file);
@@ -252,40 +222,18 @@ pub(super) fn list_state_with_matches() -> AppState {
     ];
     state.gists = vec![
         GistFile {
-            gist_id: "a".into(),
             description: "Zed".into(),
-            filename: "settings.json".into(),
             public: true,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("a", "settings.json")
         },
         GistFile {
-            gist_id: "b".into(),
             description: "misc".into(),
-            filename: "zzz.txt".into(),
             public: true,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("b", "zzz.txt")
         },
     ];
     state.local_index = 0;
@@ -552,22 +500,11 @@ fn t_toggles_gist_view() {
 fn gist_row_label_switches_with_view() {
     let g = RankedGistFile {
         file: GistFile {
-            gist_id: "abc".into(),
             description: "My Ghostty config".into(),
-            filename: "config".into(),
             public: true,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("abc", "config")
         },
         mark: crate::ranking::MatchMark::None,
     };
@@ -629,22 +566,9 @@ fn reverse_ranking_orders_locals_by_selected_gist() {
     let mut state = initial_state();
     state.anchor = FocusPane::Gist;
     state.gists = vec![GistFile {
-        gist_id: "a".into(),
-        description: String::new(),
-        filename: "settings.json".into(),
-        public: false,
         updated_at: "x".into(),
         created_at: "x".into(),
-        owner_login: String::new(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        size: 0,
-
-        node_id: None,
+        ..GistFile::fixture("a", "settings.json")
     }];
     state.locals = vec![
         LocalCandidate {
@@ -728,22 +652,9 @@ fn ranking_helpers_terminate_in_either_anchor() {
     // anchor-driven rankings to recurse into each other.
     let mut state = initial_state();
     state.gists = vec![GistFile {
-        gist_id: "a".into(),
-        description: String::new(),
-        filename: "f".into(),
-        public: false,
         updated_at: "x".into(),
         created_at: "x".into(),
-        owner_login: String::new(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        size: 0,
-
-        node_id: None,
+        ..GistFile::fixture("a", "f")
     }];
     state.locals = vec![LocalCandidate {
         path: PathBuf::from("f"),
@@ -764,40 +675,16 @@ fn sort_by_name_and_recent_reorders_gists() {
     let mut state = initial_state();
     state.gists = vec![
         GistFile {
-            gist_id: "z".into(),
-            description: "".into(),
-            filename: "zeta.json".into(),
             public: true,
             updated_at: "2026-01-01T00:00:00Z".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("z", "zeta.json")
         },
         GistFile {
-            gist_id: "a".into(),
-            description: "".into(),
-            filename: "alpha.json".into(),
             public: true,
             updated_at: "2026-09-09T00:00:00Z".into(),
             created_at: "2026-09-09T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("a", "alpha.json")
         },
     ];
     // No local selected -> Match keeps gh list order (zeta, alpha).
@@ -816,40 +703,17 @@ fn gist_type_filter_limits_ranked_gists() {
     let mut state = initial_state();
     state.gists = vec![
         GistFile {
-            gist_id: "pub".into(),
             description: "p".into(),
-            filename: "a.json".into(),
             public: true,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("pub", "a.json")
         },
         GistFile {
-            gist_id: "sec".into(),
             description: "s".into(),
-            filename: "b.json".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("sec", "b.json")
         },
     ];
     assert_eq!(state.ranked_gists().len(), 2);
@@ -869,40 +733,17 @@ pub(super) fn state_with_two_gists() -> AppState {
     let mut state = initial_state();
     state.gists = vec![
         GistFile {
-            gist_id: "a".into(),
             description: "My Ghostty config".into(),
-            filename: "config.ghostty".into(),
             public: true,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("a", "config.ghostty")
         },
         GistFile {
-            gist_id: "b".into(),
             description: "SSH config".into(),
-            filename: "ssh_config".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("b", "ssh_config")
         },
     ];
     state.focus = FocusPane::Gist;
@@ -1329,22 +1170,11 @@ fn marked_row_text_uses_match_mark_pin_prefix() {
 fn gist_row_label_falls_back_to_filename_when_description_empty() {
     let g = RankedGistFile {
         file: GistFile {
-            gist_id: "abc".into(),
             description: "  ".into(),
-            filename: "config".into(),
             public: true,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("abc", "config")
         },
         mark: crate::ranking::MatchMark::None,
     };
@@ -1355,22 +1185,10 @@ fn gist_row_label_falls_back_to_filename_when_description_empty() {
 fn left_right_scrolls_focused_gist_pane() {
     let mut state = initial_state();
     state.gists = vec![GistFile {
-        gist_id: "a".into(),
         description: "a fairly long description for scrolling".into(),
-        filename: "f.json".into(),
-        public: false,
         updated_at: "x".into(),
         created_at: "x".into(),
-        owner_login: String::new(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        size: 0,
-
-        node_id: None,
+        ..GistFile::fixture("a", "f.json")
     }];
     state.focus = FocusPane::Gist;
     assert_eq!(state.gist_hscroll, 0);
@@ -1387,22 +1205,10 @@ fn left_right_scrolls_focused_gist_pane() {
 fn gist_hscroll_caps_at_painted_row() {
     let mut state = initial_state();
     state.gists = vec![GistFile {
-        gist_id: "a".into(),
         description: "tiny".into(),
-        filename: "f".into(),
-        public: false,
         updated_at: "x".into(),
         created_at: "x".into(),
-        owner_login: String::new(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        size: 0,
-
-        node_id: None,
+        ..GistFile::fixture("a", "f")
     }];
     state.focus = FocusPane::Gist;
     // Cap must use the painted display string (star / pin prefixes included), not the
@@ -1425,32 +1231,16 @@ fn gist_hscroll_follows_the_selected_row() {
     state.gist_sort = GistSort::Name;
     state.gists = vec![
         GistFile {
-            gist_id: "short".into(),
             description: "ab".into(),
-            filename: "a.txt".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-            raw_url: None,
-            content_type: None,
-            size: 0,
-            node_id: None,
+            ..GistFile::fixture("short", "a.txt")
         },
         GistFile {
-            gist_id: "long".into(),
             description: "a fairly long description for scrolling".into(),
-            filename: "b.txt".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-            raw_url: None,
-            content_type: None,
-            size: 0,
-            node_id: None,
+            ..GistFile::fixture("long", "b.txt")
         },
     ];
     state.focus = FocusPane::Gist;
@@ -1525,18 +1315,10 @@ fn local_hscroll_caps_at_selected_row_not_the_longest() {
 fn gist_hscroll_caps_include_star_prefix() {
     let mut state = initial_state();
     state.gists = vec![GistFile {
-        gist_id: "starred-id".into(),
         description: "tiny".into(),
-        filename: "f".into(),
-        public: false,
         updated_at: "x".into(),
         created_at: "x".into(),
-        owner_login: String::new(),
-        fork_of_id: None,
-        raw_url: None,
-        content_type: None,
-        size: 0,
-        node_id: None,
+        ..GistFile::fixture("starred-id", "f")
     }];
     state.starred_gist_ids.insert("starred-id".into());
     state.focus = FocusPane::Gist;
@@ -1577,40 +1359,16 @@ fn moving_gist_selection_resets_hscroll() {
     let mut state = initial_state();
     state.gists = vec![
         GistFile {
-            gist_id: "a".into(),
             description: "first long description here".into(),
-            filename: "a.json".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("a", "a.json")
         },
         GistFile {
-            gist_id: "b".into(),
             description: "second long description here".into(),
-            filename: "b.json".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("b", "b.json")
         },
     ];
     state.focus = FocusPane::Gist;
@@ -1631,40 +1389,16 @@ fn no_local_selected_lists_all_gists_unranked() {
     let mut state = initial_state();
     state.gists = vec![
         GistFile {
-            gist_id: "a".into(),
             description: "first".into(),
-            filename: "alpha.json".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("a", "alpha.json")
         },
         GistFile {
-            gist_id: "b".into(),
             description: "second".into(),
-            filename: "beta.json".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("b", "beta.json")
         },
     ];
     let ranked = state.ranked_gists();
@@ -1678,22 +1412,10 @@ fn no_local_selected_lists_all_gists_unranked() {
 fn enter_with_no_local_but_gist_selected_returns_preview() {
     let mut state = initial_state();
     state.gists = vec![GistFile {
-        gist_id: "a".into(),
         description: "first".into(),
-        filename: "alpha.json".into(),
-        public: false,
         updated_at: "x".into(),
         created_at: "x".into(),
-        owner_login: String::new(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        size: 0,
-
-        node_id: None,
+        ..GistFile::fixture("a", "alpha.json")
     }];
     state.focus = FocusPane::Gist;
     assert!(state.locals.is_empty());
@@ -1720,40 +1442,16 @@ fn local_selection_changes_ranked_gists() {
     ];
     state.gists = vec![
         GistFile {
-            gist_id: "a".into(),
             description: "settings".into(),
-            filename: "settings.json".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("a", "settings.json")
         },
         GistFile {
-            gist_id: "b".into(),
             description: "status".into(),
-            filename: "statusline.sh".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("b", "statusline.sh")
         },
     ];
 
@@ -1784,32 +1482,16 @@ fn selected_accessors_track_recomputed_lists_with_no_cache() {
     ];
     state.gists = vec![
         GistFile {
-            gist_id: "a".into(),
             description: "settings".into(),
-            filename: "settings.json".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-            raw_url: None,
-            content_type: None,
-            size: 0,
-            node_id: None,
+            ..GistFile::fixture("a", "settings.json")
         },
         GistFile {
-            gist_id: "b".into(),
             description: "status".into(),
-            filename: "statusline.sh".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-            raw_url: None,
-            content_type: None,
-            size: 0,
-            node_id: None,
+            ..GistFile::fixture("b", "statusline.sh")
         },
     ];
 
@@ -1874,32 +1556,16 @@ fn list_pane_snapshots_match_public_accessors() {
     ];
     state.gists = vec![
         GistFile {
-            gist_id: "a".into(),
             description: "settings".into(),
-            filename: "settings.json".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-            raw_url: None,
-            content_type: None,
-            size: 0,
-            node_id: None,
+            ..GistFile::fixture("a", "settings.json")
         },
         GistFile {
-            gist_id: "b".into(),
             description: "status".into(),
-            filename: "statusline.sh".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-            raw_url: None,
-            content_type: None,
-            size: 0,
-            node_id: None,
+            ..GistFile::fixture("b", "statusline.sh")
         },
     ];
 
@@ -1961,22 +1627,10 @@ fn state_with_selection() -> AppState {
         modified: None,
     }];
     state.gists = vec![GistFile {
-        gist_id: "a".into(),
         description: "settings".into(),
-        filename: "settings.json".into(),
-        public: false,
         updated_at: "x".into(),
         created_at: "x".into(),
-        owner_login: String::new(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        size: 0,
-
-        node_id: None,
+        ..GistFile::fixture("a", "settings.json")
     }];
     state.focus = FocusPane::Gist;
     state
@@ -2313,22 +1967,10 @@ fn u_adds_when_gist_lacks_filename() {
         modified: None,
     }];
     state.gists = vec![GistFile {
-        gist_id: "a".into(),
         description: "x".into(),
-        filename: "settings.json".into(),
-        public: false,
         updated_at: "x".into(),
         created_at: "x".into(),
-        owner_login: String::new(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        size: 0,
-
-        node_id: None,
+        ..GistFile::fixture("a", "settings.json")
     }];
     state.focus = FocusPane::Gist;
     assert!(matches!(
@@ -2346,22 +1988,10 @@ fn u_previews_when_gist_has_same_filename() {
         modified: None,
     }];
     state.gists = vec![GistFile {
-        gist_id: "a".into(),
         description: "x".into(),
-        filename: "settings.json".into(),
-        public: false,
         updated_at: "x".into(),
         created_at: "x".into(),
-        owner_login: String::new(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        size: 0,
-
-        node_id: None,
+        ..GistFile::fixture("a", "settings.json")
     }];
     state.focus = FocusPane::Gist;
     assert!(matches!(
@@ -2675,40 +2305,16 @@ fn x_removes_selected_file_from_a_multifile_gist() {
     state.focus = FocusPane::Gist;
     state.gists = vec![
         GistFile {
-            gist_id: "abc123".into(),
             description: "my notes".into(),
-            filename: "a.md".into(),
-            public: false,
             updated_at: "2026-01-01T00:00:00Z".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("abc123", "a.md")
         },
         GistFile {
-            gist_id: "abc123".into(),
             description: "my notes".into(),
-            filename: "b.md".into(),
-            public: false,
             updated_at: "2026-01-01T00:00:00Z".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("abc123", "b.md")
         },
     ];
     // X stages a single-file removal (not a whole-gist delete) and asks to confirm.
@@ -3141,24 +2747,7 @@ fn list_screen_capital_s_syncs_selected_pair() {
         pinned: true,
         modified: None,
     }];
-    state.gists = vec![GistFile {
-        gist_id: "g1".into(),
-        description: String::new(),
-        filename: "a.txt".into(),
-        public: false,
-        updated_at: String::new(),
-        created_at: String::new(),
-        owner_login: String::new(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        size: 0,
-
-        node_id: None,
-    }];
+    state.gists = vec![GistFile::fixture("g1", "a.txt")];
     assert!(matches!(
         state.handle_key(KeyCode::Char('S')),
         KeyOutcome::SyncSelectedPair { .. }
@@ -3402,18 +2991,12 @@ fn gist_info_line_shows_counts_when_nonzero() {
 #[test]
 fn gist_filenames_dedupes_owned_gist_that_is_also_starred() {
     let make = |filename: &str| GistFile {
-        gist_id: "g1".into(),
         description: "My ZSH profile".into(),
-        filename: filename.into(),
         public: true,
         updated_at: "2026-06-10T00:00:00Z".into(),
         created_at: "2020-01-01T00:00:00Z".into(),
         owner_login: "akunzai".into(),
-        fork_of_id: None,
-        raw_url: None,
-        content_type: None,
-        size: 0,
-        node_id: None,
+        ..GistFile::fixture("g1", filename)
     };
     let mut state = initial_state();
     state.gists = vec![make(".zprofile"), make(".zshenv"), make(".zshrc")];
@@ -3750,7 +3333,7 @@ fn pin_sync_status_is_missing_when_local_file_absent() {
     }];
     state.gists = vec![GistFile {
         updated_at: "2026-01-01T00:00:00Z".into(),
-        ..GistFile::for_sync("g1".into(), "settings.json".into(), None)
+        ..GistFile::fixture("g1", "settings.json")
     }];
 
     assert_eq!(
@@ -3788,7 +3371,7 @@ fn pin_sync_status_upgrades_to_in_sync_when_content_hash_matches_baseline() {
         // Far in the past, so the just-written local file (mtime ~ now) reads as newer —
         // sync_status(Some(local_ts), Some(remote_ts)) would normally resolve to Push.
         updated_at: "2020-01-01T00:00:00Z".into(),
-        ..GistFile::for_sync("g1".into(), "settings.json".into(), None)
+        ..GistFile::fixture("g1", "settings.json")
     }];
 
     assert_eq!(
@@ -3820,7 +3403,7 @@ fn pin_sync_status_keeps_push_when_content_hash_does_not_match_baseline() {
     }];
     state.gists = vec![GistFile {
         updated_at: "2020-01-01T00:00:00Z".into(),
-        ..GistFile::for_sync("g1".into(), "settings.json".into(), None)
+        ..GistFile::fixture("g1", "settings.json")
     }];
 
     assert_eq!(
@@ -3852,7 +3435,7 @@ fn pin_sync_status_keeps_push_when_no_baseline_hash_recorded() {
     }];
     state.gists = vec![GistFile {
         updated_at: "2020-01-01T00:00:00Z".into(),
-        ..GistFile::for_sync("g1".into(), "settings.json".into(), None)
+        ..GistFile::fixture("g1", "settings.json")
     }];
 
     state.refresh_pin_sync_cache();
@@ -3867,40 +3450,21 @@ fn forked_filter_shows_only_forks() {
     let mut state = initial_state();
     state.gists = vec![
         GistFile {
-            gist_id: "owned".into(),
             description: "mine".into(),
-            filename: "a.txt".into(),
             public: true,
             updated_at: "x".into(),
             created_at: "x".into(),
             owner_login: "me".into(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("owned", "a.txt")
         },
         GistFile {
-            gist_id: "forked".into(),
             description: "fork".into(),
-            filename: "b.txt".into(),
             public: true,
             updated_at: "x".into(),
             created_at: "x".into(),
             owner_login: "me".into(),
             fork_of_id: Some("upstream".into()),
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("forked", "b.txt")
         },
     ];
     state.current_user_login = Some("me".into());
@@ -3923,22 +3487,12 @@ fn foreign_gist_blocks_pin() {
         modified: None,
     }];
     state.gists = vec![GistFile {
-        gist_id: "foreign".into(),
         description: "x".into(),
-        filename: "a.txt".into(),
         public: true,
         updated_at: "x".into(),
         created_at: "x".into(),
         owner_login: "other".into(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        size: 0,
-
-        node_id: None,
+        ..GistFile::fixture("foreign", "a.txt")
     }];
     state.local_index = 0;
     state.gist_index = 0;
@@ -3950,22 +3504,11 @@ fn foreign_gist_blocks_pin() {
 fn star_key_returns_toggle_intent() {
     let mut state = initial_state();
     state.gists = vec![GistFile {
-        gist_id: "g1".into(),
         description: "x".into(),
-        filename: "a.txt".into(),
         public: true,
         updated_at: "x".into(),
         created_at: "x".into(),
-        owner_login: String::new(),
-        fork_of_id: None,
-
-        raw_url: None,
-
-        content_type: None,
-
-        size: 0,
-
-        node_id: None,
+        ..GistFile::fixture("g1", "a.txt")
     }];
     state.gist_index = 0;
     assert!(matches!(
@@ -3980,32 +3523,20 @@ fn starred_filter_lists_only_starred_gists() {
     // owned list — exercises the owned/starred source switch with data on both sides.
     let mut state = initial_state();
     state.gists = vec![GistFile {
-        gist_id: "owned".into(),
         description: "mine".into(),
-        filename: "a.txt".into(),
         public: true,
         updated_at: "x".into(),
         created_at: "x".into(),
         owner_login: "me".into(),
-        fork_of_id: None,
-        raw_url: None,
-        content_type: None,
-        size: 0,
-        node_id: None,
+        ..GistFile::fixture("owned", "a.txt")
     }];
     state.starred_gists = vec![GistFile {
-        gist_id: "starred".into(),
         description: "theirs".into(),
-        filename: "b.txt".into(),
         public: true,
         updated_at: "x".into(),
         created_at: "x".into(),
         owner_login: "other".into(),
-        fork_of_id: None,
-        raw_url: None,
-        content_type: None,
-        size: 0,
-        node_id: None,
+        ..GistFile::fixture("starred", "b.txt")
     }];
     state.gist_type_filter = GistTypeFilter::Starred;
 

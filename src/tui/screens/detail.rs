@@ -967,22 +967,10 @@ mod tests {
         let mut state = initial_state();
         state.gists = (0..n)
             .map(|i| GistFile {
-                gist_id: "g1".into(),
                 description: "demo".into(),
-                filename: format!("f{i}.txt"),
-                public: false,
                 updated_at: "2026-06-10T00:00:00Z".into(),
                 created_at: "2026-06-01T00:00:00Z".into(),
-                owner_login: String::new(),
-                fork_of_id: None,
-
-                raw_url: None,
-
-                content_type: None,
-
-                size: 0,
-
-                node_id: None,
+                ..GistFile::fixture("g1", format!("f{i}.txt"))
             })
             .collect();
         state
@@ -1254,22 +1242,12 @@ mod tests {
         state.screen = Screen::GistDetail(Box::default());
         detail_mut(&mut state).gist_id = Some("foreign".into());
         state.starred_gists = vec![GistFile {
-            gist_id: "foreign".into(),
             description: "x".into(),
-            filename: "a.txt".into(),
             public: true,
             updated_at: "x".into(),
             created_at: "x".into(),
             owner_login: "other".into(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("foreign", "a.txt")
         }];
         assert!(matches!(
             state.handle_key(KeyCode::Char('F')),
@@ -1284,22 +1262,12 @@ mod tests {
         state.screen = Screen::GistDetail(Box::default());
         detail_mut(&mut state).gist_id = Some("mine".into());
         state.gists = vec![GistFile {
-            gist_id: "mine".into(),
             description: "x".into(),
-            filename: "a.txt".into(),
             public: true,
             updated_at: "x".into(),
             created_at: "x".into(),
             owner_login: "me".into(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("mine", "a.txt")
         }];
         assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::None);
         assert!(state.status.as_ref().unwrap().contains("already yours"));
@@ -1312,18 +1280,12 @@ mod tests {
         state.screen = Screen::GistDetail(Box::default());
         detail_mut(&mut state).gist_id = Some("foreign".into());
         state.starred_gists = vec![GistFile {
-            gist_id: "foreign".into(),
             description: "x".into(),
-            filename: "a.txt".into(),
             public: true,
             updated_at: "x".into(),
             created_at: "x".into(),
             owner_login: "other".into(),
-            fork_of_id: None,
-            raw_url: None,
-            content_type: None,
-            size: 0,
-            node_id: None,
+            ..GistFile::fixture("foreign", "a.txt")
         }];
         assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::None);
         assert_eq!(state.handle_key(KeyCode::Char('c')), KeyOutcome::None);
@@ -1434,7 +1396,7 @@ mod tests {
         let mut state = initial_state();
         state.screen = Screen::GistDetail(Box::default());
         detail_mut(&mut state).gist_id = Some("g1".into());
-        state.gists = vec![GistFile::for_sync("g1".into(), "a.txt".into(), None)];
+        state.gists = vec![GistFile::fixture("g1", "a.txt")];
         detail_mut(&mut state).comments = Some(comments);
         detail_mut(&mut state).comments_loaded_oldest_page = 1;
         let detail = build_gist_detail_vm(&state);
