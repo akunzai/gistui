@@ -4,6 +4,7 @@
 
 use super::bg::*;
 use super::*;
+use crate::actions::SystemRunner;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 
@@ -117,6 +118,7 @@ pub(super) fn dispatch_outcome(
                 "Loading older comments…",
                 move || {
                     let result = crate::gh::fetch_gist_comments_page(
+                        &SystemRunner,
                         &fetch_id,
                         page,
                         crate::gh::COMMENTS_PAGE_SIZE,

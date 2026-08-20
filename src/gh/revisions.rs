@@ -1,7 +1,7 @@
 //! Gist revision history and per-revision file fetch/parse (issue #301).
 
 use super::{raw_url_fetch_plan, GhCommentUser};
-use crate::actions::{run_command, CommandPlan, CommandRunner, SystemRunner};
+use crate::actions::{run_command, CommandPlan, CommandRunner};
 use crate::domain::{GistRevision, GistRevisionChangeStatus};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -26,15 +26,11 @@ pub fn gist_revision_plan(gist_id: &str, version: &str) -> CommandPlan {
     }
 }
 
-pub fn fetch_gist_commits_json(gist_id: &str) -> Result<String> {
-    fetch_gist_commits_json_with(&SystemRunner, gist_id)
-}
-
-pub fn fetch_gist_commits_json_with(runner: &dyn CommandRunner, gist_id: &str) -> Result<String> {
+pub fn fetch_gist_commits_json(runner: &dyn CommandRunner, gist_id: &str) -> Result<String> {
     run_command(runner, &gist_commits_plan(gist_id))
 }
 
-pub fn fetch_gist_revision_json_with(
+pub fn fetch_gist_revision_json(
     runner: &dyn CommandRunner,
     gist_id: &str,
     version: &str,
@@ -88,7 +84,7 @@ fn fetch_revision_file_via_raw_url(
 /// Fetch one file at a gist revision SHA. Uses the revision API when it works; on HTTP
 /// failures or truncated payloads, falls back to the revision `raw_url` or the canonical
 /// `gist.githubusercontent.com/.../raw/{sha}/{file}` URL.
-pub fn fetch_revision_file_with(
+pub fn fetch_revision_file(
     runner: &dyn CommandRunner,
     gist_id: &str,
     version: &str,
@@ -96,7 +92,7 @@ pub fn fetch_revision_file_with(
     owner_login: &str,
 ) -> Result<RevisionFileContent> {
     let constructed = build_gist_revision_raw_url(owner_login, gist_id, version, filename);
-    match fetch_gist_revision_json_with(runner, gist_id, version) {
+    match fetch_gist_revision_json(runner, gist_id, version) {
         Ok(raw) => {
             let root: serde_json::Value =
                 serde_json::from_str(&raw).context("parse gh gist revision JSON")?;
@@ -123,22 +119,13 @@ pub fn fetch_revision_file_with(
 }
 
 pub fn fetch_revision_file_text(
-    gist_id: &str,
-    version: &str,
-    filename: &str,
-    owner_login: &str,
-) -> Result<String> {
-    fetch_revision_file_text_with(&SystemRunner, gist_id, version, filename, owner_login)
-}
-
-pub fn fetch_revision_file_text_with(
     runner: &dyn CommandRunner,
     gist_id: &str,
     version: &str,
     filename: &str,
     owner_login: &str,
 ) -> Result<String> {
-    match fetch_revision_file_with(runner, gist_id, version, filename, owner_login)? {
+    match fetch_revision_file(runner, gist_id, version, filename, owner_login)? {
         RevisionFileContent::Present(content) => Ok(content),
         RevisionFileContent::Truncated => {
             bail!("file too large for API preview (>1 MB)")
@@ -148,22 +135,13 @@ pub fn fetch_revision_file_text_with(
 }
 
 pub fn fetch_revision_file_text_optional(
-    gist_id: &str,
-    version: &str,
-    filename: &str,
-    owner_login: &str,
-) -> Result<String> {
-    fetch_revision_file_text_optional_with(&SystemRunner, gist_id, version, filename, owner_login)
-}
-
-pub fn fetch_revision_file_text_optional_with(
     runner: &dyn CommandRunner,
     gist_id: &str,
     version: &str,
     filename: &str,
     owner_login: &str,
 ) -> Result<String> {
-    match fetch_revision_file_with(runner, gist_id, version, filename, owner_login)? {
+    match fetch_revision_file(runner, gist_id, version, filename, owner_login)? {
         RevisionFileContent::Present(content) => Ok(content),
         RevisionFileContent::Truncated => bail!("file too large for API preview (>1 MB)"),
         RevisionFileContent::Absent => Ok(String::new()),
@@ -312,7 +290,7 @@ mod tests {
             },
         ]);
 
-        let content = fetch_revision_file_with(&runner, "g1", "sha1", "f.md", "karpathy").unwrap();
+        let content = fetch_revision_file(&runner, "g1", "sha1", "f.md", "karpathy").unwrap();
         assert_eq!(
             content,
             RevisionFileContent::Present("revision body".into())

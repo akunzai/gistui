@@ -12,10 +12,9 @@ use std::path::PathBuf;
 use gistui::actions::{run_command, upload_command, CommandOutput, CommandPlan, CommandRunner};
 use gistui::domain::GistFile;
 use gistui::gh::{
-    auth_status_plan, check_gh_ready_with, fetch_gist_comments_page_with,
-    fetch_gist_file_content_with, fetch_gist_list_json_with, gh_version_plan,
-    gist_comments_page_plan, gist_list_plan, gist_view_plan, parse_gist_comments_json,
-    parse_gist_list_json,
+    auth_status_plan, check_gh_ready, fetch_gist_comments_page, fetch_gist_file_content,
+    fetch_gist_list_json, gh_version_plan, gist_comments_page_plan, gist_list_plan, gist_view_plan,
+    parse_gist_comments_json, parse_gist_list_json,
 };
 
 /// A scripted runner: returns queued outputs in order and records every plan it
@@ -68,7 +67,7 @@ const GIST_COMMENTS_JSON: &str = include_str!("fixtures/gh/gist-comments.json");
 fn fetch_and_parse_gist_list_via_fake_runner() {
     let runner = FakeRunner::new(vec![FakeRunner::ok(GIST_LIST_JSON)]);
 
-    let raw = fetch_gist_list_json_with(&runner).unwrap();
+    let raw = fetch_gist_list_json(&runner).unwrap();
     let files = parse_gist_list_json(&raw).unwrap();
 
     assert_eq!(files.len(), 3);
@@ -79,7 +78,7 @@ fn fetch_and_parse_gist_list_via_fake_runner() {
 fn fetch_gist_list_surfaces_stderr_on_failure() {
     let runner = FakeRunner::new(vec![FakeRunner::fail("HTTP 401: Bad credentials")]);
 
-    let err = fetch_gist_list_json_with(&runner).unwrap_err();
+    let err = fetch_gist_list_json(&runner).unwrap_err();
     assert!(err.to_string().contains("Bad credentials"));
 }
 
@@ -87,7 +86,7 @@ fn fetch_gist_list_surfaces_stderr_on_failure() {
 fn fetch_gist_file_content_returns_stdout_and_plans_view() {
     let runner = FakeRunner::new(vec![FakeRunner::ok("hello = true\n")]);
 
-    let content = fetch_gist_file_content_with(&runner, "abc123", "config.toml", None).unwrap();
+    let content = fetch_gist_file_content(&runner, "abc123", "config.toml", None).unwrap();
 
     assert_eq!(content, "hello = true\n");
     assert_eq!(
@@ -100,7 +99,7 @@ fn fetch_gist_file_content_returns_stdout_and_plans_view() {
 fn fetch_gist_file_content_surfaces_stderr_on_failure() {
     let runner = FakeRunner::new(vec![FakeRunner::fail("could not find gist")]);
 
-    let err = fetch_gist_file_content_with(&runner, "missing", "x", None).unwrap_err();
+    let err = fetch_gist_file_content(&runner, "missing", "x", None).unwrap_err();
     assert!(err.to_string().contains("could not find gist"));
 }
 
@@ -108,7 +107,7 @@ fn fetch_gist_file_content_surfaces_stderr_on_failure() {
 fn check_gh_ready_passes_when_version_and_auth_succeed() {
     let runner = FakeRunner::new(vec![FakeRunner::ok(""), FakeRunner::ok("")]);
 
-    assert!(check_gh_ready_with(&runner).is_ok());
+    assert!(check_gh_ready(&runner).is_ok());
 
     let calls = runner.calls.borrow();
     assert_eq!(calls[0], gh_version_plan());
@@ -119,7 +118,7 @@ fn check_gh_ready_passes_when_version_and_auth_succeed() {
 fn check_gh_ready_fails_when_gh_missing() {
     let runner = FakeRunner::new(vec![FakeRunner::fail("command not found")]);
 
-    let err = check_gh_ready_with(&runner).unwrap_err();
+    let err = check_gh_ready(&runner).unwrap_err();
     assert!(err.to_string().contains("did not run successfully"));
     // Auth is never probed once the version check fails.
     assert_eq!(runner.calls.borrow().len(), 1);
@@ -129,7 +128,7 @@ fn check_gh_ready_fails_when_gh_missing() {
 fn check_gh_ready_fails_when_unauthenticated() {
     let runner = FakeRunner::new(vec![FakeRunner::ok(""), FakeRunner::fail("not logged in")]);
 
-    let err = check_gh_ready_with(&runner).unwrap_err();
+    let err = check_gh_ready(&runner).unwrap_err();
     assert!(err.to_string().contains("gh auth login"));
 }
 
@@ -171,7 +170,7 @@ fn run_command_surfaces_stderr_on_failure() {
 fn fetch_and_parse_gist_comments_via_fake_runner() {
     let runner = FakeRunner::new(vec![FakeRunner::ok(GIST_COMMENTS_JSON)]);
 
-    let raw = fetch_gist_comments_page_with(&runner, "abc123", 1, 30).unwrap();
+    let raw = fetch_gist_comments_page(&runner, "abc123", 1, 30).unwrap();
     let comments = parse_gist_comments_json(&raw).unwrap();
 
     assert_eq!(comments.len(), 3);
@@ -191,7 +190,7 @@ fn fetch_and_parse_gist_comments_via_fake_runner() {
 fn fetch_gist_comments_surfaces_stderr_on_failure() {
     let runner = FakeRunner::new(vec![FakeRunner::fail("HTTP 404: Not Found")]);
 
-    let err = fetch_gist_comments_page_with(&runner, "missing", 1, 30).unwrap_err();
+    let err = fetch_gist_comments_page(&runner, "missing", 1, 30).unwrap_err();
     assert!(err.to_string().contains("Not Found"));
 }
 

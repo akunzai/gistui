@@ -1,7 +1,7 @@
 //! Gist fork counts, fork-flag detection, and fork_of resolution (issue #301).
 
 use super::{escape_graphql_string, parse_gh_gists, GhGist};
-use crate::actions::{run_command, CommandPlan, CommandRunner, SystemRunner};
+use crate::actions::{run_command, CommandPlan, CommandRunner};
 use crate::domain::GistFile;
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -29,7 +29,7 @@ pub fn gist_forks_plan(gist_id: &str) -> CommandPlan {
     }
 }
 
-pub fn fetch_gist_fork_count_with(runner: &dyn CommandRunner, gist_id: &str) -> Result<u32> {
+pub fn fetch_gist_fork_count(runner: &dyn CommandRunner, gist_id: &str) -> Result<u32> {
     let raw = run_command(runner, &gist_forks_plan(gist_id))?;
     let forks: Vec<serde_json::Value> = serde_json::from_str(&raw).context("parse gist forks")?;
     Ok(forks.len() as u32)
@@ -39,7 +39,7 @@ pub fn fetch_gist_fork_count_with(runner: &dyn CommandRunner, gist_id: &str) -> 
 /// One page of the viewer's gists with their `isFork` flag. Accounts with >100 gists need
 /// pagination: `after` carries the previous page's `endCursor` (escaped, since it is opaque
 /// API text), and the response's `pageInfo` drives the loop in
-/// [`fetch_forked_gist_ids_graphql_with`].
+/// [`fetch_forked_gist_ids_graphql`].
 fn gist_fork_flags_graphql_query(after: Option<&str>) -> String {
     let connection = match after {
         Some(cursor) => format!(
@@ -74,7 +74,7 @@ pub fn gist_detail_plan(gist_id: &str) -> CommandPlan {
     }
 }
 
-pub fn fetch_forked_gist_ids_graphql_with(runner: &dyn CommandRunner) -> Result<HashSet<String>> {
+pub fn fetch_forked_gist_ids_graphql(runner: &dyn CommandRunner) -> Result<HashSet<String>> {
     let mut all = HashSet::new();
     let mut after: Option<String> = None;
     loop {
@@ -149,15 +149,12 @@ fn parse_fork_flags_page(raw: &str) -> Result<(HashSet<String>, Option<String>)>
 }
 
 /// Owned gist ids flagged as forks by a single GraphQL viewer page (the cursor is dropped).
-/// Pagination is handled by [`fetch_forked_gist_ids_graphql_with`].
+/// Pagination is handled by [`fetch_forked_gist_ids_graphql`].
 pub fn parse_forked_gist_ids_graphql(raw: &str) -> Result<HashSet<String>> {
     parse_fork_flags_page(raw).map(|(ids, _)| ids)
 }
 
-pub fn fetch_gist_fork_of_id_with(
-    runner: &dyn CommandRunner,
-    gist_id: &str,
-) -> Result<Option<String>> {
+pub fn fetch_gist_fork_of_id(runner: &dyn CommandRunner, gist_id: &str) -> Result<Option<String>> {
     let raw = run_command(runner, &gist_detail_plan(gist_id))?;
     let gist: GhGist = serde_json::from_str(&raw).context("parse gh gist detail JSON")?;
     Ok(gist.fork_of.map(|f| f.id))
@@ -166,23 +163,16 @@ pub fn fetch_gist_fork_of_id_with(
 /// Map owned gist id → upstream `fork_of` id. Uses GraphQL `isFork` (one call) then
 /// `GET /gists/{id}` only for the handful of owned forks (list JSON omits `fork_of`).
 pub fn collect_owned_fork_of_ids(
-    owned_ids: HashSet<String>,
-) -> Result<HashMap<String, Option<String>>, String> {
-    collect_owned_fork_of_ids_with(&SystemRunner, owned_ids)
-}
-
-/// Injectable variant of [`collect_owned_fork_of_ids`] (issue #245).
-pub fn collect_owned_fork_of_ids_with(
     runner: &dyn CommandRunner,
     owned_ids: HashSet<String>,
 ) -> Result<HashMap<String, Option<String>>, String> {
     // Surface a failure of the single fork-detection query — a transient error or expired
     // token would otherwise leave every owned fork undetected with no hint why the `forked`
     // filter is empty. Per-gist `fork_of` lookups stay best-effort (one bad gist is skipped).
-    let fork_ids = fetch_forked_gist_ids_graphql_with(runner).map_err(|e| e.to_string())?;
+    let fork_ids = fetch_forked_gist_ids_graphql(runner).map_err(|e| e.to_string())?;
     let mut out = HashMap::new();
     for id in fork_ids.intersection(&owned_ids) {
-        if let Ok(fork_of) = fetch_gist_fork_of_id_with(runner, id) {
+        if let Ok(fork_of) = fetch_gist_fork_of_id(runner, id) {
             out.insert(id.clone(), fork_of);
         }
     }
@@ -201,15 +191,6 @@ pub fn apply_fork_of_ids(gists: &mut [GistFile], fork_of: &HashMap<String, Optio
 /// Fill fork counts. List JSON usually omits `forks`, so each id is probed via
 /// `/gists/{id}/forks` when the parsed count is zero. Merges owned and starred list JSON.
 pub fn collect_gist_fork_counts(
-    owned_raw: Option<&str>,
-    starred_raw: Option<&str>,
-    gist_ids: impl IntoIterator<Item = String>,
-) -> HashMap<String, u32> {
-    collect_gist_fork_counts_with(&SystemRunner, owned_raw, starred_raw, gist_ids)
-}
-
-/// Injectable variant of [`collect_gist_fork_counts`] (issue #245).
-pub fn collect_gist_fork_counts_with(
     runner: &dyn CommandRunner,
     owned_raw: Option<&str>,
     starred_raw: Option<&str>,
@@ -227,7 +208,7 @@ pub fn collect_gist_fork_counts_with(
         if counts.get(&id).copied().unwrap_or(0) > 0 {
             continue;
         }
-        if let Ok(n) = fetch_gist_fork_count_with(runner, &id) {
+        if let Ok(n) = fetch_gist_fork_count(runner, &id) {
             if n > 0 {
                 counts.insert(id, n);
             }
@@ -340,7 +321,7 @@ mod tests {
                 stderr: String::new(),
             },
         ]);
-        let counts = collect_gist_fork_counts_with(
+        let counts = collect_gist_fork_counts(
             &runner,
             Some(list_raw),
             None,
@@ -387,7 +368,7 @@ mod tests {
             },
         ]);
         let owned = HashSet::from(["g1".into(), "g2".into(), "g3".into()]);
-        let map = collect_owned_fork_of_ids_with(&runner, owned).unwrap();
+        let map = collect_owned_fork_of_ids(&runner, owned).unwrap();
         assert_eq!(map.get("g1").cloned(), Some(Some("upstream1".into())));
         assert!(!map.contains_key("g2"));
         assert!(!map.contains_key("g3"));
@@ -406,8 +387,7 @@ mod tests {
             stdout: String::new(),
             stderr: "HTTP 401".into(),
         }]);
-        let err =
-            collect_owned_fork_of_ids_with(&runner, HashSet::from(["g1".into()])).unwrap_err();
+        let err = collect_owned_fork_of_ids(&runner, HashSet::from(["g1".into()])).unwrap_err();
         assert!(err.contains("401") || err.contains("HTTP"));
     }
 }
