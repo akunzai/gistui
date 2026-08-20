@@ -22,10 +22,12 @@ pub(super) fn dispatch_outcome(
             target,
             upload_orientation,
         } => {
-            // List-originated diff returns to List on Esc.
-            state.pending_return = Some(Screen::List);
-            let gist = state.gist_file_for_diff(&file);
-            let (local_label, gist_label) = diff_labels(local_path.as_deref(), &gist);
+            let (file, local_label, gist_label) = screens::diff::stage_preview_diff(
+                state,
+                local_path.clone(),
+                file,
+                Some(Screen::List),
+            );
 
             jobs.spawn_gist_fetch_action(
                 state,
@@ -53,8 +55,8 @@ pub(super) fn dispatch_outcome(
             }
         }
         KeyOutcome::DownloadGist { file, target } => {
-            let gist = state.gist_file_for_diff(&file);
-            let (local_label, gist_label) = diff_labels(Some(&target), &gist);
+            let (file, local_label, gist_label) =
+                screens::diff::stage_download_gist(state, target.clone(), file);
 
             jobs.spawn_gist_fetch_action(
                 state,
@@ -83,16 +85,9 @@ pub(super) fn dispatch_outcome(
             state.reset_comment_pagination();
         }
         KeyOutcome::FetchComments { gist_id } => {
-            if state
-                .detail()
-                .is_some_and(|d| d.comments.is_some() || d.comments_loading)
-            {
+            let Some(fetch_id) = screens::detail::stage_fetch_comments(state, gist_id) else {
                 return Ok(LoopFlow::Proceed);
-            }
-            if let Some(d) = state.detail_mut() {
-                d.comments_loading = true;
-            }
-            let fetch_id = gist_id.clone();
+            };
             jobs.spawn_action(
                 state,
                 "Loading comments…",
@@ -106,13 +101,10 @@ pub(super) fn dispatch_outcome(
             );
         }
         KeyOutcome::LoadOlderComments { gist_id, page } => {
-            if page == 0 || !state.can_load_older_comments() {
+            let Some(fetch_id) = screens::detail::stage_load_older_comments(state, gist_id, page)
+            else {
                 return Ok(LoopFlow::Proceed);
-            }
-            if let Some(d) = state.detail_mut() {
-                d.comments_loading_more = true;
-            }
-            let fetch_id = gist_id.clone();
+            };
             jobs.spawn_action(
                 state,
                 "Loading older comments…",
@@ -198,16 +190,12 @@ pub(super) fn dispatch_outcome(
             file,
             from_pin_diff,
         } => {
-            if !from_pin_diff {
-                state.pending_return = Some(Screen::List);
-            }
-            let gist_file = state.gist_file_for_diff(&file);
-            let (local_label, gist_label) = diff_labels(Some(&local_path), &gist_file);
-            // Prefer list-row raw_url when present (may be richer than the outcome's ref).
-            let mut file = file;
-            if file.raw_url.is_none() {
-                file.raw_url = gist_file.raw_url.clone();
-            }
+            let (file, local_label, gist_label) = screens::confirm::stage_upload_preview(
+                state,
+                local_path.clone(),
+                file,
+                from_pin_diff,
+            );
 
             jobs.spawn_gist_fetch_action(
                 state,
@@ -299,16 +287,10 @@ pub(super) fn dispatch_outcome(
                 },
             );
         }
-        KeyOutcome::PreviewContent { mut file } => {
-            let key = file.cache_key();
-            if let Some(content) = state.gist_content_cache.get(&key).cloned() {
-                let preview_title = state.preview_title(&file.gist_id, &file.filename);
-                state.enter_preview(preview_title, content, Some(key));
-            } else {
-                if file.raw_url.is_none() {
-                    file.raw_url = state.gist_file_raw_url(&file.gist_id, &file.filename);
-                }
-                let preview_title = state.preview_title(&file.gist_id, &file.filename);
+        KeyOutcome::PreviewContent { file } => {
+            if let Some((file, preview_title)) =
+                screens::preview::stage_preview_content(state, file)
+            {
                 jobs.spawn_gist_fetch_action(
                     state,
                     "Loading preview…",
@@ -319,16 +301,8 @@ pub(super) fn dispatch_outcome(
                 );
             }
         }
-        KeyOutcome::RefreshPreview { mut file } => {
-            // Keep the current return path when reloading.
-            if state.screen.is_preview() {
-                state.pending_return = state.nav_stack.last().cloned();
-            }
-            state.gist_content_cache.remove(&file.cache_key());
-            if file.raw_url.is_none() {
-                file.raw_url = state.gist_file_raw_url(&file.gist_id, &file.filename);
-            }
-            let preview_title = state.preview_title(&file.gist_id, &file.filename);
+        KeyOutcome::RefreshPreview { file } => {
+            let (file, preview_title) = screens::preview::stage_refresh_preview(state, file);
             jobs.spawn_gist_fetch_action(
                 state,
                 "Loading preview…",

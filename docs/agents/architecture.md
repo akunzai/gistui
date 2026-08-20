@@ -38,6 +38,10 @@ Fields stay `pub`. No `#[serde(default)]` on the struct.
 handle_key (pure) → KeyOutcome → run_loop / dispatch_outcome (IO)
 ```
 
+Before a fetch/action is spawned, its owning screen's `stage_*` function performs any
+branching state work and returns the values dispatch needs. `dispatch_outcome` then only
+routes that payload to `Jobs`; it does not restage labels, return paths, caches, or loading flags.
+
 - New key logic → `AppState::handle_key` (testable).
 - New IO → `dispatch` / `bg` helpers, not `handle_key`.
 - IO-bearing `KeyOutcome` variants carry payloads (issue #244): `@src/tui/mod.rs` (`KeyOutcome`), `@src/tui/dispatch.rs`.

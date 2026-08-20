@@ -374,10 +374,9 @@ pub(super) fn spawn_pin_push(
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
     // Upload Confirm is opened when UploadPreview completes (staged return is Pins).
-    let raw_url = state.gist_file_raw_url(&gist_id, &filename);
-    let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
-    let (local_label, gist_label) =
-        diff_labels(Some(&local_path), &state.gist_file_for_diff(&file));
+    let file = crate::domain::GistFileRef::id_name(gist_id, filename);
+    let (file, local_label, gist_label) =
+        screens::confirm::stage_upload_preview(state, local_path.clone(), file, true);
     jobs.spawn_gist_fetch_action(
         state,
         "Loading diff…",
@@ -406,9 +405,9 @@ pub(super) fn spawn_pin_pull(
     let target = pin_local_abs(state, m);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
-    let raw_url = state.gist_file_raw_url(&gist_id, &filename);
-    let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
-    let (local_label, gist_label) = diff_labels(Some(&target), &state.gist_file_for_diff(&file));
+    let file = crate::domain::GistFileRef::id_name(gist_id, filename);
+    let (file, local_label, gist_label) =
+        screens::diff::stage_download_gist(state, target.clone(), file);
     jobs.spawn_gist_fetch_action(state, "Downloading…", file, move |result, file, state| {
         screens::diff::on_download_selected(state, result, target, local_label, gist_label, file)
     });
@@ -425,9 +424,9 @@ pub(super) fn spawn_pin_diff(
     let filename = m.gist_filename.clone();
     // Stage pin identity so enter_diff copies it onto DiffState (is_pin_diff_context).
     state.staged_diff_gist = Some((gist_id.clone(), filename.clone()));
-    let raw_url = state.gist_file_raw_url(&gist_id, &filename);
-    let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
-    let (local_label, gist_label) = diff_labels(Some(&local_abs), &state.gist_file_for_diff(&file));
+    let file = crate::domain::GistFileRef::id_name(gist_id, filename);
+    let (file, local_label, gist_label) =
+        screens::diff::stage_preview_diff(state, Some(local_abs.clone()), file, None);
     let target = local_abs.clone();
     jobs.spawn_gist_fetch_action(
         state,

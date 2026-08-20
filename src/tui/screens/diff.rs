@@ -2,7 +2,7 @@
 //! colocated in one file (issue #287, Phase 2; issue #383).
 
 use crate::tui::bg::{record_pin_sync, refresh_locals, LocalScanMode, LoopFlow};
-use crate::tui::render::preview_diff_text;
+use crate::tui::render::{diff_labels, preview_diff_text};
 use crate::tui::view_model::{ChromeVm, DiffVm};
 use crate::tui::{AppState, HelpTopic, KeyOutcome, PendingAction};
 use crossterm::event::KeyCode;
@@ -20,6 +20,41 @@ pub(crate) fn help_topic() -> HelpTopic {
 
 pub(crate) fn wheel_step() -> usize {
     3
+}
+
+/// Stage a gist-vs-local diff before dispatch starts its fetch.
+pub(crate) fn stage_preview_diff(
+    state: &mut AppState,
+    local_path: Option<PathBuf>,
+    file: crate::domain::GistFileRef,
+    pending_return: Option<crate::tui::Screen>,
+) -> (crate::domain::GistFileRef, String, String) {
+    if let Some(screen) = pending_return {
+        state.pending_return = Some(screen);
+    }
+    stage_gist_diff_fetch(state, local_path.as_deref(), file)
+}
+
+/// Stage labels for downloading a gist file before dispatch starts its fetch.
+pub(crate) fn stage_download_gist(
+    state: &mut AppState,
+    target: PathBuf,
+    file: crate::domain::GistFileRef,
+) -> (crate::domain::GistFileRef, String, String) {
+    stage_gist_diff_fetch(state, Some(&target), file)
+}
+
+fn stage_gist_diff_fetch(
+    state: &AppState,
+    local_path: Option<&std::path::Path>,
+    mut file: crate::domain::GistFileRef,
+) -> (crate::domain::GistFileRef, String, String) {
+    let gist = state.gist_file_for_diff(&file);
+    if file.raw_url.is_none() {
+        file.raw_url = gist.raw_url.clone();
+    }
+    let (local_label, gist_label) = diff_labels(local_path, &gist);
+    (file, local_label, gist_label)
 }
 
 /// Shared "would this key actually do something" predicate for `Screen::Diff`, mirrored by
@@ -390,10 +425,41 @@ fn set_diff_identical(state: &mut AppState, identical: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::test_support::{gist_file_ref, set_diff_body, set_diff_scroll, set_pending};
+    use crate::tui::test_support::{
+        gist_file_ref, set_diff_body, set_diff_scroll, set_pending, state_with_gists,
+    };
     use crate::tui::*;
     use crossterm::event::KeyCode;
     use std::path::PathBuf;
+
+    #[test]
+    fn stage_preview_diff_sets_list_return_and_labels() {
+        let mut state = state_with_gists();
+        let file = gist_file_ref("g1", "a.txt");
+
+        let (_, local_label, gist_label) = stage_preview_diff(
+            &mut state,
+            Some(PathBuf::from("/tmp/a.txt")),
+            file,
+            Some(Screen::List),
+        );
+
+        assert!(matches!(state.pending_return, Some(Screen::List)));
+        assert!(local_label.starts_with("local: a.txt"));
+        assert!(gist_label.starts_with("gist g1 / a.txt"));
+    }
+
+    #[test]
+    fn stage_download_gist_builds_labels() {
+        let mut state = state_with_gists();
+        let file = gist_file_ref("g1", "a.txt");
+
+        let (_, local_label, gist_label) =
+            stage_download_gist(&mut state, PathBuf::from("/tmp/a.txt"), file);
+
+        assert!(local_label.starts_with("local: a.txt"));
+        assert!(gist_label.starts_with("gist g1 / a.txt"));
+    }
 
     #[test]
     fn diff_w_toggles_wrap_and_resets_hscroll() {

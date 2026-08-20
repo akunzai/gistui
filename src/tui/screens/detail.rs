@@ -77,6 +77,31 @@ pub struct InitialComments {
     pub oldest_page: u32,
 }
 
+/// Stage the initial comments fetch, skipping work already represented by detail state.
+pub(crate) fn stage_fetch_comments(state: &mut AppState, gist_id: String) -> Option<String> {
+    if state
+        .detail()
+        .is_some_and(|d| d.comments.is_some() || d.comments_loading)
+    {
+        return None;
+    }
+    state.detail_mut().map(|d| d.comments_loading = true)?;
+    Some(gist_id)
+}
+
+/// Stage an older-comments fetch only when a prior page remains available.
+pub(crate) fn stage_load_older_comments(
+    state: &mut AppState,
+    gist_id: String,
+    page: u32,
+) -> Option<String> {
+    if page == 0 || !state.can_load_older_comments() {
+        return None;
+    }
+    state.detail_mut().map(|d| d.comments_loading_more = true)?;
+    Some(gist_id)
+}
+
 impl AppState {
     pub(crate) fn handle_key_detail(&mut self, code: KeyCode) -> KeyOutcome {
         self.status = None;
@@ -981,6 +1006,43 @@ mod tests {
     use crate::tui::test_support::{detail_mut, state_with_gists, state_with_two_gists};
     use crate::tui::*;
     use crossterm::event::KeyCode;
+
+    #[test]
+    fn stage_fetch_comments_skips_loaded_or_loading_and_marks_a_new_load() {
+        let mut state = state_with_gists();
+        detail_mut(&mut state).comments_loading = true;
+        assert!(stage_fetch_comments(&mut state, "g1".into()).is_none());
+
+        detail_mut(&mut state).comments_loading = false;
+        assert_eq!(
+            stage_fetch_comments(&mut state, "g1".into()).as_deref(),
+            Some("g1")
+        );
+        assert!(detail_ref(&state).comments_loading);
+
+        let detail = detail_mut(&mut state);
+        detail.comments_loading = false;
+        detail.comments = Some(vec![]);
+        assert!(stage_fetch_comments(&mut state, "g1".into()).is_none());
+    }
+
+    #[test]
+    fn stage_load_older_comments_skips_invalid_page_and_marks_valid_load() {
+        let mut state = state_with_gists();
+        let detail = detail_mut(&mut state);
+        detail.comments = Some(vec![]);
+        detail.comments_loaded_oldest_page = 2;
+
+        assert!(stage_load_older_comments(&mut state, "g1".into(), 0).is_none());
+        detail_mut(&mut state).comments_loaded_oldest_page = 1;
+        assert!(stage_load_older_comments(&mut state, "g1".into(), 1).is_none());
+        detail_mut(&mut state).comments_loaded_oldest_page = 2;
+        assert_eq!(
+            stage_load_older_comments(&mut state, "g1".into(), 1).as_deref(),
+            Some("g1")
+        );
+        assert!(detail_ref(&state).comments_loading_more);
+    }
 
     fn detail_ref(state: &AppState) -> &DetailState {
         state.detail().expect("expected Screen::GistDetail")
