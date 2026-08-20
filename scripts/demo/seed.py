@@ -65,6 +65,47 @@ GISTS = {
                 "alias gr='git rebase'\n"
             )
         },
+        # Newest first. The first List gist (alphabetical `aliases.sh`) is what
+        # the Revisions still opens; older snapshots keep their own `files` so
+        # Enter / D diffs are real; the long login exercises row clipping.
+        "commits": [
+            {
+                "version": "aa11bb22cc33dd44ee55ff6677889900aabbccdd",
+                "committed_at": "2026-06-08T09:00:00Z",
+                "user": "demo",
+                "change_status": {"total": 3, "additions": 2, "deletions": 1},
+            },
+            {
+                "version": "bb22cc33dd44ee55ff6677889900aabbccddeeff",
+                "committed_at": "2026-05-20T10:00:00Z",
+                "user": "a-very-long-github-username-for-clipping",
+                "change_status": {"total": 8, "additions": 8, "deletions": 0},
+                "files": {
+                    "aliases.sh": (
+                        "#!/usr/bin/env bash\n"
+                        "# Handy git aliases\n"
+                        "alias gs='git status'\n"
+                        "alias gp='git push'\n"
+                    )
+                },
+            },
+            {
+                "version": "cc33dd44ee55ff6677889900aabbccddeeff0011",
+                "committed_at": "2026-04-02T09:15:00Z",
+                "user": "demo",
+                "change_status": {"total": 4, "additions": 4, "deletions": 0},
+                "files": {
+                    "aliases.sh": "#!/usr/bin/env bash\nalias gs='git status'\n"
+                },
+            },
+            {
+                "version": "dd44ee55ff6677889900aabbccddeeff00112233",
+                "committed_at": "2026-02-10T00:00:00Z",
+                "user": "demo",
+                "change_status": {"total": 2, "additions": 2, "deletions": 0},
+                "files": {"aliases.sh": "#!/usr/bin/env bash\n"},
+            },
+        ],
     },
     "g_ccc333": {
         "description": "Tmux base config",

@@ -4,10 +4,14 @@
 Implements only the command surface gistui actually uses, backed by a JSON gist
 store at $GISTUI_DEMO_HOME/state/gists.json. Mutating commands (edit/create/
 delete/description PATCH) update the store so the TUI reflects changes across
-its many subprocess calls. Put this directory first on PATH and gistui talks to
-fake data instead of a real GitHub account.
+its many subprocess calls. Read-only revision history is served from a per-gist
+`commits` list (`GET /gists/{id}/commits` and `GET /gists/{id}/{version}`); a
+gist without one gets a single synthetic HEAD so Revisions never 404s. Put this
+directory first on PATH and gistui talks to fake data instead of a real GitHub
+account.
 """
 import datetime
+import hashlib
 import json
 import os
 import pathlib
@@ -37,6 +41,81 @@ def save(d):
 
 def now():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def path_without_query(path):
+    return path.split("?", 1)[0]
+
+
+def commits_for(gid, g):
+    """Revision list for a gist: seeded history, or a single synthetic HEAD."""
+    if g.get("commits"):
+        return g["commits"]
+    return [
+        {
+            "version": hashlib.sha1(gid.encode()).hexdigest(),
+            "committed_at": g.get("updated_at") or now(),
+            "user": DEMO_USER,
+            "change_status": {"total": 1, "additions": 1, "deletions": 0},
+        }
+    ]
+
+
+def commit_api_row(commit):
+    user = commit.get("user", DEMO_USER)
+    if isinstance(user, str):
+        user = {"login": user}
+    return {
+        "version": commit["version"],
+        "committed_at": commit.get("committed_at", ""),
+        "user": user,
+        "change_status": commit.get(
+            "change_status", {"total": 0, "additions": 0, "deletions": 0}
+        ),
+    }
+
+
+def files_for_version(g, version):
+    for commit in g.get("commits") or []:
+        if commit.get("version") == version and "files" in commit:
+            return commit["files"]
+    return g.get("files", {})
+
+
+def gist_commits(gid):
+    d = load()
+    g = d["gists"].get(gid)
+    if g is None:
+        return None
+    return [commit_api_row(c) for c in commits_for(gid, g)]
+
+
+def gist_revision_row(gid, version):
+    d = load()
+    g = d["gists"].get(gid)
+    if g is None:
+        return None
+    known = {c["version"] for c in commits_for(gid, g)}
+    if version not in known:
+        return None
+    files = files_for_version(g, version)
+    return {
+        "id": gid,
+        "url": f"https://api.github.com/gists/{gid}/{version}",
+        "files": {
+            fn: {
+                "filename": fn,
+                "type": FILE_TYPES.get(fn, "text/plain"),
+                "truncated": False,
+                "content": content,
+            }
+            for fn, content in files.items()
+        },
+        "public": g.get("public", False),
+        "created_at": g.get("created_at", ""),
+        "updated_at": g.get("updated_at", ""),
+        "owner": {"login": DEMO_USER},
+    }
 
 
 def gist_api_row(gid, g):
@@ -135,13 +214,36 @@ def main():
         if path.startswith("/gists/starred"):
             print(json.dumps(gist_list(starred_only=True)))
             return 0
+        base = path_without_query(path).rstrip("/")
+        parts = base.split("/")
+        # /gists/{id}/commits — must beat the generic `/gists` list below.
+        if len(parts) == 4 and parts[1] == "gists" and parts[3] == "commits":
+            commits = gist_commits(parts[2])
+            if commits is None:
+                return 1
+            print(json.dumps(commits))
+            return 0
         if path.startswith("/gists"):
             print(json.dumps(gist_list(starred_only=False)))
             return 0
 
-    if len(a) >= 3 and a[:2] == ["api"] and a[2].startswith("/gists/"):
-        tail = a[2].split("/gists/", 1)[1]
-        if "/" in tail:
+    # `gh api /gists/...` (and `gh api -i /gists/.../comments`). The path is
+    # whichever arg starts with `/`, so this matches both two-arg plans
+    # (`api /gists/{id}/{version}`) and flag-prefixed ones (`api -i /gists/...`).
+    if a[:1] == ["api"] and "--paginate" not in a and "--method" not in a:
+        path = next((x for x in a[1:] if x.startswith("/")), None)
+        if path is not None and path.startswith("/gists"):
+            tail = path_without_query(path)[len("/gists") :].lstrip("/")
+            if not tail:
+                print(json.dumps(gist_list(starred_only=False)))
+                return 0
+            if "/" not in tail:
+                d = load()
+                g = d["gists"].get(tail)
+                if g:
+                    print(json.dumps(gist_api_row(tail, g)))
+                    return 0
+                return 0
             gid, rest = tail.split("/", 1)
             if rest == "comments":
                 print("[]")
@@ -152,14 +254,17 @@ def main():
                 n = int(g.get("forks", 0))
                 print(json.dumps([{"id": f"{gid}_fork{i}"} for i in range(n)]))
                 return 0
-        else:
-            gid = tail
-            d = load()
-            g = d["gists"].get(gid)
-            if g:
-                print(json.dumps(gist_api_row(gid, g)))
+            if rest == "commits":
+                commits = gist_commits(gid)
+                if commits is None:
+                    return 1
+                print(json.dumps(commits))
                 return 0
-        return 0
+            row = gist_revision_row(gid, rest)
+            if row is None:
+                return 1
+            print(json.dumps(row))
+            return 0
 
     if a[:1] == ["api"] and "--method" in a and "PATCH" in a:
         gid = a[a.index("PATCH") + 1].split("/gists/")[-1]

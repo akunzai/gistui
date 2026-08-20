@@ -32,7 +32,7 @@ the keystrokes, so:
 
 | Piece | Role |
 |-------|------|
-| `fake-gh` | A stateful stand-in for `gh`. Implements only the commands gistui uses (`api /gists`, `gist view/edit/create/delete`, `api PATCH`) over a JSON store, and mutates the store so uploads/downloads/deletes are reflected live. Symlinked/copied to `gh` and put first on `PATH`. |
+| `fake-gh` | A stateful stand-in for `gh`. Implements only the commands gistui uses (`api /gists`, `api /gists/{id}/commits`, `api /gists/{id}/{version}`, `gist view/edit/create/delete`, `api PATCH`) over a JSON store, and mutates the store so uploads/downloads/deletes are reflected live. Revision history is read from a per-gist `commits` list in the store (a gist without one gets a single synthetic HEAD). Symlinked/copied to `gh` and put first on `PATH`. |
 | `seed.py` | Writes the fake gist store + the local working-dir files into an isolated workspace. Content is crafted so a diff, an upload, and a download-overwrite are all meaningful. |
 | `record.py` | Forks `gistui` under a pseudo-tty, sets the window size, replays `storyboard.json` keystrokes with pauses, and captures output into an asciinema v2 `.cast`. |
 | `storyboard.json` | The script: `["wait", secs]` and `["key", name]` steps. Edit this to change the demo. |
@@ -99,6 +99,7 @@ extracts the frame to a PNG with Pillow. Each entry in the `SHOTS` array maps
 | Shot | Screen | Output |
 |------|--------|--------|
 | `gist-manager` | the gist manager (`g`) | `website/gist-manager.png` |
+| `revisions` | revision history (`H`) | `website/revisions.png` |
 
 `shoot.py` differs from `record.py` in one way: it writes the cast *before* the
 TUI tears down, so leaving the alternate screen never blanks the captured frame.
