@@ -448,8 +448,11 @@ fn about_metadata_is_available_for_help() {
 
 #[test]
 fn hint_line_colours_keys_by_action_category() {
+    // Detail is the screen that binds `X` to a destructive delete.
+    let bindings = keymap::for_screen(&Screen::List);
     let line = hint_line(
-        "Tab panes  ·  d download  ·  X delete  ·  Esc/q back",
+        "Tab panes  ·  d download  ·  P pins  ·  Esc/q back",
+        bindings,
         &Theme::DARK,
     );
     let key_fg = |k: &str| {
@@ -461,8 +464,8 @@ fn hint_line_colours_keys_by_action_category() {
             .fg
     };
     assert_eq!(key_fg("Tab"), Some(Color::Cyan)); // navigation
-    assert_eq!(key_fg("d"), Some(Color::Green)); // write/sync
-    assert_eq!(key_fg("X"), Some(Color::Red)); // destructive
+    assert_eq!(key_fg("d"), Some(Color::Green)); // write
+    assert_eq!(key_fg("P"), Some(Color::Cyan)); // opens a view, not the `pin` write action
     assert_eq!(key_fg("Esc/q"), Some(Color::Cyan)); // navigation
                                                     // Labels keep default brightness (no fg override) regardless of the key's category.
     let label = line
@@ -474,23 +477,43 @@ fn hint_line_colours_keys_by_action_category() {
 }
 
 #[test]
-fn action_color_matches_whole_words_only() {
-    // `pins` opens a view, not the `pin` write action, so it must not read as Green.
-    assert_eq!(action_color("pins", &Theme::DARK), Color::Cyan);
+fn category_color_maps_every_category() {
+    use crate::tui::keymap::Category;
+    assert_eq!(category_color(Category::Nav, &Theme::DARK), Color::Cyan);
+    assert_eq!(category_color(Category::Read, &Theme::DARK), Color::Cyan);
+    assert_eq!(category_color(Category::Write, &Theme::DARK), Color::Green);
     assert_eq!(
-        action_color("synced ↑ local-newer", &Theme::DARK),
-        Color::Cyan
+        category_color(Category::Destructive, &Theme::DARK),
+        Color::Red
     );
-    assert_eq!(action_color("remove file", &Theme::DARK), Color::Red);
-    assert_eq!(action_color("pin", &Theme::DARK), Color::Green);
-    assert_eq!(action_color("star", &Theme::DARK), Color::Green);
+}
+
+/// A key the screen's table does not claim — a status line, or `MINIMAL_HINT`'s `;` and
+/// `Ctrl+p` — reads as navigation rather than panicking or borrowing a neighbour's colour.
+#[test]
+fn hint_line_leaves_an_unclaimed_key_on_the_navigation_accent() {
+    let line = hint_line(
+        crate::tui::MINIMAL_HINT,
+        keymap::for_screen(&Screen::GistDetail(Box::default())),
+        &Theme::DARK,
+    );
+    let key_fg = |k: &str| {
+        line.spans
+            .iter()
+            .find(|s| s.content == k)
+            .unwrap_or_else(|| panic!("key span {k}"))
+            .style
+            .fg
+    };
+    assert_eq!(key_fg(";"), Some(Color::Cyan));
+    assert_eq!(key_fg("Ctrl+p"), Some(Color::Cyan));
 }
 
 #[test]
 fn hint_line_preserves_every_character() {
     // Sizing relies on wrap_line_count over the raw text, so styling must not add/drop chars.
     let text = "↑↓ move  ·  Enter diff · q back";
-    let joined: String = hint_line(text, &Theme::DARK)
+    let joined: String = hint_line(text, keymap::for_screen(&Screen::List), &Theme::DARK)
         .spans
         .iter()
         .map(|s| s.content.as_ref())
@@ -4227,6 +4250,7 @@ fn palette_row_line_aligns_long_keys() {
         label: "Diff local ↔ gist".to_string(),
         exec: crate::tui::palette::PaletteExec::Key(KeyCode::Enter, KeyModifiers::NONE),
         enabled: true,
+        category: crate::tui::keymap::Category::Read,
         search: String::new(),
     };
     let line = palette_row_line(

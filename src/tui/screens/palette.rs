@@ -1,7 +1,7 @@
 //! `Screen::Palette` — key handling, view-model, paint, and palette items colocated in one
 //! file (issue #287, Phase 2).
 
-use crate::tui::palette::{CrossAction, PaletteExec, PaletteItem, PaletteMode};
+use crate::tui::palette::{CrossAction, PaletteExec, PaletteMode};
 use crate::tui::view_model::{ChromeVm, PaletteVm};
 use crate::tui::EditResult;
 use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, Screen};
@@ -22,10 +22,6 @@ pub(crate) fn help_topic() -> HelpTopic {
 
 pub(crate) fn wheel_step() -> usize {
     1
-}
-
-pub(crate) fn palette_palette_items(_state: &AppState) -> Vec<PaletteItem> {
-    Vec::new()
 }
 
 impl AppState {
@@ -160,6 +156,7 @@ pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
         .map(|item| crate::tui::view_model::PaletteRowVm {
             key_hint: item.key_hint.clone(),
             label: item.label.clone(),
+            category: item.category,
             enabled: item.enabled,
         })
         .collect();
@@ -257,6 +254,7 @@ pub(crate) fn render_palette_vm(
             lines.push(crate::tui::render::palette_row_spans(
                 &item.key_hint,
                 &item.label,
+                item.category,
                 palette.key_width,
                 &state.theme,
                 row_style,

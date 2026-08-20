@@ -257,15 +257,6 @@ pub(crate) fn render_config_vm(
     );
 }
 
-pub(crate) fn config_palette_items() -> Vec<crate::tui::palette::PaletteItem> {
-    use crate::tui::palette::key_item;
-    vec![
-        key_item("Enter", "Toggle / increase value", KeyCode::Enter, true),
-        key_item("h/l", "Decrease / increase value", KeyCode::Char('l'), true),
-        key_item("Esc", "Close settings", KeyCode::Esc, true),
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

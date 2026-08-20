@@ -76,6 +76,8 @@ pub struct PaletteVm {
 pub struct PaletteRowVm {
     pub key_hint: String,
     pub label: String,
+    /// What the action risks, resolved by the keymap table so paint only looks it up.
+    pub category: crate::tui::keymap::Category,
     pub enabled: bool,
 }
 
@@ -1153,6 +1155,7 @@ mod tests {
             mode: PaletteMode::Menu,
             items: vec![PaletteItem {
                 key_hint: "d".into(),
+                category: crate::tui::keymap::Category::Write,
                 label: "download".into(),
                 exec: PaletteExec::Key(KeyCode::Char('d'), crossterm::event::KeyModifiers::empty()),
                 enabled: true,

@@ -538,14 +538,6 @@ pub(crate) fn render_help_vm(
     }
 }
 
-pub(crate) fn help_palette_items() -> Vec<crate::tui::palette::PaletteItem> {
-    use crate::tui::palette::key_item;
-    vec![
-        key_item("Tab", "Browse topic index", KeyCode::Tab, true),
-        key_item("q", "Close Help", KeyCode::Char('q'), true),
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
