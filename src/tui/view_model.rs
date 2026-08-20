@@ -530,7 +530,10 @@ pub(crate) fn confirm_prompt(state: &AppState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::test_support::set_pending;
+
     use crate::domain::{PinnedMapping, SyncStatus};
+    use crate::tui::screens::confirm::confirm_modal_style;
     use crate::tui::{initial_state, ConfigState, HelpState};
     use std::path::PathBuf;
 
@@ -1213,5 +1216,117 @@ mod tests {
         let vm = build_view_model(&state);
         assert_eq!(vm.chrome.bg_task_msg.as_deref(), Some("Working…"));
         assert_eq!(vm.chrome.spinner_frame, 3);
+    }
+
+    #[test]
+    fn confirm_prompt_covers_each_pending_action() {
+        let mut state = initial_state();
+
+        state.enter_diff(
+            String::new(),
+            String::new(),
+            PathBuf::new(),
+            PathBuf::from("notes.txt"),
+        );
+        state.enter_confirm_from_diff(PendingAction::Download);
+        assert_eq!(confirm_prompt(&state), "Overwrite notes.txt? (y/n)");
+        assert_eq!(confirm_modal_style(&state), ("Overwrite", Color::Red));
+
+        set_pending(
+            &mut state,
+            PendingAction::Delete {
+                gist_id: "abc".into(),
+                label: "my config".into(),
+            },
+        );
+        assert_eq!(
+            confirm_prompt(&state),
+            "Permanently delete \"my config\" (abc)? (y/n)"
+        );
+        assert_eq!(confirm_modal_style(&state), ("Delete", Color::Red));
+
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "g1".into(),
+                filename: "main.rs".into(),
+                local_path: PathBuf::from("main.rs"),
+            },
+        );
+        assert!(confirm_prompt(&state).starts_with("Upload main.rs to gist g1?"));
+        assert_eq!(confirm_modal_style(&state), ("Upload", Color::Yellow));
+
+        set_pending(
+            &mut state,
+            PendingAction::CompactGist {
+                gist_id: "abc".into(),
+                label: "my config".into(),
+                count: 4,
+            },
+        );
+        assert_eq!(
+                confirm_prompt(&state),
+                "Compact 4 revisions of \"my config\" into one? This force-pushes and cannot be undone. (y/n)"
+            );
+        assert_eq!(
+            confirm_modal_style(&state),
+            ("Compact revisions", Color::Red)
+        );
+    }
+
+    #[test]
+    fn confirm_prompt_shows_description_editor_for_create() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Create {
+                local_path: PathBuf::from("notes.txt"),
+            },
+        );
+        state.editing_description = true;
+        state.description_input = "hello".into();
+        assert_eq!(
+            confirm_prompt(&state),
+            "Description (optional): hello_   ·  Enter next  ·  Esc cancel"
+        );
+        assert_eq!(confirm_modal_style(&state), ("Description", Color::Cyan));
+    }
+
+    #[test]
+    fn confirm_prompt_shows_watching_indicator_for_upload() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "a".into(),
+                filename: "notes.txt".into(),
+                local_path: PathBuf::from("/tmp/notes.txt"),
+            },
+        );
+        state.upload.watching = true;
+
+        let prompt = confirm_prompt(&state);
+        assert!(prompt.contains("watching for edits"));
+        assert!(
+            !prompt.contains("y yes"),
+            "y/e hints should be hidden while watching"
+        );
+    }
+
+    #[test]
+    fn create_confirm_prompt_shortens_home_path() {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Create {
+                local_path: home.join("notes.txt"),
+            },
+        );
+        assert!(
+            confirm_prompt(&state).starts_with("Create gist from ~/notes.txt"),
+            "got {}",
+            confirm_prompt(&state)
+        );
     }
 }

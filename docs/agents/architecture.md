@@ -111,5 +111,5 @@ Narrow-terminal reflow (issue #342), also in `@src/tui/render/mod.rs` — differ
 
 - Download overwrite gate (issue #246): `@src/actions.rs` — `DownloadMode` / `OverwriteConfirmed`.
 - Injectable `gh` boundary (issue #245): `CommandRunner` + `actions::test_support::SeqRunner`; fixtures in `tests/fixtures/gh/`.
-- Gold-style TUI pure logic: `@src/tui/tests.rs` (no network).
+- Gold-style TUI pure logic: each `tui` module's own `#[cfg(test)] mod tests` (no network); shared `AppState` fixtures live in `@src/tui/test_support.rs`.
 - E2E frames: `@scripts/demo/` (real binary + fake `gh` + fake cwd).

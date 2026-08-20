@@ -259,8 +259,8 @@ pub(crate) fn render_config_vm(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::tui::*;
+    use crossterm::event::KeyCode;
 
     fn config_mut(state: &mut AppState) -> &mut ConfigState {
         if !state.screen.is_config() {
@@ -339,5 +339,56 @@ mod tests {
         assert!(!state.diff_show_full);
         assert!(state.adjust_config_field(true));
         assert!(state.diff_show_full);
+    }
+
+    #[test]
+    fn config_field_values_round_trip_via_save_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut state = initial_state();
+        state.theme_choice = crate::config::ThemeChoice::Light;
+        state.config_mouse = false;
+        state.config_check_updates = false;
+        state.ignore_trailing_newline = false;
+        state.scan_depth = 5;
+        state.diff_context = 7;
+        // Simulate persist_settings write path using shipped save/load.
+        let config = crate::config::AppConfig {
+            theme: state.theme_choice,
+            mouse: state.config_mouse,
+            check_updates: state.config_check_updates,
+            ignore_trailing_newline: state.ignore_trailing_newline,
+            scan_depth: state.scan_depth,
+            diff_context: state.diff_context,
+            ..crate::config::AppConfig::default()
+        };
+        crate::config::save_config(&path, &config).unwrap();
+        assert!(path.exists());
+        let loaded = crate::config::load_config(&path).unwrap();
+        assert_eq!(loaded.theme, crate::config::ThemeChoice::Light);
+        assert!(!loaded.mouse);
+        assert!(!loaded.check_updates);
+        assert!(!loaded.ignore_trailing_newline);
+        assert_eq!(loaded.scan_depth, 5);
+        assert_eq!(loaded.diff_context, 7);
+    }
+
+    #[test]
+    fn persist_settings_dispatch_path_syncs_mouse_capture() {
+        // Structural: PersistSettings arm must call sync_mouse_capture after save so a
+        // Settings mouse toggle takes effect without restart (skeptic fix).
+        let src = include_str!("../dispatch.rs");
+        let persist_idx = src
+            .find("KeyOutcome::PersistSettings")
+            .expect("PersistSettings arm");
+        let arm = &src[persist_idx..persist_idx + 280];
+        assert!(
+            arm.contains("sync_mouse_capture"),
+            "PersistSettings must sync terminal mouse capture: {arm}"
+        );
+        assert!(
+            arm.contains("mouse_enabled"),
+            "must pass current mouse_enabled into sync: {arm}"
+        );
     }
 }

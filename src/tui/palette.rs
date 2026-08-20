@@ -289,6 +289,10 @@ pub(crate) fn fuzzy_match(query: &str, target: &str) -> Option<u32> {
 mod tests {
     use super::*;
 
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyModifiers;
+    use std::path::PathBuf;
+
     #[test]
     fn fuzzy_match_empty_query_matches_all() {
         assert_eq!(fuzzy_match("", "download gist"), Some(0));
@@ -672,5 +676,52 @@ mod tests {
                 ("q", "Close Help", true),
             ]
         );
+    }
+
+    #[test]
+    fn ctrl_p_opens_command_palette() {
+        let mut state = crate::tui::initial_state();
+        state.handle_key_with(KeyCode::Char('p'), KeyModifiers::CONTROL);
+        assert!(state.screen.is_palette());
+        assert_eq!(
+            state.palette().unwrap().mode,
+            crate::tui::palette::PaletteMode::Command
+        );
+    }
+
+    #[test]
+    fn menu_palette_hides_disabled_actions() {
+        let mut state = crate::tui::initial_state();
+        state.open_palette_menu(None);
+        let labels: Vec<_> = state
+            .palette_visible_items()
+            .iter()
+            .map(|i| i.label.as_str())
+            .collect();
+        assert!(!labels.iter().any(|l| l.contains("Upload")));
+    }
+
+    #[test]
+    fn command_palette_includes_cross_screen_quit() {
+        let mut state = crate::tui::initial_state();
+        state.open_palette_command();
+        assert!(state
+            .palette_visible_items()
+            .iter()
+            .any(|i| i.label == "Quit"));
+    }
+
+    #[test]
+    fn command_palette_fuzzy_filter_narrows_items() {
+        let mut state = crate::tui::initial_state();
+        state.open_palette_command();
+        let before = state.palette_visible_items().len();
+        state.palette_mut().unwrap().query.set("quit");
+        let after = state.palette_visible_items().len();
+        assert!(after < before);
+        assert!(state
+            .palette_visible_items()
+            .iter()
+            .all(|i| i.label.to_ascii_lowercase().contains("quit")));
     }
 }

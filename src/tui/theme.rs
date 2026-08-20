@@ -122,3 +122,17 @@ impl Theme {
         Style::default().bg(self.bg).fg(self.fg)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn light_theme_keeps_focus_and_diff_header_colours_distinct() {
+        let theme = Theme::LIGHT;
+
+        assert_ne!(theme.accent, theme.dim);
+        assert_ne!(theme.accent, theme.gist_label_color);
+        assert_ne!(theme.dim, theme.gist_label_color);
+    }
+}

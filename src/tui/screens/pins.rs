@@ -343,9 +343,12 @@ pub(crate) fn render_pins_vm(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::test_support::{
+        pins_mut, pins_ref, pins_state_with_long_home_path, set_pending,
+    };
     use crate::tui::*;
-
-    use crate::tui::tests::{pins_mut, pins_ref, pins_state_with_long_home_path, set_pending};
+    use crossterm::event::KeyCode;
+    use std::path::PathBuf;
 
     #[test]
     fn pins_key_clears_lingering_status_for_one_shot_display() {
@@ -639,5 +642,80 @@ mod tests {
         assert!(state.screen.is_palette());
         state.handle_key(KeyCode::Esc);
         assert!(state.screen.is_pins());
+    }
+
+    #[test]
+    fn pin_row_label_shows_home_as_tilde() {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
+        let label = pin_row_label(PinLabelParams {
+            icon: "✓",
+            local_path: &home.join("code/gistui"),
+            gist_id: "abc123",
+            gist_description: None,
+            gist_filename: "notes.txt",
+            local_age: "2h",
+            gist_age: "3h",
+        });
+        assert!(
+            label.contains("~/code/gistui"),
+            "expected ~ home in label, got {label}"
+        );
+        assert!(!label.contains(home.to_string_lossy().as_ref()));
+    }
+
+    /// Issue #347: the gist description leads the identity (before the filename), and the full id
+    /// is demoted to a trailing, `#`-prefixed abbreviation rather than sitting between the local
+    /// path and the filename.
+    #[test]
+    fn pin_row_label_leads_with_description_and_abbreviates_id() {
+        let label = pin_row_label(PinLabelParams {
+            icon: "✓",
+            local_path: std::path::Path::new("/tmp/x"),
+            gist_id: "abcdef0123456789abcdef0123456789",
+            gist_description: Some("My cool gist"),
+            gist_filename: "notes.txt",
+            local_age: "2h",
+            gist_age: "3h",
+        });
+        assert!(
+            label.contains("My cool gist / notes.txt"),
+            "description should lead the filename: {label}"
+        );
+        assert!(
+            !label.contains("abcdef0123456789abcdef0123456789"),
+            "full id must not appear: {label}"
+        );
+        assert!(
+            label.contains("#abcdef0"),
+            "abbreviated id should still be reachable: {label}"
+        );
+    }
+
+    /// Issue #347: without a known description, the identity falls back to the filename alone
+    /// (not a redundant "filename / filename").
+    #[test]
+    fn pin_row_label_falls_back_to_filename_without_description() {
+        let label = pin_row_label(PinLabelParams {
+            icon: "✓",
+            local_path: std::path::Path::new("/tmp/x"),
+            gist_id: "abc123",
+            gist_description: None,
+            gist_filename: "notes.txt",
+            local_age: "2h",
+            gist_age: "3h",
+        });
+        assert!(label.contains("↔  notes.txt "), "got {label}");
+        assert!(!label.contains("notes.txt / notes.txt"));
+    }
+
+    #[test]
+    fn entering_pins_screen_resets_hscroll() {
+        let mut state = pins_state_with_long_home_path();
+        state.handle_key(KeyCode::Right);
+        assert!(pins_ref(&state).cursor.hscroll > 0);
+        state.screen = Screen::List;
+        state.handle_key(KeyCode::Char('P'));
+        assert!(state.screen.is_pins());
+        assert_eq!(pins_ref(&state).cursor.hscroll, 0);
     }
 }

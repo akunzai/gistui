@@ -232,9 +232,14 @@ pub(crate) fn render_confirm_vm(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::test_support::{
+        detail_mut, gists_mut, pins_mut, set_diff_body, set_pending, state_ready_to_create,
+        state_with_gists,
+    };
+    use crate::tui::view_model::confirm_prompt;
     use crate::tui::*;
-
-    use crate::tui::tests::{set_pending, state_with_gists};
+    use crossterm::event::KeyCode;
+    use std::path::PathBuf;
 
     fn upload_pending(gist_id: &str, filename: &str) -> PendingAction {
         PendingAction::Upload {
@@ -386,5 +391,327 @@ mod tests {
         state.screen = Screen::Confirm(Box::default());
         state.handle_key(KeyCode::Char(';'));
         assert!(state.screen.is_confirm());
+    }
+
+    #[test]
+    fn confirm_screen_scrolls_diff() {
+        let mut state = initial_state();
+        set_pending(&mut state, PendingAction::Download);
+        set_diff_body(&mut state, "l1\nl2\nl3");
+        assert_eq!(state.handle_key(KeyCode::Down), KeyOutcome::None);
+        assert_eq!(state.diff_scroll(), 1);
+        state.handle_key(KeyCode::Up);
+        assert_eq!(state.diff_scroll(), 0);
+    }
+
+    #[test]
+    fn confirm_y_returns_download() {
+        let mut state = initial_state();
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
+        set_pending(&mut state, PendingAction::Download);
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('y')),
+            KeyOutcome::Download {
+                mode: crate::actions::DownloadMode::Overwrite(_)
+            }
+        ));
+    }
+
+    #[test]
+    fn confirm_n_returns_to_diff() {
+        let mut state = initial_state();
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
+        set_pending(&mut state, PendingAction::Download);
+        assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
+        assert!(state.screen.is_diff());
+    }
+
+    #[test]
+    fn confirm_esc_returns_to_diff() {
+        let mut state = initial_state();
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
+        set_pending(&mut state, PendingAction::Download);
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
+        assert!(state.screen.is_diff());
+    }
+
+    #[test]
+    fn confirm_upload_y_returns_upload() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "a".into(),
+                filename: "settings.json".into(),
+                local_path: PathBuf::from("/tmp/settings.json"),
+            },
+        );
+        assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::Upload);
+    }
+
+    #[test]
+    fn confirm_upload_e_returns_edit_upload() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "a".into(),
+                filename: "settings.json".into(),
+                local_path: PathBuf::from("/tmp/settings.json"),
+            },
+        );
+        assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::EditUpload);
+    }
+
+    #[test]
+    fn confirm_upload_y_is_blocked_while_watching() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "a".into(),
+                filename: "settings.json".into(),
+                local_path: PathBuf::from("/tmp/settings.json"),
+            },
+        );
+        state.upload.watching = true;
+
+        assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::None);
+        assert_eq!(
+            state.status.as_deref(),
+            Some("editor still open — finish editing first")
+        );
+    }
+
+    #[test]
+    fn confirm_upload_e_is_blocked_while_watching() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "a".into(),
+                filename: "settings.json".into(),
+                local_path: PathBuf::from("/tmp/settings.json"),
+            },
+        );
+        state.upload.watching = true;
+
+        assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::None);
+        assert_eq!(state.status.as_deref(), Some("editor already open"));
+    }
+
+    #[test]
+    fn confirm_upload_json_toggles() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "a".into(),
+                filename: "settings.json".into(),
+                local_path: PathBuf::from("/tmp/settings.json"),
+            },
+        );
+        assert!(!state.upload.json_pretty);
+        assert!(!state.upload.json_sort);
+
+        // Toggle pretty
+        assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::None);
+        assert!(state.upload.json_pretty);
+
+        // Toggle sort
+        assert_eq!(state.handle_key(KeyCode::Char('s')), KeyOutcome::None);
+        assert!(state.upload.json_sort);
+
+        // Toggle pretty off
+        assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::None);
+        assert!(!state.upload.json_pretty);
+    }
+
+    #[test]
+    fn remove_file_confirm_y_returns_execute_remove_file() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::RemoveFile {
+                gist_id: "abc123".into(),
+                filename: "a.md".into(),
+                label: "my notes".into(),
+            },
+        );
+        assert_eq!(
+            state.handle_key(KeyCode::Char('y')),
+            KeyOutcome::ExecuteRemoveFile
+        );
+    }
+
+    #[test]
+    fn delete_confirm_y_returns_execute_delete() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Delete {
+                gist_id: "abc123".into(),
+                label: "my notes".into(),
+            },
+        );
+        assert_eq!(
+            state.handle_key(KeyCode::Char('y')),
+            KeyOutcome::ExecuteDelete
+        );
+    }
+
+    #[test]
+    fn delete_from_list_returns_to_list() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Delete {
+                gist_id: "abc123".into(),
+                label: "my notes".into(),
+            },
+        );
+        assert_eq!(
+            state.handle_key(KeyCode::Char('y')),
+            KeyOutcome::ExecuteDelete
+        );
+        state.cancel_confirm_after_delete();
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn delete_from_gist_detail_opened_via_gists_returns_to_gists() {
+        let mut state = initial_state();
+        gists_mut(&mut state);
+        state.enter(Screen::GistDetail(Box::default()));
+        detail_mut(&mut state).gist_id = Some("abc123".into());
+        set_pending(
+            &mut state,
+            PendingAction::Delete {
+                gist_id: "abc123".into(),
+                label: "my notes".into(),
+            },
+        );
+        assert_eq!(
+            state.handle_key(KeyCode::Char('y')),
+            KeyOutcome::ExecuteDelete
+        );
+        state.cancel_confirm_after_delete();
+        assert!(state.screen.is_gists());
+    }
+
+    #[test]
+    fn delete_from_gist_detail_opened_via_pins_returns_to_pins() {
+        let mut state = initial_state();
+        pins_mut(&mut state);
+        state.enter(Screen::GistDetail(Box::default()));
+        detail_mut(&mut state).gist_id = Some("abc123".into());
+        set_pending(
+            &mut state,
+            PendingAction::Delete {
+                gist_id: "abc123".into(),
+                label: "my notes".into(),
+            },
+        );
+        assert_eq!(
+            state.handle_key(KeyCode::Char('y')),
+            KeyOutcome::ExecuteDelete
+        );
+        state.cancel_confirm_after_delete();
+        assert!(state.screen.is_pins());
+    }
+
+    #[test]
+    fn create_description_edits_mid_string_with_cursor_keys() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Create {
+                local_path: PathBuf::from("notes.txt"),
+            },
+        );
+        state.editing_description = true;
+        for c in "helo".chars() {
+            state.handle_key(KeyCode::Char(c));
+        }
+        // Fix the typo: go back one char and insert the missing 'l'.
+        state.handle_key(KeyCode::Left);
+        state.handle_key(KeyCode::Char('l'));
+        assert_eq!(state.description_input, "hello");
+        // Enter advances to the visibility step without losing the text.
+        state.handle_key(KeyCode::Enter);
+        assert!(!state.editing_description);
+        assert_eq!(state.description_input, "hello");
+    }
+
+    #[test]
+    fn create_confirm_s_and_p_choose_visibility() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Create {
+                local_path: PathBuf::from("/tmp/config.toml"),
+            },
+        );
+        assert_eq!(
+            state.handle_key(KeyCode::Char('s')),
+            KeyOutcome::Create(false)
+        );
+
+        set_pending(
+            &mut state,
+            PendingAction::Create {
+                local_path: PathBuf::from("/tmp/config.toml"),
+            },
+        );
+        assert_eq!(
+            state.handle_key(KeyCode::Char('p')),
+            KeyOutcome::Create(true)
+        );
+    }
+
+    #[test]
+    fn n_starts_create_in_the_description_editor() {
+        let mut state = state_ready_to_create();
+        state.handle_key(KeyCode::Char('n'));
+        assert!(state.screen.is_confirm());
+        assert!(state.editing_description);
+        // While editing, letters (incl. s/p) are typed into the description, not
+        // interpreted as the visibility choice.
+        for c in "notes".chars() {
+            assert_eq!(state.handle_key(KeyCode::Char(c)), KeyOutcome::None);
+        }
+        assert_eq!(state.description_input, "notes");
+    }
+
+    #[test]
+    fn create_enter_advances_to_visibility_then_s_creates() {
+        let mut state = state_ready_to_create();
+        state.handle_key(KeyCode::Char('n'));
+        state.handle_key(KeyCode::Char('h'));
+        state.handle_key(KeyCode::Char('i'));
+        // Enter ends the description step (does not create yet).
+        assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
+        assert!(!state.editing_description);
+        assert_eq!(state.description_input, "hi");
+        // Now s/p choose visibility and trigger the create.
+        assert_eq!(
+            state.handle_key(KeyCode::Char('s')),
+            KeyOutcome::Create(false)
+        );
     }
 }
