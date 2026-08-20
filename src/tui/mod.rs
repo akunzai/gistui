@@ -2340,6 +2340,7 @@ mod keymap;
 mod keys;
 mod list_cursor;
 pub(crate) use list_cursor::ListCursor;
+mod scroll;
 mod list_ranking;
 mod pin_sync;
 pub use pin_sync::PinSyncCacheEntry;
