@@ -303,32 +303,14 @@ mod tests {
     fn apply_fork_of_ids_stamps_all_file_rows() {
         let mut gists = vec![
             GistFile {
-                gist_id: "fork1".into(),
-                description: String::new(),
-                filename: "a.txt".into(),
                 public: true,
-                updated_at: String::new(),
-                created_at: String::new(),
                 owner_login: "me".into(),
-                fork_of_id: None,
-                raw_url: None,
-                content_type: None,
-                size: 0,
-                node_id: None,
+                ..GistFile::fixture("fork1", "a.txt")
             },
             GistFile {
-                gist_id: "fork1".into(),
-                description: String::new(),
-                filename: "b.txt".into(),
                 public: true,
-                updated_at: String::new(),
-                created_at: String::new(),
                 owner_login: "me".into(),
-                fork_of_id: None,
-                raw_url: None,
-                content_type: None,
-                size: 0,
-                node_id: None,
+                ..GistFile::fixture("fork1", "b.txt")
             },
         ];
         let fork_of = [("fork1".into(), Some("upstream".into()))].into();

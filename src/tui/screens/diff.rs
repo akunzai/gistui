@@ -296,22 +296,10 @@ mod tests {
             modified: None,
         }];
         state.gists = vec![GistFile {
-            gist_id: "a".into(),
             description: "x".into(),
-            filename: "settings.json".into(),
-            public: false,
             updated_at: "x".into(),
             created_at: "x".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("a", "settings.json")
         }];
         state.screen = Screen::Diff(Box::default());
         // The gist has no "config" file -> case B -> add directly.

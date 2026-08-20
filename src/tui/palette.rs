@@ -304,18 +304,10 @@ mod tests {
 
     fn test_gist(gist_id: &str, filename: &str) -> GistFile {
         GistFile {
-            gist_id: gist_id.to_string(),
             description: "demo".into(),
-            filename: filename.to_string(),
-            public: false,
             updated_at: "2026-06-10T00:00:00Z".into(),
             created_at: "2026-06-01T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-            raw_url: None,
-            content_type: None,
-            size: 0,
-            node_id: None,
+            ..GistFile::fixture(gist_id, filename)
         }
     }
 

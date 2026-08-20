@@ -631,22 +631,10 @@ mod tests {
 
     fn gist_file() -> GistFile {
         GistFile {
-            gist_id: "abc123".into(),
             description: "config".into(),
-            filename: "settings.json".into(),
-            public: false,
             updated_at: "2026-06-08T00:00:00Z".into(),
             created_at: "2026-06-08T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("abc123", "settings.json")
         }
     }
 

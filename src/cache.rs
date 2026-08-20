@@ -68,18 +68,10 @@ mod tests {
 
     fn gist(id: &str, filename: &str) -> GistFile {
         GistFile {
-            gist_id: id.into(),
             description: "desc".into(),
-            filename: filename.into(),
-            public: false,
             updated_at: "2026-06-09T00:00:00Z".into(),
             created_at: "2026-06-09T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-            raw_url: None,
-            content_type: None,
-            size: 0,
-            node_id: None,
+            ..GistFile::fixture(id, filename)
         }
     }
 

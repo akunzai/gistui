@@ -727,7 +727,7 @@ mod tests {
         }];
         state.gists = vec![GistFile {
             description: "demo notes".into(),
-            ..GistFile::for_sync("g1".into(), "notes.txt".into(), None)
+            ..GistFile::fixture("g1", "notes.txt")
         }];
         state.starred_gist_ids.insert("g1".into());
         state.pinned = vec![PinnedMapping {
@@ -853,11 +853,11 @@ mod tests {
         state.gists = vec![
             GistFile {
                 description: "alpha".into(),
-                ..GistFile::for_sync("g1".into(), "a.txt".into(), None)
+                ..GistFile::fixture("g1", "a.txt")
             },
             GistFile {
                 description: "beta".into(),
-                ..GistFile::for_sync("g2".into(), "b.txt".into(), None)
+                ..GistFile::fixture("g2", "b.txt")
             },
         ];
         state.starred_gist_ids.insert("g1".into());
@@ -889,7 +889,7 @@ mod tests {
 
         let mut state = initial_state();
         state.screen = Screen::Gists(Box::default());
-        state.gists = vec![GistFile::for_sync("g1".into(), "a.txt".into(), None)];
+        state.gists = vec![GistFile::fixture("g1", "a.txt")];
         if let Some(gm) = state.gist_manager_mut() {
             gm.filter_query = crate::tui::TextInput::from("zzz-nope");
         }
@@ -935,9 +935,9 @@ mod tests {
                 description: "demo".into(),
                 content_type: Some("text/plain".into()),
                 size: 1_536,
-                ..GistFile::for_sync("g1".into(), "a.txt".into(), None)
+                ..GistFile::fixture("g1", "a.txt")
             },
-            GistFile::for_sync("g1".into(), "b.txt".into(), None),
+            GistFile::fixture("g1", "b.txt"),
         ];
         if let Some(d) = state.detail_mut() {
             d.gist_id = Some("g1".into());
@@ -1020,7 +1020,7 @@ mod tests {
         }
         state.gists = vec![GistFile {
             description: "hist".into(),
-            ..GistFile::for_sync("g1".into(), "a.txt".into(), None)
+            ..GistFile::fixture("g1", "a.txt")
         }];
         match build_view_model(&state).screen {
             ScreenVm::Revisions(r) => {
@@ -1183,7 +1183,7 @@ mod tests {
         let mut state = initial_state();
         state.gists = vec![GistFile {
             description: "pack".into(),
-            ..GistFile::for_sync("g1".into(), "a.txt".into(), None)
+            ..GistFile::fixture("g1", "a.txt")
         }];
         state.enter_confirm(
             PendingAction::CompactGist {

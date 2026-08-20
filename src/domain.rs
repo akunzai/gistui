@@ -70,7 +70,7 @@ pub struct LocalCandidate {
     pub modified: Option<u64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct GistFile {
     pub gist_id: String,
     pub description: String,
@@ -275,24 +275,22 @@ pub struct GistGroup {
 }
 
 impl GistFile {
+    /// Identity-only constructor (issue #379). Tests override the fields they
+    /// care about with struct-update syntax; the rest stay at `Default`.
+    pub fn fixture(gist_id: impl Into<String>, filename: impl Into<String>) -> Self {
+        Self::for_sync(gist_id.into(), filename.into(), None)
+    }
+
     /// A bare row carrying only the identity a sync/diff/upload operation needs —
     /// `gist_id`, `filename`, and `raw_url`. All display/metadata fields default to empty,
     /// so adding a new field to `GistFile` no longer means editing every call site that
     /// builds one of these throwaway targets.
     pub fn for_sync(gist_id: String, filename: String, raw_url: Option<String>) -> Self {
-        GistFile {
+        Self {
             gist_id,
-            description: String::new(),
             filename,
-            public: false,
-            updated_at: String::new(),
-            created_at: String::new(),
-            owner_login: String::new(),
-            fork_of_id: None,
             raw_url,
-            content_type: None,
-            size: 0,
-            node_id: None,
+            ..Self::default()
         }
     }
 
@@ -499,6 +497,32 @@ mod tests {
     }
 
     #[test]
+    fn gist_file_fixture_is_identity_plus_default() {
+        let g = GistFile::fixture("g1", "a.txt");
+        assert_eq!(
+            g,
+            GistFile {
+                gist_id: "g1".into(),
+                filename: "a.txt".into(),
+                ..GistFile::default()
+            }
+        );
+    }
+
+    #[test]
+    fn gist_file_for_sync_is_fixture_plus_raw_url() {
+        let url = Some("https://raw/x".into());
+        let g = GistFile::for_sync("g1".into(), "a.txt".into(), url.clone());
+        assert_eq!(
+            g,
+            GistFile {
+                raw_url: url,
+                ..GistFile::fixture("g1", "a.txt")
+            }
+        );
+    }
+
+    #[test]
     fn gist_file_ref_cache_key_is_id_and_filename() {
         let r = GistFileRef::new("g1", "f.toml", Some("https://raw".into()));
         assert_eq!(r.cache_key(), ("g1".into(), "f.toml".into()));
@@ -593,19 +617,12 @@ mod tests {
 
     fn file(gist_id: &str, filename: &str, desc: &str, public: bool) -> GistFile {
         GistFile {
-            gist_id: gist_id.into(),
             description: desc.into(),
-            filename: filename.into(),
             public,
             updated_at: "2026-06-08T00:00:00Z".into(),
             created_at: "2026-06-08T00:00:00Z".into(),
             owner_login: "owner".into(),
-            fork_of_id: None,
-
-            raw_url: None,
-            content_type: None,
-            size: 0,
-            node_id: None,
+            ..GistFile::fixture(gist_id, filename)
         }
     }
 

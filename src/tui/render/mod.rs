@@ -2102,18 +2102,10 @@ mod tests {
 
     fn gist_file(filename: &str, description: &str) -> crate::domain::GistFile {
         crate::domain::GistFile {
-            gist_id: "abc123def".into(),
             description: description.into(),
-            filename: filename.into(),
-            public: false,
             updated_at: "2024-01-01T00:00:00Z".into(),
             created_at: "2024-01-01T00:00:00Z".into(),
-            owner_login: String::new(),
-            fork_of_id: None,
-            raw_url: None,
-            content_type: None,
-            size: 0,
-            node_id: None,
+            ..crate::domain::GistFile::fixture("abc123def", filename)
         }
     }
 
@@ -2403,11 +2395,7 @@ mod tests {
     fn render_comments_keep_hanging_indent_at_eighty_columns() {
         let mut state = initial_state();
         state.screen = Screen::GistDetail(Box::default());
-        state.gists = vec![crate::domain::GistFile::for_sync(
-            "g1".into(),
-            "a.txt".into(),
-            None,
-        )];
+        state.gists = vec![crate::domain::GistFile::fixture("g1", "a.txt")];
         if let Some(d) = state.detail_mut() {
             d.gist_id = Some("g1".into());
             d.focus = DetailFocus::Comments;

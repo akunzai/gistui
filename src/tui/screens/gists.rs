@@ -419,40 +419,16 @@ mod tests {
         state.screen = Screen::Gists(Box::default());
         state.gists = vec![
             GistFile {
-                gist_id: "old-upd".into(),
                 description: "x".into(),
-                filename: "f".into(),
-                public: false,
                 updated_at: "2026-01-01T00:00:00Z".into(),
                 created_at: "2026-12-01T00:00:00Z".into(),
-                owner_login: String::new(),
-                fork_of_id: None,
-
-                raw_url: None,
-
-                content_type: None,
-
-                size: 0,
-
-                node_id: None,
+                ..GistFile::fixture("old-upd", "f")
             },
             GistFile {
-                gist_id: "new-upd".into(),
                 description: "y".into(),
-                filename: "g".into(),
-                public: false,
                 updated_at: "2026-06-01T00:00:00Z".into(),
                 created_at: "2026-02-01T00:00:00Z".into(),
-                owner_login: String::new(),
-                fork_of_id: None,
-
-                raw_url: None,
-
-                content_type: None,
-
-                size: 0,
-
-                node_id: None,
+                ..GistFile::fixture("new-upd", "g")
             },
         ];
         // Default: sort by updated (newest first).
@@ -482,40 +458,16 @@ mod tests {
         let mut state = initial_state();
         state.gists = vec![
             GistFile {
-                gist_id: "g1".into(),
                 description: "alpha".into(),
-                filename: "a.txt".into(),
-                public: false,
                 updated_at: "2026-06-10T00:00:00Z".into(),
                 created_at: "2026-06-01T00:00:00Z".into(),
-                owner_login: String::new(),
-                fork_of_id: None,
-
-                raw_url: None,
-
-                content_type: None,
-
-                size: 0,
-
-                node_id: None,
+                ..GistFile::fixture("g1", "a.txt")
             },
             GistFile {
-                gist_id: "g2".into(),
                 description: "beta".into(),
-                filename: "b.txt".into(),
-                public: false,
                 updated_at: "2026-06-10T00:00:00Z".into(),
                 created_at: "2026-06-01T00:00:00Z".into(),
-                owner_login: String::new(),
-                fork_of_id: None,
-
-                raw_url: None,
-
-                content_type: None,
-
-                size: 0,
-
-                node_id: None,
+                ..GistFile::fixture("g2", "b.txt")
             },
         ];
         state.screen = Screen::Gists(Box::default());
@@ -563,18 +515,11 @@ mod tests {
         state.screen = Screen::Gists(Box::default());
         state.gists = (0..12)
             .map(|i| GistFile {
-                gist_id: format!("g{i}"),
                 description: format!("gist {i}"),
-                filename: "a.txt".into(),
                 public: true,
                 updated_at: "x".into(),
                 created_at: "x".into(),
-                owner_login: String::new(),
-                fork_of_id: None,
-                raw_url: None,
-                content_type: None,
-                size: 0,
-                node_id: None,
+                ..GistFile::fixture(format!("g{i}"), "a.txt")
             })
             .collect();
         state.handle_key(KeyCode::PageDown);
@@ -588,22 +533,12 @@ mod tests {
         let mut state = initial_state();
         state.current_user_login = Some("me".into());
         state.starred_gists = vec![GistFile {
-            gist_id: "foreign".into(),
             description: "x".into(),
-            filename: "a.txt".into(),
             public: true,
             updated_at: "x".into(),
             created_at: "x".into(),
             owner_login: "other".into(),
-            fork_of_id: None,
-
-            raw_url: None,
-
-            content_type: None,
-
-            size: 0,
-
-            node_id: None,
+            ..GistFile::fixture("foreign", "a.txt")
         }];
         state.gist_type_filter = GistTypeFilter::Starred;
         state.gist_index = 0;
