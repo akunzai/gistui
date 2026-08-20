@@ -271,7 +271,7 @@ pub(super) fn dispatch_outcome(
                     drop(scratch);
                     result
                 },
-                move |result, jobs, state| jobs.on_upload_replace(state, result, file),
+                move |result, _jobs, state| gist_mutation::on_upload_replace(state, result, file),
             );
         }
         KeyOutcome::EditUpload => {
@@ -292,7 +292,9 @@ pub(super) fn dispatch_outcome(
                         .map(|_| ())
                         .map_err(|e| e.to_string())
                 },
-                move |result, jobs, state| jobs.on_create_gist(state, result, local_path, public),
+                move |result, _jobs, state| {
+                    gist_mutation::on_create_gist(state, result, local_path, public)
+                },
             );
         }
         KeyOutcome::PreviewContent { mut file } => {
@@ -357,7 +359,7 @@ pub(super) fn dispatch_outcome(
                         .map(|_| ())
                         .map_err(|e| e.to_string())
                 },
-                move |result, jobs, state| jobs.on_delete_gist(state, result, gist_id),
+                move |result, _jobs, state| gist_mutation::on_delete_gist(state, result, gist_id),
             );
         }
         KeyOutcome::ExecuteRemoveFile => {
@@ -378,7 +380,9 @@ pub(super) fn dispatch_outcome(
                         .map(|_| ())
                         .map_err(|e| e.to_string())
                 },
-                move |result, jobs, state| jobs.on_remove_file(state, result, gist_id, filename),
+                move |result, _jobs, state| {
+                    gist_mutation::on_remove_file(state, result, gist_id, filename)
+                },
             );
         }
         KeyOutcome::ExecuteCompactGist => {
@@ -396,7 +400,9 @@ pub(super) fn dispatch_outcome(
                 state,
                 "Compacting revisions…",
                 move || crate::actions::execute_compact_gist(&gist_id).map_err(|e| e.to_string()),
-                move |result, jobs, state| jobs.on_compact_gist(state, result, label, count),
+                move |result, _jobs, state| {
+                    gist_mutation::on_compact_gist(state, result, label, count)
+                },
             );
         }
         KeyOutcome::ApplyDescription {
@@ -415,7 +421,9 @@ pub(super) fn dispatch_outcome(
                         .map(|_| ())
                         .map_err(|e| e.to_string())
                 },
-                move |result, jobs, state| jobs.on_apply_description(state, result, gist_id),
+                move |result, _jobs, state| {
+                    gist_mutation::on_apply_description(state, result, gist_id)
+                },
             );
         }
         KeyOutcome::RefreshLocals => {
@@ -633,8 +641,8 @@ pub(super) fn dispatch_outcome(
                         .map(|_| ())
                         .map_err(|e| e.to_string())
                 },
-                move |result, jobs, state| {
-                    jobs.on_gist_star_toggle(state, result, gist_id, starring)
+                move |result, _jobs, state| {
+                    gist_mutation::on_gist_star_toggle(state, result, gist_id, starring)
                 },
             );
         }
@@ -652,7 +660,7 @@ pub(super) fn dispatch_outcome(
                         .map(|_| ())
                         .map_err(|e| e.to_string())
                 },
-                move |result, jobs, state| jobs.on_fork_gist(state, result, gist_id),
+                move |result, _jobs, state| gist_mutation::on_fork_gist(state, result, gist_id),
             );
         }
         KeyOutcome::None => {}

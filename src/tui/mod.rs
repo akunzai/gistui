@@ -2329,6 +2329,7 @@ use palette::{PaletteMode, PaletteState};
 
 mod render;
 use render::*;
+mod gist_mutation;
 mod screens;
 pub use screens::detail::InitialComments;
 mod text;
