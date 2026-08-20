@@ -56,7 +56,7 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("could not enter {}: {e}", workdir.display()))?;
 
     if cli.check {
-        gistui::gh::check_gh_ready()?;
+        gistui::gh::check_gh_ready(&gistui::actions::SystemRunner)?;
         println!("gh is installed and authenticated");
         return Ok(());
     }

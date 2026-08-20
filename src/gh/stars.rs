@@ -1,7 +1,7 @@
 //! Stargazer counts via a batched GraphQL query (issue #301).
 
 use super::escape_graphql_string;
-use crate::actions::{run_command, CommandPlan, CommandRunner, SystemRunner};
+use crate::actions::{run_command, CommandPlan, CommandRunner};
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 
@@ -58,11 +58,7 @@ pub fn parse_stargazer_counts_graphql(raw: &str) -> Result<HashMap<String, u32>>
     Ok(out)
 }
 
-pub fn collect_gist_star_counts(node_ids: HashMap<String, String>) -> HashMap<String, u32> {
-    collect_gist_star_counts_with(&SystemRunner, node_ids)
-}
-
-pub fn collect_gist_star_counts_with(
+pub fn collect_gist_star_counts(
     runner: &dyn CommandRunner,
     node_ids: HashMap<String, String>,
 ) -> HashMap<String, u32> {

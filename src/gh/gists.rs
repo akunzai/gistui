@@ -1,7 +1,7 @@
 //! Gist listing, node-id mapping, and file-content fetch (issue #301).
 
 use super::{parse_gh_gists, raw_url_fetch_plan};
-use crate::actions::{run_command, CommandPlan, CommandRunner, SystemRunner};
+use crate::actions::{run_command, CommandPlan, CommandRunner};
 use crate::domain::GistFile;
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -115,27 +115,15 @@ pub fn merge_gist_node_id_maps(
     map
 }
 
-pub fn fetch_gist_list_json() -> Result<String> {
-    fetch_gist_list_json_with(&SystemRunner)
-}
-
-pub fn fetch_gist_list_json_with(runner: &dyn CommandRunner) -> Result<String> {
+pub fn fetch_gist_list_json(runner: &dyn CommandRunner) -> Result<String> {
     run_command(runner, &gist_list_plan())
 }
 
-pub fn fetch_gist_starred_list_json() -> Result<String> {
-    fetch_gist_starred_list_json_with(&SystemRunner)
-}
-
-pub fn fetch_gist_starred_list_json_with(runner: &dyn CommandRunner) -> Result<String> {
+pub fn fetch_gist_starred_list_json(runner: &dyn CommandRunner) -> Result<String> {
     run_command(runner, &gist_starred_list_plan())
 }
 
-pub fn fetch_current_user_login() -> Result<String> {
-    fetch_current_user_login_with(&SystemRunner)
-}
-
-pub fn fetch_current_user_login_with(runner: &dyn CommandRunner) -> Result<String> {
+pub fn fetch_current_user_login(runner: &dyn CommandRunner) -> Result<String> {
     let raw = run_command(runner, &current_user_plan())?;
     let login = raw.trim().trim_matches('"').to_string();
     if login.is_empty() {
@@ -151,14 +139,6 @@ pub fn parse_starred_gist_ids(raw: &str) -> Result<std::collections::HashSet<Str
 }
 
 pub fn fetch_gist_file_content(
-    gist_id: &str,
-    filename: &str,
-    raw_url: Option<&str>,
-) -> Result<String> {
-    fetch_gist_file_content_with(&SystemRunner, gist_id, filename, raw_url)
-}
-
-pub fn fetch_gist_file_content_with(
     runner: &dyn CommandRunner,
     gist_id: &str,
     filename: &str,
@@ -240,7 +220,7 @@ mod tests {
             },
         ]);
 
-        let content = fetch_gist_file_content_with(&runner, "id", "file.md", Some(url)).unwrap();
+        let content = fetch_gist_file_content(&runner, "id", "file.md", Some(url)).unwrap();
         assert_eq!(content, "big content");
         let calls = runner.calls();
         assert_eq!(calls[0], gist_view_plan("id", "file.md"));

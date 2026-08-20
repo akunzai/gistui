@@ -3,6 +3,7 @@
 //! so call sites do not own parallel channel fields by hand (issue #243).
 
 use super::*;
+use crate::actions::SystemRunner;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::path::PathBuf;
@@ -55,13 +56,25 @@ pub(super) fn fetch_revision_incremental_pair(
     owner_login: &str,
 ) -> std::result::Result<(String, String), String> {
     let new_content = ensure_fetched_text(
-        crate::gh::fetch_revision_file_text_optional(gist_id, child_version, filename, owner_login)
-            .map_err(|e| e.to_string())?,
+        crate::gh::fetch_revision_file_text_optional(
+            &SystemRunner,
+            gist_id,
+            child_version,
+            filename,
+            owner_login,
+        )
+        .map_err(|e| e.to_string())?,
     )?;
     let old_content = match parent_version {
         Some(parent) => ensure_fetched_text(
-            crate::gh::fetch_revision_file_text_optional(gist_id, parent, filename, owner_login)
-                .map_err(|e| e.to_string())?,
+            crate::gh::fetch_revision_file_text_optional(
+                &SystemRunner,
+                gist_id,
+                parent,
+                filename,
+                owner_login,
+            )
+            .map_err(|e| e.to_string())?,
         )?,
         None => String::new(),
     };
@@ -78,7 +91,7 @@ pub(super) fn fetch_revision_pair(
     _new_label: &str,
 ) -> std::result::Result<(String, String), String> {
     let old_content = ensure_fetched_text(
-        crate::gh::fetch_revision_file_text(gist_id, version, filename, owner_login)
+        crate::gh::fetch_revision_file_text(&SystemRunner, gist_id, version, filename, owner_login)
             .map_err(|e| e.to_string())?,
     )?;
     let new_content = fetch_gist_content(gist_id, filename, raw_url)?;
@@ -90,7 +103,7 @@ pub(super) fn fetch_gist_content(
     filename: &str,
     raw_url: Option<&str>,
 ) -> std::result::Result<String, String> {
-    let content = crate::gh::fetch_gist_file_content(gist_id, filename, raw_url)
+    let content = crate::gh::fetch_gist_file_content(&SystemRunner, gist_id, filename, raw_url)
         .map_err(|e| e.to_string())?;
     crate::domain::ensure_text_size(content.len() as u64)?;
     Ok(content)
@@ -175,15 +188,16 @@ pub(super) fn spawn_update_check(
 pub(super) fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<GistFetchResult> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = if crate::gh::check_gh_ready().is_ok() {
+        let result = if crate::gh::check_gh_ready(&SystemRunner).is_ok() {
             // Owned list, starred list, and current-user login are independent network
             // legs — run them concurrently so large accounts don't pay three sequential
             // round-trips on cold start (issue #223). Soft-fail each leg independently
             // (`.ok()`), matching the previous sequential behaviour.
             let (owned, starred_raw, user_login) = std::thread::scope(|s| {
-                let owned_h = s.spawn(|| crate::gh::fetch_gist_list_json().ok());
-                let starred_h = s.spawn(|| crate::gh::fetch_gist_starred_list_json().ok());
-                let user_h = s.spawn(|| crate::gh::fetch_current_user_login().ok());
+                let owned_h = s.spawn(|| crate::gh::fetch_gist_list_json(&SystemRunner).ok());
+                let starred_h =
+                    s.spawn(|| crate::gh::fetch_gist_starred_list_json(&SystemRunner).ok());
+                let user_h = s.spawn(|| crate::gh::fetch_current_user_login(&SystemRunner).ok());
                 (
                     owned_h.join().unwrap_or(None),
                     starred_h.join().unwrap_or(None),
@@ -237,6 +251,7 @@ pub(super) fn spawn_fork_count_fetch(
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let counts = crate::gh::collect_gist_fork_counts(
+            &SystemRunner,
             owned_raw.as_deref(),
             starred_raw.as_deref(),
             gist_ids,
@@ -251,7 +266,7 @@ pub(super) fn spawn_star_count_fetch(
 ) -> std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let counts = crate::gh::collect_gist_star_counts(node_ids);
+        let counts = crate::gh::collect_gist_star_counts(&SystemRunner, node_ids);
         let _ = tx.send(counts);
     });
     rx
@@ -262,7 +277,7 @@ pub(super) fn spawn_fork_metadata_fetch(
 ) -> std::sync::mpsc::Receiver<ForkMetaResult> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let fork_of = crate::gh::collect_owned_fork_of_ids(owned_ids);
+        let fork_of = crate::gh::collect_owned_fork_of_ids(&SystemRunner, owned_ids);
         let _ = tx.send(fork_of);
     });
     rx
@@ -301,7 +316,8 @@ type ActionRx = Option<std::sync::mpsc::Receiver<(u64, ActionApply)>>;
 /// Initial newest-first comment load: probe the total, then fetch the newest page.
 /// Thin IO boundary (network) — not unit-tested.
 pub(super) fn load_initial_comments(gist_id: &str) -> Result<crate::tui::InitialComments, String> {
-    let probe = crate::gh::fetch_gist_comments_probe(gist_id).map_err(|e| e.to_string())?;
+    let probe =
+        crate::gh::fetch_gist_comments_probe(&SystemRunner, gist_id).map_err(|e| e.to_string())?;
     let total = crate::gh::comments_total_from_probe(&probe);
     if total == 0 {
         return Ok(crate::tui::InitialComments {
@@ -311,9 +327,13 @@ pub(super) fn load_initial_comments(gist_id: &str) -> Result<crate::tui::Initial
         });
     }
     let oldest_page = crate::gh::last_page(total, crate::gh::COMMENTS_PAGE_SIZE);
-    let raw =
-        crate::gh::fetch_gist_comments_page(gist_id, oldest_page, crate::gh::COMMENTS_PAGE_SIZE)
-            .map_err(|e| e.to_string())?;
+    let raw = crate::gh::fetch_gist_comments_page(
+        &SystemRunner,
+        gist_id,
+        oldest_page,
+        crate::gh::COMMENTS_PAGE_SIZE,
+    )
+    .map_err(|e| e.to_string())?;
     let comments = crate::gh::parse_gist_comments_json(&raw).map_err(|e| e.to_string())?;
     Ok(crate::tui::InitialComments {
         comments,

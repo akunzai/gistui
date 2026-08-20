@@ -1,6 +1,7 @@
 //! `Screen::Revisions` — key handling, view-model, paint, palette items, and apply handlers
 //! colocated in one file (issue #287, Phase 2; issue #383).
 
+use crate::actions::SystemRunner;
 use crate::tui::bg::{revision_version_label, Jobs, LoopFlow};
 use crate::tui::keys::{point_in, NavAction, PAGE_SCROLL};
 use crate::tui::render::list_pane::render_list_pane;
@@ -481,7 +482,7 @@ pub(crate) fn request_revisions(jobs: &mut Jobs, state: &mut AppState, gist_id: 
         state,
         "Loading revisions…",
         move || {
-            let result = crate::gh::fetch_gist_commits_json(&gist_id)
+            let result = crate::gh::fetch_gist_commits_json(&SystemRunner, &gist_id)
                 .map_err(|e| e.to_string())
                 .and_then(|raw| {
                     crate::gh::parse_gist_commits_json(&raw).map_err(|e| e.to_string())

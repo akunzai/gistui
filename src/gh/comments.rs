@@ -1,7 +1,7 @@
 //! Gist comment fetch/parse/pagination (issue #301).
 
 use super::{parse_gh_gists, GhCommentUser};
-use crate::actions::{run_command, CommandPlan, CommandRunner, SystemRunner};
+use crate::actions::{run_command, CommandPlan, CommandRunner};
 use crate::domain::GistComment;
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -105,19 +105,11 @@ pub fn gist_comments_page_plan(gist_id: &str, page: u32, per_page: u32) -> Comma
     }
 }
 
-pub fn fetch_gist_comments_probe(gist_id: &str) -> Result<String> {
-    fetch_gist_comments_probe_with(&SystemRunner, gist_id)
-}
-
-pub fn fetch_gist_comments_probe_with(runner: &dyn CommandRunner, gist_id: &str) -> Result<String> {
+pub fn fetch_gist_comments_probe(runner: &dyn CommandRunner, gist_id: &str) -> Result<String> {
     run_command(runner, &gist_comments_probe_plan(gist_id))
 }
 
-pub fn fetch_gist_comments_page(gist_id: &str, page: u32, per_page: u32) -> Result<String> {
-    fetch_gist_comments_page_with(&SystemRunner, gist_id, page, per_page)
-}
-
-pub fn fetch_gist_comments_page_with(
+pub fn fetch_gist_comments_page(
     runner: &dyn CommandRunner,
     gist_id: &str,
     page: u32,
