@@ -27,6 +27,7 @@ Fields stay `pub`. No `#[serde(default)]` on the struct.
 - **`Screen` is `Clone`, not `Copy`** — payload variants own screen-local UI (`@src/tui/mod.rs`, issue #242).
 - **`List` stays a unit tag** — dual-pane selection / filters / sorts are session-global on `AppState` (user story 19).
 - Other variants (`Diff`, `Confirm`, `Preview`, `Help`, `Config`, `Revisions`, `Pins`, `Gists`, `GistDetail`, `Palette`, …) carry payloads (body/scroll/return/origin as needed).
+- **Diff/Confirm/Preview body+scroll** is `ScrollBody` (`@src/tui/scroll.rs`, issue #385), reached only via `scroll_body` / `scroll_body_mut`. The ten `diff_body_text` / `scroll_diff_*` methods are gone. `apply_navigation` handles `scroll_body_mut` before the `Screen` match (Pins/Gists still return earlier). Help and Detail comments have no `ScrollBody`.
 - **`nav_stack`** (issue #271) holds return targets; Esc pops. Prefer stack ops over parallel “return” root fields for new navigation.
 - Staged root fields (`diff_return` / `preview_return` / `staged_diff_gist` and similar) are consumed on enter only when still present.
 - **`back_to_list()` is a hard reset** (clears `nav_stack`) — reserve it for paths whose only possible origin is `Screen::List` itself. Confirm-execute paths with more than one possible origin (e.g. `ExecuteDelete`, `ExecuteCompactGist` in `dispatch.rs`) use `leave()`/`cancel_confirm()` instead, to return to whichever screen actually launched them; pop an extra time if the popped screen is now stale (e.g. `GistDetail` for a gist just deleted).
@@ -40,6 +41,7 @@ handle_key (pure) → KeyOutcome → run_loop / dispatch_outcome (IO)
 - New key logic → `AppState::handle_key` (testable).
 - New IO → `dispatch` / `bg` helpers, not `handle_key`.
 - IO-bearing `KeyOutcome` variants carry payloads (issue #244): `@src/tui/mod.rs` (`KeyOutcome`), `@src/tui/dispatch.rs`.
+- Diff/Confirm/Preview scroll keys go through `scroll_body_mut` (issue #385), not per-axis `AppState` methods.
 
 ## Keymap (`@src/tui/keymap.rs`)
 

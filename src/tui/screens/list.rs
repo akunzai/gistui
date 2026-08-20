@@ -854,7 +854,7 @@ mod tests {
         state.back_to_list();
         assert_eq!(state.screen, Screen::List);
         assert!(!state.diff_previewed());
-        assert!(state.diff_body_text().is_empty());
+        assert!(state.scroll_body().is_none());
         assert!(state.preview_remote().is_empty());
         assert_eq!(state.preview_local(), PathBuf::new());
         assert_eq!(state.download_target(), PathBuf::new());

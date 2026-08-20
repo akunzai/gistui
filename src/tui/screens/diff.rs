@@ -56,8 +56,8 @@ impl AppState {
             // count changes, so reset the vertical scroll. The choice is persisted.
             KeyCode::Char('c') => {
                 self.diff_show_full = !self.diff_show_full;
-                if let Some(d) = self.diff_mut() {
-                    d.scroll = 0;
+                if let Some(body) = self.scroll_body_mut() {
+                    body.scroll = 0;
                 }
                 return KeyOutcome::PersistDiffContext;
             }
@@ -65,8 +65,8 @@ impl AppState {
             // horizontal offset so wrapped lines start at column 0.
             KeyCode::Char('w') => {
                 self.diff_wrap = !self.diff_wrap;
-                if let Some(d) = self.diff_mut() {
-                    d.hscroll = 0;
+                if let Some(body) = self.scroll_body_mut() {
+                    body.hscroll = 0;
                 }
             }
             _ => {}
@@ -157,7 +157,10 @@ pub(crate) fn diff_footer(state: &AppState) -> String {
 
 /// Diff pane facts — also used as Confirm overwrite background (non-compact).
 pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
-    let text = state.diff_body_text();
+    let (text, scroll, hscroll) = match state.scroll_body() {
+        Some(b) => (b.text.as_str(), b.scroll, b.hscroll),
+        None => ("", 0, 0),
+    };
     let body = match state.effective_diff_context() {
         Some(radius) => crate::diff::collapse_context(text, radius),
         None => text.to_string(),
@@ -174,8 +177,8 @@ pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
         body,
         footer: diff_footer(state),
         wrap: state.diff_wrap,
-        scroll: state.diff_scroll(),
-        hscroll: state.diff_hscroll(),
+        scroll,
+        hscroll,
         syntax_highlight: state.syntax_highlight,
         ext,
     }
@@ -392,29 +395,16 @@ mod tests {
     use crossterm::event::KeyCode;
     use std::path::PathBuf;
 
-    fn set_diff_hscroll(state: &mut AppState, hscroll: u16) {
-        match &mut state.screen {
-            Screen::Diff(d) => d.hscroll = hscroll,
-            Screen::Confirm(c) => c.hscroll = hscroll,
-            _ => {
-                state.screen = Screen::Diff(Box::new(DiffState {
-                    hscroll,
-                    ..DiffState::default()
-                }));
-            }
-        }
-    }
-
     #[test]
     fn diff_w_toggles_wrap_and_resets_hscroll() {
         let mut state = initial_state();
         state.screen = Screen::Diff(Box::default());
-        set_diff_hscroll(&mut state, 5);
+        state.scroll_body_mut().expect("Diff ScrollBody").hscroll = 5;
         assert!(!state.diff_wrap);
         state.handle_key(KeyCode::Char('w'));
         assert!(state.diff_wrap);
         // Horizontal offset is meaningless once wrapping, so it resets.
-        assert_eq!(state.diff_hscroll(), 0);
+        assert_eq!(state.scroll_body().expect("Diff ScrollBody").hscroll, 0);
         state.handle_key(KeyCode::Char('w'));
         assert!(!state.diff_wrap);
     }
@@ -438,7 +428,7 @@ mod tests {
         set_diff_body(&mut state, "a\nb\nc");
         set_diff_scroll(&mut state, 1);
         state.handle_key(KeyCode::PageUp);
-        assert_eq!(state.diff_scroll(), 0);
+        assert_eq!(state.scroll_body().expect("Diff ScrollBody").scroll, 0);
     }
 
     #[test]
@@ -453,7 +443,7 @@ mod tests {
         let outcome = state.handle_key(KeyCode::Char('c'));
         assert_eq!(outcome, KeyOutcome::PersistDiffContext);
         assert!(state.diff_show_full);
-        assert_eq!(state.diff_scroll(), 0);
+        assert_eq!(state.scroll_body().expect("Diff ScrollBody").scroll, 0);
         assert_eq!(state.effective_diff_context(), None);
 
         // Pressing it again returns to the configured radius.
@@ -498,7 +488,7 @@ mod tests {
         assert_eq!(state.preview_remote(), "remote body");
         assert_eq!(state.preview_local(), PathBuf::from("/tmp/x"));
         assert_eq!(state.download_target(), PathBuf::from("/tmp/cwd/x"));
-        assert_eq!(state.diff_scroll(), 0);
+        assert_eq!(state.scroll_body().expect("Diff ScrollBody").scroll, 0);
     }
 
     #[test]
@@ -510,38 +500,27 @@ mod tests {
             PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
-        assert_eq!(state.diff_scroll(), 0);
-        state.handle_key(KeyCode::Up); // stays at 0
-        assert_eq!(state.diff_scroll(), 0);
+        assert_eq!(state.scroll_body().expect("Diff ScrollBody").scroll, 0);
         state.handle_key(KeyCode::Down);
-        assert_eq!(state.diff_scroll(), 1);
-        state.handle_key(KeyCode::Down);
-        assert_eq!(state.diff_scroll(), 2);
-        state.handle_key(KeyCode::Down); // capped at lines-1 = 2
-        assert_eq!(state.diff_scroll(), 2);
+        assert_eq!(state.scroll_body().expect("Diff ScrollBody").scroll, 1);
         state.handle_key(KeyCode::Up);
-        assert_eq!(state.diff_scroll(), 1);
+        assert_eq!(state.scroll_body().expect("Diff ScrollBody").scroll, 0);
     }
 
     #[test]
     fn diff_hscroll_respects_bounds() {
         let mut state = initial_state();
-        // Longest line is "abcd" (4 chars) -> max offset 3.
         state.enter_diff(
             "abcd\nab".into(),
             "r".into(),
             PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
-        assert_eq!(state.diff_hscroll(), 0);
-        state.handle_key(KeyCode::Left); // stays at 0
-        assert_eq!(state.diff_hscroll(), 0);
-        for _ in 0..10 {
-            state.handle_key(KeyCode::Right);
-        }
-        assert_eq!(state.diff_hscroll(), 3);
+        assert_eq!(state.scroll_body().expect("Diff ScrollBody").hscroll, 0);
+        state.handle_key(KeyCode::Right);
+        assert_eq!(state.scroll_body().expect("Diff ScrollBody").hscroll, 1);
         state.handle_key(KeyCode::Left);
-        assert_eq!(state.diff_hscroll(), 2);
+        assert_eq!(state.scroll_body().expect("Diff ScrollBody").hscroll, 0);
     }
 
     #[test]

@@ -501,7 +501,7 @@ pub(super) fn copy_gist_url_id(state: &mut AppState, gist_id: &str) {
 /// Copies the full previewed file content (the text shown on `Screen::Preview`) to the
 /// system clipboard.
 pub(super) fn copy_preview_content(state: &mut AppState) {
-    let Some(text) = state.preview().map(|p| p.text.clone()) else {
+    let Some(text) = state.preview().map(|p| p.body.text.clone()) else {
         state.set_status("no content to copy");
         return;
     };

@@ -197,6 +197,19 @@ impl AppState {
         if matches!(self.screen, Screen::Gists(_)) {
             return self.apply_navigation_gists(action);
         }
+        // Diff/Confirm/Preview share ScrollBody; a fourth payload that embeds one gets
+        // these keys for free. Help and Detail comments must not match.
+        if let Some(body) = self.scroll_body_mut() {
+            match action {
+                NavAction::Down => body.down(),
+                NavAction::Up => body.up(),
+                NavAction::PageDown => body.page_down(PAGE_SCROLL),
+                NavAction::PageUp => body.page_up(PAGE_SCROLL),
+                NavAction::Right => body.right(),
+                NavAction::Left => body.left(),
+            }
+            return true;
+        }
         match &mut self.screen {
             Screen::Palette(_) => {
                 let len = self.palette_visible_items().len();
@@ -220,21 +233,14 @@ impl AppState {
             Screen::Revisions(_) => self.apply_navigation_revisions(action),
             Screen::List => self.apply_navigation_list(action),
             Screen::Config(_) => self.apply_navigation_config(action),
-            // Diff, Preview and Confirm all scroll the same diff/preview buffer identically.
-            Screen::Diff(_) | Screen::Preview(_) | Screen::Confirm(_) => {
-                match action {
-                    NavAction::Down => self.scroll_diff_down(),
-                    NavAction::Up => self.scroll_diff_up(),
-                    NavAction::PageDown => self.scroll_diff_page_down(PAGE_SCROLL),
-                    NavAction::PageUp => self.scroll_diff_page_up(PAGE_SCROLL),
-                    NavAction::Right => self.scroll_diff_right(),
-                    NavAction::Left => self.scroll_diff_left(),
-                }
-                true
-            }
-            // Exhaustiveness only — Pins/Gists return above before this match.
-            Screen::Pins(_) | Screen::Gists(_) => {
-                unreachable!("Pins/Gists navigation is handled before the match")
+            // Exhaustiveness only — Pins/Gists return above; Diff/Confirm/Preview use
+            // scroll_body_mut before this match.
+            Screen::Pins(_)
+            | Screen::Gists(_)
+            | Screen::Diff(_)
+            | Screen::Preview(_)
+            | Screen::Confirm(_) => {
+                unreachable!("Pins/Gists and ScrollBody screens are handled before the match")
             }
         }
     }
@@ -796,7 +802,7 @@ mod tests {
 
     #[test]
     fn scroll_down_moves_content_three_lines() {
-        // Set up a Diff screen with enough lines that diff_scroll can reach 3.
+        // Set up a Diff screen with enough lines that wheel-down can reach 3.
         let mut state = state_with_selection();
         state.enter_diff(
             "line1\nline2\nline3\nline4\nline5".into(),
@@ -805,9 +811,9 @@ mod tests {
             std::path::PathBuf::from("/tmp/cwd/x"),
         );
         assert!(state.screen.is_diff());
-        assert_eq!(state.diff_scroll(), 0);
+        assert_eq!(state.scroll_body().expect("Diff ScrollBody").scroll, 0);
         state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
-        assert_eq!(state.diff_scroll(), 3);
+        assert_eq!(state.scroll_body().expect("Diff ScrollBody").scroll, 3);
     }
 
     #[test]
@@ -821,7 +827,7 @@ mod tests {
         );
         set_diff_scroll(&mut state, 3);
         state.handle_mouse(MouseInput::ScrollUp, &MouseLayout::default());
-        assert_eq!(state.diff_scroll(), 0);
+        assert_eq!(state.scroll_body().expect("Diff ScrollBody").scroll, 0);
     }
 
     #[test]

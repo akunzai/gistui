@@ -389,7 +389,11 @@ mod tests {
             state.upload.watching,
             "still watching — editor hasn't closed yet"
         );
-        assert!(state.diff_body_text().contains("new"));
+        assert!(state
+            .scroll_body()
+            .expect("Confirm ScrollBody")
+            .text
+            .contains("new"));
     }
 
     #[test]
@@ -518,9 +522,9 @@ mod tests {
         set_pending(&mut state, PendingAction::Download);
         set_diff_body(&mut state, "l1\nl2\nl3");
         assert_eq!(state.handle_key(KeyCode::Down), KeyOutcome::None);
-        assert_eq!(state.diff_scroll(), 1);
+        assert_eq!(state.scroll_body().expect("Confirm ScrollBody").scroll, 1);
         state.handle_key(KeyCode::Up);
-        assert_eq!(state.diff_scroll(), 0);
+        assert_eq!(state.scroll_body().expect("Confirm ScrollBody").scroll, 0);
     }
 
     #[test]

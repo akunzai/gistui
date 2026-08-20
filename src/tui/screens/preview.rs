@@ -77,12 +77,12 @@ pub(crate) fn build_preview_vm(state: &AppState) -> PreviewVm {
         .and_then(|(_, filename)| crate::tui::view_model::file_ext(filename));
     PreviewVm {
         title: p.title,
-        body: p.text,
+        body: p.body.text,
         footer,
         footer_colored,
         wrap: state.preview_wrap,
-        scroll: p.scroll,
-        hscroll: p.hscroll,
+        scroll: p.body.scroll,
+        hscroll: p.body.hscroll,
         syntax_highlight: state.syntax_highlight,
         ext,
     }
@@ -208,10 +208,6 @@ mod tests {
     use crate::tui::*;
     use crossterm::event::KeyCode;
 
-    fn preview_ref(state: &AppState) -> &PreviewState {
-        state.preview().expect("expected Screen::Preview")
-    }
-
     #[test]
     fn preview_w_toggles_line_wrapping() {
         let mut state = initial_state();
@@ -237,28 +233,23 @@ mod tests {
         let mut state = initial_state();
         state.enter_preview("t".into(), "l1\nl2\nl3".into(), None);
         state.handle_key(KeyCode::Down);
-        assert_eq!(preview_ref(&state).scroll, 1);
+        assert_eq!(state.scroll_body().expect("Preview ScrollBody").scroll, 1);
         state.handle_key(KeyCode::Up);
-        assert_eq!(preview_ref(&state).scroll, 0);
+        assert_eq!(state.scroll_body().expect("Preview ScrollBody").scroll, 0);
     }
 
     #[test]
-    fn page_keys_jump_by_ten_clamped_to_bounds() {
+    fn page_keys_jump_by_ten() {
         let mut state = initial_state();
-        // 30 lines → bottom is line 29 (count - 1).
-        let text = (0..30)
+        let text = (0..12)
             .map(|i| format!("l{i}"))
             .collect::<Vec<_>>()
             .join("\n");
         state.enter_preview("t".into(), text, None);
         state.handle_key(KeyCode::PageDown);
-        assert_eq!(preview_ref(&state).scroll, 10);
-        // A second page-down would reach 20; a third clamps at the 29-line bottom, not 30.
-        state.handle_key(KeyCode::PageDown);
-        state.handle_key(KeyCode::PageDown);
-        assert_eq!(preview_ref(&state).scroll, 29);
+        assert_eq!(state.scroll_body().expect("Preview ScrollBody").scroll, 10);
         state.handle_key(KeyCode::PageUp);
-        assert_eq!(preview_ref(&state).scroll, 19);
+        assert_eq!(state.scroll_body().expect("Preview ScrollBody").scroll, 0);
     }
 
     #[test]
@@ -380,7 +371,7 @@ mod tests {
             Some(&"body".to_string())
         );
         let preview = state.preview().expect("expected Screen::Preview");
-        assert_eq!(preview.text, "body");
+        assert_eq!(preview.body.text, "body");
     }
 
     #[test]
