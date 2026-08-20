@@ -33,108 +33,6 @@ pub(super) enum UploadEditWatchEvent {
     },
 }
 
-pub(super) enum BgTaskOutcome {
-    PreviewDiff {
-        result: std::result::Result<String, String>,
-        local_path: Option<PathBuf>,
-        local_label: String,
-        gist_label: String,
-        target: PathBuf,
-        // True when the local pane was focused at trigger time: frame the preview as an
-        // upload (old = gist, new = local) instead of a download.
-        upload_orientation: bool,
-    },
-    DownloadSelected {
-        result: std::result::Result<String, String>,
-        target: PathBuf,
-        local_label: String,
-        gist_label: String,
-        file: crate::domain::GistFileRef,
-    },
-    UploadPreview {
-        result: std::result::Result<String, String>,
-        file: crate::domain::GistFileRef,
-        local_path: PathBuf,
-        local_label: String,
-        gist_label: String,
-    },
-    UploadReplace {
-        result: std::result::Result<(), String>,
-        file: crate::domain::GistFileRef,
-    },
-    CreateGist {
-        result: std::result::Result<(), String>,
-        local_path: PathBuf,
-        public: bool,
-    },
-    PreviewContent {
-        result: std::result::Result<String, String>,
-        file: crate::domain::GistFileRef,
-        preview_title: String,
-    },
-    DeleteGist {
-        result: std::result::Result<(), String>,
-        gist_id: String,
-    },
-    RemoveFile {
-        result: std::result::Result<(), String>,
-        gist_id: String,
-        filename: String,
-    },
-    ApplyDescription {
-        result: std::result::Result<(), String>,
-        gist_id: String,
-    },
-    CompactAnalyze {
-        result: std::result::Result<usize, String>,
-        gist_id: String,
-        label: String,
-    },
-    CompactGist {
-        result: std::result::Result<(), String>,
-        label: String,
-        count: usize,
-    },
-    CommentsInitialLoaded {
-        gist_id: String,
-        result: Result<crate::tui::InitialComments, String>,
-    },
-    CommentsOlderLoaded {
-        gist_id: String,
-        result: Result<Vec<GistComment>, String>,
-    },
-    RevisionsFetched {
-        gist_id: String,
-        result: std::result::Result<Vec<crate::domain::GistRevision>, String>,
-    },
-    RevisionDiff {
-        result: std::result::Result<(String, String), String>,
-        old_label: String,
-        new_label: String,
-    },
-    RestoreRevisionReady {
-        result: std::result::Result<(String, String), String>,
-        gist_id: String,
-        filename: String,
-        version: String,
-        version_label: String,
-    },
-    RestoreRevisionDone {
-        result: std::result::Result<(), String>,
-        gist_id: String,
-        filename: String,
-    },
-    GistStarToggle {
-        result: std::result::Result<(), String>,
-        gist_id: String,
-        starred: bool,
-    },
-    ForkGist {
-        result: std::result::Result<(), String>,
-        gist_id: String,
-    },
-}
-
 pub(super) fn revision_version_label(revision: &crate::domain::GistRevision) -> String {
     let sha = crate::domain::short_sha(&revision.version);
     let age = crate::domain::parse_rfc3339_to_unix(&revision.committed_at)
@@ -392,8 +290,13 @@ fn spawn_local_scan(
     rx
 }
 
-/// Background per-action outcome stamped with the generation active at spawn time.
-type ActionRx = Option<std::sync::mpsc::Receiver<(u64, BgTaskOutcome)>>;
+/// Work that ran off-thread, ready to apply on the event-loop tick (issue #375).
+/// The boxed closure captures the worker's result; [`Jobs::on_action_outcome`]
+/// calls it after the generation guard.
+type ActionApply = Box<dyn FnOnce(&mut Jobs, &mut AppState) -> LoopFlow + Send>;
+
+/// Background per-action apply, stamped with the generation active at spawn time.
+type ActionRx = Option<std::sync::mpsc::Receiver<(u64, ActionApply)>>;
 
 /// Initial newest-first comment load: probe the total, then fetch the newest page.
 /// Thin IO boundary (network) — not unit-tested.
@@ -455,15 +358,14 @@ pub(super) fn spawn_pin_push(
     let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
     let (local_label, gist_label) =
         diff_labels(Some(&local_path), &state.gist_file_for_diff(&file));
-    jobs.spawn_gist_fetch_action(state, "Loading diff…", file, move |result, file| {
-        BgTaskOutcome::UploadPreview {
-            result,
-            file,
-            local_path,
-            local_label,
-            gist_label,
-        }
-    });
+    jobs.spawn_gist_fetch_action(
+        state,
+        "Loading diff…",
+        file,
+        move |result, file, jobs, state| {
+            jobs.on_upload_preview(state, result, file, local_path, local_label, gist_label)
+        },
+    );
 }
 
 /// Spawn the pull (download gist → local) flow for a pin: lands in the existing
@@ -480,15 +382,14 @@ pub(super) fn spawn_pin_pull(
     let raw_url = state.gist_file_raw_url(&gist_id, &filename);
     let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
     let (local_label, gist_label) = diff_labels(Some(&target), &state.gist_file_for_diff(&file));
-    jobs.spawn_gist_fetch_action(state, "Downloading…", file, move |result, file| {
-        BgTaskOutcome::DownloadSelected {
-            result,
-            target,
-            local_label,
-            gist_label,
-            file,
-        }
-    });
+    jobs.spawn_gist_fetch_action(
+        state,
+        "Downloading…",
+        file,
+        move |result, file, jobs, state| {
+            jobs.on_download_selected(state, result, target, local_label, gist_label, file)
+        },
+    );
 }
 
 /// Spawn a read-only diff (gist vs local) for a pin, landing on `Screen::Diff`.
@@ -506,18 +407,24 @@ pub(super) fn spawn_pin_diff(
     let file = crate::domain::GistFileRef::new(gist_id, filename, raw_url);
     let (local_label, gist_label) = diff_labels(Some(&local_abs), &state.gist_file_for_diff(&file));
     let target = local_abs.clone();
-    jobs.spawn_gist_fetch_action(state, "Loading diff…", file, move |result, _file| {
-        BgTaskOutcome::PreviewDiff {
-            result,
-            local_path: Some(local_abs),
-            local_label,
-            gist_label,
-            target,
+    jobs.spawn_gist_fetch_action(
+        state,
+        "Loading diff…",
+        file,
+        move |result, _file, jobs, state| {
             // Pin diffs originate from the Pins screen (no focused pane); keep the
             // historical download orientation (old = local, new = gist).
-            upload_orientation: false,
-        }
-    });
+            jobs.on_preview_diff(
+                state,
+                result,
+                Some(local_abs),
+                local_label,
+                gist_label,
+                target,
+                false,
+            )
+        },
+    );
 }
 
 /// If `(local_abs, gist_id, filename)` is a pinned pair, record the sync result
@@ -1169,40 +1076,63 @@ impl Jobs {
         }
     }
 
-    /// Run `work` on a background thread. Sets `bg_task_msg` and stamps the result with
-    /// the current action-job generation (issue #221).
-    pub(super) fn spawn_action<F>(&mut self, state: &mut AppState, msg: impl Into<String>, work: F)
-    where
-        F: FnOnce() -> BgTaskOutcome + Send + 'static,
+    /// Run `run` on a background thread; apply `apply(value)` on the event-loop tick.
+    /// Sets `bg_task_msg` and stamps the result with the current action-job generation
+    /// (issue #221). `run` must not touch `AppState`; `apply` is the only place that does
+    /// (issue #375).
+    pub(super) fn spawn_action<T, R, A>(
+        &mut self,
+        state: &mut AppState,
+        msg: impl Into<String>,
+        run: R,
+        apply: A,
+    ) where
+        T: Send + 'static,
+        R: FnOnce() -> T + Send + 'static,
+        A: FnOnce(T, &mut Jobs, &mut AppState) -> LoopFlow + Send + 'static,
     {
         let generation = state.begin_bg_task();
         state.bg_task_msg = Some(msg.into());
         let (tx, rx) = std::sync::mpsc::channel();
         self.action = Some(rx);
         std::thread::spawn(move || {
-            let _ = tx.send((generation, work()));
+            let value = run();
+            let boxed: ActionApply = Box::new(move |jobs, state| apply(value, jobs, state));
+            let _ = tx.send((generation, boxed));
         });
     }
 
     /// Spawn a background job that fetches a gist file's content, then hands the result
-    /// (and the file identity back) to `wrap` to build the `BgTaskOutcome`. Collapses the
-    /// `fetch_gist_content` template shared by `PreviewDiff`/`DownloadSelected`/
-    /// `UploadPreview`/`PreviewContent` across `dispatch.rs` and the pin-spawn helpers
-    /// below (issue #299). `wrap` gets `file` back so variants that store it (all but
-    /// `PreviewDiff`) don't need a second clone.
-    pub(super) fn spawn_gist_fetch_action(
+    /// (and the file identity back) to `apply`. Collapses the `fetch_gist_content`
+    /// template shared by preview/download/upload across `dispatch.rs` and the pin-spawn
+    /// helpers below (issue #299). `apply` gets `file` back so call sites that store it
+    /// (all but preview-diff) don't need a second clone.
+    pub(super) fn spawn_gist_fetch_action<A>(
         &mut self,
         state: &mut AppState,
         msg: impl Into<String>,
         file: crate::domain::GistFileRef,
-        wrap: impl FnOnce(std::result::Result<String, String>, crate::domain::GistFileRef) -> BgTaskOutcome
+        apply: A,
+    ) where
+        A: FnOnce(
+                std::result::Result<String, String>,
+                crate::domain::GistFileRef,
+                &mut Jobs,
+                &mut AppState,
+            ) -> LoopFlow
             + Send
             + 'static,
-    ) {
-        self.spawn_action(state, msg, move || {
-            let result = fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
-            wrap(result, file)
-        });
+    {
+        self.spawn_action(
+            state,
+            msg,
+            move || {
+                let result =
+                    fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
+                (result, file)
+            },
+            move |(result, file), jobs, state| apply(result, file, jobs, state),
+        );
     }
 
     /// Esc cancel: drop the action receiver and invalidate generation so a late completion
@@ -1454,155 +1384,27 @@ impl Jobs {
     /// Returns [`LoopFlow::SkipIteration`] when the outcome should abort the rest of this
     /// event-loop tick (stale revision fetch / no-op restore); otherwise `LoopFlow::Proceed`.
     ///
-    /// A router shell: this owns the generation guard and dispatches each variant to its own
-    /// `on_<variant_snake_case>` method (issue #298) instead of inlining ~480 lines of match
-    /// arms here.
+    /// A router shell: generation guard, then the apply closure the job carried (issue #375).
     fn on_action_outcome(&mut self, state: &mut AppState) -> LoopFlow {
-        if let Some(ref rx) = self.action {
-            if let Ok((generation, outcome)) = rx.try_recv() {
-                self.action = None;
-                if state.is_current_bg_generation(generation) {
-                    state.bg_task_msg = None;
-                    match outcome {
-                        BgTaskOutcome::PreviewDiff {
-                            result,
-                            local_path,
-                            local_label,
-                            gist_label,
-                            target,
-                            upload_orientation,
-                        } => self.on_preview_diff(
-                            state,
-                            result,
-                            local_path,
-                            local_label,
-                            gist_label,
-                            target,
-                            upload_orientation,
-                        ),
-                        BgTaskOutcome::DownloadSelected {
-                            result,
-                            target,
-                            local_label,
-                            gist_label,
-                            file,
-                        } => self.on_download_selected(
-                            state,
-                            result,
-                            target,
-                            local_label,
-                            gist_label,
-                            file,
-                        ),
-                        BgTaskOutcome::UploadPreview {
-                            result,
-                            file,
-                            local_path,
-                            local_label,
-                            gist_label,
-                        } => self.on_upload_preview(
-                            state,
-                            result,
-                            file,
-                            local_path,
-                            local_label,
-                            gist_label,
-                        ),
-                        BgTaskOutcome::UploadReplace { result, file } => {
-                            self.on_upload_replace(state, result, file)
-                        }
-                        BgTaskOutcome::CreateGist {
-                            result,
-                            local_path,
-                            public,
-                        } => self.on_create_gist(state, result, local_path, public),
-                        BgTaskOutcome::PreviewContent {
-                            result,
-                            file,
-                            preview_title,
-                        } => self.on_preview_content(state, result, file, preview_title),
-                        BgTaskOutcome::DeleteGist { result, gist_id } => {
-                            self.on_delete_gist(state, result, gist_id)
-                        }
-                        BgTaskOutcome::RemoveFile {
-                            result,
-                            gist_id,
-                            filename,
-                        } => self.on_remove_file(state, result, gist_id, filename),
-                        BgTaskOutcome::ApplyDescription { result, gist_id } => {
-                            self.on_apply_description(state, result, gist_id)
-                        }
-                        BgTaskOutcome::CompactAnalyze {
-                            result,
-                            gist_id,
-                            label,
-                        } => self.on_compact_analyze(state, result, gist_id, label),
-                        BgTaskOutcome::CompactGist {
-                            result,
-                            label,
-                            count,
-                        } => self.on_compact_gist(state, result, label, count),
-                        BgTaskOutcome::CommentsInitialLoaded { gist_id, result } => {
-                            self.on_comments_initial_loaded(state, gist_id, result)
-                        }
-                        BgTaskOutcome::CommentsOlderLoaded { gist_id, result } => {
-                            self.on_comments_older_loaded(state, gist_id, result)
-                        }
-                        BgTaskOutcome::RevisionsFetched { gist_id, result } => {
-                            if let LoopFlow::SkipIteration =
-                                self.on_revisions_fetched(state, gist_id, result)
-                            {
-                                return LoopFlow::SkipIteration;
-                            }
-                        }
-                        BgTaskOutcome::RevisionDiff {
-                            result,
-                            old_label,
-                            new_label,
-                        } => self.on_revision_diff(state, result, old_label, new_label),
-                        BgTaskOutcome::RestoreRevisionReady {
-                            result,
-                            gist_id,
-                            filename,
-                            version,
-                            version_label,
-                        } => {
-                            if let LoopFlow::SkipIteration = self.on_restore_revision_ready(
-                                state,
-                                result,
-                                gist_id,
-                                filename,
-                                version,
-                                version_label,
-                            ) {
-                                return LoopFlow::SkipIteration;
-                            }
-                        }
-                        BgTaskOutcome::GistStarToggle {
-                            result,
-                            gist_id,
-                            starred,
-                        } => self.on_gist_star_toggle(state, result, gist_id, starred),
-                        BgTaskOutcome::ForkGist { result, gist_id } => {
-                            self.on_fork_gist(state, result, gist_id)
-                        }
-                        BgTaskOutcome::RestoreRevisionDone {
-                            result,
-                            gist_id,
-                            filename,
-                        } => self.on_restore_revision_done(state, result, gist_id, filename),
-                    }
-                } // is_current_bg_generation — stale outcomes are dropped without applying
-            }
+        let Some((generation, apply)) = self.action.as_ref().and_then(|rx| rx.try_recv().ok())
+        else {
+            return LoopFlow::Proceed;
+        };
+        self.action = None;
+        if state.is_current_bg_generation(generation) {
+            state.bg_task_msg = None;
+            apply(self, state)
+        } else {
+            // Stale outcomes are dropped without applying.
+            LoopFlow::Proceed
         }
-        LoopFlow::Proceed
     }
 
     /// `PreviewDiff` outcome: build the local-vs-gist preview diff and, if the two sides are
     /// byte-identical, opportunistically refresh the pin-sync cache with the content already
     /// fetched (see the inline comment below for why).
     #[allow(clippy::too_many_arguments)]
-    fn on_preview_diff(
+    pub(super) fn on_preview_diff(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<String, String>,
@@ -1611,7 +1413,7 @@ impl Jobs {
         gist_label: String,
         target: PathBuf,
         upload_orientation: bool,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok(remote) => {
                 match local_path
@@ -1669,10 +1471,12 @@ impl Jobs {
             }
             Err(error) => state.set_status(format!("fetch failed: {error}")),
         }
+
+        LoopFlow::Proceed
     }
 
     /// `DownloadSelected` outcome: diff against an existing local file, or write a new one.
-    fn on_download_selected(
+    pub(super) fn on_download_selected(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<String, String>,
@@ -1680,7 +1484,7 @@ impl Jobs {
         local_label: String,
         gist_label: String,
         file: crate::domain::GistFileRef,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok(remote) => {
                 if target.exists() {
@@ -1735,11 +1539,13 @@ impl Jobs {
             }
             Err(error) => state.set_status(format!("fetch failed: {error}")),
         }
+
+        LoopFlow::Proceed
     }
 
     /// `UploadPreview` outcome: stage the pending Upload action and open Confirm with the
     /// local-vs-gist diff.
-    fn on_upload_preview(
+    pub(super) fn on_upload_preview(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<String, String>,
@@ -1747,7 +1553,7 @@ impl Jobs {
         local_path: PathBuf,
         local_label: String,
         gist_label: String,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok(remote) => {
                 // Keep staged pin/list return; enter_confirm consumes it.
@@ -1774,16 +1580,18 @@ impl Jobs {
             }
             Err(error) => state.set_status(format!("fetch failed: {error}")),
         }
+
+        LoopFlow::Proceed
     }
 
     /// `UploadReplace` outcome: commit the pin-sync record and return to wherever the upload
     /// was initiated from, then re-fetch the gist list.
-    fn on_upload_replace(
+    pub(super) fn on_upload_replace(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<(), String>,
         file: crate::domain::GistFileRef,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok(_) => {
                 state.gist_content_cache.remove(&file.cache_key());
@@ -1813,16 +1621,18 @@ impl Jobs {
                 // Stay on Confirm payload if still open.
             }
         }
+
+        LoopFlow::Proceed
     }
 
     /// `CreateGist` outcome.
-    fn on_create_gist(
+    pub(super) fn on_create_gist(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<(), String>,
         local_path: PathBuf,
         public: bool,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok(_) => {
                 let visibility = if public { "public" } else { "secret" };
@@ -1841,16 +1651,18 @@ impl Jobs {
                 state.description_input.clear();
             }
         }
+
+        LoopFlow::Proceed
     }
 
     /// `PreviewContent` outcome: cache the fetched content and open the read-only preview.
-    fn on_preview_content(
+    pub(super) fn on_preview_content(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<String, String>,
         file: crate::domain::GistFileRef,
         preview_title: String,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok(content) => {
                 let key = file.cache_key();
@@ -1861,15 +1673,17 @@ impl Jobs {
             }
             Err(error) => state.set_status(format!("fetch failed: {error}")),
         }
+
+        LoopFlow::Proceed
     }
 
     /// `DeleteGist` outcome.
-    fn on_delete_gist(
+    pub(super) fn on_delete_gist(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<(), String>,
         gist_id: String,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok(_) => {
                 state.set_status(format!("Deleted gist {gist_id}"));
@@ -1877,16 +1691,18 @@ impl Jobs {
             }
             Err(error) => state.set_status(format!("delete failed: {error}")),
         }
+
+        LoopFlow::Proceed
     }
 
     /// `RemoveFile` outcome.
-    fn on_remove_file(
+    pub(super) fn on_remove_file(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<(), String>,
         gist_id: String,
         filename: String,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok(_) => {
                 state
@@ -1897,15 +1713,17 @@ impl Jobs {
             }
             Err(error) => state.set_status(format!("remove failed: {error}")),
         }
+
+        LoopFlow::Proceed
     }
 
     /// `ApplyDescription` outcome.
-    fn on_apply_description(
+    pub(super) fn on_apply_description(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<(), String>,
         gist_id: String,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok(_) => {
                 state.set_status(format!("Updated description for gist {gist_id}"));
@@ -1913,17 +1731,19 @@ impl Jobs {
             }
             Err(error) => state.set_status(format!("description update failed: {error}")),
         }
+
+        LoopFlow::Proceed
     }
 
     /// `CompactAnalyze` outcome: a single-revision gist has nothing to compact; otherwise open
     /// the Confirm warning before compacting.
-    fn on_compact_analyze(
+    pub(super) fn on_compact_analyze(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<usize, String>,
         gist_id: String,
         label: String,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok(count) if count <= 1 => state.set_status(format!(
                 "\"{label}\" already has a single revision — nothing to compact"
@@ -1945,16 +1765,18 @@ impl Jobs {
             }
             Err(error) => state.set_status(format!("revision check failed: {error}")),
         }
+
+        LoopFlow::Proceed
     }
 
     /// `CompactGist` outcome.
-    fn on_compact_gist(
+    pub(super) fn on_compact_gist(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<(), String>,
         label: String,
         count: usize,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok(_) => {
                 state.set_status(format!("Compacted \"{label}\" ({count} → 1 revision)"));
@@ -1962,31 +1784,37 @@ impl Jobs {
             }
             Err(error) => state.set_status(format!("compact failed: {error}")),
         }
+
+        LoopFlow::Proceed
     }
 
     /// `CommentsInitialLoaded` outcome.
-    fn on_comments_initial_loaded(
+    pub(super) fn on_comments_initial_loaded(
         &mut self,
         state: &mut AppState,
         gist_id: String,
         result: Result<crate::tui::InitialComments, String>,
-    ) {
+    ) -> LoopFlow {
         state.apply_initial_comments(&gist_id, result);
+
+        LoopFlow::Proceed
     }
 
     /// `CommentsOlderLoaded` outcome.
-    fn on_comments_older_loaded(
+    pub(super) fn on_comments_older_loaded(
         &mut self,
         state: &mut AppState,
         gist_id: String,
         result: Result<Vec<GistComment>, String>,
-    ) {
+    ) -> LoopFlow {
         state.apply_older_comments(&gist_id, result);
+
+        LoopFlow::Proceed
     }
 
     /// `RevisionsFetched` outcome. Returns [`LoopFlow::SkipIteration`] if the fetch belongs to
     /// a gist the Revisions screen has since navigated away from.
-    fn on_revisions_fetched(
+    pub(super) fn on_revisions_fetched(
         &mut self,
         state: &mut AppState,
         gist_id: String,
@@ -2017,13 +1845,13 @@ impl Jobs {
     }
 
     /// `RevisionDiff` outcome: diff two historical revisions of the same file.
-    fn on_revision_diff(
+    pub(super) fn on_revision_diff(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<(String, String), String>,
         old_label: String,
         new_label: String,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok((old_content, new_content)) => {
                 let diff = crate::diff::unified_diff(
@@ -2041,11 +1869,13 @@ impl Jobs {
             }
             Err(error) => state.set_status(error),
         }
+
+        LoopFlow::Proceed
     }
 
     /// `RestoreRevisionReady` outcome. Returns [`LoopFlow::SkipIteration`] when the revision
     /// content matches current (nothing to restore).
-    fn on_restore_revision_ready(
+    pub(super) fn on_restore_revision_ready(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<(String, String), String>,
@@ -2088,13 +1918,13 @@ impl Jobs {
     }
 
     /// `GistStarToggle` outcome.
-    fn on_gist_star_toggle(
+    pub(super) fn on_gist_star_toggle(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<(), String>,
         gist_id: String,
         starred: bool,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok(()) => {
                 if starred {
@@ -2108,15 +1938,17 @@ impl Jobs {
             }
             Err(error) => state.set_status(format!("star toggle failed: {error}")),
         }
+
+        LoopFlow::Proceed
     }
 
     /// `ForkGist` outcome.
-    fn on_fork_gist(
+    pub(super) fn on_fork_gist(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<(), String>,
         gist_id: String,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok(()) => {
                 state.set_status(format!("forked {gist_id} into your account"));
@@ -2124,17 +1956,19 @@ impl Jobs {
             }
             Err(error) => state.set_status(format!("fork failed: {error}")),
         }
+
+        LoopFlow::Proceed
     }
 
     /// `RestoreRevisionDone` outcome: return to the Revisions screen and re-fetch both the
     /// gist list and the revision history for the restored gist.
-    fn on_restore_revision_done(
+    pub(super) fn on_restore_revision_done(
         &mut self,
         state: &mut AppState,
         result: std::result::Result<(), String>,
         gist_id: String,
         filename: String,
-    ) {
+    ) -> LoopFlow {
         match result {
             Ok(_) => {
                 state
@@ -2157,14 +1991,22 @@ impl Jobs {
                 });
                 self.request_gist_fetch(state);
                 if let Some(gist_id) = gist_id {
-                    self.spawn_action(state, "Loading revisions…", move || {
-                        let result = crate::gh::fetch_gist_commits_json(&gist_id)
-                            .map_err(|e| e.to_string())
-                            .and_then(|raw| {
-                                crate::gh::parse_gist_commits_json(&raw).map_err(|e| e.to_string())
-                            });
-                        BgTaskOutcome::RevisionsFetched { gist_id, result }
-                    });
+                    self.spawn_action(
+                        state,
+                        "Loading revisions…",
+                        move || {
+                            let result = crate::gh::fetch_gist_commits_json(&gist_id)
+                                .map_err(|e| e.to_string())
+                                .and_then(|raw| {
+                                    crate::gh::parse_gist_commits_json(&raw)
+                                        .map_err(|e| e.to_string())
+                                });
+                            (result, gist_id)
+                        },
+                        move |(result, gist_id), jobs, state| {
+                            jobs.on_revisions_fetched(state, gist_id, result)
+                        },
+                    );
                 }
             }
             Err(error) => {
@@ -2172,6 +2014,8 @@ impl Jobs {
                 // Stay on Confirm payload if still open.
             }
         }
+
+        LoopFlow::Proceed
     }
 }
 
@@ -2531,10 +2375,9 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         tx.send((
             stale,
-            BgTaskOutcome::DeleteGist {
-                result: Ok(()),
-                gist_id: "g1".into(),
-            },
+            Box::new(|jobs: &mut Jobs, state: &mut AppState| {
+                jobs.on_delete_gist(state, Ok(()), "g1".into())
+            }) as ActionApply,
         ))
         .unwrap();
         let mut jobs = empty_jobs();

@@ -308,8 +308,9 @@ impl GistFile {
 /// Identity of one file inside a gist — the three fields a fetch/sync path needs,
 /// without list-row metadata on [`GistFile`] (issue #276).
 ///
-/// Used on TUI `KeyOutcome` / `BgTaskOutcome` variants so dispatch does not re-split
-/// ad hoc `gist_id`/`filename`/`raw_url` bags. Labels and local paths stay outside.
+/// Used on TUI `KeyOutcome` variants and action-job apply closures so dispatch does
+/// not re-split ad hoc `gist_id`/`filename`/`raw_url` bags. Labels and local paths stay
+/// outside.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GistFileRef {
     pub gist_id: String,

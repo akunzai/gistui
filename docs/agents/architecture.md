@@ -7,7 +7,7 @@ Index: [`AGENTS.md`](../../AGENTS.md). Source of truth for types lives in the mo
 | Kind | Modules | Testing |
 | --- | --- | --- |
 | **Pure** (unit-tested) | `domain`, `config`, `ranking`, `local`, `diff`, actions **plan/guard**, `tui::view_model`, `tui::list_ranking` | In-crate unit tests |
-| **Impure** (thin IO) | `gh`, actions **execute**, `tui::run_loop` / `tui::bg` / `tui::pin_sync` | Fixtures / injectable runners only; no live `gh` |
+| **Impure** (thin IO) | `gh`, actions **execute**, `tui::run_loop` / `tui::bg` / `tui::pin_sync` | No live `gh`. Spawn/absorb is thin IO; action-job `on_*` apply handlers in `bg.rs` are unit-tested (#298) |
 
 `build_view_model` (`@src/tui/view_model.rs`): `AppState` + pin-sync cache → presentation facts. Paint helpers apply theme/layout only — no business rules, FS, or network.
 
@@ -52,6 +52,7 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
 - Action jobs and local scans use **generation supersession** (issue #221).
 - Call sites: `jobs.spawn_action` / `request_*` — do not own ad-hoc channel fields on `AppState`.
 - `run_loop` only **polls** `jobs.absorb`.
+- **Action jobs carry their apply** (issue #375, ADR-0002's async-response half): `spawn_action(run, apply)` runs `run` off-thread and boxes `apply(value)` for the event-loop tick. There is no `BgTaskOutcome` enum. `on_action_outcome` is a generation-guard shell that calls the closure. The named `on_*` handlers stay — they are the apply bodies and the unit-test seam (#298); do not inline them into dispatch closures (`dispatch_outcome` is not a unit-test surface). `KeyOutcome` / `dispatch_outcome` stay plain data (ADR-0002).
 
 ## Pin-sync presentation (`@src/tui/pin_sync.rs`)
 
