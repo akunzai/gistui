@@ -129,3 +129,165 @@ impl AppState {
         self.pin_sync_cache.get(index).copied().unwrap_or_default()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::tui::*;
+
+    #[test]
+    fn pin_mtimes_local_falls_back_to_disk_when_not_discovered() {
+        // A pin pointing outside cwd is absent from state.locals, but the Pins list
+        // and sync status should still reflect the file's real mtime by stat-ing it.
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("settings.json");
+        std::fs::write(&outside, "{}").unwrap();
+
+        let mut state = initial_state();
+        state.locals.clear();
+        state.pinned = vec![crate::domain::PinnedMapping {
+            local_path: outside.clone(),
+            gist_id: "g1".into(),
+            gist_filename: "settings.json".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+
+        let (local_ts, _remote_ts) = state.pin_mtimes(0);
+        assert!(
+            local_ts.is_some(),
+            "local mtime should fall back to disk for pins outside cwd"
+        );
+    }
+
+    #[test]
+    fn pin_sync_status_is_missing_when_local_file_absent() {
+        // A pinned local path that doesn't exist on disk should report Missing,
+        // not the generic Unknown ambiguity used when a timestamp is merely
+        // unavailable for other reasons.
+        let dir = tempfile::tempdir().unwrap();
+        let gone = dir.path().join("settings.json");
+        // Deliberately never created — this path must not exist.
+
+        let mut state = initial_state();
+        state.locals.clear();
+        state.pinned = vec![crate::domain::PinnedMapping {
+            local_path: gone,
+            gist_id: "g1".into(),
+            gist_filename: "settings.json".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+        state.gists = vec![GistFile {
+            updated_at: "2026-01-01T00:00:00Z".into(),
+            ..GistFile::fixture("g1", "settings.json")
+        }];
+
+        assert_eq!(
+            {
+                state.refresh_pin_sync_cache();
+                state.cached_pin_sync_status(0)
+            },
+            crate::domain::SyncStatus::Missing,
+            "a pin whose local file doesn't exist must report Missing even though \
+             the gist side has a known mtime"
+        );
+    }
+
+    #[test]
+    fn pin_sync_status_upgrades_to_in_sync_when_content_hash_matches_baseline() {
+        // Timestamps disagree (forcing Push), but the content hash still matches what was
+        // last recorded as synced — the Pins list should show synced (✓), not a misleading
+        // push arrow, since nothing has actually changed content-wise.
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("settings.json");
+        let content = b"{\"key\":\"value\"}";
+        std::fs::write(&local, content).unwrap();
+        let hash = crate::domain::sha256_hex(content);
+
+        let mut state = initial_state();
+        state.locals.clear();
+        state.pinned = vec![crate::domain::PinnedMapping {
+            local_path: local,
+            gist_id: "g1".into(),
+            gist_filename: "settings.json".into(),
+            direction: None,
+            last_seen_hash: Some(hash),
+        }];
+        state.gists = vec![GistFile {
+            // Far in the past, so the just-written local file (mtime ~ now) reads as newer —
+            // sync_status(Some(local_ts), Some(remote_ts)) would normally resolve to Push.
+            updated_at: "2020-01-01T00:00:00Z".into(),
+            ..GistFile::fixture("g1", "settings.json")
+        }];
+
+        assert_eq!(
+            {
+                state.refresh_pin_sync_cache();
+                state.cached_pin_sync_status(0)
+            },
+            crate::domain::SyncStatus::InSync,
+            "a matching content hash must override a stale-timestamp Push into InSync"
+        );
+    }
+
+    #[test]
+    fn pin_sync_status_keeps_push_when_content_hash_does_not_match_baseline() {
+        // Same timestamp setup as above, but the recorded baseline hash doesn't match the
+        // file's actual current content — a real, unrecorded local change. Must stay Push.
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("settings.json");
+        std::fs::write(&local, b"{\"key\":\"value\"}").unwrap();
+
+        let mut state = initial_state();
+        state.locals.clear();
+        state.pinned = vec![crate::domain::PinnedMapping {
+            local_path: local,
+            gist_id: "g1".into(),
+            gist_filename: "settings.json".into(),
+            direction: None,
+            last_seen_hash: Some("does-not-match-anything".into()),
+        }];
+        state.gists = vec![GistFile {
+            updated_at: "2020-01-01T00:00:00Z".into(),
+            ..GistFile::fixture("g1", "settings.json")
+        }];
+
+        assert_eq!(
+            {
+                state.refresh_pin_sync_cache();
+                state.cached_pin_sync_status(0)
+            },
+            crate::domain::SyncStatus::Push,
+            "a non-matching baseline hash must not mask a real content change"
+        );
+    }
+
+    #[test]
+    fn pin_sync_status_keeps_push_when_no_baseline_hash_recorded() {
+        // Regression guard: a pin that was never synced (no baseline hash at all) must fall
+        // back to the plain timestamp-based status, not attempt a hash comparison.
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("settings.json");
+        std::fs::write(&local, b"{\"key\":\"value\"}").unwrap();
+
+        let mut state = initial_state();
+        state.locals.clear();
+        state.pinned = vec![crate::domain::PinnedMapping {
+            local_path: local,
+            gist_id: "g1".into(),
+            gist_filename: "settings.json".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+        state.gists = vec![GistFile {
+            updated_at: "2020-01-01T00:00:00Z".into(),
+            ..GistFile::fixture("g1", "settings.json")
+        }];
+
+        state.refresh_pin_sync_cache();
+        assert_eq!(
+            state.cached_pin_sync_status(0),
+            crate::domain::SyncStatus::Push
+        );
+    }
+}

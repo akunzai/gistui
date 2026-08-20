@@ -2343,18 +2343,287 @@ mod theme;
 pub use theme::Theme;
 mod view_model;
 pub(crate) use view_model::{build_view_model, gist_row_display, ScreenVm};
-// Only exercised by tests.rs's `use super::*` — view_model.rs's own build_*_vm functions call
-// these directly without needing the re-export.
 #[cfg(test)]
-pub(crate) use screens::confirm::confirm_modal_style;
-#[cfg(test)]
-pub(crate) use screens::detail::detail_focus_tab;
-#[cfg(test)]
-pub(crate) use screens::diff::{diff_footer, diff_title};
-#[cfg(test)]
-pub(crate) use screens::pins::{pin_row_label, PinLabelParams};
-#[cfg(test)]
-pub(crate) use view_model::confirm_prompt;
+mod test_support;
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    use super::test_support::{set_pending, state_with_gists};
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Issue #348: the diff header's gist side must show the real update time when the gist is
+    /// already loaded in memory (e.g. it's listed in Gist manager or Pinned Mappings), not
+    /// `(unknown)` — the throwaway `GistFileRef` used to fetch/sync carries no `updated_at` of
+    /// its own, so `gist_file_for_diff` must fill it in from the owned/starred lists.
+    #[test]
+    fn gist_file_for_diff_fills_updated_at_from_loaded_gists() {
+        let state = state_with_gists();
+        let file = GistFileRef::id_name("g1", "a.txt");
+        let resolved = state.gist_file_for_diff(&file);
+        assert_eq!(resolved.updated_at, "2026-06-10T00:00:00Z");
+
+        let (_, gist_label) = diff_labels(None, &resolved);
+        assert!(
+            gist_label.contains("2026-06-10 00:00 UTC"),
+            "expected the real timestamp in the header, got {gist_label}"
+        );
+        assert!(!gist_label.contains("unknown"), "got {gist_label}");
+    }
+
+    /// Issue #348: `(unknown)` is still shown, but only when the gist genuinely isn't loaded
+    /// anywhere in memory — not as the default for every diff.
+    #[test]
+    fn gist_file_for_diff_falls_back_to_unknown_for_an_unloaded_gist() {
+        let state = initial_state();
+        let file = GistFileRef::id_name("never-loaded", "a.txt");
+        let resolved = state.gist_file_for_diff(&file);
+        let (_, gist_label) = diff_labels(None, &resolved);
+        assert!(gist_label.contains("(unknown)"), "got {gist_label}");
+    }
+
+    /// Issue #348: the lookup must also cover starred (not just owned) gists — one of the call
+    /// sites this fix replaced only checked `state.gists`, so a starred gist's diff header still
+    /// showed `(unknown)` even though its age was visible in Pinned Mappings.
+    #[test]
+    fn gist_file_for_diff_finds_a_starred_gist_too() {
+        let mut state = initial_state();
+        state.starred_gists = vec![GistFile {
+            description: "starred demo".into(),
+            public: true,
+            updated_at: "2026-06-12T08:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+            owner_login: "someone-else".into(),
+            ..GistFile::fixture("s1", "notes.md")
+        }];
+        let file = GistFileRef::id_name("s1", "notes.md");
+        let resolved = state.gist_file_for_diff(&file);
+        assert_eq!(resolved.updated_at, "2026-06-12T08:00:00Z");
+    }
+
+    // Whichever editor is used, the confirmed upload must send the edited (redacted) buffer, not
+    // the original file snapshot taken at preview time.
+    #[test]
+    fn content_to_upload_prefers_edited_content() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "a".into(),
+                filename: "notes.txt".into(),
+                local_path: PathBuf::from("/tmp/notes.txt"),
+            },
+        );
+        state.upload.original_content = "token=abc123secret".into();
+        state.upload.edited_content = Some("token=REDACTED".into());
+        assert_eq!(state.content_to_upload(), "token=REDACTED");
+    }
+
+    #[test]
+    fn content_to_upload_prefers_edited_content_for_json() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "a".into(),
+                filename: "settings.json".into(),
+                local_path: PathBuf::from("/tmp/settings.json"),
+            },
+        );
+        state.upload.original_content = r#"{"token":"abc123secret"}"#.into();
+        state.upload.edited_content = Some(r#"{"token":"REDACTED"}"#.into());
+        assert_eq!(state.content_to_upload(), r#"{"token":"REDACTED"}"#);
+    }
+
+    // A gist you own *and* starred lands in both `gists` and `starred_gists`. The detail
+    // file list (gist_filenames -> all_gist_files) must not show each file twice (issue #188).
+    #[test]
+    fn gist_filenames_dedupes_owned_gist_that_is_also_starred() {
+        let make = |filename: &str| GistFile {
+            description: "My ZSH profile".into(),
+            public: true,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2020-01-01T00:00:00Z".into(),
+            owner_login: "akunzai".into(),
+            ..GistFile::fixture("g1", filename)
+        };
+        let mut state = initial_state();
+        state.gists = vec![make(".zprofile"), make(".zshenv"), make(".zshrc")];
+        // Same gist, fetched again from /gists/starred because the owner starred it.
+        state.starred_gists = vec![make(".zprofile"), make(".zshenv"), make(".zshrc")];
+
+        assert_eq!(
+            state.gist_filenames("g1"),
+            vec![".zprofile", ".zshenv", ".zshrc"]
+        );
+        assert_eq!(state.gist_file_display_names("g1").len(), 3);
+    }
+
+    #[test]
+    fn help_topic_all_is_ordered_and_titled() {
+        let all = HelpTopic::all();
+        assert_eq!(all.len(), 11);
+        assert_eq!(all[0], HelpTopic::List);
+        assert_eq!(all[4], HelpTopic::Revisions);
+        assert_eq!(all[8], HelpTopic::Config);
+        assert_eq!(all[9], HelpTopic::General);
+        assert_eq!(all[10], HelpTopic::About);
+        assert_eq!(HelpTopic::Pins.title(), "Pinned Mappings");
+        assert_eq!(HelpTopic::Config.title(), "Settings");
+        assert_eq!(HelpTopic::About.title(), "About");
+    }
+
+    #[test]
+    fn help_topic_for_screen_maps_key_dense_screens() {
+        assert_eq!(HelpTopic::for_screen(&Screen::List), HelpTopic::List);
+        assert_eq!(
+            HelpTopic::for_screen(&Screen::Pins(Box::default())),
+            HelpTopic::Pins
+        );
+        assert_eq!(
+            HelpTopic::for_screen(&Screen::Gists(Box::default())),
+            HelpTopic::GistManager
+        );
+        assert_eq!(
+            HelpTopic::for_screen(&Screen::GistDetail(Box::default())),
+            HelpTopic::GistDetail
+        );
+        assert_eq!(
+            HelpTopic::for_screen(&Screen::Revisions(Box::default())),
+            HelpTopic::Revisions
+        );
+        assert_eq!(
+            HelpTopic::for_screen(&Screen::Diff(Box::default())),
+            HelpTopic::List
+        );
+    }
+
+    #[test]
+    fn initial_state_enables_mouse_by_default() {
+        assert!(super::initial_state().mouse_enabled);
+    }
+
+    #[test]
+    fn pane_hit_maps_rows_to_indices() {
+        // A pane at y=2, height 6: top border row 2, content rows 3..=6, bottom border row 7.
+        let hit = PaneHit {
+            rect: Rect::new(0, 2, 40, 6),
+            offset: 0,
+        };
+        assert_eq!(hit.index_at(3, 4), Some(0)); // first content row
+        assert_eq!(hit.index_at(6, 4), Some(3)); // fourth content row
+        assert_eq!(hit.index_at(2, 4), None); // top border
+        assert_eq!(hit.index_at(7, 4), None); // bottom border
+        assert_eq!(hit.index_at(6, 2), None); // row maps to idx 3 >= visible_len 2
+    }
+
+    #[test]
+    fn pane_hit_respects_scroll_offset() {
+        let hit = PaneHit {
+            rect: Rect::new(0, 0, 40, 10),
+            offset: 5,
+        };
+        // content starts at row 1; row 1 -> offset 5
+        assert_eq!(hit.index_at(1, 20), Some(5));
+        assert_eq!(hit.index_at(3, 20), Some(7));
+    }
+
+    #[test]
+    fn pane_hit_empty_list_selects_nothing() {
+        let hit = PaneHit {
+            rect: Rect::new(0, 0, 40, 10),
+            offset: 0,
+        };
+        assert_eq!(hit.index_at(1, 0), None);
+    }
+
+    #[test]
+    fn classify_click_detects_double_click() {
+        // Same cell within the threshold -> DoubleClick.
+        let r = super::classify_click(Some((5, 5)), 100, 5, 5);
+        assert_eq!(r, MouseInput::DoubleClick { col: 5, row: 5 });
+    }
+
+    #[test]
+    fn classify_click_single_when_too_slow() {
+        let r = super::classify_click(Some((5, 5)), super::DOUBLE_CLICK_MS + 1, 5, 5);
+        assert_eq!(r, MouseInput::Click { col: 5, row: 5 });
+    }
+
+    #[test]
+    fn classify_click_single_on_different_cell() {
+        let r = super::classify_click(Some((5, 5)), 100, 6, 5);
+        assert_eq!(r, MouseInput::Click { col: 6, row: 5 });
+    }
+
+    #[test]
+    fn classify_click_single_when_no_prior() {
+        let r = super::classify_click(None, 0, 5, 5);
+        assert_eq!(r, MouseInput::Click { col: 5, row: 5 });
+    }
+
+    #[test]
+    fn classify_click_at_exact_threshold() {
+        // Exactly at the boundary: still counts as a double-click (inclusive `<=`).
+        let r = super::classify_click(Some((5, 5)), super::DOUBLE_CLICK_MS, 5, 5);
+        assert_eq!(r, MouseInput::DoubleClick { col: 5, row: 5 });
+    }
+
+    #[test]
+    fn bg_task_generation_bumps_on_begin_and_invalidate() {
+        let mut state = crate::tui::initial_state();
+        assert_eq!(state.bg_task_generation, 0);
+        assert_eq!(state.begin_bg_task(), 1);
+        state.bg_task_msg = Some("working…".into());
+        assert!(state.is_current_bg_generation(1));
+        assert!(!state.is_current_bg_generation(0));
+
+        state.invalidate_bg_task();
+        assert_eq!(state.bg_task_generation, 2);
+        assert!(state.bg_task_msg.is_none());
+        assert!(
+            !state.is_current_bg_generation(1),
+            "cancelled gen must be stale"
+        );
+        assert!(state.is_current_bg_generation(2));
+    }
+
+    #[test]
+    fn local_scan_generation_ignores_stale_results() {
+        let mut state = crate::tui::initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/old.txt"),
+            pinned: false,
+            modified: None,
+        }];
+        state.local_scanning = true;
+
+        let gen1 = state.begin_local_scan();
+        let gen2 = state.begin_local_scan();
+        assert_ne!(gen1, gen2);
+
+        // Stale gen1 must not replace the list.
+        assert!(!state.apply_local_scan_if_current(
+            gen1,
+            vec![LocalCandidate {
+                path: PathBuf::from("/tmp/stale.txt"),
+                pinned: false,
+                modified: None,
+            }]
+        ));
+        assert_eq!(state.locals[0].path, PathBuf::from("/tmp/old.txt"));
+        assert!(state.local_scanning);
+
+        // Current gen2 applies.
+        assert!(state.apply_local_scan_if_current(
+            gen2,
+            vec![LocalCandidate {
+                path: PathBuf::from("/tmp/fresh.txt"),
+                pinned: false,
+                modified: None,
+            }]
+        ));
+        assert_eq!(state.locals[0].path, PathBuf::from("/tmp/fresh.txt"));
+        assert!(!state.local_scanning);
+    }
+}

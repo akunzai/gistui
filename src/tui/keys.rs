@@ -647,3 +647,257 @@ impl AppState {
 pub(crate) fn point_in(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
     col >= rect.x && col < rect.right() && row >= rect.y && row < rect.bottom()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::test_support::{
+        detail_mut, pins_ref, pins_state_with_long_home_path, set_diff_body, set_diff_scroll,
+        set_pending, state_with_gists, state_with_selection, state_with_two_gists,
+    };
+
+    use crossterm::event::KeyCode;
+
+    use std::path::PathBuf;
+
+    #[test]
+    fn q_in_list_quits_on_second_press() {
+        let mut state = initial_state();
+        // First press only arms the quit (and surfaces a hint); it must not exit.
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
+        assert!(state.quit_armed);
+        // Issue #346: the hint must name every key that confirms the quit, not just `q`.
+        assert_eq!(
+            state.status.as_deref(),
+            Some("Press q or Esc again to quit (any other key cancels)")
+        );
+        // Second press confirms.
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::Quit);
+    }
+
+    #[test]
+    fn esc_in_list_quits_on_second_press() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
+        assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::Quit);
+    }
+
+    #[test]
+    fn any_key_cancels_a_pending_quit() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
+        assert!(state.quit_armed);
+        // A non-quit key disarms; the next q then needs two presses again.
+        state.handle_key(KeyCode::Tab);
+        assert!(!state.quit_armed);
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn q_in_confirm_cancels_without_quitting() {
+        let mut state = initial_state();
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
+        set_pending(&mut state, PendingAction::Download);
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
+        assert!(state.screen.is_diff());
+    }
+
+    #[test]
+    fn y_copies_gist_url_on_list_gists_and_detail() {
+        let mut list = state_with_two_gists();
+        assert!(matches!(
+            list.handle_key(KeyCode::Char('y')),
+            KeyOutcome::CopyGistUrl { .. }
+        ));
+
+        let mut gists = state_with_two_gists();
+        gists.screen = Screen::Gists(Box::default());
+        assert!(matches!(
+            gists.handle_key(KeyCode::Char('y')),
+            KeyOutcome::CopyGistUrl { .. }
+        ));
+
+        let mut detail = state_with_gists();
+        detail.screen = Screen::GistDetail(Box::default());
+        detail_mut(&mut detail).gist_id = Some("g1".into());
+        assert!(matches!(
+            detail.handle_key(KeyCode::Char('y')),
+            KeyOutcome::CopyGistUrl { .. }
+        ));
+    }
+
+    #[test]
+    fn top_bar_pins_click_opens_pins_from_any_screen() {
+        let mut state = pins_state_with_long_home_path();
+        state.handle_key(KeyCode::Right); // dirty the hscroll so the reset is observable
+        assert!(pins_ref(&state).cursor.hscroll > 0);
+        state.screen = Screen::Preview(Box::default());
+        let layout = MouseLayout {
+            top_bar_pins: Some(Rect::new(20, 0, 6, 1)),
+            ..Default::default()
+        };
+        let out = state.handle_mouse(MouseInput::Click { col: 22, row: 0 }, &layout);
+        assert!(state.screen.is_pins());
+        assert_eq!(pins_ref(&state).cursor.hscroll, 0);
+        assert_eq!(out, KeyOutcome::None);
+    }
+
+    #[test]
+    fn top_bar_help_click_while_already_on_help_does_not_trap_keyboard_exit() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Preview(Box::default());
+        let layout = MouseLayout {
+            top_bar_help: Some(Rect::new(30, 0, 7, 1)),
+            ..Default::default()
+        };
+        // First click opens Help from Preview, remembering Preview as the return screen.
+        state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
+        assert!(state.screen.is_help());
+        assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
+
+        // A second click on the same top-bar Help hotspot, now that Help is already open, must
+        // be a no-op — it must not overwrite return_screen with Screen::Help, which would trap
+        // Esc/`?`/the close button in Help with no keyboard way out.
+        let out = state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
+        assert!(state.screen.is_help());
+        assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
+        assert_eq!(out, KeyOutcome::None);
+
+        // Esc must still return to the real origin screen, not stay stuck on Help.
+        state.handle_key(KeyCode::Esc);
+        assert!(state.screen.is_preview());
+    }
+
+    #[test]
+    fn shift_t_toggles_theme() {
+        use crossterm::event::KeyModifiers;
+        let mut state = initial_state();
+        assert_eq!(state.theme_choice, crate::config::ThemeChoice::Dark);
+        let outcome = state.handle_key_with(KeyCode::Char('T'), KeyModifiers::SHIFT);
+        assert_eq!(outcome, KeyOutcome::ThemeToggle);
+        assert_eq!(state.theme_choice, crate::config::ThemeChoice::Light);
+    }
+
+    #[test]
+    fn repo_link_click_opens_repo_url_regardless_of_which_screen_set_the_rect() {
+        let mut state = initial_state();
+        let layout = MouseLayout {
+            repo_link: Some(Rect::new(5, 10, 20, 1)),
+            ..Default::default()
+        };
+        let out = state.handle_mouse(MouseInput::Click { col: 10, row: 10 }, &layout);
+        assert!(matches!(out, KeyOutcome::OpenRepoUrl { .. }));
+    }
+
+    #[test]
+    fn scroll_down_moves_content_three_lines() {
+        // Set up a Diff screen with enough lines that diff_scroll can reach 3.
+        let mut state = state_with_selection();
+        state.enter_diff(
+            "line1\nline2\nline3\nline4\nline5".into(),
+            "remote".into(),
+            std::path::PathBuf::from("/tmp/x"),
+            std::path::PathBuf::from("/tmp/cwd/x"),
+        );
+        assert!(state.screen.is_diff());
+        assert_eq!(state.diff_scroll(), 0);
+        state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+        assert_eq!(state.diff_scroll(), 3);
+    }
+
+    #[test]
+    fn scroll_up_moves_content_three_lines() {
+        let mut state = state_with_selection();
+        state.enter_diff(
+            "line1\nline2\nline3\nline4\nline5".into(),
+            "remote".into(),
+            std::path::PathBuf::from("/tmp/x"),
+            std::path::PathBuf::from("/tmp/cwd/x"),
+        );
+        set_diff_scroll(&mut state, 3);
+        state.handle_mouse(MouseInput::ScrollUp, &MouseLayout::default());
+        assert_eq!(state.diff_scroll(), 0);
+    }
+
+    #[test]
+    fn close_button_click_returns_from_help() {
+        let mut state = state_with_gists();
+        // Simulate entering Help (mirrors what open_help() does).
+        state.screen = Screen::Help(Box::default());
+        let layout = MouseLayout {
+            close_button: Some(Rect::new(36, 0, 5, 1)),
+            ..Default::default()
+        };
+        let out = state.handle_mouse(MouseInput::Click { col: 38, row: 0 }, &layout);
+        assert_eq!(out, KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn close_button_click_confirm_cancel_clears_pending() {
+        // Close button on Screen::Confirm(Box::default()) dispatches Esc, which cancels the pending action.
+        // Using PendingAction::Download: Esc sets pending_action = None and screen = Screen::Diff(Box::default()).
+        let mut state = state_with_gists();
+        set_diff_body(&mut state, "line1\nline2\nline3");
+        set_pending(&mut state, PendingAction::Download);
+        let layout = MouseLayout {
+            close_button: Some(Rect::new(36, 0, 5, 1)),
+            ..Default::default()
+        };
+        let out = state.handle_mouse(MouseInput::Click { col: 38, row: 0 }, &layout);
+        assert_eq!(out, KeyOutcome::None);
+        assert!(state.pending_action().is_none());
+        assert!(state.screen.is_diff());
+    }
+
+    #[test]
+    fn close_button_click_create_description_cancels_not_types() {
+        // Regression: close button while editing the create-description sub-state must cancel
+        // (Esc), NOT append 'n' to the description field.  This test fails against the old
+        // `KeyCode::Char('n')` dispatch and passes with `KeyCode::Esc`.
+        let mut state = initial_state();
+        state.screen = Screen::Confirm(Box::default());
+        set_pending(
+            &mut state,
+            PendingAction::Create {
+                local_path: std::path::PathBuf::from("notes.txt"),
+            },
+        );
+        state.editing_description = true;
+        // Pre-fill description so we can assert it was cleared (not grown by a typed 'n').
+        state.description_input = "my desc".into();
+        let layout = MouseLayout {
+            close_button: Some(Rect::new(36, 0, 5, 1)),
+            ..Default::default()
+        };
+        state.handle_mouse(MouseInput::Click { col: 38, row: 0 }, &layout);
+        // Esc on create-description clears description, exits editing, and calls back_to_list.
+        assert!(
+            !state.editing_description,
+            "editing_description must be false after close"
+        );
+        assert!(
+            state.description_input.is_empty(),
+            "description must be cleared, not have 'n' appended"
+        );
+        assert_eq!(state.screen, Screen::List);
+        assert!(state.pending_action().is_none());
+    }
+
+    #[test]
+    fn right_click_opens_menu_palette() {
+        let mut state = crate::tui::initial_state();
+        let out = state.handle_mouse(
+            MouseInput::RightClick { col: 10, row: 5 },
+            &MouseLayout::default(),
+        );
+        assert_eq!(out, KeyOutcome::None);
+        assert!(state.screen.is_palette());
+        assert_eq!(state.palette().unwrap().anchor, Some((10, 5)));
+    }
+}

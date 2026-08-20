@@ -751,13 +751,15 @@ pub(crate) fn render_list_vm(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::*;
-    use crossterm::event::KeyModifiers;
-
-    use crate::tui::tests::{
+    use crate::tui::test_support::{
         list_state_with_matches, set_pending, state_ready_to_create, state_with_gists,
-        state_with_local_paths, state_with_two_gists,
+        state_with_local_paths, state_with_selection, state_with_two_gists,
     };
+    use crate::tui::text::{hscroll_max_for_text, local_row_label, text_len};
+    use crate::tui::*;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyModifiers;
+    use std::path::PathBuf;
 
     fn clear_pending(state: &mut AppState) {
         if state.screen.is_confirm() {
@@ -1220,5 +1222,932 @@ mod tests {
         assert!(state.screen.is_config());
         state.handle_key(KeyCode::Esc);
         assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn local_filter_matches_filename_and_relative_path() {
+        let mut state =
+            state_with_local_paths(&["/cwd/settings.json", "/cwd/src/main.rs", "/cwd/notes.txt"]);
+
+        assert_eq!(state.visible_locals().len(), 3);
+
+        state.local_filter_query = "json".into();
+        let visible: Vec<_> = state
+            .visible_locals()
+            .iter()
+            .map(|r| r.candidate.path.clone())
+            .collect();
+        assert_eq!(visible, vec![PathBuf::from("/cwd/settings.json")]);
+
+        state.local_filter_query = "src/".into();
+        let visible: Vec<_> = state
+            .visible_locals()
+            .iter()
+            .map(|r| r.candidate.path.clone())
+            .collect();
+        assert_eq!(visible, vec![PathBuf::from("/cwd/src/main.rs")]);
+
+        state.local_filter_query = "NOTES".into();
+        assert_eq!(state.visible_locals().len(), 1);
+    }
+
+    #[test]
+    fn local_down_clamps_to_filtered_count() {
+        let mut state = state_with_local_paths(&["/cwd/a.json", "/cwd/b.txt", "/cwd/c.txt"]);
+        state.focus = FocusPane::Local;
+        state.local_filter_query = "json".into(); // only 1 match
+
+        state.handle_key(KeyCode::Down); // would move to index 1 if clamped on raw len
+        assert_eq!(state.local_index, 0); // clamped: only one visible row
+    }
+
+    #[test]
+    fn anchor_defaults_to_local() {
+        assert_eq!(initial_state().anchor, FocusPane::Local);
+    }
+
+    #[test]
+    fn a_key_toggles_anchor_and_resets_ranked_pane() {
+        let mut state = list_state_with_matches();
+        assert_eq!(state.anchor, FocusPane::Local);
+        state.local_index = 1;
+        state.local_hscroll = 3;
+        state.handle_key(KeyCode::Char('a'));
+        assert_eq!(state.anchor, FocusPane::Gist);
+        // anchor now Gist → local is the newly-ranked (non-driver) pane → reset to top.
+        assert_eq!(state.local_index, 0);
+        assert_eq!(state.local_hscroll, 0);
+    }
+
+    #[test]
+    fn a_key_toggle_reverse_direction_resets_gist() {
+        let mut state = list_state_with_matches();
+        state.anchor = FocusPane::Gist;
+        state.gist_index = 1;
+        state.gist_hscroll = 4;
+        state.handle_key(KeyCode::Char('a'));
+        assert_eq!(state.anchor, FocusPane::Local);
+        assert_eq!(state.gist_index, 0);
+        assert_eq!(state.gist_hscroll, 0);
+    }
+
+    #[test]
+    fn moving_driver_pane_up_resets_ranked_pane() {
+        let mut state = list_state_with_matches();
+        state.anchor = FocusPane::Local;
+        state.focus = FocusPane::Local;
+        state.local_index = 1; // >0 so Up fires
+        state.gist_index = 1;
+        state.handle_key(KeyCode::Up);
+        assert_eq!(state.local_index, 0);
+        assert_eq!(state.gist_index, 0);
+    }
+
+    #[test]
+    fn moving_ranked_pane_does_not_reset_driver() {
+        let mut state = list_state_with_matches();
+        state.anchor = FocusPane::Local; // Local drives
+        state.local_index = 0;
+        state.focus = FocusPane::Gist; // picking in the ranked gist pane
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.gist_index, 1);
+        assert_eq!(state.local_index, 0); // driver NOT reset
+    }
+
+    #[test]
+    fn moving_driver_pane_resets_ranked_pane() {
+        let mut state = list_state_with_matches();
+        state.anchor = FocusPane::Local;
+        state.focus = FocusPane::Local; // moving the driver
+        state.gist_index = 1;
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.local_index, 1);
+        assert_eq!(state.gist_index, 0); // ranked pane reset to top
+    }
+
+    #[test]
+    fn tab_switches_focus() {
+        let mut state = initial_state();
+        assert_eq!(state.focus, FocusPane::Local);
+        state.handle_key(KeyCode::Tab);
+        assert_eq!(state.focus, FocusPane::Gist);
+    }
+
+    #[test]
+    fn digit_keys_jump_to_a_pane() {
+        let mut state = initial_state();
+        state.handle_key(KeyCode::Char('2'));
+        assert_eq!(state.focus, FocusPane::Gist);
+        state.handle_key(KeyCode::Char('1'));
+        assert_eq!(state.focus, FocusPane::Local);
+    }
+
+    #[test]
+    fn t_toggles_gist_view() {
+        let mut state = initial_state();
+        assert_eq!(state.gist_view, GistView::Description);
+        state.handle_key(KeyCode::Char('t'));
+        assert_eq!(state.gist_view, GistView::Id);
+        state.handle_key(KeyCode::Char('t'));
+        assert_eq!(state.gist_view, GistView::Description);
+    }
+
+    #[test]
+    fn v_cycles_gist_type_filter() {
+        let mut state = initial_state();
+        assert_eq!(state.gist_type_filter, GistTypeFilter::All);
+        state.handle_key(KeyCode::Char('v'));
+        assert_eq!(state.gist_type_filter, GistTypeFilter::Public);
+        state.handle_key(KeyCode::Char('v'));
+        assert_eq!(state.gist_type_filter, GistTypeFilter::Secret);
+        state.handle_key(KeyCode::Char('v'));
+        assert_eq!(state.gist_type_filter, GistTypeFilter::Starred);
+        state.handle_key(KeyCode::Char('v'));
+        assert_eq!(state.gist_type_filter, GistTypeFilter::Forked);
+        state.handle_key(KeyCode::Char('v'));
+        assert_eq!(state.gist_type_filter, GistTypeFilter::All);
+    }
+
+    #[test]
+    fn s_cycles_gist_sort_when_gist_pane_focused() {
+        let mut state = initial_state();
+        state.focus = FocusPane::Gist;
+        assert_eq!(state.gist_sort, GistSort::Match);
+        state.handle_key(KeyCode::Char('s'));
+        assert_eq!(state.gist_sort, GistSort::Name);
+        state.handle_key(KeyCode::Char('s'));
+        assert_eq!(state.gist_sort, GistSort::Recent);
+        state.handle_key(KeyCode::Char('s'));
+        assert_eq!(state.gist_sort, GistSort::Match);
+        // The local sort is untouched while the gist pane is focused.
+        assert_eq!(state.local_sort, LocalSort::Match);
+    }
+
+    #[test]
+    fn s_cycles_local_sort_when_local_pane_focused() {
+        let mut state = initial_state();
+        assert_eq!(state.focus, FocusPane::Local);
+        assert_eq!(state.local_sort, LocalSort::Match);
+        state.handle_key(KeyCode::Char('s'));
+        assert_eq!(state.local_sort, LocalSort::Name);
+        state.handle_key(KeyCode::Char('s'));
+        assert_eq!(state.local_sort, LocalSort::Recent);
+        state.handle_key(KeyCode::Char('s'));
+        assert_eq!(state.local_sort, LocalSort::Match);
+        // The gist sort is untouched while the local pane is focused.
+        assert_eq!(state.gist_sort, GistSort::Match);
+    }
+
+    #[test]
+    fn slash_enters_filter_mode_and_typing_filters() {
+        let mut state = state_with_two_gists();
+        assert!(!state.filtering);
+        state.handle_key(KeyCode::Char('/'));
+        assert!(state.filtering);
+        // Type "ghostty" -> matches only the first gist (by filename + description).
+        for c in "ghostty".chars() {
+            state.handle_key(KeyCode::Char(c));
+        }
+        let ranked = state.ranked_gists();
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].file.gist_id, "a");
+    }
+
+    #[test]
+    fn filter_matches_description_case_insensitively() {
+        let mut state = state_with_two_gists();
+        state.filter_query = "SSH".into();
+        let ranked = state.ranked_gists();
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].file.gist_id, "b");
+    }
+
+    #[test]
+    fn filter_enter_keeps_query_esc_clears() {
+        let mut state = state_with_two_gists();
+        state.handle_key(KeyCode::Char('/'));
+        state.handle_key(KeyCode::Char('s'));
+        state.handle_key(KeyCode::Char('s'));
+        state.handle_key(KeyCode::Char('h'));
+        state.handle_key(KeyCode::Enter);
+        assert!(!state.filtering);
+        assert_eq!(state.filter_query, "ssh");
+        // Re-enter and Esc clears.
+        state.handle_key(KeyCode::Char('/'));
+        state.handle_key(KeyCode::Esc);
+        assert!(!state.filtering);
+        assert!(state.filter_query.is_empty());
+    }
+
+    #[test]
+    fn filter_backspace_deletes_last_char() {
+        let mut state = state_with_two_gists();
+        state.handle_key(KeyCode::Char('/'));
+        state.handle_key(KeyCode::Char('x'));
+        state.handle_key(KeyCode::Char('y'));
+        state.handle_key(KeyCode::Backspace);
+        assert_eq!(state.filter_query, "x");
+    }
+
+    #[test]
+    fn space_on_selected_gist_returns_preview_content() {
+        let mut state = state_with_two_gists();
+        assert!(matches!(
+            state.handle_key(KeyCode::Char(' ')),
+            KeyOutcome::PreviewContent { .. }
+        ));
+    }
+
+    #[test]
+    fn space_blocks_preview_for_image_gist_file() {
+        let mut state = state_with_two_gists();
+        state.gists[0].filename = "logo.png".into();
+        state.gists[0].content_type = Some("image/png".into());
+        assert_eq!(state.handle_key(KeyCode::Char(' ')), KeyOutcome::None);
+        assert!(state
+            .status
+            .as_deref()
+            .is_some_and(|s| s.contains("image file")));
+    }
+
+    #[test]
+    fn enter_blocks_diff_for_image_gist_file() {
+        let mut state = state_with_two_gists();
+        state.gists[0].filename = "photo.jpg".into();
+        state.gists[0].content_type = Some("image/jpeg".into());
+        assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
+        assert!(state
+            .status
+            .as_deref()
+            .is_some_and(|s| s.contains("image file")));
+    }
+
+    #[test]
+    fn space_without_gist_is_noop() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char(' ')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn left_right_scrolls_focused_gist_pane() {
+        let mut state = initial_state();
+        state.gists = vec![GistFile {
+            description: "a fairly long description for scrolling".into(),
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            ..GistFile::fixture("a", "f.json")
+        }];
+        state.focus = FocusPane::Gist;
+        assert_eq!(state.gist_hscroll, 0);
+        state.handle_key(KeyCode::Left); // saturates at 0
+        assert_eq!(state.gist_hscroll, 0);
+        state.handle_key(KeyCode::Right);
+        state.handle_key(KeyCode::Right);
+        assert_eq!(state.gist_hscroll, 2);
+        state.handle_key(KeyCode::Left);
+        assert_eq!(state.gist_hscroll, 1);
+    }
+
+    #[test]
+    fn gist_hscroll_caps_at_painted_row() {
+        let mut state = initial_state();
+        state.gists = vec![GistFile {
+            description: "tiny".into(),
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            ..GistFile::fixture("a", "f")
+        }];
+        state.focus = FocusPane::Gist;
+        // Cap must use the painted display string (star / pin prefixes included), not the
+        // star-less label helper — see issue #247.
+        let ranked = state.ranked_gists();
+        let row = marked_row_text(
+            gist_row_display(&ranked[0], state.gist_view, &state),
+            ranked[0].mark,
+        );
+        let max = hscroll_max_for_text(&row);
+        for _ in 0..200 {
+            state.handle_key(KeyCode::Right);
+        }
+        assert_eq!(state.gist_hscroll, max);
+    }
+
+    #[test]
+    fn gist_hscroll_follows_the_selected_row() {
+        let mut state = initial_state();
+        state.gist_sort = GistSort::Name;
+        state.gists = vec![
+            GistFile {
+                description: "ab".into(),
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("short", "a.txt")
+            },
+            GistFile {
+                description: "a fairly long description for scrolling".into(),
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("long", "b.txt")
+            },
+        ];
+        state.focus = FocusPane::Gist;
+        let ranked = state.ranked_gists();
+        let short_max = hscroll_max_for_text(&marked_row_text(
+            gist_row_display(&ranked[0], state.gist_view, &state),
+            ranked[0].mark,
+        ));
+        let long_max = hscroll_max_for_text(&marked_row_text(
+            gist_row_display(&ranked[1], state.gist_view, &state),
+            ranked[1].mark,
+        ));
+        assert!(
+            short_max < long_max,
+            "fixture must make a.txt shorter than b.txt"
+        );
+        for _ in 0..200 {
+            state.handle_key(KeyCode::Right);
+        }
+        assert_eq!(
+            state.gist_hscroll, short_max,
+            "Right must stop at the selected row, not the longest row in the pane"
+        );
+        state.handle_key(KeyCode::Down);
+        for _ in 0..200 {
+            state.handle_key(KeyCode::Right);
+        }
+        assert_eq!(state.gist_hscroll, long_max);
+        state.handle_key(KeyCode::Up);
+        assert_eq!(state.gist_index, 0);
+        assert!(
+            state.gist_hscroll <= short_max,
+            "selected row must not stay scrolled past its own content (hscroll {}, max {})",
+            state.gist_hscroll,
+            short_max
+        );
+    }
+
+    #[test]
+    fn local_hscroll_caps_at_selected_row_not_the_longest() {
+        let mut state = state_with_local_paths(&[
+            "/cwd/ab.txt",
+            "/cwd/a-fairly-long-filename-for-scrolling.md",
+        ]);
+        state.focus = FocusPane::Local;
+        state.local_index = 0;
+        let locals = state.visible_locals();
+        let short_row = marked_row_text(
+            local_row_label(&locals[0].candidate.path, &state.cwd),
+            locals[0].mark,
+        );
+        let long_row = marked_row_text(
+            local_row_label(&locals[1].candidate.path, &state.cwd),
+            locals[1].mark,
+        );
+        let short_max = hscroll_max_for_text(&short_row);
+        let long_max = hscroll_max_for_text(&long_row);
+        assert!(
+            short_max < long_max,
+            "fixture must make the selected row shorter than its sibling"
+        );
+        for _ in 0..200 {
+            state.handle_key(KeyCode::Right);
+        }
+        assert_eq!(
+            state.local_hscroll, short_max,
+            "Right must stop at the selected local row, not the longest row in the pane"
+        );
+    }
+
+    #[test]
+    fn gist_hscroll_caps_include_star_prefix() {
+        let mut state = initial_state();
+        state.gists = vec![GistFile {
+            description: "tiny".into(),
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            ..GistFile::fixture("starred-id", "f")
+        }];
+        state.starred_gist_ids.insert("starred-id".into());
+        state.focus = FocusPane::Gist;
+
+        let ranked = state.ranked_gists();
+        let display = gist_row_display(&ranked[0], state.gist_view, &state);
+        assert!(
+            display.starts_with("★ "),
+            "display must include star prefix, got {display:?}"
+        );
+        let label = gist_row_label(&ranked[0], state.gist_view);
+        assert!(
+            !label.starts_with('★'),
+            "label helper stays star-less for pure text tests"
+        );
+        // Regression: measuring the label (no star) under-scrolled by 2 chars.
+        assert_eq!(text_len(&display), text_len(&label) + 2);
+
+        let row = marked_row_text(display, ranked[0].mark);
+        let max = hscroll_max_for_text(&row);
+        let label_only_max = hscroll_max_for_text(&label);
+        assert!(max > label_only_max, "star must raise the hscroll cap");
+
+        for _ in 0..200 {
+            state.handle_key(KeyCode::Right);
+        }
+        assert_eq!(
+            state.gist_hscroll, max,
+            "Right must reach the display-string max, not the star-less label max"
+        );
+    }
+
+    #[test]
+    fn moving_gist_selection_resets_hscroll() {
+        let mut state = initial_state();
+        state.gists = vec![
+            GistFile {
+                description: "first long description here".into(),
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("a", "a.json")
+            },
+            GistFile {
+                description: "second long description here".into(),
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("b", "b.json")
+            },
+        ];
+        state.focus = FocusPane::Gist;
+        state.handle_key(KeyCode::Right);
+        assert_eq!(state.gist_hscroll, 1);
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.gist_hscroll, 0);
+    }
+
+    #[test]
+    fn enter_with_no_local_but_gist_selected_returns_preview() {
+        let mut state = initial_state();
+        state.gists = vec![GistFile {
+            description: "first".into(),
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            ..GistFile::fixture("a", "alpha.json")
+        }];
+        state.focus = FocusPane::Gist;
+        assert!(state.locals.is_empty());
+        assert!(matches!(
+            state.handle_key(KeyCode::Enter),
+            KeyOutcome::PreviewDiff { .. }
+        ));
+    }
+
+    #[test]
+    fn changing_local_selection_resets_gist_index() {
+        let mut state = initial_state();
+        state.locals = vec![
+            LocalCandidate {
+                path: PathBuf::from("/tmp/a.json"),
+                pinned: false,
+                modified: None,
+            },
+            LocalCandidate {
+                path: PathBuf::from("/tmp/b.json"),
+                pinned: false,
+                modified: None,
+            },
+        ];
+        state.gist_index = 2;
+        state.handle_key(KeyCode::Down); // move local selection down
+        assert_eq!(state.gist_index, 0);
+    }
+
+    #[test]
+    fn enter_in_gist_focus_with_selection_returns_preview() {
+        let mut state = state_with_selection();
+        assert!(matches!(
+            state.handle_key(KeyCode::Enter),
+            KeyOutcome::PreviewDiff { .. }
+        ));
+    }
+
+    #[test]
+    fn enter_with_nested_local_targets_its_directory() {
+        let mut state = state_with_selection();
+        state.cwd = PathBuf::from("/tmp");
+        state.locals[0].path = PathBuf::from("/tmp/nested/settings.json");
+
+        let KeyOutcome::PreviewDiff {
+            local_path, target, ..
+        } = state.handle_key(KeyCode::Enter)
+        else {
+            panic!("expected PreviewDiff");
+        };
+
+        assert_eq!(local_path, Some(PathBuf::from("/tmp/nested/settings.json")));
+        assert_eq!(target, PathBuf::from("/tmp/nested/settings.json"));
+    }
+
+    #[test]
+    fn enter_in_local_focus_previews_top_gist() {
+        let mut state = state_with_selection();
+        state.focus = FocusPane::Local;
+        assert!(matches!(
+            state.handle_key(KeyCode::Enter),
+            KeyOutcome::PreviewDiff { .. }
+        ));
+    }
+
+    #[test]
+    fn enter_with_no_gists_is_noop_in_local_focus() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/x"),
+            pinned: false,
+            modified: None,
+        }];
+        state.focus = FocusPane::Local;
+        assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
+    }
+
+    #[test]
+    fn d_in_gist_focus_returns_download_gist() {
+        let mut state = state_with_selection();
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('d')),
+            KeyOutcome::DownloadGist { .. }
+        ));
+    }
+
+    #[test]
+    fn d_in_local_focus_is_noop() {
+        let mut state = state_with_selection();
+        state.focus = FocusPane::Local;
+        assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn d_without_gists_is_noop() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/x"),
+            pinned: false,
+            modified: None,
+        }];
+        state.focus = FocusPane::Gist;
+        assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn enter_without_gists_is_noop() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/x"),
+            pinned: false,
+            modified: None,
+        }];
+        state.focus = FocusPane::Gist;
+        assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
+    }
+
+    #[test]
+    fn p_pins_unpinned_pair_then_unpins() {
+        let mut state = state_with_selection();
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('p')),
+            KeyOutcome::Pin { .. }
+        ));
+        state.pinned = vec![PinnedMapping {
+            local_path: PathBuf::from("/tmp/settings.json"),
+            gist_id: "a".into(),
+            gist_filename: "settings.json".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('p')),
+            KeyOutcome::Unpin { .. }
+        ));
+    }
+
+    #[test]
+    fn p_without_local_or_gist_is_noop() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn u_adds_when_gist_lacks_filename() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/config"),
+            pinned: false,
+            modified: None,
+        }];
+        state.gists = vec![GistFile {
+            description: "x".into(),
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            ..GistFile::fixture("a", "settings.json")
+        }];
+        state.focus = FocusPane::Gist;
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('u')),
+            KeyOutcome::UploadAdd { .. }
+        ));
+    }
+
+    #[test]
+    fn u_previews_when_gist_has_same_filename() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/settings.json"),
+            pinned: false,
+            modified: None,
+        }];
+        state.gists = vec![GistFile {
+            description: "x".into(),
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            ..GistFile::fixture("a", "settings.json")
+        }];
+        state.focus = FocusPane::Gist;
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('u')),
+            KeyOutcome::UploadPreview { .. }
+        ));
+    }
+
+    #[test]
+    fn u_without_selection_is_noop() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn e_edits_local_with_file_selected() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/config"),
+            pinned: false,
+            modified: None,
+        }];
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('e')),
+            KeyOutcome::EditLocal { .. }
+        ));
+    }
+
+    #[test]
+    fn e_without_local_is_noop() {
+        let mut state = initial_state();
+        assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::None);
+    }
+
+    #[test]
+    fn n_opens_create_confirm() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/tmp/config.toml"),
+            pinned: false,
+            modified: None,
+        }];
+        assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
+        assert!(state.screen.is_confirm());
+        assert_eq!(
+            state.pending_action().cloned(),
+            Some(PendingAction::Create {
+                local_path: PathBuf::from("/tmp/config.toml")
+            })
+        );
+    }
+
+    #[test]
+    fn x_removes_selected_file_from_a_multifile_gist() {
+        let mut state = initial_state();
+        state.focus = FocusPane::Gist;
+        state.gists = vec![
+            GistFile {
+                description: "my notes".into(),
+                updated_at: "2026-01-01T00:00:00Z".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                ..GistFile::fixture("abc123", "a.md")
+            },
+            GistFile {
+                description: "my notes".into(),
+                updated_at: "2026-01-01T00:00:00Z".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                ..GistFile::fixture("abc123", "b.md")
+            },
+        ];
+        // X stages a single-file removal (not a whole-gist delete) and asks to confirm.
+        assert_eq!(state.handle_key(KeyCode::Char('X')), KeyOutcome::None);
+        assert!(state.screen.is_confirm());
+        assert_eq!(
+            state.pending_action().cloned(),
+            Some(PendingAction::RemoveFile {
+                gist_id: "abc123".into(),
+                filename: "a.md".into(),
+                label: "my notes".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn list_screen_capital_s_syncs_selected_pair() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("a.txt"),
+            pinned: true,
+            modified: None,
+        }];
+        state.gists = vec![GistFile::fixture("g1", "a.txt")];
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('S')),
+            KeyOutcome::SyncSelectedPair { .. }
+        ));
+    }
+
+    #[test]
+    fn list_filter_routes_chars_to_focused_pane() {
+        let mut state = state_with_local_paths(&["/cwd/a.json", "/cwd/b.txt"]);
+        state.focus = FocusPane::Local;
+        state.filtering = true;
+
+        state.handle_key(KeyCode::Char('j'));
+        state.handle_key(KeyCode::Char('s'));
+        assert_eq!(state.local_filter_query, "js");
+        assert_eq!(state.filter_query, ""); // gist pane untouched
+    }
+
+    #[test]
+    fn list_filter_focus_gist_routes_to_gist_query() {
+        let mut state = state_with_local_paths(&["/cwd/a.json"]);
+        state.focus = FocusPane::Gist;
+        state.filtering = true;
+
+        state.handle_key(KeyCode::Char('x'));
+        assert_eq!(state.filter_query, "x");
+        assert_eq!(state.local_filter_query, "");
+    }
+
+    #[test]
+    fn list_filter_navigates_while_typing() {
+        let mut state = state_with_local_paths(&["/cwd/a.txt", "/cwd/b.txt", "/cwd/c.txt"]);
+        state.focus = FocusPane::Local;
+        state.filtering = true;
+
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.local_index, 1);
+        assert!(state.filtering); // still in filter input
+        state.handle_key(KeyCode::Up);
+        assert_eq!(state.local_index, 0);
+    }
+
+    #[test]
+    fn list_filter_empty_backspace_exits() {
+        let mut state = state_with_local_paths(&["/cwd/a.txt"]);
+        state.focus = FocusPane::Local;
+        state.filtering = true;
+
+        state.handle_key(KeyCode::Char('a'));
+        state.handle_key(KeyCode::Backspace); // back to empty, still filtering
+        assert!(state.filtering);
+        assert_eq!(state.local_filter_query, "");
+        state.handle_key(KeyCode::Backspace); // empty -> exit
+        assert!(!state.filtering);
+    }
+
+    #[test]
+    fn list_filter_tab_commits_and_switches_pane() {
+        let mut state = state_with_local_paths(&["/cwd/a.json"]);
+        state.focus = FocusPane::Local;
+        state.filtering = true;
+        state.handle_key(KeyCode::Char('j'));
+
+        state.handle_key(KeyCode::Tab);
+        assert!(!state.filtering); // committed, left input
+        assert_eq!(state.local_filter_query, "j"); // query kept
+        assert_eq!(state.focus, FocusPane::Gist); // switched pane
+    }
+
+    #[test]
+    fn list_filter_esc_clears_focused_query() {
+        let mut state = state_with_local_paths(&["/cwd/a.json"]);
+        state.focus = FocusPane::Local;
+        state.filtering = true;
+        state.handle_key(KeyCode::Char('j'));
+
+        state.handle_key(KeyCode::Esc);
+        assert!(!state.filtering);
+        assert_eq!(state.local_filter_query, "");
+    }
+
+    #[test]
+    fn list_filter_char_resets_focused_index() {
+        let mut state = state_with_local_paths(&["/cwd/a.txt", "/cwd/ab.txt", "/cwd/abc.txt"]);
+        state.focus = FocusPane::Local;
+        state.filtering = true;
+        state.local_index = 2; // cursor not at top
+
+        state.handle_key(KeyCode::Char('a')); // edit -> reset to top
+        assert_eq!(state.local_index, 0);
+    }
+
+    #[test]
+    fn list_filter_enter_keeps_query_and_exits() {
+        let mut state = state_with_local_paths(&["/cwd/a.json"]);
+        state.focus = FocusPane::Local;
+        state.filtering = true;
+        state.handle_key(KeyCode::Char('j'));
+
+        state.handle_key(KeyCode::Enter);
+        assert!(!state.filtering); // exited input
+        assert_eq!(state.local_filter_query, "j"); // query kept
+    }
+
+    #[test]
+    fn vim_j_k_move_list_selection() {
+        let mut state = list_state_with_matches();
+        state.focus = FocusPane::Gist;
+        state.gist_index = 0;
+        state.handle_key(KeyCode::Char('j'));
+        assert_eq!(state.gist_index, 1);
+        state.handle_key(KeyCode::Char('k'));
+        assert_eq!(state.gist_index, 0);
+    }
+
+    #[test]
+    fn vim_h_scrolls_focused_row_left() {
+        let mut state = list_state_with_matches();
+        state.focus = FocusPane::Gist;
+        state.gist_hscroll = 2;
+        state.handle_key(KeyCode::Char('h'));
+        assert_eq!(state.gist_hscroll, 1);
+    }
+
+    #[test]
+    fn list_page_keys_jump_local_selection() {
+        let paths: Vec<String> = (0..15).map(|i| format!("/cwd/f{i:02}.txt")).collect();
+        let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+        let mut state = state_with_local_paths(&path_refs);
+        state.focus = FocusPane::Local;
+        state.handle_key(KeyCode::PageDown);
+        assert_eq!(state.local_index, 10);
+        state.handle_key(KeyCode::PageDown);
+        assert_eq!(state.local_index, 14);
+        state.handle_key(KeyCode::PageUp);
+        assert_eq!(state.local_index, 4);
+    }
+
+    #[test]
+    fn list_filter_ctrl_f_pages_without_typing_f() {
+        use crossterm::event::KeyModifiers;
+        let paths: Vec<String> = (0..12).map(|i| format!("/cwd/f{i:02}.txt")).collect();
+        let path_refs: Vec<&str> = paths.iter().map(|s| s.as_str()).collect();
+        let mut state = state_with_local_paths(&path_refs);
+        state.focus = FocusPane::Local;
+        state.filtering = true;
+        state.local_filter_query.set("f");
+        state.handle_key_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
+        assert_eq!(state.local_index, 10);
+        assert_eq!(state.local_filter_query, "f");
+    }
+
+    #[test]
+    fn foreign_gist_blocks_pin() {
+        let mut state = initial_state();
+        state.current_user_login = Some("me".into());
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("/cwd/a.txt"),
+            pinned: false,
+            modified: None,
+        }];
+        state.gists = vec![GistFile {
+            description: "x".into(),
+            public: true,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            owner_login: "other".into(),
+            ..GistFile::fixture("foreign", "a.txt")
+        }];
+        state.local_index = 0;
+        state.gist_index = 0;
+        assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::None);
+        assert!(state.status.as_ref().unwrap().contains("cannot pin"));
+    }
+
+    #[test]
+    fn star_key_returns_toggle_intent() {
+        let mut state = initial_state();
+        state.gists = vec![GistFile {
+            description: "x".into(),
+            public: true,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            ..GistFile::fixture("g1", "a.txt")
+        }];
+        state.gist_index = 0;
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('*')),
+            KeyOutcome::ToggleGistStar { .. }
+        ));
     }
 }

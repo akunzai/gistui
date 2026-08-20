@@ -283,10 +283,11 @@ pub(crate) fn render_gists_vm(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::tui::test_support::{
+        gists_mut, set_pending, state_with_gists, state_with_two_gists,
+    };
     use crate::tui::*;
-
-    use crate::tui::tests::{gists_mut, set_pending, state_with_gists, state_with_two_gists};
+    use crossterm::event::KeyCode;
 
     fn gists_ref(state: &AppState) -> &GistsManagerState {
         state.gist_manager().expect("expected Screen::Gists")
@@ -572,5 +573,13 @@ mod tests {
         let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
         assert_eq!(by_mouse, key_out);
         assert!(matches!(by_mouse, KeyOutcome::OpenGistDetail { .. }));
+    }
+
+    #[test]
+    fn gist_view_q_returns_to_list() {
+        let mut state = state_with_two_gists();
+        state.screen = Screen::Gists(Box::default());
+        state.handle_key(KeyCode::Char('q'));
+        assert_eq!(state.screen, Screen::List);
     }
 }

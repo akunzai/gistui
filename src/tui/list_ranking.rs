@@ -149,3 +149,453 @@ impl AppState {
         (local, gist)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::tui::test_support::list_state_with_matches;
+    use crate::tui::*;
+    use crossterm::event::KeyCode;
+    use std::path::PathBuf;
+
+    #[test]
+    fn gist_ranking_follows_anchor_not_focus() {
+        let mut state = list_state_with_matches();
+        state.anchor = FocusPane::Local;
+        state.local_index = 0; // settings.json
+        state.focus = FocusPane::Gist; // focus moved away, but anchor still Local
+        let ranked = state.ranked_gists();
+        assert_eq!(ranked[0].file.filename, "settings.json");
+    }
+
+    #[test]
+    fn reverse_ranking_orders_locals_by_selected_gist() {
+        let mut state = initial_state();
+        state.anchor = FocusPane::Gist;
+        state.gists = vec![GistFile {
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            ..GistFile::fixture("a", "settings.json")
+        }];
+        state.locals = vec![
+            LocalCandidate {
+                path: PathBuf::from("other.txt"),
+                pinned: false,
+                modified: None,
+            },
+            LocalCandidate {
+                path: PathBuf::from("settings.json"),
+                pinned: false,
+                modified: None,
+            },
+        ];
+        // The local pane reverse-ranks against the selected gist (gist_index 0).
+        let visible = state.visible_locals();
+        assert_eq!(visible[0].candidate.path, PathBuf::from("settings.json"));
+        assert_ne!(visible[0].mark, crate::ranking::MatchMark::None);
+    }
+
+    #[test]
+    fn local_sort_name_orders_by_filename() {
+        let mut state = initial_state(); // focus Local -> no reverse ranking
+        state.local_sort = LocalSort::Name;
+        state.locals = vec![
+            LocalCandidate {
+                path: PathBuf::from("zeta.txt"),
+                pinned: false,
+                modified: None,
+            },
+            LocalCandidate {
+                path: PathBuf::from("alpha.txt"),
+                pinned: false,
+                modified: None,
+            },
+        ];
+        assert_eq!(
+            state.visible_locals()[0].candidate.path,
+            PathBuf::from("alpha.txt")
+        );
+    }
+
+    #[test]
+    fn local_sort_recent_orders_by_mtime_desc_none_last() {
+        let mut state = initial_state();
+        state.local_sort = LocalSort::Recent;
+        state.locals = vec![
+            LocalCandidate {
+                path: PathBuf::from("old"),
+                pinned: false,
+                modified: Some(100),
+            },
+            LocalCandidate {
+                path: PathBuf::from("none"),
+                pinned: false,
+                modified: None,
+            },
+            LocalCandidate {
+                path: PathBuf::from("new"),
+                pinned: false,
+                modified: Some(500),
+            },
+        ];
+        let paths: Vec<_> = state
+            .visible_locals()
+            .into_iter()
+            .map(|r| r.candidate.path)
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                PathBuf::from("new"),
+                PathBuf::from("old"),
+                PathBuf::from("none")
+            ]
+        );
+    }
+
+    #[test]
+    fn ranking_helpers_terminate_in_either_anchor() {
+        // Regression: eagerly evaluating the cross-pane selection caused the two
+        // anchor-driven rankings to recurse into each other.
+        let mut state = initial_state();
+        state.gists = vec![GistFile {
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            ..GistFile::fixture("a", "f")
+        }];
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("f"),
+            pinned: false,
+            modified: None,
+        }];
+        for anchor in [FocusPane::Local, FocusPane::Gist] {
+            state.anchor = anchor;
+            let _ = state.ranked_gists();
+            let _ = state.visible_locals();
+            let _ = state.selected_local();
+            let _ = state.selected_gist();
+        }
+    }
+
+    #[test]
+    fn sort_by_name_and_recent_reorders_gists() {
+        let mut state = initial_state();
+        state.gists = vec![
+            GistFile {
+                public: true,
+                updated_at: "2026-01-01T00:00:00Z".into(),
+                created_at: "2026-01-01T00:00:00Z".into(),
+                ..GistFile::fixture("z", "zeta.json")
+            },
+            GistFile {
+                public: true,
+                updated_at: "2026-09-09T00:00:00Z".into(),
+                created_at: "2026-09-09T00:00:00Z".into(),
+                ..GistFile::fixture("a", "alpha.json")
+            },
+        ];
+        // No local selected -> Match keeps gh list order (zeta, alpha).
+        assert_eq!(state.ranked_gists()[0].file.filename, "zeta.json");
+
+        state.gist_sort = GistSort::Name;
+        assert_eq!(state.ranked_gists()[0].file.filename, "alpha.json");
+
+        state.gist_sort = GistSort::Recent;
+        assert_eq!(state.ranked_gists()[0].file.filename, "alpha.json");
+        assert_eq!(state.ranked_gists()[1].file.filename, "zeta.json");
+    }
+
+    #[test]
+    fn gist_type_filter_limits_ranked_gists() {
+        let mut state = initial_state();
+        state.gists = vec![
+            GistFile {
+                description: "p".into(),
+                public: true,
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("pub", "a.json")
+            },
+            GistFile {
+                description: "s".into(),
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("sec", "b.json")
+            },
+        ];
+        assert_eq!(state.ranked_gists().len(), 2);
+
+        state.gist_type_filter = GistTypeFilter::Public;
+        let only_public = state.ranked_gists();
+        assert_eq!(only_public.len(), 1);
+        assert_eq!(only_public[0].file.gist_id, "pub");
+
+        state.gist_type_filter = GistTypeFilter::Secret;
+        let only_secret = state.ranked_gists();
+        assert_eq!(only_secret.len(), 1);
+        assert_eq!(only_secret[0].file.gist_id, "sec");
+    }
+
+    #[test]
+    fn empty_state_has_no_ranked_gists() {
+        let state = initial_state();
+        assert!(state.ranked_gists().is_empty());
+    }
+
+    #[test]
+    fn no_local_selected_lists_all_gists_unranked() {
+        let mut state = initial_state();
+        state.gists = vec![
+            GistFile {
+                description: "first".into(),
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("a", "alpha.json")
+            },
+            GistFile {
+                description: "second".into(),
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("b", "beta.json")
+            },
+        ];
+        let ranked = state.ranked_gists();
+        assert_eq!(ranked.len(), 2);
+        // Order preserved (unranked) and no scoring applied.
+        assert_eq!(ranked[0].file.filename, "alpha.json");
+        assert_eq!(ranked[0].mark, crate::ranking::MatchMark::None);
+    }
+
+    #[test]
+    fn local_selection_changes_ranked_gists() {
+        let mut state = initial_state();
+        state.locals = vec![
+            LocalCandidate {
+                path: PathBuf::from("/tmp/settings.json"),
+                pinned: false,
+                modified: None,
+            },
+            LocalCandidate {
+                path: PathBuf::from("/tmp/statusline.sh"),
+                pinned: false,
+                modified: None,
+            },
+        ];
+        state.gists = vec![
+            GistFile {
+                description: "settings".into(),
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("a", "settings.json")
+            },
+            GistFile {
+                description: "status".into(),
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("b", "statusline.sh")
+            },
+        ];
+
+        assert_eq!(state.ranked_gists()[0].file.filename, "settings.json");
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.ranked_gists()[0].file.filename, "statusline.sh");
+    }
+
+    /// Public `ranked_gists` / `visible_locals` / `selected_*` stay pure recomputes (no
+    /// content-hash / epoch memo — #154 closed that approach). Hot paths use
+    /// `list_pane_snapshots()` (#224 shape #1) which builds each list once without caching
+    /// across mutations. `selected_gist` / `selected_local` must still equal `list[index]`
+    /// after an earlier read and an input mutation — a future silent cache would break here.
+    #[test]
+    fn selected_accessors_track_recomputed_lists_with_no_cache() {
+        let mut state = initial_state();
+        state.locals = vec![
+            LocalCandidate {
+                path: PathBuf::from("/tmp/settings.json"),
+                pinned: false,
+                modified: None,
+            },
+            LocalCandidate {
+                path: PathBuf::from("/tmp/statusline.sh"),
+                pinned: false,
+                modified: None,
+            },
+        ];
+        state.gists = vec![
+            GistFile {
+                description: "settings".into(),
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("a", "settings.json")
+            },
+            GistFile {
+                description: "status".into(),
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("b", "statusline.sh")
+            },
+        ];
+
+        // Read both lists first — this would warm any hypothetical cache.
+        let _ = state.ranked_gists();
+        let _ = state.visible_locals();
+        // Accessors equal a fresh recompute at the current indices.
+        assert_eq!(
+            state.selected_gist().map(|g| g.file.filename),
+            state
+                .ranked_gists()
+                .into_iter()
+                .nth(state.gist_index)
+                .map(|g| g.file.filename),
+        );
+        assert_eq!(
+            state.selected_local().map(|l| l.path),
+            state
+                .visible_locals()
+                .into_iter()
+                .nth(state.local_index)
+                .map(|r| r.candidate.path),
+        );
+        assert_eq!(state.ranked_gists()[0].file.filename, "settings.json");
+
+        // Move the local selection: ranking must reflect the *new* state, not the earlier read.
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.ranked_gists()[0].file.filename, "statusline.sh");
+        // The accessors still match a fresh recompute after the mutation.
+        assert_eq!(
+            state.selected_gist().map(|g| g.file.filename),
+            state
+                .ranked_gists()
+                .into_iter()
+                .nth(state.gist_index)
+                .map(|g| g.file.filename),
+        );
+        assert_eq!(
+            state.selected_local().map(|l| l.path),
+            state
+                .visible_locals()
+                .into_iter()
+                .nth(state.local_index)
+                .map(|r| r.candidate.path),
+        );
+    }
+
+    #[test]
+    fn list_pane_snapshots_match_public_accessors() {
+        let mut state = initial_state();
+        state.locals = vec![
+            LocalCandidate {
+                path: PathBuf::from("/tmp/settings.json"),
+                pinned: false,
+                modified: None,
+            },
+            LocalCandidate {
+                path: PathBuf::from("/tmp/statusline.sh"),
+                pinned: false,
+                modified: None,
+            },
+        ];
+        state.gists = vec![
+            GistFile {
+                description: "settings".into(),
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("a", "settings.json")
+            },
+            GistFile {
+                description: "status".into(),
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("b", "statusline.sh")
+            },
+        ];
+
+        for anchor in [FocusPane::Local, FocusPane::Gist] {
+            state.anchor = anchor;
+            let (locals, gists) = state.list_pane_snapshots();
+            assert_eq!(
+                locals
+                    .iter()
+                    .map(|r| r.candidate.path.clone())
+                    .collect::<Vec<_>>(),
+                state
+                    .visible_locals()
+                    .into_iter()
+                    .map(|r| r.candidate.path)
+                    .collect::<Vec<_>>(),
+                "locals mismatch for {anchor:?}"
+            );
+            assert_eq!(
+                gists
+                    .iter()
+                    .map(|g| g.file.filename.clone())
+                    .collect::<Vec<_>>(),
+                state
+                    .ranked_gists()
+                    .into_iter()
+                    .map(|g| g.file.filename)
+                    .collect::<Vec<_>>(),
+                "gists mismatch for {anchor:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn forked_filter_shows_only_forks() {
+        let mut state = initial_state();
+        state.gists = vec![
+            GistFile {
+                description: "mine".into(),
+                public: true,
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                owner_login: "me".into(),
+                ..GistFile::fixture("owned", "a.txt")
+            },
+            GistFile {
+                description: "fork".into(),
+                public: true,
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                owner_login: "me".into(),
+                fork_of_id: Some("upstream".into()),
+                ..GistFile::fixture("forked", "b.txt")
+            },
+        ];
+        state.current_user_login = Some("me".into());
+        state.gist_type_filter = GistTypeFilter::Forked;
+        let ids: Vec<_> = state
+            .ranked_gists()
+            .into_iter()
+            .map(|g| g.file.gist_id)
+            .collect();
+        assert_eq!(ids, vec!["forked"]);
+    }
+
+    #[test]
+    fn starred_filter_lists_only_starred_gists() {
+        // With the Starred type filter active, ranked_gists must draw from starred_gists, not the
+        // owned list — exercises the owned/starred source switch with data on both sides.
+        let mut state = initial_state();
+        state.gists = vec![GistFile {
+            description: "mine".into(),
+            public: true,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            owner_login: "me".into(),
+            ..GistFile::fixture("owned", "a.txt")
+        }];
+        state.starred_gists = vec![GistFile {
+            description: "theirs".into(),
+            public: true,
+            updated_at: "x".into(),
+            created_at: "x".into(),
+            owner_login: "other".into(),
+            ..GistFile::fixture("starred", "b.txt")
+        }];
+        state.gist_type_filter = GistTypeFilter::Starred;
+
+        let ranked = state.ranked_gists();
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].file.gist_id, "starred");
+    }
+}

@@ -213,9 +213,10 @@ pub(crate) fn render_diff_vm(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::test_support::{set_diff_body, set_diff_scroll, set_pending};
     use crate::tui::*;
-
-    use crate::tui::tests::{set_diff_body, set_diff_scroll};
+    use crossterm::event::KeyCode;
+    use std::path::PathBuf;
 
     fn set_diff_hscroll(state: &mut AppState, hscroll: u16) {
         match &mut state.screen {
@@ -307,5 +308,159 @@ mod tests {
             state.handle_key(KeyCode::Char('u')),
             KeyOutcome::UploadAdd { .. }
         ));
+    }
+
+    #[test]
+    fn enter_diff_sets_diff_screen() {
+        let mut state = initial_state();
+        state.enter_diff(
+            "the diff".into(),
+            "remote body".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/cwd/x"),
+        );
+        assert!(state.screen.is_diff());
+        assert!(state.diff_previewed());
+        assert_eq!(state.preview_remote(), "remote body");
+        assert_eq!(state.preview_local(), PathBuf::from("/tmp/x"));
+        assert_eq!(state.download_target(), PathBuf::from("/tmp/cwd/x"));
+        assert_eq!(state.diff_scroll(), 0);
+    }
+
+    #[test]
+    fn diff_scroll_respects_bounds() {
+        let mut state = initial_state();
+        state.enter_diff(
+            "l1\nl2\nl3".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
+        assert_eq!(state.diff_scroll(), 0);
+        state.handle_key(KeyCode::Up); // stays at 0
+        assert_eq!(state.diff_scroll(), 0);
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.diff_scroll(), 1);
+        state.handle_key(KeyCode::Down);
+        assert_eq!(state.diff_scroll(), 2);
+        state.handle_key(KeyCode::Down); // capped at lines-1 = 2
+        assert_eq!(state.diff_scroll(), 2);
+        state.handle_key(KeyCode::Up);
+        assert_eq!(state.diff_scroll(), 1);
+    }
+
+    #[test]
+    fn diff_hscroll_respects_bounds() {
+        let mut state = initial_state();
+        // Longest line is "abcd" (4 chars) -> max offset 3.
+        state.enter_diff(
+            "abcd\nab".into(),
+            "r".into(),
+            PathBuf::from("/tmp/x"),
+            PathBuf::from("/tmp/x"),
+        );
+        assert_eq!(state.diff_hscroll(), 0);
+        state.handle_key(KeyCode::Left); // stays at 0
+        assert_eq!(state.diff_hscroll(), 0);
+        for _ in 0..10 {
+            state.handle_key(KeyCode::Right);
+        }
+        assert_eq!(state.diff_hscroll(), 3);
+        state.handle_key(KeyCode::Left);
+        assert_eq!(state.diff_hscroll(), 2);
+    }
+
+    #[test]
+    fn d_in_diff_requests_download_when_file_absent() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("does-not-exist.json");
+        let mut state = initial_state();
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/local"),
+            missing.clone(),
+        );
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('d')),
+            KeyOutcome::DownloadRequested { target } if target == missing
+        ));
+    }
+
+    #[test]
+    fn d_in_diff_requests_download_when_file_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("exists.json");
+        std::fs::write(&existing, "old").unwrap();
+        let mut state = initial_state();
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/local"),
+            existing.clone(),
+        );
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('d')),
+            KeyOutcome::DownloadRequested { target } if target == existing
+        ));
+        assert!(state.screen.is_diff());
+    }
+
+    #[test]
+    fn d_in_diff_on_existing_requests_download() {
+        let dir = tempfile::tempdir().unwrap();
+        let existing = dir.path().join("exists.json");
+        std::fs::write(&existing, "old").unwrap();
+        let mut state = initial_state();
+        state.enter_diff(
+            "d".into(),
+            "r".into(),
+            PathBuf::from("/tmp/local"),
+            existing.clone(),
+        );
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('d')),
+            KeyOutcome::DownloadRequested { target } if target == existing
+        ));
+        assert!(state.screen.is_diff());
+    }
+
+    #[test]
+    fn create_diff_title_shortens_home_path() {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Create {
+                local_path: home.join("notes.txt"),
+            },
+        );
+        assert_eq!(diff_title(&state), "Create gist from ~/notes.txt");
+    }
+
+    #[test]
+    fn diff_view_title_shortens_single_home_path() {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
+        let mut state = initial_state();
+        state.enter_diff(
+            String::new(),
+            String::new(),
+            PathBuf::new(),
+            home.join("notes.txt"),
+        );
+        assert_eq!(diff_title(&state), "Diff → ~/notes.txt");
+    }
+
+    #[test]
+    fn diff_view_title_shortens_both_home_paths() {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
+        let mut state = initial_state();
+        state.enter_diff(
+            String::new(),
+            String::new(),
+            home.join("src").join("a.txt"),
+            home.join("b.txt"),
+        );
+        assert_eq!(diff_title(&state), "Diff: ~/src/a.txt → ~/b.txt");
     }
 }

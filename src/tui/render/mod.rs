@@ -1586,6 +1586,10 @@ pub(super) fn preview_diff_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyModifiers;
+
     use ratatui::{backend::TestBackend, Terminal};
 
     /// Concatenates every cell's symbol in row-major order (no separators) — enough to assert
@@ -2462,5 +2466,609 @@ mod tests {
         assert!(text.contains("Menu"));
         // The origin screen (List) still paints as the palette's background.
         assert!(text.contains("gistui"));
+    }
+
+    #[test]
+    fn file_list_scroll_keeps_cursor_visible() {
+        // count <= visible: no scroll.
+        assert_eq!(file_list_scroll(0, 5, 3), 0);
+        assert_eq!(file_list_scroll(2, 5, 3), 0);
+        // cursor within the first window: no scroll.
+        assert_eq!(file_list_scroll(2, 5, 20), 0);
+        assert_eq!(file_list_scroll(4, 5, 20), 0);
+        // cursor past the window: scroll so cursor is the last visible row.
+        assert_eq!(file_list_scroll(5, 5, 20), 1);
+        assert_eq!(file_list_scroll(19, 5, 20), 15);
+        // visible_rows == 0: never panic, offset 0.
+        assert_eq!(file_list_scroll(19, 0, 20), 0);
+    }
+
+    #[test]
+    fn footer_with_status_prefers_status_else_colourised_hints() {
+        // A one-shot status message wins and is shown plain (not key-colourised).
+        let (msg, colored) = footer_with_status(Some("already in sync"), "↑↓ move · q back");
+        assert_eq!(msg, "already in sync");
+        assert!(!colored);
+        // Otherwise the key hints render, colourised.
+        let (hint, colored) = footer_with_status(None, "↑↓ move · q back");
+        assert_eq!(hint, "↑↓ move · q back");
+        assert!(colored);
+    }
+
+    #[test]
+    fn count_label_plain_unless_filtered() {
+        assert_eq!(count_label(12, 12), "(12)");
+        assert_eq!(count_label(0, 0), "(0)");
+        // Filtered: fewer shown than total.
+        assert_eq!(count_label(3, 12), "(3/12)");
+    }
+
+    #[test]
+    fn spinner_glyph_cycles_through_frames_and_wraps() {
+        // Adjacent ticks advance the frame; the cycle wraps after a full revolution.
+        assert_ne!(spinner_glyph(0), spinner_glyph(1));
+        assert_eq!(spinner_glyph(0), spinner_glyph(10));
+        assert_eq!(spinner_glyph(3), spinner_glyph(13));
+        // Every position in one revolution yields a distinct glyph.
+        let frames: std::collections::HashSet<_> = (0..10).map(spinner_glyph).collect();
+        assert_eq!(frames.len(), 10);
+    }
+
+    #[test]
+    fn hint_line_colours_keys_by_action_category() {
+        // Detail is the screen that binds `X` to a destructive delete.
+        let bindings = keymap::for_screen(&Screen::List);
+        let line = hint_line(
+            "Tab panes  ·  d download  ·  P pins  ·  Esc/q back",
+            bindings,
+            &Theme::DARK,
+        );
+        let key_fg = |k: &str| {
+            line.spans
+                .iter()
+                .find(|s| s.content == k)
+                .unwrap_or_else(|| panic!("key span {k}"))
+                .style
+                .fg
+        };
+        assert_eq!(key_fg("Tab"), Some(Color::Cyan)); // navigation
+        assert_eq!(key_fg("d"), Some(Color::Green)); // write
+        assert_eq!(key_fg("P"), Some(Color::Cyan)); // opens a view, not the `pin` write action
+        assert_eq!(key_fg("Esc/q"), Some(Color::Cyan)); // navigation
+                                                        // Labels keep default brightness (no fg override) regardless of the key's category.
+        let label = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("download"))
+            .expect("label span");
+        assert_eq!(label.style.fg, None);
+    }
+
+    #[test]
+    fn category_color_maps_every_category() {
+        use crate::tui::keymap::Category;
+        assert_eq!(category_color(Category::Nav, &Theme::DARK), Color::Cyan);
+        assert_eq!(category_color(Category::Read, &Theme::DARK), Color::Cyan);
+        assert_eq!(category_color(Category::Write, &Theme::DARK), Color::Green);
+        assert_eq!(
+            category_color(Category::Destructive, &Theme::DARK),
+            Color::Red
+        );
+    }
+
+    /// A key the screen's table does not claim — a status line, or `MINIMAL_HINT`'s `;` and
+    /// `Ctrl+p` — reads as navigation rather than panicking or borrowing a neighbour's colour.
+    #[test]
+    fn hint_line_leaves_an_unclaimed_key_on_the_navigation_accent() {
+        let line = hint_line(
+            crate::tui::MINIMAL_HINT,
+            keymap::for_screen(&Screen::GistDetail(Box::default())),
+            &Theme::DARK,
+        );
+        let key_fg = |k: &str| {
+            line.spans
+                .iter()
+                .find(|s| s.content == k)
+                .unwrap_or_else(|| panic!("key span {k}"))
+                .style
+                .fg
+        };
+        assert_eq!(key_fg(";"), Some(Color::Cyan));
+        assert_eq!(key_fg("Ctrl+p"), Some(Color::Cyan));
+    }
+
+    #[test]
+    fn hint_line_preserves_every_character() {
+        // Sizing relies on wrap_line_count over the raw text, so styling must not add/drop chars.
+        let text = "↑↓ move  ·  Enter diff · q back";
+        let joined: String = hint_line(text, keymap::for_screen(&Screen::List), &Theme::DARK)
+            .spans
+            .iter()
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(joined, text);
+    }
+
+    #[test]
+    fn gist_row_label_switches_with_view() {
+        let g = RankedGistFile {
+            file: GistFile {
+                description: "My Ghostty config".into(),
+                public: true,
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("abc", "config")
+            },
+            mark: crate::ranking::MatchMark::None,
+        };
+        assert_eq!(
+            gist_row_label(&g, GistView::Description),
+            "config — My Ghostty config"
+        );
+        assert_eq!(gist_row_label(&g, GistView::Id), "abc / config");
+    }
+
+    #[test]
+    fn diff_view_applies_vertical_and_horizontal_scroll() {
+        let text = "--- a\n+++ b\nabcdef\n more";
+        let v = diff_view_highlighted(text, 2, 2, None, false, &Theme::DARK); // skip 2 lines, drop 2 leading chars
+        assert_eq!(v.lines.len(), 2);
+        assert_eq!(v.lines[0].spans[0].content, "cdef");
+    }
+
+    #[test]
+    fn diff_view_inline_highlights_changed_words() {
+        // A single-line modification: "hello world" → "hello planet"
+        let text = "--- a\n+++ b\n-hello world\n+hello planet\n";
+        let v = diff_view_highlighted(text, 2, 0, None, false, &Theme::DARK); // skip header lines
+                                                                              // del line: span 0 is "-", unchanged word "hello " is plain red,
+                                                                              //           changed word "world" is bold red
+        assert_eq!(v.lines.len(), 2);
+        let del = &v.lines[0];
+        let sign = del.spans.iter().find(|s| s.content == "-").unwrap();
+        assert_eq!(sign.style.fg, Some(Color::Red));
+        // "world" is the changed word — should be bold
+        let world = del
+            .spans
+            .iter()
+            .find(|s| s.content.trim() == "world")
+            .unwrap();
+        assert!(world.style.add_modifier.contains(Modifier::BOLD));
+        // "hello " is unchanged — should NOT be bold
+        let hello = del
+            .spans
+            .iter()
+            .find(|s| s.content.starts_with("hello"))
+            .unwrap();
+        assert!(!hello.style.add_modifier.contains(Modifier::BOLD));
+        // ins line: "planet" should be bold green
+        let ins = &v.lines[1];
+        let planet = ins
+            .spans
+            .iter()
+            .find(|s| s.content.trim() == "planet")
+            .unwrap();
+        assert!(planet.style.add_modifier.contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn diff_view_highlights_context_lines_for_known_language() {
+        // Context line " let x = 1;" gets syntax colour; the -/+ pair keeps red/green.
+        let text = "--- a\n+++ b\n let x = 1;\n-old\n+new\n";
+        let v = diff_view_highlighted(text, 0, 0, Some("rs"), true, &Theme::DARK);
+        let ctx = v
+            .lines
+            .iter()
+            .find(|l| l.spans.first().map(|s| s.content.as_ref()) == Some(" "))
+            .expect("a context line marked by a leading space span");
+        // `let` is a Rust keyword → magenta somewhere on the context line.
+        assert!(ctx.spans.iter().any(|s| s.style.fg == Some(Color::Magenta)));
+        // The del line stays red, never picks up a syntax colour.
+        let del = v
+            .lines
+            .iter()
+            .find(|l| l.spans.iter().any(|s| s.content == "-"))
+            .unwrap();
+        assert!(del.spans.iter().all(|s| s.style.fg != Some(Color::Magenta)));
+    }
+
+    #[test]
+    fn diff_view_leaves_context_plain_when_highlight_disabled() {
+        let text = "--- a\n+++ b\n let x = 1;\n";
+        let v = diff_view_highlighted(text, 0, 0, Some("rs"), false, &Theme::DARK);
+        assert!(v.lines[2].spans.iter().all(|s| s.style.fg.is_none()));
+    }
+
+    #[test]
+    fn diff_view_skips_tabbed_context_lines() {
+        // A tab in the context line keeps it plain so indentation stays aligned with -/+ lines.
+        let text = "--- a\n+++ b\n \tlet x = 1;\n";
+        let v = diff_view_highlighted(text, 0, 0, Some("rs"), true, &Theme::DARK);
+        assert!(v.lines[2].spans.iter().all(|s| s.style.fg.is_none()));
+    }
+
+    #[test]
+    fn header_line_tints_local_yellow_and_gist_blue() {
+        let local = header_line(
+            "--- local: notes.txt (2026-06-10 14:25 UTC)",
+            0,
+            &Theme::DARK,
+        );
+        let kw = local.spans.iter().find(|s| s.content == "local").unwrap();
+        assert_eq!(kw.style.fg, Some(Color::Yellow));
+
+        let gist = header_line(
+            "+++ gist abc123 / notes.txt (2026-06-10 13:10 UTC)",
+            0,
+            &Theme::DARK,
+        );
+        let kw = gist.spans.iter().find(|s| s.content == "gist").unwrap();
+        assert_eq!(kw.style.fg, Some(Color::Blue));
+    }
+
+    #[test]
+    fn preview_diff_text_flips_with_focus() {
+        // Download orientation (gist pane focused): old = local, new = gist.
+        let dl = preview_diff_text(false, "local: a", "old\n", "gist b", "new\n", false);
+        assert!(dl.starts_with("--- local: a\n+++ gist b\n"));
+
+        // Upload orientation (local pane focused): old = gist, new = local.
+        let ul = preview_diff_text(true, "local: a", "old\n", "gist b", "new\n", false);
+        assert!(ul.starts_with("--- gist b\n+++ local: a\n"));
+    }
+
+    #[test]
+    fn format_unix_utc_known_instants() {
+        assert_eq!(format_unix_utc(0), "1970-01-01 00:00 UTC");
+        assert_eq!(format_unix_utc(1_780_656_360), "2026-06-05 10:46 UTC");
+    }
+
+    #[test]
+    fn gist_time_label_normalises_rfc3339() {
+        assert_eq!(
+            gist_time_label("2026-06-08T11:06:18Z"),
+            "2026-06-08 11:06 UTC"
+        );
+        assert_eq!(gist_time_label(""), "unknown");
+        assert_eq!(gist_time_label("short"), "short");
+    }
+
+    #[test]
+    fn wrap_line_count_is_responsive_to_width() {
+        let text = "aaa bbb ccc";
+        assert_eq!(wrap_line_count(text, 100), 1);
+        assert_eq!(wrap_line_count(text, 7), 2);
+        assert_eq!(wrap_line_count(text, 3), 3);
+        assert_eq!(wrap_line_count(text, 0), 1);
+    }
+
+    #[test]
+    fn footer_height_collapses_to_zero_when_empty_else_wraps() {
+        assert_eq!(footer_height("", 100, "", false), 0);
+        assert_eq!(footer_height("? Help", 100, "", false), 1);
+        assert_eq!(footer_height("aaa bbb ccc", 9, "", false), 2); // 2 wrapped lines at inner width 7
+        assert_eq!(footer_height("/x_", 100, "Filter", false), 2); // title row + 1 content line
+        assert_eq!(footer_height("aaa bbb ccc", 9, "", true), 1); // hints stay one row (#342)
+    }
+
+    #[test]
+    fn minimal_hint_shows_menu_and_palette_shortcuts() {
+        assert_eq!(MINIMAL_HINT, "; Menu · Ctrl+p Palette");
+        let (hint, colored) = footer_with_status(None, MINIMAL_HINT);
+        assert_eq!(hint, "; Menu · Ctrl+p Palette");
+        assert!(colored);
+        let (status, colored) = footer_with_status(Some("Downloaded file.txt"), MINIMAL_HINT);
+        assert_eq!(status, "Downloaded file.txt");
+        assert!(!colored);
+    }
+
+    #[test]
+    fn marked_row_text_uses_match_mark_pin_prefix() {
+        use crate::ranking::MatchMark;
+        assert_eq!(marked_row_text("x".into(), MatchMark::Pinned), "📌 x");
+        assert_eq!(marked_row_text("x".into(), MatchMark::ExactFilename), "x");
+        assert_eq!(marked_row_text("x".into(), MatchMark::None), "x");
+    }
+
+    #[test]
+    fn gist_row_label_falls_back_to_filename_when_description_empty() {
+        let g = RankedGistFile {
+            file: GistFile {
+                description: "  ".into(),
+                public: true,
+                updated_at: "x".into(),
+                created_at: "x".into(),
+                ..GistFile::fixture("abc", "config")
+            },
+            mark: crate::ranking::MatchMark::None,
+        };
+        assert_eq!(gist_row_label(&g, GistView::Description), "config");
+    }
+
+    #[test]
+    fn input_line_reverses_the_char_under_the_cursor() {
+        let mut input = TextInput::from("abc");
+        input.left(); // ab|c → cursor on 'c'
+        let line = input_line("/", &input, "");
+        // Exactly one span carries the reverse-video cursor, and it's the char at the cursor.
+        let reversed: Vec<&str> = line
+            .spans
+            .iter()
+            .filter(|s| s.style.add_modifier.contains(Modifier::REVERSED))
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(reversed, vec!["c"]);
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "/abc");
+    }
+
+    #[test]
+    fn input_line_cursor_at_end_reverses_trailing_space() {
+        let input = TextInput::from("ab");
+        let line = input_line("", &input, "");
+        let reversed: Vec<&str> = line
+            .spans
+            .iter()
+            .filter(|s| s.style.add_modifier.contains(Modifier::REVERSED))
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert_eq!(reversed, vec![" "]);
+    }
+
+    #[test]
+    fn gist_group_row_age_tracks_active_sort() {
+        let group = GistGroup {
+            id: "g1".into(),
+            description: "demo".into(),
+            public: false,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+            file_count: 2,
+            owner_login: String::new(),
+            fork_of_id: None,
+        };
+        let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+        // Sorting by updated shows the updated age (1 day ago); sorting by created shows the
+        // created age (10 days ago → "1w"), so the 🕒 column matches the ordering key.
+        let updated =
+            gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), false, None);
+        let created =
+            gist_group_row_label(&group, now, GistGroupSort::Created, (0, 0, 0), false, None);
+        assert!(updated.ends_with("🕒 1d"), "{updated}");
+        assert!(created.ends_with("🕒 1w"), "{created}");
+    }
+
+    #[test]
+    fn gist_group_row_shows_comment_marker_only_when_present() {
+        let group = GistGroup {
+            id: "g1".into(),
+            description: "demo".into(),
+            public: false,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+            file_count: 2,
+            owner_login: String::new(),
+            fork_of_id: None,
+        };
+        let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+        assert!(
+            !gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), false, None)
+                .contains('💬')
+        );
+        assert!(
+            gist_group_row_label(&group, now, GistGroupSort::Updated, (3, 0, 0), false, None)
+                .contains("💬 3")
+        );
+    }
+
+    #[test]
+    fn gist_group_row_shows_foreign_owner() {
+        let group = GistGroup {
+            id: "g1".into(),
+            description: "demo".into(),
+            public: true,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+            file_count: 1,
+            owner_login: "karpathy".into(),
+            fork_of_id: None,
+        };
+        let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+        let foreign = gist_group_row_label(
+            &group,
+            now,
+            GistGroupSort::Updated,
+            (0, 0, 0),
+            false,
+            Some("me"),
+        );
+        assert!(foreign.contains("@karpathy"));
+        let own = gist_group_row_label(
+            &group,
+            now,
+            GistGroupSort::Updated,
+            (0, 0, 0),
+            false,
+            Some("karpathy"),
+        );
+        assert!(!own.contains("@karpathy"));
+    }
+
+    #[test]
+    fn gist_group_row_shows_fork_marker_only_when_present() {
+        let group = GistGroup {
+            id: "g1".into(),
+            description: "demo".into(),
+            public: false,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+            file_count: 2,
+            owner_login: String::new(),
+            fork_of_id: None,
+        };
+        let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+        assert!(
+            !gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), false, None)
+                .contains('⑂')
+        );
+        assert!(
+            gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 2), false, None)
+                .contains("⑂ 2")
+        );
+    }
+
+    #[test]
+    fn gist_group_row_shows_star_marker_only_when_present() {
+        let group = GistGroup {
+            id: "g1".into(),
+            description: "demo".into(),
+            public: false,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+            file_count: 2,
+            owner_login: String::new(),
+            fork_of_id: None,
+        };
+        let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+        assert!(
+            !gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), false, None)
+                .contains('☆')
+        );
+        assert!(
+            gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 3, 0), false, None)
+                .contains("☆ 3")
+        );
+    }
+
+    /// Issue #347: the description leads the row (after the fixed-width badge/owner columns), and
+    /// the full 32-char id no longer dominates it — only a short, `#`-prefixed abbreviation trails.
+    #[test]
+    fn gist_group_row_description_leads_and_id_is_abbreviated() {
+        let group = GistGroup {
+            id: "abcdef0123456789abcdef0123456789".into(),
+            description: "My cool gist".into(),
+            public: false,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+            file_count: 2,
+            owner_login: String::new(),
+            fork_of_id: None,
+        };
+        let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+        let row = gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), false, None);
+        assert!(
+            row.trim_start().starts_with("My cool gist"),
+            "description should lead the row, got {row}"
+        );
+        assert!(!row.contains(&group.id), "full id must not appear: {row}");
+        assert!(
+            row.contains(&format!("#{}", &group.id[..7])),
+            "abbreviated id should still be reachable inline: {row}"
+        );
+    }
+
+    /// Issue #347: the badge column is fixed-width, so a starred row's description starts at the
+    /// same column as an unstarred row's.
+    #[test]
+    fn gist_group_row_badge_column_is_fixed_width() {
+        let group = GistGroup {
+            id: "g1".into(),
+            description: "demo".into(),
+            public: false,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+            file_count: 1,
+            owner_login: String::new(),
+            fork_of_id: None,
+        };
+        let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+        let unbadged =
+            gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), false, None);
+        let starred =
+            gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), true, None);
+        // Compare by char count, not byte offset — `★` is multi-byte, so a byte-offset comparison
+        // would report misalignment even though the two rows line up on screen.
+        let char_col = |s: &str| s.find("demo").map(|byte_idx| s[..byte_idx].chars().count());
+        assert_eq!(
+            char_col(&unbadged),
+            char_col(&starred),
+            "description column must align with and without a badge: {unbadged:?} vs {starred:?}"
+        );
+    }
+
+    /// Issue #347: a legacy (shorter than the abbreviation width) gist id still pads the id column
+    /// out to its usual width, so the `📄` segment that follows stays aligned across rows.
+    #[test]
+    fn gist_group_row_legacy_short_id_still_aligns() {
+        let short = GistGroup {
+            id: "abc12".into(),
+            description: "demo".into(),
+            public: false,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+            file_count: 1,
+            owner_login: String::new(),
+            fork_of_id: None,
+        };
+        let long = GistGroup {
+            id: "abcdef0123456789".into(),
+            ..short.clone()
+        };
+        let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+        let short_row =
+            gist_group_row_label(&short, now, GistGroupSort::Updated, (0, 0, 0), false, None);
+        let long_row =
+            gist_group_row_label(&long, now, GistGroupSort::Updated, (0, 0, 0), false, None);
+        assert_eq!(
+            short_row.find('📄'),
+            long_row.find('📄'),
+            "the file-count marker must land at the same column regardless of id length: \
+             {short_row:?} vs {long_row:?}"
+        );
+    }
+
+    #[test]
+    fn gist_info_line_shows_counts_when_nonzero() {
+        let group = GistGroup {
+            id: "616796de59282c8bfdae3005511c588e".into(),
+            description: "demo".into(),
+            public: true,
+            updated_at: "2026-06-10T00:00:00Z".into(),
+            created_at: "2026-06-01T00:00:00Z".into(),
+            file_count: 1,
+            owner_login: String::new(),
+            fork_of_id: None,
+        };
+        let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
+        let quiet = gist_info_line(&group, now, None, false, (0, 0, 0));
+        assert!(!quiet.contains('☆'));
+        assert!(!quiet.contains('⑂'));
+        assert!(!quiet.contains('💬'));
+
+        let rich = gist_info_line(&group, now, None, true, (2, 3, 1));
+        assert!(rich.starts_with("★ starred · "));
+        assert!(rich.contains("☆ 3 · ⑂ 1 · 💬 2"));
+        assert!(rich.contains(&group.id));
+    }
+
+    #[test]
+    fn palette_row_line_aligns_long_keys() {
+        let item = PaletteItem {
+            key_hint: "Enter".to_string(),
+            label: "Diff local ↔ gist".to_string(),
+            exec: crate::tui::palette::PaletteExec::Key(KeyCode::Enter, KeyModifiers::NONE),
+            enabled: true,
+            category: crate::tui::keymap::Category::Read,
+            search: String::new(),
+        };
+        let line = palette_row_line(
+            &item,
+            palette_key_width(&[&item]),
+            &Theme::DARK,
+            Style::default(),
+        );
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(text.starts_with("  Enter  Diff"));
+        assert!(!text.contains("EnterDiff"));
     }
 }

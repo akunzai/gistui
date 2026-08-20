@@ -543,9 +543,9 @@ pub(crate) fn render_help_vm(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::test_support::{help_mut, help_ref, state_with_gists};
     use crate::tui::*;
-
-    use crate::tui::tests::{help_mut, help_ref, state_with_gists};
+    use crossterm::event::KeyCode;
 
     #[test]
     fn footer_help_rows_align_with_the_key_column() {
@@ -737,5 +737,83 @@ mod tests {
         assert_eq!(by_mouse, KeyOutcome::None);
         assert!(!help_ref(&state).index_open);
         assert_eq!(help_ref(&state).topic, HelpTopic::Pins);
+    }
+
+    #[test]
+    fn about_metadata_is_available_for_help() {
+        // The footer renders the repo URL; guard against dropping it from Cargo.toml.
+        assert!(env!("CARGO_PKG_REPOSITORY").contains("github.com/akunzai/gistui"));
+    }
+
+    #[test]
+    fn question_opens_contextual_help_from_list() {
+        let mut state = initial_state();
+        state.handle_key(KeyCode::Char('?'));
+        assert!(state.screen.is_help());
+        assert_eq!(help_ref(&state).topic, HelpTopic::List);
+        assert_eq!(state.nav_stack.last(), Some(&Screen::List));
+        assert!(!help_ref(&state).index_open);
+        // Arrow keys scroll help
+        state.handle_key(KeyCode::Down);
+        assert!(state.screen.is_help());
+        assert_eq!(help_ref(&state).scroll, 1);
+        state.handle_key(KeyCode::Up);
+        assert!(state.screen.is_help());
+        assert_eq!(help_ref(&state).scroll, 0);
+        // Esc closes help (payload is dropped with the screen — no stale help on AppState).
+        help_mut(&mut state).scroll = 5;
+        state.handle_key(KeyCode::Esc);
+        assert_eq!(state.screen, Screen::List);
+        assert!(state.help().is_none());
+    }
+
+    #[test]
+    fn q_in_help_closes_to_list() {
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn question_mark_opens_contextual_help_from_pins() {
+        let mut state = initial_state();
+        state.screen = Screen::Pins(Box::default());
+        state.handle_key(KeyCode::Char('?'));
+        assert!(state.screen.is_help());
+        assert_eq!(help_ref(&state).topic, HelpTopic::Pins);
+        assert!(state.nav_stack.last().is_some_and(Screen::is_pins));
+        assert!(!help_ref(&state).index_open);
+    }
+
+    #[test]
+    fn help_topic_view_esc_returns_to_origin() {
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        state.nav_stack.push(Screen::Gists(Box::default()));
+        state.handle_key(KeyCode::Esc);
+        assert!(state.screen.is_gists());
+    }
+
+    #[test]
+    fn help_index_esc_returns_to_origin() {
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        help_mut(&mut state).index_open = true;
+        state.nav_stack.push(Screen::List);
+        state.handle_key(KeyCode::Esc);
+        assert_eq!(state.screen, Screen::List);
+        assert!(state.help().is_none());
+    }
+
+    #[test]
+    fn help_index_question_mark_exits_help() {
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::default());
+        help_mut(&mut state).index_open = true;
+        state.nav_stack.push(Screen::Pins(Box::default()));
+        state.handle_key(KeyCode::Char('?'));
+        assert!(state.screen.is_pins());
+        assert!(state.help().is_none());
     }
 }

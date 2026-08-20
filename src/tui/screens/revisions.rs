@@ -445,10 +445,13 @@ pub(crate) fn render_revisions_vm(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::tui::screens::diff::diff_footer;
+    use crate::tui::test_support::{
+        detail_mut, list_state_with_matches, revision_ref, state_with_gists,
+    };
     use crate::tui::*;
-
-    use crate::tui::tests::{revision_ref, state_with_gists};
+    use crossterm::event::KeyCode;
+    use std::path::PathBuf;
 
     fn revision_mut(state: &mut AppState) -> &mut RevisionState {
         if !state.screen.is_revisions() {
@@ -647,5 +650,33 @@ mod tests {
             by_mouse,
             KeyOutcome::RevisionDiffIncremental { .. }
         ));
+    }
+
+    #[test]
+    fn capital_h_from_list_opens_revisions_for_selected_gist_file() {
+        let mut state = list_state_with_matches();
+        state.focus = FocusPane::Gist;
+        state.gist_index = 0;
+        let outcome = state.handle_key(KeyCode::Char('H'));
+        assert!(matches!(outcome, KeyOutcome::FetchRevisions { .. }));
+        assert!(state.screen.is_revisions());
+        assert_eq!(revision_ref(&state).gist_id.as_deref(), Some("a"));
+        assert_eq!(revision_ref(&state).target_file, "settings.json");
+        assert_eq!(state.nav_stack.last(), Some(&Screen::List));
+    }
+
+    #[test]
+    fn capital_h_from_gist_detail_opens_revisions_and_fetches() {
+        let mut state = state_with_gists();
+        state.screen = Screen::GistDetail(Box::default());
+        detail_mut(&mut state).gist_id = Some("g1".into());
+        detail_mut(&mut state).file_cursor = 1;
+        let outcome = state.handle_key(KeyCode::Char('H'));
+        assert!(matches!(outcome, KeyOutcome::FetchRevisions { .. }));
+        assert!(state.screen.is_revisions());
+        assert_eq!(revision_ref(&state).gist_id.as_deref(), Some("g1"));
+        assert_eq!(revision_ref(&state).target_file, "b.txt");
+        assert!(state.nav_stack.last().is_some_and(Screen::is_gist_detail));
+        assert!(revision_ref(&state).entries.is_none());
     }
 }

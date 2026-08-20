@@ -354,7 +354,7 @@ mod tests {
                 deletions: 0,
             },
         };
-        let mut state = crate::tui::tests::state_with_gists();
+        let mut state = crate::tui::test_support::state_with_gists();
         state.screen = crate::tui::Screen::Revisions(Box::default());
         let rev = state.revision_mut().expect("expected Screen::Revisions");
         rev.gist_id = Some("g1".into());
@@ -384,7 +384,7 @@ mod tests {
     /// Issue #341: scrolling the selected long path must not eat the start of its siblings.
     #[test]
     fn list_hscroll_leaves_unselected_rows_readable_from_their_start() {
-        let mut state = crate::tui::tests::state_with_local_paths(&[
+        let mut state = crate::tui::test_support::state_with_local_paths(&[
             "/cwd/AGENTS.md",
             "/cwd/docs/adr/0001-appstate-field-visibility.md",
             "/cwd/CHANGELOG.md",

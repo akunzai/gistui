@@ -955,9 +955,9 @@ pub(crate) fn detail_focus_tabs_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::test_support::{detail_mut, state_with_gists, state_with_two_gists};
     use crate::tui::*;
-
-    use crate::tui::tests::{detail_mut, state_with_gists, state_with_two_gists};
+    use crossterm::event::KeyCode;
 
     fn detail_ref(state: &AppState) -> &DetailState {
         state.detail().expect("expected Screen::GistDetail")
@@ -1529,5 +1529,37 @@ mod tests {
         );
         let out = s.handle_key(KeyCode::Char('m'));
         assert!(matches!(out, KeyOutcome::None));
+    }
+
+    #[test]
+    fn detail_q_returns_to_gists() {
+        let mut state = state_with_gists();
+        // Mirrors what `enter()` does when GistDetail is opened from Gists (OpenGistDetail).
+        state.nav_stack.push(Screen::Gists(Box::default()));
+        state.screen = Screen::GistDetail(Box::default());
+        state.handle_key(KeyCode::Char('q'));
+        assert!(state.screen.is_gists());
+    }
+
+    #[test]
+    fn detail_focus_tab_tracks_focus() {
+        assert_eq!(detail_focus_tab(DetailFocus::Files), 0);
+        assert_eq!(detail_focus_tab(DetailFocus::Comments), 1);
+    }
+
+    #[test]
+    fn c_in_detail_requests_compaction_not_gist_manager() {
+        let mut state = state_with_two_gists();
+        state.screen = Screen::Gists(Box::default());
+        assert_eq!(state.handle_key(KeyCode::Char('c')), KeyOutcome::None);
+        state.screen = Screen::GistDetail(Box::default());
+        detail_mut(&mut state).gist_id = Some("a".into());
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('c')),
+            KeyOutcome::CompactGist { .. }
+        ));
+        // `c` on the main list is not a compaction trigger.
+        let mut list = state_with_two_gists();
+        assert_eq!(list.handle_key(KeyCode::Char('c')), KeyOutcome::None);
     }
 }

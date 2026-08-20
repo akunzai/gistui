@@ -2031,6 +2031,8 @@ fn set_diff_identical(state: &mut AppState, identical: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::path::PathBuf;
     use std::sync::mpsc;
 
     // ---- poll_channel -------------------------------------------------
@@ -2920,5 +2922,99 @@ mod tests {
         );
 
         assert_eq!(state.status.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn editor_command_injects_wait_for_gui_editors() {
+        for ed in ["zed", "code", "code-insiders", "cursor", "windsurf", "subl"] {
+            let (program, args) = editor_command(ed).unwrap();
+            assert_eq!(program, ed);
+            assert!(
+                args.iter().any(|a| a == "--wait" || a == "-w"),
+                "expected a wait flag for GUI editor {ed:?}, got {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_command_matches_gui_editor_by_basename() {
+        // A full path or a `.exe` suffix must still be recognised as a GUI editor.
+        let (program, args) = editor_command("/usr/local/bin/zed -n").unwrap();
+        assert_eq!(program, "/usr/local/bin/zed");
+        assert_eq!(args, vec!["-n", "--wait"]);
+    }
+
+    #[test]
+    fn editor_command_leaves_terminal_editors_untouched() {
+        for ed in ["vi", "vim", "nvim", "nano", "emacs", "hx"] {
+            let (program, args) = editor_command(ed).unwrap();
+            assert_eq!(program, ed);
+            assert!(
+                args.is_empty(),
+                "terminal editor {ed:?} should get no injected flag, got {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_command_keeps_an_existing_wait_flag() {
+        // Don't duplicate a wait flag the user already configured (either spelling).
+        let (_, args) = editor_command("code --wait").unwrap();
+        assert_eq!(args, vec!["--wait"]);
+        let (_, args) = editor_command("subl -w").unwrap();
+        assert_eq!(args, vec!["-w"]);
+    }
+
+    #[test]
+    fn editor_command_blank_is_none() {
+        assert!(editor_command("").is_none());
+        assert!(editor_command("   ").is_none());
+    }
+
+    #[test]
+    fn editor_is_gui_matches_known_gui_editors() {
+        for ed in [
+            "zed",
+            "code",
+            "code-insiders",
+            "codium",
+            "vscodium",
+            "cursor",
+            "windsurf",
+            "subl",
+            "sublime_text",
+        ] {
+            assert!(
+                editor_is_gui(ed),
+                "{ed} should be recognised as a GUI editor"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_is_gui_rejects_terminal_editors() {
+        for ed in ["vi", "vim", "nvim", "nano", "emacs", "hx"] {
+            assert!(
+                !editor_is_gui(ed),
+                "{ed} should not be recognised as a GUI editor"
+            );
+        }
+    }
+
+    #[test]
+    fn editor_is_gui_matches_by_basename_from_full_path() {
+        assert!(editor_is_gui("/usr/local/bin/zed"));
+        assert!(editor_is_gui("C:\\Tools\\code.exe"));
+    }
+
+    #[test]
+    fn mouse_capture_applies_to_stdout_matches_is_terminal() {
+        // Guard used by sync_mouse_capture: must agree with std's TTY check so CI
+        // (non-TTY) skips execute! and real sessions still apply capture.
+        use std::io::IsTerminal;
+        assert_eq!(
+            mouse_capture_applies_to_stdout(),
+            std::io::stdout().is_terminal()
+        );
     }
 }

@@ -181,10 +181,9 @@ pub(crate) fn render_preview_vm(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use crate::tui::test_support::state_with_gists;
     use crate::tui::*;
-
-    use crate::tui::tests::state_with_gists;
+    use crossterm::event::KeyCode;
 
     fn preview_ref(state: &AppState) -> &PreviewState {
         state.preview().expect("expected Screen::Preview")
@@ -314,5 +313,35 @@ mod tests {
         assert!(state.screen.is_help());
         assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
         assert_eq!(out, KeyOutcome::None);
+    }
+
+    #[test]
+    fn preview_q_returns_to_launch_screen() {
+        let mut state = state_with_gists();
+        state.nav_stack.push(Screen::GistDetail(Box::default()));
+        state.screen = Screen::Preview(Box::default());
+        state.handle_key(KeyCode::Char('q'));
+        assert!(state.screen.is_gist_detail());
+        // nav_stack is now drained, so a later list-launched preview isn't left pointing here.
+        assert!(state.nav_stack.is_empty());
+    }
+
+    /// Issue #347: the Preview screen titles itself with the gist's description, consistent
+    /// with the Gist detail screen, rather than the raw id.
+    #[test]
+    fn preview_title_uses_gist_description() {
+        let state = state_with_gists();
+        assert_eq!(state.preview_title("g1", "a.txt"), "Preview: demo / a.txt");
+    }
+
+    /// Issue #347: without a known description, the preview title still identifies the gist
+    /// (falling back to its id) instead of silently showing just the filename.
+    #[test]
+    fn preview_title_falls_back_to_id_without_description() {
+        let state = initial_state();
+        assert_eq!(
+            state.preview_title("unknown-id", "a.txt"),
+            "Preview: Gist unknown-id / a.txt"
+        );
     }
 }
