@@ -30,6 +30,22 @@ handle_key (pure) → KeyOutcome → run_loop / dispatch_outcome (IO)
 - New IO → `dispatch` / `bg` helpers, not `handle_key`.
 - IO-bearing `KeyOutcome` variants carry payloads (issue #244): `@src/tui/mod.rs` (`KeyOutcome`), `@src/tui/dispatch.rs`.
 
+## Keymap (`@src/tui/keymap.rs`)
+
+`keymap::for_screen` returns one table per screen describing every key it binds (issue #369). The table **describes**; it does not dispatch and it does not gate — `handle_key_*` still executes keys, and `*_guard` still answers "is this available right now" (issue #288). Adding a key means adding a row *and* a `handle_key_*` arm; the tests below make the omission loud.
+
+Three renderings derive from it — do not hand-write any of them again:
+
+- **Palette rows** — `build_palette_items` walks the table and calls the screen's guard. There are no per-screen `*_palette_items` builders any more.
+- **Footer hints** — `keymap::footer_hints`, ordered by `FooterHint::rank`. Only the three screens with a `footer` column get one; the rest paint `MINIMAL_HINT`, and `footer_hints` returns `""` for them.
+- **Action colour** — `Category` → `category_color`. Paint never infers a category from wording.
+
+Two columns exist because the two surfaces genuinely disagree, not by oversight: `FooterHint::rank` is separate because footer order leads with navigation while palette order leads with actions, and `FooterHint::key` is separate because the footer names every key that leaves a screen (`Esc/q`) where the palette names the one it executes (`q`).
+
+**`Category` is about the user's data, not about persistence.** Changing a setting writes `config.toml` and is still `Nav`; `Write` means a gist, a local file, or the pin list moves; `Destructive` means something does not come back.
+
+Help topics and `README.md` stay hand-written — the List topic is fifty lines of sectioned prose, and generating it would flatten explanation to win a check a test can do instead. `keymap::docs_tests` is that check, in both directions: every bound key must appear in its help topic or in General (#344's direction), and every key `README.md`'s Key/Action table promises must be bound (#346's direction).
+
 ## Background jobs
 
 - **`Jobs`** is the single registry: spawn / absorb / cancel (`@src/tui/bg.rs`, issue #243).

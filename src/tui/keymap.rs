@@ -414,3 +414,131 @@ mod tests {
         }
     }
 }
+
+/// The drift nets for the two renderings that stay hand-written prose (issue #369).
+///
+/// Deriving Help and `README.md` from the table would flatten explanation that earns its keep;
+/// checking them against it costs nothing and catches the same drift — the #344 direction (a key
+/// the docs forgot) and the #346 direction (a key the docs invented or mis-cased).
+#[cfg(test)]
+mod docs_tests {
+    use super::*;
+    use crate::tui::screens::help::help_topic_body;
+    use crate::tui::HelpTopic;
+
+    /// The topic that documents each screen's keys. Not `screens::*::HELP_TOPIC`, which answers a
+    /// different question — where `?` jumps to from that screen.
+    fn topics() -> Vec<(&'static str, &'static [Binding], HelpTopic)> {
+        vec![
+            ("List", LIST, HelpTopic::List),
+            ("Gists", GISTS, HelpTopic::GistManager),
+            ("Pins", PINS, HelpTopic::Pins),
+            ("Detail", DETAIL, HelpTopic::GistDetail),
+            ("Revisions", REVISIONS, HelpTopic::Revisions),
+            ("Diff", DIFF, HelpTopic::Diff),
+            ("Preview", PREVIEW, HelpTopic::Preview),
+            ("Config", CONFIG, HelpTopic::Config),
+            ("Help", HELP, HelpTopic::General),
+        ]
+    }
+
+    /// Every key a help body names, read from the key column alone.
+    ///
+    /// A key line is `"<keys>  <description>"`. The double space is what separates the key
+    /// column from the description, and is a more reliable marker than the leading indent, which
+    /// Rust's `\`-continuation strips from a body's first line — the line carrying `Esc / q`.
+    /// `/` separates alternatives (`Esc / q`, `Up/Down`), so it splits too.
+    ///
+    /// Only the key column counts. Reading keys out of descriptions too would let prose vouch
+    /// for a binding: a topic that had lost its `a` line would still pass on the strength of an
+    /// unrelated sentence starting with "a". That is why every key documented here gets its own
+    /// line rather than sharing one behind a `·`.
+    fn documented_keys(topic: HelpTopic) -> Vec<String> {
+        help_topic_body(topic)
+            .lines()
+            .filter_map(|line| line.trim().split_once("  "))
+            .flat_map(|(keys, _)| keys.split('/'))
+            .map(|key| key.trim().to_string())
+            .filter(|key| !key.is_empty())
+            .collect()
+    }
+
+    /// A binding's keys, as the table writes them: `"h/l"` is two keys, `"Esc/q"` is two.
+    fn binding_keys(binding: &Binding) -> Vec<&str> {
+        binding
+            .key_hint
+            .split('/')
+            .map(str::trim)
+            .filter(|k| !k.is_empty())
+            .collect()
+    }
+
+    /// Issue #344's direction: a key the table binds but no help topic mentions is a key the user
+    /// cannot discover. Screen-wide keys (`?`, `Esc`/`q`) live on the General topic rather than
+    /// being repeated on every screen, so both bodies count.
+    #[test]
+    fn every_bound_key_is_documented_in_help() {
+        let general = documented_keys(HelpTopic::General);
+        for (name, table, topic) in topics() {
+            let mut documented = documented_keys(topic);
+            documented.extend(general.iter().cloned());
+            for binding in table.iter().filter(|b| b.code.is_some()) {
+                for key in binding_keys(binding) {
+                    assert!(
+                        documented.iter().any(|d| d == key),
+                        "{name}'s `{key}` ({}) is bound but appears in neither the {topic:?} help \
+                         topic nor General",
+                        binding.label
+                    );
+                }
+            }
+        }
+    }
+
+    /// Issue #346's direction: `README.md`'s key table promises keys the List screen must
+    /// actually bind. Scoped to that one table — the Configuration table below it mentions keys
+    /// inside prose sentences, which is not a promise about the keymap.
+    #[test]
+    fn every_key_readme_promises_is_bound() {
+        let readme = include_str!("../../README.md");
+        // Bounded by the table's own shape rather than by a blank line: `str::lines` normalises
+        // the `\r\n` a Windows checkout leaves behind, whereas a `"\n\n"` search does not, and
+        // an unbounded table would swallow the Configuration table further down the file.
+        let table: Vec<&str> = readme
+            .lines()
+            .skip_while(|line| !line.starts_with("| Key | Action |"))
+            .skip(2)
+            .take_while(|line| line.starts_with("| "))
+            .collect();
+        assert!(
+            !table.is_empty(),
+            "README's Key/Action table moved or changed shape"
+        );
+
+        let bound: Vec<&str> = LIST
+            .iter()
+            .flat_map(binding_keys)
+            .chain(GISTS.iter().flat_map(binding_keys))
+            .collect();
+        // Keys README documents that belong to another screen or to the global set, neither of
+        // which the List and Gists tables carry.
+        let elsewhere = ["C", "T", ";", "Ctrl+p", "?", "j", "k", "h", "l", "1", "2"];
+
+        for row in table.iter().filter(|line| line.starts_with("| `")) {
+            let key_cell = row
+                .trim_start_matches("| ")
+                .split_once(" |")
+                .expect("a table row has a key cell and an action cell")
+                .0;
+            for key in key_cell.split('/').map(|k| k.trim().trim_matches('`')) {
+                if key.is_empty() || elsewhere.contains(&key) {
+                    continue;
+                }
+                assert!(
+                    bound.contains(&key),
+                    "README's key table promises `{key}`, which no List or Gists binding provides"
+                );
+            }
+        }
+    }
+}

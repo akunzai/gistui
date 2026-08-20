@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- The `?` help now documents `Tab` on the Help screen (it opens the topic index), and the
+  command palette accents `Smart-sync`, `Fork gist`, and `Restore revision` as the writes they
+  are — `Pin / unpin pair` no longer reads as a destructive action.
 - Revision history rows now behave like every other list screen: a clipped row ends in an
   ellipsis (`…`) instead of looking complete, rows are clamped to the pane width, and
   `←`/`→` scrolls only the selected row behind a leading `…` rather than shifting the
