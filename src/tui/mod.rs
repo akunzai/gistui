@@ -761,10 +761,7 @@ pub struct PinsState {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct PreviewState {
     pub title: String,
-    /// Body text shown in the preview pane.
-    pub text: String,
-    pub scroll: u16,
-    pub hscroll: u16,
+    pub body: ScrollBody,
     /// `(gist_id, filename)` for refresh / copy-url context.
     pub gist_key: Option<(String, String)>,
 }
@@ -774,9 +771,7 @@ pub struct PreviewState {
 /// state cannot linger on the root (including while parked under Confirm).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DiffState {
-    pub text: String,
-    pub scroll: u16,
-    pub hscroll: u16,
+    pub body: ScrollBody,
     /// Remote file body (download source content).
     pub remote_content: String,
     /// Local path paired in the diff (empty for revision-only comparisons).
@@ -796,18 +791,14 @@ pub struct DiffState {
 pub struct ConfirmState {
     pub action: PendingAction,
     /// Background body (unified diff or explanatory message).
-    pub text: String,
-    pub scroll: u16,
-    pub hscroll: u16,
+    pub body: ScrollBody,
 }
 
 impl Default for ConfirmState {
     fn default() -> Self {
         Self {
             action: PendingAction::Download,
-            text: String::new(),
-            scroll: 0,
-            hscroll: 0,
+            body: ScrollBody::default(),
         }
     }
 }
@@ -1132,9 +1123,10 @@ impl AppState {
         self.status = None;
         self.enter(Screen::Preview(Box::new(PreviewState {
             title,
-            text,
-            scroll: 0,
-            hscroll: 0,
+            body: ScrollBody {
+                text,
+                ..ScrollBody::default()
+            },
             gist_key,
         })));
     }
@@ -1155,36 +1147,22 @@ impl AppState {
         self.confirm().map(|c| &c.action)
     }
 
-    /// Background body text for Diff or Confirm (not Preview).
-    pub fn diff_body_text(&self) -> &str {
+    /// Live Diff / Confirm / Preview body. Does not walk `nav_stack` or palette origin.
+    fn scroll_body(&self) -> Option<&ScrollBody> {
         match &self.screen {
-            Screen::Diff(d) => d.text.as_str(),
-            Screen::Confirm(c) => c.text.as_str(),
-            _ => "",
-        }
-    }
-
-    pub fn diff_body_text_mut(&mut self) -> Option<&mut String> {
-        match &mut self.screen {
-            Screen::Diff(d) => Some(&mut d.text),
-            Screen::Confirm(c) => Some(&mut c.text),
+            Screen::Diff(d) => Some(&d.body),
+            Screen::Confirm(c) => Some(&c.body),
+            Screen::Preview(p) => Some(&p.body),
             _ => None,
         }
     }
 
-    pub fn diff_scroll(&self) -> u16 {
-        match &self.screen {
-            Screen::Diff(d) => d.scroll,
-            Screen::Confirm(c) => c.scroll,
-            _ => 0,
-        }
-    }
-
-    pub fn diff_hscroll(&self) -> u16 {
-        match &self.screen {
-            Screen::Diff(d) => d.hscroll,
-            Screen::Confirm(c) => c.hscroll,
-            _ => 0,
+    fn scroll_body_mut(&mut self) -> Option<&mut ScrollBody> {
+        match &mut self.screen {
+            Screen::Diff(d) => Some(&mut d.body),
+            Screen::Confirm(c) => Some(&mut c.body),
+            Screen::Preview(p) => Some(&mut p.body),
+            _ => None,
         }
     }
 
@@ -1194,9 +1172,10 @@ impl AppState {
         self.status = None;
         self.enter(Screen::Confirm(Box::new(ConfirmState {
             action,
-            text,
-            scroll: 0,
-            hscroll: 0,
+            body: ScrollBody {
+                text,
+                ..ScrollBody::default()
+            },
         })));
     }
 
@@ -1206,17 +1185,12 @@ impl AppState {
             return;
         };
         self.status = None;
-        let (text, scroll, hscroll) = (d.text.clone(), d.scroll, d.hscroll);
+        let body = d.body.clone();
         // Park full Diff (pairing + identity) so cancel/download IO still have it; not a
         // `pending_return` case (synchronous — `d` came straight off `self.screen`), so push it
         // directly rather than going through `enter()`.
         self.nav_stack.push(Screen::Diff(d));
-        self.screen = Screen::Confirm(Box::new(ConfirmState {
-            action,
-            text,
-            scroll,
-            hscroll,
-        }));
+        self.screen = Screen::Confirm(Box::new(ConfirmState { action, body }));
     }
 
     /// Leave Confirm for a Download cancel: restore the parked Diff payload.
@@ -1226,9 +1200,7 @@ impl AppState {
         };
         self.leave();
         if let Screen::Diff(ref mut d) = self.screen {
-            d.text = c.text;
-            d.scroll = c.scroll;
-            d.hscroll = c.hscroll;
+            d.body = c.body;
         }
     }
 
@@ -1292,8 +1264,8 @@ impl AppState {
             &local_content,
             self.ignore_trailing_newline,
         );
-        if let Some(body) = self.diff_body_text_mut() {
-            *body = diff;
+        if let Some(body) = self.scroll_body_mut() {
+            body.text = diff;
         }
     }
 
@@ -1989,9 +1961,10 @@ impl AppState {
         };
         self.status = None;
         self.enter(Screen::Diff(Box::new(DiffState {
-            text: diff_text,
-            scroll: 0,
-            hscroll: 0,
+            body: ScrollBody {
+                text: diff_text,
+                ..ScrollBody::default()
+            },
             remote_content: remote,
             local_path: local,
             download_target: target,
@@ -2047,100 +2020,6 @@ impl AppState {
 
     pub fn set_status(&mut self, message: impl Into<String>) {
         self.status = Some(message.into());
-    }
-
-    pub fn scroll_diff_down(&mut self) {
-        let max = self.diff_vscroll_max();
-        if let Some(p) = self.preview_mut() {
-            if p.scroll < max {
-                p.scroll += 1;
-            }
-            return;
-        }
-        match &mut self.screen {
-            Screen::Diff(d) if d.scroll < max => d.scroll += 1,
-            Screen::Confirm(c) if c.scroll < max => c.scroll += 1,
-            _ => {}
-        }
-    }
-
-    /// Bottom clamp for the diff/preview vertical scroll: the last addressable line index.
-    fn diff_vscroll_max(&self) -> u16 {
-        let text = self
-            .preview()
-            .map(|p| p.text.as_str())
-            .unwrap_or_else(|| self.diff_body_text());
-        text.lines()
-            .count()
-            .saturating_sub(1)
-            .min(u16::MAX as usize) as u16
-    }
-
-    pub fn scroll_diff_up(&mut self) {
-        if let Some(p) = self.preview_mut() {
-            p.scroll = p.scroll.saturating_sub(1);
-            return;
-        }
-        match &mut self.screen {
-            Screen::Diff(d) => d.scroll = d.scroll.saturating_sub(1),
-            Screen::Confirm(c) => c.scroll = c.scroll.saturating_sub(1),
-            _ => {}
-        }
-    }
-
-    /// Page the diff/preview down by `lines`, clamped to the same bottom as `scroll_diff_down`.
-    pub fn scroll_diff_page_down(&mut self, lines: u16) {
-        let max = self.diff_vscroll_max();
-        if let Some(p) = self.preview_mut() {
-            p.scroll = p.scroll.saturating_add(lines).min(max);
-            return;
-        }
-        match &mut self.screen {
-            Screen::Diff(d) => d.scroll = d.scroll.saturating_add(lines).min(max),
-            Screen::Confirm(c) => c.scroll = c.scroll.saturating_add(lines).min(max),
-            _ => {}
-        }
-    }
-
-    /// Page the diff/preview up by `lines`, saturating at the top.
-    pub fn scroll_diff_page_up(&mut self, lines: u16) {
-        if let Some(p) = self.preview_mut() {
-            p.scroll = p.scroll.saturating_sub(lines);
-            return;
-        }
-        match &mut self.screen {
-            Screen::Diff(d) => d.scroll = d.scroll.saturating_sub(lines),
-            Screen::Confirm(c) => c.scroll = c.scroll.saturating_sub(lines),
-            _ => {}
-        }
-    }
-
-    pub fn scroll_diff_right(&mut self) {
-        if let Some(p) = self.preview_mut() {
-            let max = hscroll_max_among(p.text.lines());
-            if p.hscroll < max {
-                p.hscroll += 1;
-            }
-            return;
-        }
-        let max = hscroll_max_among(self.diff_body_text().lines());
-        match &mut self.screen {
-            Screen::Diff(d) if d.hscroll < max => d.hscroll += 1,
-            Screen::Confirm(c) if c.hscroll < max => c.hscroll += 1,
-            _ => {}
-        }
-    }
-
-    pub fn scroll_diff_left(&mut self) {
-        if let Some(p) = self.preview_mut() {
-            p.hscroll = p.hscroll.saturating_sub(1);
-            return;
-        }
-        match &mut self.screen {
-            Screen::Diff(d) => d.hscroll = d.hscroll.saturating_sub(1),
-            Screen::Confirm(c) => c.hscroll = c.hscroll.saturating_sub(1),
-            _ => {}
-        }
     }
 
     /// Context radius to render the diff with: `None` shows the full file, `Some(n)`
@@ -2333,7 +2212,7 @@ mod gist_mutation;
 mod screens;
 pub use screens::detail::InitialComments;
 mod text;
-use text::{hscroll_max_among, hscroll_max_for_text, local_row_label};
+use text::{hscroll_max_for_text, local_row_label};
 mod bg;
 mod dispatch;
 mod keymap;
@@ -2341,6 +2220,7 @@ mod keys;
 mod list_cursor;
 pub(crate) use list_cursor::ListCursor;
 mod scroll;
+pub(crate) use scroll::ScrollBody;
 mod list_ranking;
 mod pin_sync;
 pub use pin_sync::PinSyncCacheEntry;

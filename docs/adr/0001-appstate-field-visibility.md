@@ -5,3 +5,5 @@
 We decided **not** to encapsulate it. All four of those concrete issues (#286–#289) were fully scoped and resolved during grilling without touching `AppState`'s field visibility — the friction traced back to specific, local problems, not to the field surface itself. `tui::*` is one trust domain (single binary, one author/review context per PR), so Rust module-level privacy wouldn't buy an enforced boundary that isn't already enforced by review. Encapsulating ~60 fields preemptively would be a large, low-value diff chasing a discomfort rather than a demonstrated defect.
 
 **Revisit if**: a specific bug is traced to unconstrained cross-file mutation of a particular field — narrow that field with an accessor at that point, not preemptively across the whole struct.
+
+**Narrowed the Diff/Confirm/Preview scroll cluster as #385.** `text · scroll · hscroll` is now `ScrollBody` on those three payloads; `AppState` exposes `scroll_body` / `scroll_body_mut` instead of ten per-axis methods. This continues the revisit clause (narrow the demonstrated cluster in place) rather than encapsulating the rest of `AppState`.

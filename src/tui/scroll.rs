@@ -7,7 +7,6 @@
 use super::text::hscroll_max_among;
 
 /// Scrollable text body: content plus vertical and horizontal offsets.
-#[allow(dead_code)] // Wired into Diff/Confirm/Preview in the following commit.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ScrollBody {
     pub text: String,
@@ -15,7 +14,6 @@ pub struct ScrollBody {
     pub hscroll: u16,
 }
 
-#[allow(dead_code)] // Wired into Diff/Confirm/Preview in the following commit.
 impl ScrollBody {
     /// Last addressable line index (empty body → 0).
     fn vscroll_max(&self) -> u16 {

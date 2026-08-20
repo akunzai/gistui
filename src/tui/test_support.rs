@@ -71,28 +71,36 @@ pub(super) fn set_pending(state: &mut AppState, action: PendingAction) {
 
 pub(super) fn set_diff_body(state: &mut AppState, text: impl Into<String>) {
     let text = text.into();
-    if let Some(t) = state.diff_body_text_mut() {
-        *t = text;
-        return;
+    if matches!(state.screen, Screen::Diff(_) | Screen::Confirm(_)) {
+        if let Some(body) = state.scroll_body_mut() {
+            body.text = text;
+            return;
+        }
     }
     // Ensure a Diff payload exists for tests that set body before navigating.
     state.screen = Screen::Diff(Box::new(DiffState {
-        text,
+        body: ScrollBody {
+            text,
+            ..ScrollBody::default()
+        },
         ..DiffState::default()
     }));
 }
 
 pub(super) fn set_diff_scroll(state: &mut AppState, scroll: u16) {
-    match &mut state.screen {
-        Screen::Diff(d) => d.scroll = scroll,
-        Screen::Confirm(c) => c.scroll = scroll,
-        _ => {
-            state.screen = Screen::Diff(Box::new(DiffState {
-                scroll,
-                ..DiffState::default()
-            }));
+    if matches!(state.screen, Screen::Diff(_) | Screen::Confirm(_)) {
+        if let Some(body) = state.scroll_body_mut() {
+            body.scroll = scroll;
+            return;
         }
     }
+    state.screen = Screen::Diff(Box::new(DiffState {
+        body: ScrollBody {
+            scroll,
+            ..ScrollBody::default()
+        },
+        ..DiffState::default()
+    }));
 }
 
 pub(super) fn state_with_gists() -> AppState {
