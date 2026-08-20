@@ -227,17 +227,7 @@ fn cross_items() -> Vec<PaletteItem> {
 /// Whether the screen's own guard says `code` is available right now (issue #288). Screens
 /// whose keys are never gated — and the two with no table at all — answer `true`.
 fn guard_for(state: &AppState, screen: &Screen, code: KeyCode) -> bool {
-    use super::screens::{detail, diff, gists, list, pins, revisions};
-    match screen {
-        Screen::List => list::list_guard(state, code),
-        Screen::Pins(_) => pins::pins_guard(state, code),
-        Screen::Gists(_) => gists::gists_guard(state, code),
-        Screen::GistDetail(_) => detail::detail_guard(state, code),
-        Screen::Revisions(_) => revisions::revisions_guard(state, code),
-        Screen::Diff(_) => diff::diff_guard(state, code),
-        Screen::Preview(_) | Screen::Help(_) | Screen::Config(_) => true,
-        Screen::Confirm(_) | Screen::Palette(_) => true,
-    }
+    (super::screens::lookup(screen).guard)(state, code)
 }
 
 /// The screen's palette rows, in the keymap table's order. Command mode appends the

@@ -1,8 +1,16 @@
-//! Per-screen colocation (issue #287, Phase 2): each `Screen` variant's `handle_key_*`,
-//! `build_*_vm`, `render_*_vm`, and `*_palette_items` bodies live in one file here, migrated
-//! one screen at a time. The six per-screen registries (`handle_key` dispatch,
-//! `build_view_model`, `render_screen_vm`, `build_palette_items`, `HelpTopic::for_screen`,
-//! `wheel_step`) keep their exhaustive-match shape; each arm becomes a one-line call into a screen module.
+//! Per-screen colocation (issue #287): each `Screen` variant's `handle_key_*`,
+//! `build_*_vm`, and `render_*_vm` live in one file here.
+//!
+//! [`lookup`] is the exhaustive match for the data-like per-screen columns
+//! (issue #377): help topic, wheel step, key guard, VM builder. `handle_key`,
+//! `apply_navigation`, and `click_select` stay matches — they need `&mut AppState`
+//! (issue #274). `render_screen_vm` matches [`ScreenVm`], not [`Screen`].
+//! `keymap::for_screen` stays in `keymap.rs` (bindings are that table; putting
+//! them here would cycle `screens` ↔ `keymap`).
+
+use super::view_model::ScreenVm;
+use super::{AppState, HelpTopic, Screen};
+use crossterm::event::KeyCode;
 
 pub(crate) mod config;
 pub(crate) mod confirm;
@@ -15,3 +23,137 @@ pub(crate) mod palette;
 pub(crate) mod pins;
 pub(crate) mod preview;
 pub(crate) mod revisions;
+
+/// Per-screen facts selected by [`lookup`]. Columns are `fn` pointers so the
+/// screen files stay the adapters — this type does not add a parallel set of
+/// dummy types.
+pub(crate) struct ScreenLookup {
+    pub help_topic: HelpTopic,
+    pub wheel_step: fn(&AppState) -> usize,
+    pub guard: fn(&AppState, KeyCode) -> bool,
+    pub build_vm: fn(&AppState) -> ScreenVm,
+}
+
+fn ungated(_: &AppState, _: KeyCode) -> bool {
+    true
+}
+
+/// Exhaustive map from `Screen` to the four lookup columns. A new variant that
+/// forgets this match fails to compile; that is the protection the old seven
+/// matches duplicated.
+pub(crate) fn lookup(screen: &Screen) -> ScreenLookup {
+    match screen {
+        Screen::List => ScreenLookup {
+            help_topic: list::help_topic(),
+            wheel_step: |_: &AppState| list::wheel_step(),
+            guard: list::list_guard,
+            build_vm: |state| ScreenVm::List(list::build_list_vm(state)),
+        },
+        Screen::Pins(_) => ScreenLookup {
+            help_topic: pins::help_topic(),
+            wheel_step: |_: &AppState| pins::wheel_step(),
+            guard: pins::pins_guard,
+            build_vm: |state| ScreenVm::Pins(pins::build_pins_vm(state)),
+        },
+        Screen::Gists(_) => ScreenLookup {
+            help_topic: gists::help_topic(),
+            wheel_step: |_: &AppState| gists::wheel_step(),
+            guard: gists::gists_guard,
+            build_vm: |state| ScreenVm::Gists(gists::build_gists_vm(state)),
+        },
+        Screen::GistDetail(_) => ScreenLookup {
+            help_topic: detail::help_topic(),
+            wheel_step: detail::wheel_step,
+            guard: detail::detail_guard,
+            build_vm: |state| ScreenVm::GistDetail(detail::build_gist_detail_vm(state)),
+        },
+        Screen::Revisions(_) => ScreenLookup {
+            help_topic: revisions::help_topic(),
+            wheel_step: |_: &AppState| revisions::wheel_step(),
+            guard: revisions::revisions_guard,
+            build_vm: |state| ScreenVm::Revisions(revisions::build_revisions_vm(state)),
+        },
+        Screen::Diff(_) => ScreenLookup {
+            help_topic: diff::help_topic(),
+            wheel_step: |_: &AppState| diff::wheel_step(),
+            guard: diff::diff_guard,
+            build_vm: |state| ScreenVm::Diff(diff::build_diff_vm(state)),
+        },
+        Screen::Preview(_) => ScreenLookup {
+            help_topic: preview::help_topic(),
+            wheel_step: |_: &AppState| preview::wheel_step(),
+            guard: ungated,
+            build_vm: |state| ScreenVm::Preview(preview::build_preview_vm(state)),
+        },
+        Screen::Help(_) => ScreenLookup {
+            help_topic: help::help_topic(),
+            wheel_step: |state| state.help().map(help::wheel_step).unwrap_or(1),
+            guard: ungated,
+            build_vm: |state| ScreenVm::Help(help::build_help_vm(state)),
+        },
+        Screen::Config(_) => ScreenLookup {
+            help_topic: config::help_topic(),
+            wheel_step: |_: &AppState| config::wheel_step(),
+            guard: ungated,
+            build_vm: |state| ScreenVm::Config(config::build_config_vm(state)),
+        },
+        Screen::Confirm(_) => ScreenLookup {
+            help_topic: confirm::help_topic(),
+            wheel_step: |_: &AppState| confirm::wheel_step(),
+            guard: ungated,
+            build_vm: |state| ScreenVm::Confirm(confirm::build_confirm_vm(state)),
+        },
+        Screen::Palette(_) => ScreenLookup {
+            help_topic: palette::help_topic(),
+            wheel_step: |_: &AppState| palette::wheel_step(),
+            guard: ungated,
+            build_vm: |state| ScreenVm::Palette(palette::build_palette_vm(state)),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lookup_answers_for_every_variant() {
+        let cases: &[(&str, Screen, HelpTopic)] = &[
+            ("List", Screen::List, list::HELP_TOPIC),
+            ("Pins", Screen::Pins(Box::default()), pins::HELP_TOPIC),
+            ("Gists", Screen::Gists(Box::default()), gists::HELP_TOPIC),
+            (
+                "GistDetail",
+                Screen::GistDetail(Box::default()),
+                detail::HELP_TOPIC,
+            ),
+            (
+                "Revisions",
+                Screen::Revisions(Box::default()),
+                revisions::HELP_TOPIC,
+            ),
+            ("Diff", Screen::Diff(Box::default()), diff::HELP_TOPIC),
+            (
+                "Preview",
+                Screen::Preview(Box::default()),
+                preview::HELP_TOPIC,
+            ),
+            ("Help", Screen::Help(Box::default()), help::HELP_TOPIC),
+            ("Config", Screen::Config(Box::default()), config::HELP_TOPIC),
+            (
+                "Confirm",
+                Screen::Confirm(Box::default()),
+                confirm::HELP_TOPIC,
+            ),
+            (
+                "Palette",
+                Screen::Palette(Box::default()),
+                palette::HELP_TOPIC,
+            ),
+        ];
+        for (name, screen, topic) in cases {
+            let found = lookup(screen);
+            assert_eq!(found.help_topic, *topic, "{name} help topic");
+        }
+    }
+}
