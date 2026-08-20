@@ -101,20 +101,7 @@ impl AppState {
                 return KeyOutcome::None;
             }
         }
-        match &self.screen {
-            Screen::List if self.filtering => self.handle_key_filter(code),
-            Screen::List => self.handle_key_list(code),
-            Screen::Diff(_) => self.handle_key_diff(code),
-            Screen::Confirm(_) => self.handle_key_confirm(code),
-            Screen::Preview(_) => self.handle_key_preview(code),
-            Screen::Help(_) => self.handle_key_help(code),
-            Screen::Pins(_) => self.handle_key_pins(code),
-            Screen::Gists(_) => self.handle_key_gists(code),
-            Screen::GistDetail(_) => self.handle_key_detail(code),
-            Screen::Revisions(_) => self.handle_key_revisions(code),
-            Screen::Config(_) => self.handle_key_config(code),
-            Screen::Palette(_) => self.handle_key_palette(code, modifiers),
-        }
+        (super::screens::lookup(&self.screen).handle_key)(self, code, modifiers)
     }
 
     /// Open the Help screen on the topic for the current screen, remembering where to return.
@@ -188,61 +175,7 @@ impl AppState {
         if self.is_any_filtering() && !matches!(action, NavAction::PageUp | NavAction::PageDown) {
             return false;
         }
-        // Pins/Gists dispatch before the match below (issue #274: cannot hold `&mut PinsState`
-        // from `match &mut self.screen` while calling helpers) -- each screen's own
-        // apply_navigation_<screen> reproduces that precompute-then-mutate shape.
-        if matches!(self.screen, Screen::Pins(_)) {
-            return self.apply_navigation_pins(action);
-        }
-        if matches!(self.screen, Screen::Gists(_)) {
-            return self.apply_navigation_gists(action);
-        }
-        // Diff/Confirm/Preview share ScrollBody; a fourth payload that embeds one gets
-        // these keys for free. Help and Detail comments must not match.
-        if let Some(body) = self.scroll_body_mut() {
-            match action {
-                NavAction::Down => body.down(),
-                NavAction::Up => body.up(),
-                NavAction::PageDown => body.page_down(PAGE_SCROLL),
-                NavAction::PageUp => body.page_up(PAGE_SCROLL),
-                NavAction::Right => body.right(),
-                NavAction::Left => body.left(),
-            }
-            return true;
-        }
-        match &mut self.screen {
-            Screen::Palette(_) => {
-                let len = self.palette_visible_items().len();
-                if let Some(p) = self.palette_mut() {
-                    match action {
-                        NavAction::Up => {
-                            p.selected = p.selected.saturating_sub(1);
-                        }
-                        NavAction::Down => {
-                            if len > 0 && p.selected + 1 < len {
-                                p.selected += 1;
-                            }
-                        }
-                        _ => return false,
-                    }
-                }
-                true
-            }
-            Screen::Help(_) => self.apply_navigation_help(action),
-            Screen::GistDetail(_) => self.apply_navigation_detail(action),
-            Screen::Revisions(_) => self.apply_navigation_revisions(action),
-            Screen::List => self.apply_navigation_list(action),
-            Screen::Config(_) => self.apply_navigation_config(action),
-            // Exhaustiveness only — Pins/Gists return above; Diff/Confirm/Preview use
-            // scroll_body_mut before this match.
-            Screen::Pins(_)
-            | Screen::Gists(_)
-            | Screen::Diff(_)
-            | Screen::Preview(_)
-            | Screen::Confirm(_) => {
-                unreachable!("Pins/Gists and ScrollBody screens are handled before the match")
-            }
-        }
+        (super::screens::lookup(&self.screen).apply_navigation)(self, action)
     }
 
     /// Screens that clear a one-shot status (and the list quit arm) on any key — including
@@ -274,16 +207,7 @@ impl AppState {
     /// blank area or border focuses it but selects nothing (returns `false`); a click off
     /// every list returns `false`.
     fn click_select(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
-        match &self.screen {
-            Screen::List => self.click_select_list(col, row, layout),
-            Screen::Gists(_) => self.click_select_gists(col, row, layout),
-            Screen::Pins(_) => self.click_select_pins(col, row, layout),
-            Screen::Revisions(_) => self.click_select_revisions(col, row, layout),
-            Screen::Help(_) => self.click_select_help(col, row, layout),
-            Screen::Config(_) => self.click_select_config(col, row, layout),
-            Screen::GistDetail(_) => self.click_select_detail(col, row, layout),
-            _ => false,
-        }
+        (super::screens::lookup(&self.screen).click_select)(self, col, row, layout)
     }
 
     /// Open/activate the currently selected row on the current screen (the double-click
