@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Narrow terminals no longer cut the top-bar `gistui` brand mid-word: the shortcuts keep the
+  row, and the name gives way rather than being painted over.
 - The `?` help now documents `Tab` on the Help screen (it opens the topic index), and the
   command palette accents `Smart-sync`, `Fork gist`, and `Restore revision` as the writes they
   are — `Pin / unpin pair` no longer reads as a destructive action.

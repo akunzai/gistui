@@ -91,9 +91,106 @@ pub(super) fn render_close_button(frame: &mut Frame, outer: Rect, theme: &Theme)
 const TOP_BAR_ITEMS: [(&str, &str); 4] =
     [("g", "ists"), ("P", "ins"), ("C", "onfig"), ("?", "Help")];
 
+/// Left-side brand. A leading space is the left margin on a wide terminal.
+const TOP_BAR_NAME: &str = " gistui";
+
 /// Height of the persistent top bar rendered on every screen except the transient `Confirm`
 /// y/n modal (which keeps its full-bleed diff/gist-info background — see `render_confirm`).
 const TOP_BAR_HEIGHT: u16 = 1;
+
+/// One shortcut that survived [`fit_top_bar`].
+struct FittedTopBarItem {
+    index: usize,
+    key: &'static str,
+    rest: &'static str,
+    x: u16,
+    width: u16,
+}
+
+/// Width budget for the top bar (issue #371): shortcuts keep the row; the brand
+/// is decoration and only appears when the full name plus a one-cell gap fits
+/// to the left of them.
+struct FittedTopBar {
+    name: Option<&'static str>,
+    items: Vec<FittedTopBarItem>,
+}
+
+fn top_bar_item_width(key: &str, rest: &str) -> u16 {
+    // "(" + key + ")" + rest — labels are ASCII, so chars == cells.
+    (key.chars().count() + rest.chars().count() + 2) as u16
+}
+
+/// Split `width` between the brand and the right-aligned shortcuts.
+///
+/// The shortcuts take the row first. Whole items drop from the left if they
+/// cannot all fit (same "drop a whole item" rule as [`fit_hints`]). The brand
+/// is shown only when `" gistui"` plus a one-cell gap still fits in the leftover
+/// — never truncated to `gis…`.
+fn fit_top_bar(width: u16) -> FittedTopBar {
+    const ITEM_GAP: u16 = 2;
+    const RIGHT_MARGIN: u16 = 1;
+    const NAME_GAP: u16 = 1;
+
+    if width == 0 {
+        return FittedTopBar {
+            name: None,
+            items: Vec::new(),
+        };
+    }
+
+    let n = TOP_BAR_ITEMS.len();
+    for start in 0..n {
+        let slice = &TOP_BAR_ITEMS[start..];
+        let widths: Vec<u16> = slice
+            .iter()
+            .map(|(key, rest)| top_bar_item_width(key, rest))
+            .collect();
+        let items_w: u16 = widths.iter().sum::<u16>() + ITEM_GAP * (slice.len() as u16 - 1);
+        if items_w > width {
+            continue;
+        }
+        let margin = if items_w + RIGHT_MARGIN <= width {
+            RIGHT_MARGIN
+        } else {
+            0
+        };
+        let items_x = width - items_w - margin;
+        let name_w = cell_width(TOP_BAR_NAME) as u16;
+        let name = if name_w + NAME_GAP <= items_x {
+            Some(TOP_BAR_NAME)
+        } else {
+            None
+        };
+
+        let mut x = items_x;
+        let mut items = Vec::with_capacity(slice.len());
+        for (i, ((key, rest), w)) in slice.iter().zip(widths).enumerate() {
+            items.push(FittedTopBarItem {
+                index: start + i,
+                key,
+                rest,
+                x,
+                width: w,
+            });
+            x += w + ITEM_GAP;
+        }
+        return FittedTopBar { name, items };
+    }
+
+    // Narrower than the last remaining shortcut: park it at the left edge.
+    // Paint marks the clip with `truncate_end`, same as `fit_hints` on a leave key.
+    let (key, rest) = TOP_BAR_ITEMS[n - 1];
+    FittedTopBar {
+        name: None,
+        items: vec![FittedTopBarItem {
+            index: n - 1,
+            key,
+            rest,
+            x: 0,
+            width,
+        }],
+    }
+}
 
 /// Renders the cross-screen top bar — ` gistui` on the left,
 /// `(g)ists (P)ins (C)onfig (?)Help` right-aligned — into the top row of `area`, then returns
@@ -117,41 +214,42 @@ pub(super) fn render_top_bar(
         .split(area);
     let bar = chunks[0];
 
-    frame.render_widget(Paragraph::new(" gistui").style(theme.base_style()), bar);
+    let fit = fit_top_bar(bar.width);
+    frame.render_widget(
+        Paragraph::new(fit.name.unwrap_or("")).style(theme.base_style()),
+        bar,
+    );
 
     let key_style = Style::default()
         .fg(theme.accent)
         .add_modifier(Modifier::BOLD);
     let label_style = Style::default().fg(theme.fg);
-    let widths: Vec<u16> = TOP_BAR_ITEMS
-        .into_iter()
-        .map(|(k, rest)| (k.chars().count() + rest.chars().count() + 2) as u16) // "(" + key + ")" + rest
-        .collect();
-    const GAP: u16 = 2;
-    let total: u16 = widths.iter().sum::<u16>() + GAP * (TOP_BAR_ITEMS.len() as u16 - 1);
-    let mut x = bar.right().saturating_sub(total + 1); // 1-column right margin
 
-    for (i, (key, rest)) in TOP_BAR_ITEMS.into_iter().enumerate() {
-        let w = widths[i].min(bar.right().saturating_sub(x));
-        let rect = Rect::new(x, bar.y, w, 1);
-        let spans = vec![
-            Span::styled("(", label_style),
-            Span::styled(key.to_string(), key_style),
-            Span::styled(format!("){rest}"), label_style),
-        ];
-        frame.render_widget(
-            Paragraph::new(Line::from(spans)).style(theme.base_style()),
-            rect,
-        );
+    for item in fit.items {
+        let w = item.width.min(bar.width.saturating_sub(item.x));
+        let rect = Rect::new(bar.x + item.x, bar.y, w, 1);
+        let natural = top_bar_item_width(item.key, item.rest);
+        let line = if w < natural {
+            Line::from(Span::styled(
+                truncate_end(&format!("({}){}", item.key, item.rest), w as usize),
+                label_style,
+            ))
+        } else {
+            Line::from(vec![
+                Span::styled("(", label_style),
+                Span::styled(item.key.to_string(), key_style),
+                Span::styled(format!("){}", item.rest), label_style),
+            ])
+        };
+        frame.render_widget(Paragraph::new(line).style(theme.base_style()), rect);
         if mouse_enabled {
-            match i {
+            match item.index {
                 0 => layout.top_bar_gists = Some(rect),
                 1 => layout.top_bar_pins = Some(rect),
                 2 => layout.top_bar_config = Some(rect),
                 _ => layout.top_bar_help = Some(rect),
             }
         }
-        x += widths[i] + GAP;
     }
 
     chunks[1]
@@ -1612,6 +1710,62 @@ mod tests {
         );
     }
 
+    /// Issue #371: four shortcuts are 34 cells plus a 1-cell right margin. At 40
+    /// the leftover cannot hold `" gistui"` plus a gap, so the brand is dropped.
+    #[test]
+    fn fit_top_bar_drops_the_name_when_the_shortcuts_need_the_row() {
+        let fit = fit_top_bar(40);
+        assert!(fit.name.is_none());
+        assert_eq!(fit.items.len(), 4);
+        assert_eq!(fit.items[0].key, "g");
+        assert_eq!(fit.items[0].x, 5);
+    }
+
+    /// Issue #371: 43 is the first width where the full brand plus a one-cell gap
+    /// still fits left of the shortcuts; 42 drops it rather than painting `gistui`
+    /// flush against `(g)ists`.
+    #[test]
+    fn fit_top_bar_keeps_the_name_only_when_both_halves_fit() {
+        assert!(fit_top_bar(42).name.is_none());
+        let fit = fit_top_bar(43);
+        assert_eq!(fit.name, Some(" gistui"));
+        assert_eq!(fit.items.len(), 4);
+        assert_eq!(fit.items[0].x, 8); // 7-cell name + 1-cell gap
+        let wide = fit_top_bar(60);
+        assert_eq!(wide.name, Some(" gistui"));
+        assert_eq!(wide.items.len(), 4);
+    }
+
+    /// Issue #371: when even the shortcuts overflow, whole items drop from the
+    /// left rather than cutting `(C)onfig` through the word.
+    #[test]
+    fn fit_top_bar_drops_leading_shortcuts_when_they_cannot_all_fit() {
+        let fit = fit_top_bar(33);
+        assert!(fit.name.is_none());
+        assert_eq!(fit.items.len(), 3);
+        assert_eq!(fit.items[0].key, "P");
+        assert_eq!(
+            fit.items
+                .iter()
+                .map(|item| format!("({}){}", item.key, item.rest))
+                .collect::<Vec<_>>(),
+            vec!["(P)ins", "(C)onfig", "(?)Help"]
+        );
+    }
+
+    /// Issue #371 / #342: a last remaining shortcut that itself cannot fit is
+    /// marked, never shown half-cut. `(?)Help` is 7 cells.
+    #[test]
+    fn render_screen_vm_top_bar_marks_a_shortcut_that_itself_cannot_fit() {
+        let rows = render_rows(&initial_state(), 6, 8);
+        let bar = rows[0].trim_end();
+        assert!(
+            bar.contains('…'),
+            "clipped last shortcut has no ellipsis: {bar:?}"
+        );
+        assert!(!bar.contains("Help"), "clipped tail still visible: {bar:?}");
+    }
+
     /// Builds a real `ScreenVm` from `state` (same seam `render()` uses) and paints it through
     /// `render_screen_vm` — the dispatch under test. Panics (e.g. an unreachable match arm, an
     /// out-of-bounds slice on empty data) fail the test; the returned buffer text lets callers
@@ -1636,6 +1790,52 @@ mod tests {
         assert!(text.contains("(P)ins"));
         assert!(text.contains("(C)onfig"));
         assert!(text.contains("(?)Help"));
+    }
+
+    /// Issue #371: at 40 columns the items used to paint over the brand, so `gistui`
+    /// read as `gist` with no ellipsis. The shortcuts keep the row; the name gives way.
+    #[test]
+    fn render_screen_vm_top_bar_does_not_cut_the_app_name_at_forty_columns() {
+        let rows = render_rows(&initial_state(), 40, 12);
+        let bar = rows[0].trim_end();
+        assert!(
+            !bar.contains("gist(g)"),
+            "brand overwritten mid-word: {bar:?}"
+        );
+        assert!(
+            !bar.contains("gistui"),
+            "brand should yield to the shortcuts: {bar:?}"
+        );
+        assert!(
+            bar.contains("(g)ists")
+                && bar.contains("(P)ins")
+                && bar.contains("(C)onfig")
+                && bar.contains("(?)Help"),
+            "shortcuts missing from the 40-column bar: {bar:?}"
+        );
+    }
+
+    /// Issue #371: a width that can hold both halves still shows the brand and the
+    /// shortcuts, with no overlap.
+    #[test]
+    fn render_screen_vm_top_bar_keeps_the_app_name_at_sixty_columns() {
+        let rows = render_rows(&initial_state(), 60, 12);
+        let bar = rows[0].trim_end();
+        assert!(
+            bar.contains("gistui"),
+            "brand missing at 60 columns: {bar:?}"
+        );
+        assert!(
+            bar.contains("(g)ists")
+                && bar.contains("(P)ins")
+                && bar.contains("(C)onfig")
+                && bar.contains("(?)Help"),
+            "shortcuts missing from the 60-column bar: {bar:?}"
+        );
+        assert!(
+            !bar.contains("gist(g)"),
+            "brand overwritten mid-word: {bar:?}"
+        );
     }
 
     /// Issue #346: a command-palette query matching nothing must not render as an empty
