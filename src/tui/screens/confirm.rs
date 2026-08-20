@@ -18,6 +18,24 @@ pub(crate) fn wheel_step() -> usize {
     3
 }
 
+/// Stage an upload preview before dispatch fetches the current gist content.
+pub(crate) fn stage_upload_preview(
+    state: &mut AppState,
+    local_path: PathBuf,
+    mut file: crate::domain::GistFileRef,
+    from_pin_diff: bool,
+) -> (crate::domain::GistFileRef, String, String) {
+    if !from_pin_diff {
+        state.pending_return = Some(Screen::List);
+    }
+    let gist_file = state.gist_file_for_diff(&file);
+    let (local_label, gist_label) = crate::tui::render::diff_labels(Some(&local_path), &gist_file);
+    if file.raw_url.is_none() {
+        file.raw_url = gist_file.raw_url;
+    }
+    (file, local_label, gist_label)
+}
+
 impl AppState {
     pub(crate) fn handle_key_confirm(&mut self, code: KeyCode) -> KeyOutcome {
         // While typing the create flow's description, arrows drive the text cursor (handled
@@ -359,6 +377,21 @@ mod tests {
     use crate::tui::*;
     use crossterm::event::KeyCode;
     use std::path::PathBuf;
+
+    #[test]
+    fn stage_upload_preview_sets_list_return_and_falls_back_to_list_raw_url() {
+        let mut state = state_with_gists();
+        state.gists[0].raw_url = Some("https://example.test/a.txt".into());
+        let file = gist_file_ref("g1", "a.txt");
+
+        let (file, local_label, gist_label) =
+            stage_upload_preview(&mut state, PathBuf::from("/tmp/a.txt"), file, false);
+
+        assert!(matches!(state.pending_return, Some(Screen::List)));
+        assert_eq!(file.raw_url.as_deref(), Some("https://example.test/a.txt"));
+        assert!(local_label.starts_with("local: a.txt"));
+        assert!(gist_label.starts_with("gist g1 / a.txt"));
+    }
 
     fn upload_pending(gist_id: &str, filename: &str) -> PendingAction {
         PendingAction::Upload {

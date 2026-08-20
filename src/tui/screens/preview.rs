@@ -22,6 +22,40 @@ pub(crate) fn wheel_step() -> usize {
     3
 }
 
+/// Stage a content preview. A cache hit enters Preview immediately; a miss returns fetch data.
+pub(crate) fn stage_preview_content(
+    state: &mut AppState,
+    mut file: crate::domain::GistFileRef,
+) -> Option<(crate::domain::GistFileRef, String)> {
+    let key = file.cache_key();
+    if let Some(content) = state.gist_content_cache.get(&key).cloned() {
+        let title = state.preview_title(&file.gist_id, &file.filename);
+        state.enter_preview(title, content, Some(key));
+        return None;
+    }
+    if file.raw_url.is_none() {
+        file.raw_url = state.gist_file_raw_url(&file.gist_id, &file.filename);
+    }
+    let title = state.preview_title(&file.gist_id, &file.filename);
+    Some((file, title))
+}
+
+/// Restage the return path and invalidate cached content before refetching a preview.
+pub(crate) fn stage_refresh_preview(
+    state: &mut AppState,
+    mut file: crate::domain::GistFileRef,
+) -> (crate::domain::GistFileRef, String) {
+    if state.screen.is_preview() {
+        state.pending_return = state.nav_stack.last().cloned();
+    }
+    state.gist_content_cache.remove(&file.cache_key());
+    if file.raw_url.is_none() {
+        file.raw_url = state.gist_file_raw_url(&file.gist_id, &file.filename);
+    }
+    let title = state.preview_title(&file.gist_id, &file.filename);
+    (file, title)
+}
+
 impl AppState {
     pub(crate) fn handle_key_preview(&mut self, code: KeyCode) -> KeyOutcome {
         // One-shot: any key dismisses a lingering status (e.g. a previous "fetch failed: …"); the
@@ -207,6 +241,49 @@ mod tests {
     use crate::tui::test_support::{gist_file_ref, state_with_gists};
     use crate::tui::*;
     use crossterm::event::KeyCode;
+
+    #[test]
+    fn stage_preview_content_cache_hit_enters_preview_without_spawn_payload() {
+        let mut state = state_with_gists();
+        let file = gist_file_ref("g1", "a.txt");
+        state
+            .gist_content_cache
+            .insert(file.cache_key(), "cached".into());
+
+        assert!(stage_preview_content(&mut state, file).is_none());
+
+        assert_eq!(state.preview().expect("preview").body.text, "cached");
+    }
+
+    #[test]
+    fn stage_preview_content_miss_falls_back_to_raw_url_and_returns_title() {
+        let mut state = state_with_gists();
+        state.gists[0].raw_url = Some("https://example.test/a.txt".into());
+
+        let (file, title) =
+            stage_preview_content(&mut state, gist_file_ref("g1", "a.txt")).expect("spawn");
+
+        assert_eq!(file.raw_url.as_deref(), Some("https://example.test/a.txt"));
+        assert!(title.contains("a.txt"));
+    }
+
+    #[test]
+    fn stage_refresh_preview_restages_return_drops_cache_and_returns_fetch_payload() {
+        let mut state = state_with_gists();
+        state.gists[0].raw_url = Some("https://example.test/a.txt".into());
+        let file = gist_file_ref("g1", "a.txt");
+        state
+            .gist_content_cache
+            .insert(file.cache_key(), "cached".into());
+        state.enter_preview("a.txt".into(), "cached".into(), Some(file.cache_key()));
+
+        let (file, title) = stage_refresh_preview(&mut state, file);
+
+        assert!(matches!(state.pending_return, Some(Screen::Gists(_))));
+        assert!(state.gist_content_cache.get(&file.cache_key()).is_none());
+        assert_eq!(file.raw_url.as_deref(), Some("https://example.test/a.txt"));
+        assert!(title.contains("a.txt"));
+    }
 
     #[test]
     fn preview_w_toggles_line_wrapping() {
