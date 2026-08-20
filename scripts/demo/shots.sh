@@ -23,7 +23,7 @@ FONT_SIZE="${FONT_SIZE:-16}"
 OUT_DIR="${OUT_DIR:-$REPO_ROOT/website}"
 
 # Each shot drives scripts/demo/shots/<name>.json and writes $OUT_DIR/<name>.png.
-SHOTS=("gist-manager")
+SHOTS=("gist-manager" "revisions")
 
 # Python helpers run through `uv run`, which provisions the interpreter on demand
 # (version from scripts/demo/.python-version, discovered via `--directory`). The
