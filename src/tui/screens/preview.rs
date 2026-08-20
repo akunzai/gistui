@@ -171,23 +171,12 @@ pub(crate) fn render_preview_vm(
         "",
         &preview.footer,
         preview.footer_colored,
+        crate::tui::keymap::for_screen(&state.screen),
         &state.theme,
-        layout,
     );
     if chrome.mouse_enabled {
         layout.close_button = Some(crate::tui::render_close_button(frame, area, &state.theme));
     }
-}
-
-pub(crate) fn preview_palette_items(_state: &AppState) -> Vec<crate::tui::palette::PaletteItem> {
-    use crate::tui::palette::key_item;
-    vec![
-        key_item("R", "Refresh content", KeyCode::Char('R'), true),
-        key_item("w", "Toggle line wrap", KeyCode::Char('w'), true),
-        key_item("y", "Copy gist URL", KeyCode::Char('y'), true),
-        key_item("Y", "Copy file content", KeyCode::Char('Y'), true),
-        key_item("q", "Back", KeyCode::Char('q'), true),
-    ]
 }
 
 #[cfg(test)]

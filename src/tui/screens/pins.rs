@@ -14,7 +14,6 @@ use ratatui::{
 };
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::Pins;
-const PINS_HINTS: &str = "↑↓ move  ·  Enter diff  ·  s sync  ·  u push  ·  d pull  ·  x unpin  ·  o sort  ·  / filter  ·  Esc/q back";
 const PINS_STATUS_LEGEND: &str =
     "✓ synced · ↑ local newer · ↓ remote newer · ✕ missing · ? unknown";
 
@@ -192,7 +191,8 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
             false,
         )
     } else {
-        let (footer, colored) = crate::tui::footer_with_status(state.status.as_deref(), PINS_HINTS);
+        let hints = crate::tui::keymap::footer_hints(&state.screen);
+        let (footer, colored) = crate::tui::footer_with_status(state.status.as_deref(), &hints);
         (PINS_STATUS_LEGEND.to_string(), footer, colored)
     };
 
@@ -331,34 +331,13 @@ pub(crate) fn render_pins_vm(
             &pins.footer_title,
             &pins.footer,
             pins.footer_colored,
+            crate::tui::keymap::for_screen(&state.screen),
             &state.theme,
-            layout,
         );
     }
     if chrome.mouse_enabled {
         layout.close_button = Some(crate::tui::render_close_button(frame, area, &state.theme));
     }
-}
-
-pub(crate) fn pins_palette_items(state: &AppState) -> Vec<crate::tui::palette::PaletteItem> {
-    use crate::tui::palette::key_item;
-    let g = |code| pins_guard(state, code);
-    vec![
-        key_item(
-            "Enter",
-            "Diff pinned pair",
-            KeyCode::Enter,
-            g(KeyCode::Enter),
-        ),
-        key_item("s", "Smart-sync", KeyCode::Char('s'), g(KeyCode::Char('s'))),
-        key_item("u", "Force push", KeyCode::Char('u'), g(KeyCode::Char('u'))),
-        key_item("d", "Force pull", KeyCode::Char('d'), g(KeyCode::Char('d'))),
-        key_item("x", "Unpin pair", KeyCode::Char('x'), g(KeyCode::Char('x'))),
-        key_item("/", "Filter pins", KeyCode::Char('/'), true),
-        key_item("o", "Cycle sort", KeyCode::Char('o'), true),
-        key_item("q", "Back to list", KeyCode::Char('q'), true),
-        key_item("?", "Help", KeyCode::Char('?'), true),
-    ]
 }
 
 #[cfg(test)]

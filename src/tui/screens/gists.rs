@@ -14,7 +14,6 @@ use ratatui::{
 };
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::GistManager;
-const GISTS_HINTS: &str = "↑↓ move  ·  Enter detail  ·  * star  ·  o browser  ·  y copy URL  ·  H revisions  ·  s sort  ·  v visibility  ·  / filter  ·  Esc/q back";
 
 pub(crate) fn help_topic() -> HelpTopic {
     HELP_TOPIC
@@ -149,8 +148,8 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
             false,
         )
     } else {
-        let (footer, colored) =
-            crate::tui::footer_with_status(state.status.as_deref(), GISTS_HINTS);
+        let hints = crate::tui::keymap::footer_hints(&state.screen);
+        let (footer, colored) = crate::tui::footer_with_status(state.status.as_deref(), &hints);
         (String::new(), footer, colored)
     };
 
@@ -273,55 +272,13 @@ pub(crate) fn render_gists_vm(
             &gists.footer_title,
             &gists.footer,
             gists.footer_colored,
+            crate::tui::keymap::for_screen(&state.screen),
             &state.theme,
-            layout,
         );
     }
     if chrome.mouse_enabled {
         layout.close_button = Some(crate::tui::render_close_button(frame, area, &state.theme));
     }
-}
-
-pub(crate) fn gists_palette_items(state: &AppState) -> Vec<crate::tui::palette::PaletteItem> {
-    use crate::tui::palette::key_item;
-    let g = |code| gists_guard(state, code);
-    vec![
-        key_item(
-            "Enter",
-            "Open gist detail",
-            KeyCode::Enter,
-            g(KeyCode::Enter),
-        ),
-        key_item(
-            "o",
-            "Open in browser",
-            KeyCode::Char('o'),
-            g(KeyCode::Char('o')),
-        ),
-        key_item(
-            "y",
-            "Copy gist URL",
-            KeyCode::Char('y'),
-            g(KeyCode::Char('y')),
-        ),
-        key_item(
-            "H",
-            "Revision history",
-            KeyCode::Char('H'),
-            g(KeyCode::Char('H')),
-        ),
-        key_item(
-            "*",
-            "Star / unstar gist",
-            KeyCode::Char('*'),
-            g(KeyCode::Char('*')),
-        ),
-        key_item("/", "Filter gists", KeyCode::Char('/'), true),
-        key_item("s", "Cycle sort", KeyCode::Char('s'), true),
-        key_item("v", "Cycle visibility", KeyCode::Char('v'), true),
-        key_item("q", "Back to list", KeyCode::Char('q'), true),
-        key_item("?", "Help", KeyCode::Char('?'), true),
-    ]
 }
 
 #[cfg(test)]

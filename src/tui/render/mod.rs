@@ -1,3 +1,4 @@
+use super::keymap::{category_for_footer_key, Binding, Category};
 use super::view_model::PaneTitleVm;
 use super::{
     screens::{
@@ -778,30 +779,21 @@ pub(super) fn footer_height(text: &str, width: u16, title: &str, colored: bool) 
 /// from plain navigation at a glance: destructive (delete/remove/unpin) → Red, write/sync
 /// (download/upload/create/sync/…) → Green, everything else (navigation/view) → Cyan. Matched on
 /// whole label words so e.g. `pins` does not read as the `pin` action.
-pub(super) fn action_color(label: &str, theme: &Theme) -> Color {
-    const DESTRUCTIVE: [&str; 3] = ["delete", "remove", "unpin"];
-    const WRITE: [&str; 11] = [
-        "download", "upload", "create", "new", "sync", "push", "pull", "pin", "edit", "desc",
-        "star",
-    ];
-    let mut color = theme.accent;
-    for word in label.split_whitespace() {
-        let word = word.to_ascii_lowercase();
-        if DESTRUCTIVE.contains(&word.as_str()) {
-            return theme.del_color;
-        }
-        if WRITE.contains(&word.as_str()) {
-            color = theme.write_color;
-        }
+/// The accent a key gets from what its action risks. The category is read off the keymap table,
+/// which is why this no longer has to guess it from the label's wording (issue #369).
+pub(super) fn category_color(category: Category, theme: &Theme) -> Color {
+    match category {
+        Category::Destructive => theme.del_color,
+        Category::Write => theme.write_color,
+        Category::Nav | Category::Read => theme.accent,
     }
-    color
 }
 
 /// Style a footer command string: the leading key token of each `·`-separated item is accented by
-/// its action category (see [`action_color`]); the descriptive label keeps the terminal's default
-/// brightness so it stays legible, and only the separators are dimmed. Every input character is
-/// preserved verbatim so `wrap_line_count` sizing stays exact.
-pub(super) fn hint_line(text: &str, theme: &Theme) -> Line<'static> {
+/// its action category, looked up in `bindings` (see [`category_color`]); the descriptive label
+/// keeps the terminal's default brightness so it stays legible, and only the separators are
+/// dimmed. Every input character is preserved verbatim so `wrap_line_count` sizing stays exact.
+pub(super) fn hint_line(text: &str, bindings: &[Binding], theme: &Theme) -> Line<'static> {
     let dim = Style::default().fg(theme.dim);
     let mut spans: Vec<Span<'static>> = Vec::new();
     for (i, seg) in text.split('·').enumerate() {
@@ -819,13 +811,17 @@ pub(super) fn hint_line(text: &str, theme: &Theme) -> Line<'static> {
         match rest.find(char::is_whitespace) {
             Some(pos) => {
                 let (k, label) = rest.split_at(pos);
-                let key = Style::default().fg(action_color(label, theme));
+                let category = category_for_footer_key(bindings, k);
+                let key = Style::default().fg(category_color(category, theme));
                 spans.push(Span::styled(k.to_string(), key));
                 spans.push(Span::raw(label.to_string()));
             }
             None => spans.push(Span::styled(
                 rest.to_string(),
-                Style::default().fg(action_color("", theme)),
+                Style::default().fg(category_color(
+                    category_for_footer_key(bindings, rest),
+                    theme,
+                )),
             )),
         }
     }
@@ -857,8 +853,8 @@ pub(super) fn render_footer(
     title: &str,
     text: &str,
     colored: bool,
+    bindings: &[Binding],
     theme: &Theme,
-    _layout: &mut MouseLayout,
 ) {
     let inner = area.width.saturating_sub(2) as usize;
     let text = if colored {
@@ -867,7 +863,7 @@ pub(super) fn render_footer(
         text.to_string()
     };
     let para = if colored {
-        Paragraph::new(hint_line(&text, theme))
+        Paragraph::new(hint_line(&text, bindings, theme))
     } else {
         Paragraph::new(text)
     };
@@ -1348,13 +1344,21 @@ pub(super) fn palette_row_line(
     theme: &Theme,
     row_style: Style,
 ) -> Line<'static> {
-    palette_row_spans(&item.key_hint, &item.label, key_width, theme, row_style)
+    palette_row_spans(
+        &item.key_hint,
+        &item.label,
+        item.category,
+        key_width,
+        theme,
+        row_style,
+    )
 }
 
 /// Shared by palette paint (`PaletteVm` rows) and test helpers.
 pub(super) fn palette_row_spans(
     key_hint: &str,
     label: &str,
+    category: Category,
     key_width: usize,
     theme: &Theme,
     row_style: Style,
@@ -1362,7 +1366,7 @@ pub(super) fn palette_row_spans(
     Line::from(vec![
         Span::styled(
             format!("  {:<key_width$}  ", key_hint, key_width = key_width),
-            Style::default().fg(action_color(label, theme)),
+            Style::default().fg(category_color(category, theme)),
         ),
         Span::styled(label.to_string(), row_style),
     ])

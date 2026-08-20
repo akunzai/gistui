@@ -1,3 +1,4 @@
+use super::keymap::Category;
 use super::{keys::point_in, *};
 use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -32,6 +33,8 @@ pub struct PaletteItem {
     pub label: String,
     pub exec: PaletteExec,
     pub enabled: bool,
+    /// What the action risks, which accents its key (see [`Category`]).
+    pub category: Category,
     /// Lowercased key+label string used for fuzzy filtering in command mode.
     pub search: String,
 }
@@ -140,22 +143,36 @@ impl AppState {
     }
 }
 
-fn palette_item(key: &str, label: &str, exec: PaletteExec, enabled: bool) -> PaletteItem {
+fn palette_item(
+    key: &str,
+    label: &str,
+    exec: PaletteExec,
+    enabled: bool,
+    category: Category,
+) -> PaletteItem {
     PaletteItem {
         key_hint: key.to_string(),
         label: label.to_string(),
         exec,
         enabled,
+        category,
         search: format!("{key} {label}").to_ascii_lowercase(),
     }
 }
 
-pub(super) fn key_item(key: &str, label: &str, code: KeyCode, enabled: bool) -> PaletteItem {
+pub(super) fn key_item(
+    key: &str,
+    label: &str,
+    code: KeyCode,
+    enabled: bool,
+    category: Category,
+) -> PaletteItem {
     palette_item(
         key,
         label,
         PaletteExec::Key(code, KeyModifiers::NONE),
         enabled,
+        category,
     )
 }
 
@@ -167,49 +184,79 @@ fn cross_items() -> Vec<PaletteItem> {
             "Go to Gists",
             PaletteExec::Cross(CrossAction::GoToGists),
             true,
+            Category::Nav,
         ),
         palette_item(
             "P",
             "Go to Pins",
             PaletteExec::Cross(CrossAction::GoToPins),
             true,
+            Category::Nav,
         ),
         palette_item(
             "?",
             "Go to Help",
             PaletteExec::Cross(CrossAction::OpenHelp),
             true,
+            Category::Nav,
         ),
         palette_item(
             "C",
             "Open settings",
             PaletteExec::Cross(CrossAction::OpenConfig),
             true,
+            Category::Nav,
         ),
         palette_item(
             "T",
             "Toggle theme",
             PaletteExec::Cross(CrossAction::ToggleTheme),
             true,
+            Category::Nav,
         ),
-        palette_item("q", "Quit", PaletteExec::Cross(CrossAction::Quit), true),
+        palette_item(
+            "q",
+            "Quit",
+            PaletteExec::Cross(CrossAction::Quit),
+            true,
+            Category::Nav,
+        ),
     ]
 }
 
+/// Whether the screen's own guard says `code` is available right now (issue #288). Screens
+/// whose keys are never gated — and the two with no table at all — answer `true`.
+fn guard_for(state: &AppState, screen: &Screen, code: KeyCode) -> bool {
+    use super::screens::{detail, diff, gists, list, pins, revisions};
+    match screen {
+        Screen::List => list::list_guard(state, code),
+        Screen::Pins(_) => pins::pins_guard(state, code),
+        Screen::Gists(_) => gists::gists_guard(state, code),
+        Screen::GistDetail(_) => detail::detail_guard(state, code),
+        Screen::Revisions(_) => revisions::revisions_guard(state, code),
+        Screen::Diff(_) => diff::diff_guard(state, code),
+        Screen::Preview(_) | Screen::Help(_) | Screen::Config(_) => true,
+        Screen::Confirm(_) | Screen::Palette(_) => true,
+    }
+}
+
+/// The screen's palette rows, in the keymap table's order. Command mode appends the
+/// screen-independent jumps.
 fn build_palette_items(state: &AppState, screen: &Screen, mode: PaletteMode) -> Vec<PaletteItem> {
-    let mut items = match screen {
-        Screen::List => super::screens::list::list_palette_items(state),
-        Screen::Pins(_) => super::screens::pins::pins_palette_items(state),
-        Screen::Gists(_) => super::screens::gists::gists_palette_items(state),
-        Screen::GistDetail(_) => super::screens::detail::detail_palette_items(state),
-        Screen::Revisions(_) => super::screens::revisions::revisions_palette_items(state),
-        Screen::Diff(_) => super::screens::diff::diff_palette_items(state),
-        Screen::Preview(_) => super::screens::preview::preview_palette_items(state),
-        Screen::Help(_) => super::screens::help::help_palette_items(),
-        Screen::Config(_) => super::screens::config::config_palette_items(),
-        Screen::Confirm(_) => super::screens::confirm::confirm_palette_items(state),
-        Screen::Palette(_) => super::screens::palette::palette_palette_items(state),
-    };
+    let mut items: Vec<PaletteItem> = super::keymap::for_screen(screen)
+        .iter()
+        .filter_map(|binding| binding.code.map(|code| (binding, code)))
+        .map(|(binding, code)| {
+            let enabled = !binding.guarded || guard_for(state, screen, code);
+            key_item(
+                binding.key_hint,
+                binding.label,
+                code,
+                enabled,
+                binding.category,
+            )
+        })
+        .collect();
     if mode == PaletteMode::Command {
         items.extend(cross_items());
     }

@@ -202,24 +202,12 @@ pub(crate) fn render_diff_vm(
         "",
         &diff.footer,
         true,
+        crate::tui::keymap::for_screen(&state.screen),
         &state.theme,
-        layout,
     );
     if chrome.mouse_enabled {
         layout.close_button = Some(crate::tui::render_close_button(frame, area, &state.theme));
     }
-}
-
-pub(crate) fn diff_palette_items(state: &AppState) -> Vec<crate::tui::palette::PaletteItem> {
-    use crate::tui::palette::key_item;
-    let g = |code| diff_guard(state, code);
-    vec![
-        key_item("d", "Download", KeyCode::Char('d'), g(KeyCode::Char('d'))),
-        key_item("u", "Upload", KeyCode::Char('u'), g(KeyCode::Char('u'))),
-        key_item("c", "Toggle full diff context", KeyCode::Char('c'), true),
-        key_item("w", "Toggle line wrap", KeyCode::Char('w'), true),
-        key_item("q", "Back", KeyCode::Char('q'), true),
-    ]
 }
 
 #[cfg(test)]

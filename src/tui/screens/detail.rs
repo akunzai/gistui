@@ -690,8 +690,8 @@ pub(crate) fn render_gist_detail_vm(
         "",
         &detail.footer,
         detail.footer_colored,
+        crate::tui::keymap::for_screen(&state.screen),
         &state.theme,
-        layout,
     );
 
     let edit_modal = if let Some(input) = &detail.description_input {
@@ -950,71 +950,6 @@ pub(crate) fn detail_focus_tabs_line(
         spans.push(Span::styled(format!(" {label} "), style));
     }
     Line::from(spans)
-}
-
-pub(crate) fn detail_palette_items(state: &AppState) -> Vec<crate::tui::palette::PaletteItem> {
-    use crate::tui::palette::key_item;
-    let g = |code| detail_guard(state, code);
-    vec![
-        key_item(
-            "Enter",
-            "Preview selected file",
-            KeyCode::Enter,
-            g(KeyCode::Enter),
-        ),
-        key_item(
-            "o",
-            "Open in browser",
-            KeyCode::Char('o'),
-            g(KeyCode::Char('o')),
-        ),
-        key_item(
-            "y",
-            "Copy gist URL",
-            KeyCode::Char('y'),
-            g(KeyCode::Char('y')),
-        ),
-        key_item(
-            "H",
-            "Revision history",
-            KeyCode::Char('H'),
-            g(KeyCode::Char('H')),
-        ),
-        key_item(
-            "e",
-            "Edit description",
-            KeyCode::Char('e'),
-            g(KeyCode::Char('e')),
-        ),
-        key_item(
-            "c",
-            "Compact revisions",
-            KeyCode::Char('c'),
-            g(KeyCode::Char('c')),
-        ),
-        key_item(
-            "*",
-            "Star / unstar gist",
-            KeyCode::Char('*'),
-            g(KeyCode::Char('*')),
-        ),
-        key_item("F", "Fork gist", KeyCode::Char('F'), g(KeyCode::Char('F'))),
-        key_item(
-            "X",
-            "Delete gist",
-            KeyCode::Char('X'),
-            g(KeyCode::Char('X')),
-        ),
-        key_item("Tab", "Switch Files / Comments", KeyCode::Tab, true),
-        key_item(
-            "m",
-            "Load older comments",
-            KeyCode::Char('m'),
-            g(KeyCode::Char('m')),
-        ),
-        key_item("q", "Back to Gist manager", KeyCode::Char('q'), true),
-        key_item("?", "Help", KeyCode::Char('?'), true),
-    ]
 }
 
 #[cfg(test)]

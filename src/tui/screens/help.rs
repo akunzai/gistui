@@ -370,7 +370,8 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   Up/Down/Left/Right  scroll (also j / k / h / l; Left/Right only when wrap is off)
   PageUp/Dn  scroll by 10 lines (also Ctrl+b / Ctrl+f)
   w          toggle soft line wrapping (remembered for the session)
-  y          copy the gist URL · Y copy the file content to the clipboard
+  y          copy the gist URL to the clipboard
+  Y          copy the file content to the clipboard
   syntax     known file types are syntax-highlighted
   R          re-fetch the content
   Esc / q    back"
@@ -409,6 +410,7 @@ File-only: skip_dirs — ~/.config/gistui/config.toml (or $XDG_CONFIG_HOME)"
             "\
   Esc / q    close an overlay; from the list, press twice to quit the app
   ?          show this help
+  Tab        in this help, open the topic index (1-9 / g / 0 jump straight to a topic)
   C          open Settings (flat list of preferences; also Ctrl+p)
   ;          context menu (actions valid for the current screen + selection)
   Ctrl+p     command palette (all actions + cross-screen navigation; type to filter)
@@ -536,14 +538,6 @@ pub(crate) fn render_help_vm(
     if chrome.mouse_enabled {
         layout.close_button = Some(crate::tui::render_close_button(frame, area, &state.theme));
     }
-}
-
-pub(crate) fn help_palette_items() -> Vec<crate::tui::palette::PaletteItem> {
-    use crate::tui::palette::key_item;
-    vec![
-        key_item("Tab", "Browse topic index", KeyCode::Tab, true),
-        key_item("q", "Close Help", KeyCode::Char('q'), true),
-    ]
 }
 
 #[cfg(test)]

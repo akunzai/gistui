@@ -2340,6 +2340,7 @@ mod text;
 use text::{hscroll_max_among, hscroll_max_for_text, local_row_label};
 mod bg;
 mod dispatch;
+mod keymap;
 mod keys;
 mod list_cursor;
 pub(crate) use list_cursor::ListCursor;

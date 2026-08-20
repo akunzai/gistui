@@ -435,49 +435,12 @@ pub(crate) fn render_revisions_vm(
         "",
         &revs.footer,
         revs.footer_colored,
+        crate::tui::keymap::for_screen(&state.screen),
         &state.theme,
-        layout,
     );
     if chrome.mouse_enabled {
         layout.close_button = Some(crate::tui::render_close_button(frame, area, &state.theme));
     }
-}
-
-pub(crate) fn revisions_palette_items(state: &AppState) -> Vec<crate::tui::palette::PaletteItem> {
-    use crate::tui::palette::key_item;
-    let g = |code| revisions_guard(state, code);
-    vec![
-        key_item(
-            "Enter",
-            "Diff parent → revision",
-            KeyCode::Enter,
-            g(KeyCode::Enter),
-        ),
-        key_item(
-            "D",
-            "Diff revision vs head",
-            KeyCode::Char('D'),
-            g(KeyCode::Char('D')),
-        ),
-        key_item(
-            "r",
-            "Restore revision",
-            KeyCode::Char('r'),
-            g(KeyCode::Char('r')),
-        ),
-        // The palette *is* gated through `revisions_guard` here, unlike the real handler's
-        // own `F` arm (which stays unconditional — see the comment on that case in
-        // `revisions_guard`): cycling the target file doesn't need the revision list loaded,
-        // so `revisions_guard`'s `F` case checks file count, not `has_entries` (issue #288).
-        key_item(
-            "F",
-            "Cycle target file",
-            KeyCode::Char('F'),
-            g(KeyCode::Char('F')),
-        ),
-        key_item("q", "Back", KeyCode::Char('q'), true),
-        key_item("?", "Help", KeyCode::Char('?'), true),
-    ]
 }
 
 #[cfg(test)]
