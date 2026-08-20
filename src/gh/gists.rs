@@ -70,6 +70,7 @@ pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
             .unwrap_or_default();
         let fork_of_id = gist.fork_of.map(|f| f.id);
         for file in gist.files.into_values() {
+            // Exhaustive by design (issue #379): a new GistFile field must fail here, not default.
             files.push(GistFile {
                 gist_id: gist.id.clone(),
                 description: description.clone(),

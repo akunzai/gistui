@@ -11,6 +11,16 @@ Index: [`AGENTS.md`](../../AGENTS.md). Source of truth for types lives in the mo
 
 `build_view_model` (`@src/tui/view_model.rs`): `AppState` + pin-sync cache → presentation facts. Paint helpers apply theme/layout only — no business rules, FS, or network.
 
+## GistFile construction (`@src/domain.rs`, issue #379)
+
+Three constructors, not one:
+
+- **API mapper** (`parse_gist_list_json` in `@src/gh/gists.rs`) lists every field. A new metadata column must fail to compile there — do not fill from `Default`.
+- **`for_sync`** — throwaway identity (`gist_id`, `filename`, `raw_url`) for sync/diff/upload. Production callers (`bg.rs`, `GistFileRef::to_gist_file`) stay on it.
+- **`fixture`** — tests. Override non-default fields with struct-update syntax.
+
+Fields stay `pub`. No `#[serde(default)]` on the struct.
+
 ## Screen state machine
 
 - **`screens::lookup`** (`@src/tui/screens/mod.rs`, issue #377) is the exhaustive match for the data-like per-screen columns: help topic, wheel step, key guard, VM builder. `handle_key` / `apply_navigation` / `click_select` stay matches — they need `&mut AppState` (issue #274). `render_screen_vm` matches `ScreenVm`, not `Screen`. `keymap::for_screen` stays in `keymap.rs` (bindings live there; putting them on the lookup would cycle `screens` ↔ `keymap`). No `ScreenModule` trait: the screen files already are the adapters.
