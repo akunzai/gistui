@@ -7,14 +7,7 @@ use super::render::{
     gist_info_line, gist_row_label, is_json_file, spinner_glyph, unix_now, CREATE_DESC_PREFIX,
     CREATE_DESC_SUFFIX,
 };
-use super::screens::{
-    config::build_config_vm as build_config, confirm::build_confirm_vm as build_confirm,
-    detail::build_gist_detail_vm as build_detail, diff::build_diff_vm as build_diff,
-    gists::build_gists_vm as build_gists, help::build_help_vm as build_help,
-    list::build_list_vm as build_list, palette::build_palette_vm as build_palette,
-    pins::build_pins_vm as build_pins, preview::build_preview_vm as build_preview,
-    revisions::build_revisions_vm as build_revisions,
-};
+use super::screens::lookup;
 use super::{
     AppState, DetailFocus, FocusPane, GistView, PaletteMode, PendingAction, Screen, TextInput,
 };
@@ -382,21 +375,10 @@ pub(crate) fn build_chrome(state: &AppState) -> ChromeVm {
 
 /// Pure: map app state (+ pin sync cache) into a view model. No FS / network / mutation.
 pub fn build_view_model(state: &AppState) -> ViewModel {
-    let chrome = build_chrome(state);
-    let screen = match &state.screen {
-        Screen::List => ScreenVm::List(build_list(state)),
-        Screen::Gists(_) => ScreenVm::Gists(build_gists(state)),
-        Screen::GistDetail(_) => ScreenVm::GistDetail(build_detail(state)),
-        Screen::Revisions(_) => ScreenVm::Revisions(build_revisions(state)),
-        Screen::Config(_) => ScreenVm::Config(build_config(state)),
-        Screen::Diff(_) => ScreenVm::Diff(build_diff(state)),
-        Screen::Preview(_) => ScreenVm::Preview(build_preview(state)),
-        Screen::Pins(_) => ScreenVm::Pins(build_pins(state)),
-        Screen::Confirm(_) => ScreenVm::Confirm(build_confirm(state)),
-        Screen::Help(_) => ScreenVm::Help(build_help(state)),
-        Screen::Palette(_) => ScreenVm::Palette(build_palette(state)),
-    };
-    ViewModel { chrome, screen }
+    ViewModel {
+        chrome: build_chrome(state),
+        screen: (lookup(&state.screen).build_vm)(state),
+    }
 }
 
 /// ViewModel for the screen a palette is covering, by its origin's tag. `state`'s accessors
@@ -407,16 +389,8 @@ pub fn build_view_model(state: &AppState) -> ViewModel {
 /// (unreachable — the palette can't be opened while itself active).
 pub(crate) fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<ScreenVm> {
     match origin {
-        Screen::List => Some(ScreenVm::List(build_list(state))),
-        Screen::Gists(_) => Some(ScreenVm::Gists(build_gists(state))),
-        Screen::GistDetail(_) => Some(ScreenVm::GistDetail(build_detail(state))),
-        Screen::Revisions(_) => Some(ScreenVm::Revisions(build_revisions(state))),
-        Screen::Config(_) => Some(ScreenVm::Config(build_config(state))),
-        Screen::Diff(_) => Some(ScreenVm::Diff(build_diff(state))),
-        Screen::Preview(_) => Some(ScreenVm::Preview(build_preview(state))),
-        Screen::Pins(_) => Some(ScreenVm::Pins(build_pins(state))),
-        Screen::Help(_) => Some(ScreenVm::Help(build_help(state))),
         Screen::Confirm(_) | Screen::Palette(_) => None,
+        other => Some((lookup(other).build_vm)(state)),
     }
 }
 

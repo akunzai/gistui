@@ -245,19 +245,7 @@ impl HelpTopic {
     /// The topic to open when `?` is pressed on a given screen. Non-key-dense screens
     /// fall back to the List topic.
     pub fn for_screen(screen: &Screen) -> HelpTopic {
-        match screen {
-            Screen::List => screens::list::help_topic(),
-            Screen::Diff(_) => screens::diff::help_topic(),
-            Screen::Confirm(_) => screens::confirm::help_topic(),
-            Screen::Preview(_) => screens::preview::help_topic(),
-            Screen::Help(_) => screens::help::help_topic(),
-            Screen::Pins(_) => screens::pins::help_topic(),
-            Screen::Gists(_) => screens::gists::help_topic(),
-            Screen::GistDetail(_) => screens::detail::help_topic(),
-            Screen::Revisions(_) => screens::revisions::help_topic(),
-            Screen::Palette(_) => screens::palette::help_topic(),
-            Screen::Config(_) => screens::config::help_topic(),
-        }
+        screens::lookup(screen).help_topic
     }
 }
 

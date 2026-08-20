@@ -13,6 +13,7 @@ Index: [`AGENTS.md`](../../AGENTS.md). Source of truth for types lives in the mo
 
 ## Screen state machine
 
+- **`screens::lookup`** (`@src/tui/screens/mod.rs`, issue #377) is the exhaustive match for the data-like per-screen columns: help topic, wheel step, key guard, VM builder. `handle_key` / `apply_navigation` / `click_select` stay matches — they need `&mut AppState` (issue #274). `render_screen_vm` matches `ScreenVm`, not `Screen`. `keymap::for_screen` stays in `keymap.rs` (bindings live there; putting them on the lookup would cycle `screens` ↔ `keymap`). No `ScreenModule` trait: the screen files already are the adapters.
 - **`Screen` is `Clone`, not `Copy`** — payload variants own screen-local UI (`@src/tui/mod.rs`, issue #242).
 - **`List` stays a unit tag** — dual-pane selection / filters / sorts are session-global on `AppState` (user story 19).
 - Other variants (`Diff`, `Confirm`, `Preview`, `Help`, `Config`, `Revisions`, `Pins`, `Gists`, `GistDetail`, `Palette`, …) carry payloads (body/scroll/return/origin as needed).

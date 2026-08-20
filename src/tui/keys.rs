@@ -260,19 +260,7 @@ impl AppState {
     /// content panes (Diff, Preview, Confirm, GistDetail) scroll three lines for faster
     /// panning. Help body also scrolls three; the Help topic index is a list (one row).
     fn wheel_step(&self) -> usize {
-        match &self.screen {
-            Screen::List => super::screens::list::wheel_step(),
-            Screen::Diff(_) => super::screens::diff::wheel_step(),
-            Screen::Confirm(_) => super::screens::confirm::wheel_step(),
-            Screen::Preview(_) => super::screens::preview::wheel_step(),
-            Screen::Help(h) => super::screens::help::wheel_step(h),
-            Screen::Pins(_) => super::screens::pins::wheel_step(),
-            Screen::Gists(_) => super::screens::gists::wheel_step(),
-            Screen::GistDetail(_) => super::screens::detail::wheel_step(self),
-            Screen::Revisions(_) => super::screens::revisions::wheel_step(),
-            Screen::Config(_) => super::screens::config::wheel_step(),
-            Screen::Palette(_) => super::screens::palette::wheel_step(),
-        }
+        (super::screens::lookup(&self.screen).wheel_step)(self)
     }
 
     /// Select the clicked list row on the current screen, focusing its pane/list. Returns
