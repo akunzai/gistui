@@ -277,6 +277,8 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   Wheel      scroll the focused list or content pane
   Click      select the clicked row (List panes also switch focus)
   Dbl-click  open the clicked row (diff / detail / pin diff / preview)
+  Divider    drag the line between the two List panes to resize them; double-click
+             it to restore the default 40/60 (resets on every launch)
   Tab click  switch Files / Comments on the Gist details screen
   [✕] btn    close / go back on any pop-up screen
   Top bar    click (g)ists / (P)ins / (C)onfig / (?)Help (top-right, every screen)

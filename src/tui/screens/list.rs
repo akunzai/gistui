@@ -3,12 +3,13 @@
 
 use crate::ranking::MatchMark;
 use crate::tui::keys::{apply_filter_edit, diff_pair_previewable, point_in, FilterKey, NavAction};
-use crate::tui::render::list_pane::render_list_pane;
+use crate::tui::render::list_pane::{highlight_pane_divider, render_list_pane, MIN_PANE_CELLS};
 use crate::tui::view_model::{
     ChromeVm, ListFooterVm, ListPaneEmpty, ListPaneVm, ListVm, PaneTitleVm, RowEmphasis, RowVm,
 };
 use crate::tui::{
     AppState, FocusPane, GistView, HelpTopic, KeyOutcome, MouseLayout, PendingAction, Screen,
+    SplitHit,
 };
 use crossterm::event::KeyCode;
 
@@ -21,10 +22,54 @@ pub(crate) fn help_topic() -> HelpTopic {
 pub(crate) fn wheel_step() -> usize {
     1
 }
+
 use ratatui::{
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     Frame,
 };
+
+/// Share of the List screen's width the local pane starts with, and what a double-click on
+/// the divider restores.
+pub(crate) const DEFAULT_SPLIT_PERCENT: u16 = 40;
+
+/// Percent band the divider drag is confined to, before the absolute width floor below.
+const MIN_SPLIT_PERCENT: u16 = 15;
+const MAX_SPLIT_PERCENT: u16 = 85;
+
+/// Cells the local pane gets for `percent` of `width`. The single source of the split
+/// geometry: paint sizes the panes with it and the drag clamp reasons in terms of it.
+/// Rounds to nearest, matching what ratatui's own percentage constraint used to resolve to.
+fn split_cells(percent: u16, width: u16) -> u16 {
+    ((u32::from(width) * u32::from(percent) + 50) / 100) as u16
+}
+
+/// Clamp a requested split to the percent band and to [`MIN_PANE_CELLS`] on both sides.
+/// `None` when `width` cannot hold two readable panes at any split — the caller then leaves
+/// the layout alone rather than painting two slits.
+fn clamp_split_percent(percent: u16, width: u16) -> Option<u16> {
+    if width < MIN_PANE_CELLS * 2 {
+        return None;
+    }
+    let width = u32::from(width);
+    let min_cells = u32::from(MIN_PANE_CELLS);
+    // Inverting `split_cells`, which rounds at the half cell: `cells >= min` holds from
+    // `ceil((min * 100 - 50) / width)` up, and `width - cells >= min` holds up to
+    // `floor(((width - min) * 100 + 49) / width)`.
+    let low = (min_cells * 100 - 50).div_ceil(width) as u16;
+    let high = ((width - min_cells) * 100 + 49).div_euclid(width) as u16;
+    let low = low.max(MIN_SPLIT_PERCENT);
+    let high = high.min(MAX_SPLIT_PERCENT);
+    (low <= high).then(|| percent.clamp(low, high))
+}
+
+/// Percent that puts the local pane's right border under `col`. Rounds to the nearest
+/// percent: above 100 columns one percent is worth more than one cell, so the divider
+/// snaps to the closest reachable column instead of drifting behind the pointer.
+fn percent_for_col(area: Rect, col: u16) -> u16 {
+    let cells = u32::from(col.saturating_sub(area.x)) + 1;
+    let width = u32::from(area.width.max(1));
+    ((cells * 100 + width / 2) / width).min(100) as u16
+}
 
 /// Shared "would this key actually do something" predicate for `Screen::List`, mirrored by
 /// both [`AppState::handle_key_list`]'s match-arm guards and `list_palette_items` so the two
@@ -451,6 +496,60 @@ impl AppState {
         true
     }
 
+    /// The divider under (`col`, `row`), if it is there *and* the terminal is wide enough for
+    /// a resize to mean anything. Both the grab and the double-click reset go through it, so
+    /// a too-narrow terminal swallows neither press — they fall through to the normal
+    /// focus/select handling instead of being eaten by a gesture that can only be clamped
+    /// away. It lives here rather than on `MouseLayout` because the width policy is the List
+    /// screen's (`clamp_split_percent`), not the hit map's.
+    fn grabbable_divider(&self, col: u16, row: u16, layout: &MouseLayout) -> bool {
+        layout.list_split.is_some_and(|hit| {
+            hit.grabbed(col, row)
+                && clamp_split_percent(self.list_split_percent, hit.area.width).is_some()
+        })
+    }
+
+    /// Grab the divider if the press landed on it, starting a drag. Returns `true` when
+    /// grabbed, so the caller can skip the click's usual focus/select handling.
+    pub(crate) fn grab_split_divider(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
+        let grabbed = self.grabbable_divider(col, row, layout);
+        if grabbed {
+            self.list_split_drag = true;
+        }
+        grabbed
+    }
+
+    /// Move the divider under `col` while a drag is in progress. Only `col` is consulted:
+    /// letting the pointer wander above or below the panes must not break the drag.
+    pub(crate) fn drag_split_divider(&mut self, col: u16, layout: &MouseLayout) {
+        if !self.list_split_drag {
+            return;
+        }
+        let Some(hit) = layout.list_split else {
+            return;
+        };
+        if let Some(percent) = clamp_split_percent(percent_for_col(hit.area, col), hit.area.width) {
+            self.list_split_percent = percent;
+        }
+    }
+
+    /// End any divider drag. Called on mouse-up and whenever a background-task overlay
+    /// takes over the mouse, which would otherwise swallow the release and wedge the drag.
+    pub(crate) fn end_split_drag(&mut self) {
+        self.list_split_drag = false;
+    }
+
+    /// Restore the default split — the double-click action on the divider. Returns `true`
+    /// when the double-click landed on it.
+    pub(crate) fn reset_split_divider(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
+        let grabbed = self.grabbable_divider(col, row, layout);
+        if grabbed {
+            self.list_split_percent = DEFAULT_SPLIT_PERCENT;
+            self.list_split_drag = false;
+        }
+        grabbed
+    }
+
     /// Select the clicked row on `Screen::List`, focusing its pane. Returns `true` when a row
     /// was hit (so a double-click should "open" it). A click in a pane's blank area or border
     /// focuses it but selects nothing (returns `false`); a click off every list returns `false`.
@@ -646,6 +745,8 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
             scrollbar: true,
         },
         footer,
+        split_percent: state.list_split_percent,
+        split_dragging: state.list_split_drag,
     }
 }
 
@@ -692,9 +793,17 @@ pub(crate) fn render_list_vm(
             )),
         ])
         .split(area);
+    // Percent is the stored fact, but the panes are sized in cells: letting ratatui round a
+    // second percentage makes the divider lag a cell behind the pointer mid-drag (#395).
+    // A terminal too narrow for two readable panes keeps the default split.
+    let split_percent =
+        clamp_split_percent(list.split_percent, chunks[0].width).unwrap_or(DEFAULT_SPLIT_PERCENT);
     let columns = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .constraints([
+            Constraint::Length(split_cells(split_percent, chunks[0].width)),
+            Constraint::Min(0),
+        ])
         .split(chunks[0]);
 
     render_list_pane(
@@ -713,6 +822,17 @@ pub(crate) fn render_list_vm(
         chrome.mouse_enabled,
         &mut layout.gist,
     );
+
+    let divider_x = columns[0].right().saturating_sub(1);
+    if list.split_dragging {
+        highlight_pane_divider(frame, chunks[0], divider_x, state.theme.accent);
+    }
+    if chrome.mouse_enabled {
+        layout.list_split = Some(SplitHit {
+            area: chunks[0],
+            divider_x,
+        });
+    }
 
     match &list.footer {
         ListFooterVm::Filtering { focus, query } => {
@@ -2149,5 +2269,256 @@ mod tests {
             state.handle_key(KeyCode::Char('*')),
             KeyOutcome::ToggleGistStar { .. }
         ));
+    }
+
+    /// Divider drag (#395) — geometry first: percent is the stored fact, cells are derived.
+    #[test]
+    fn split_cells_rounds_to_nearest_cell() {
+        assert_eq!(split_cells(40, 100), 40);
+        // 54.8 rounds up, matching what ratatui's percentage constraint resolved to before.
+        assert_eq!(split_cells(40, 137), 55);
+        assert_eq!(split_cells(15, 80), 12);
+    }
+
+    #[test]
+    fn clamp_split_percent_keeps_both_panes_readable() {
+        // Wide terminal: only the percent band bites.
+        assert_eq!(clamp_split_percent(50, 200), Some(50));
+        assert_eq!(clamp_split_percent(5, 200), Some(MIN_SPLIT_PERCENT));
+        assert_eq!(clamp_split_percent(99, 200), Some(MAX_SPLIT_PERCENT));
+        // Narrow terminal: the absolute floor takes over from the band on both sides.
+        for width in [MIN_PANE_CELLS * 2, 40, 60] {
+            let low = clamp_split_percent(0, width).expect("width fits two panes");
+            let high = clamp_split_percent(100, width).expect("width fits two panes");
+            assert!(
+                split_cells(low, width) >= MIN_PANE_CELLS,
+                "low {low} @ {width}"
+            );
+            assert!(
+                width - split_cells(high, width) >= MIN_PANE_CELLS,
+                "high {high} @ {width}"
+            );
+        }
+        // Too narrow for two readable panes at any split.
+        assert_eq!(clamp_split_percent(40, MIN_PANE_CELLS * 2 - 1), None);
+    }
+
+    #[test]
+    fn percent_for_col_puts_the_divider_under_the_pointer() {
+        let area = Rect::new(0, 1, 100, 20);
+        assert_eq!(percent_for_col(area, 39), 40);
+        assert_eq!(percent_for_col(area, 59), 60);
+        // Offset areas measure from their own left edge.
+        assert_eq!(percent_for_col(Rect::new(10, 1, 100, 20), 49), 40);
+    }
+
+    /// One percent is worth more than one cell above 100 columns, so not every column is
+    /// reachable — the divider lands on the nearest one that is, never further.
+    #[test]
+    fn percent_for_col_lands_within_one_cell_on_widths_that_are_not_multiples_of_100() {
+        for width in [80, 137, 200] {
+            let area = Rect::new(0, 1, width, 20);
+            for col in 20..(width - 20) {
+                let cells = split_cells(percent_for_col(area, col), width);
+                let landed = i32::from(cells) - 1; // the local pane's right border
+                let step = i32::from(width).div_euclid(100) + 1; // cells one percent buys
+                assert!(
+                    (landed - i32::from(col)).abs() <= step,
+                    "col {col} @ {width} landed on {landed}"
+                );
+            }
+        }
+    }
+
+    /// A `SplitHit` for a 100-column List screen split at the default 40%.
+    fn split_layout() -> MouseLayout {
+        MouseLayout {
+            list_split: Some(SplitHit {
+                area: Rect::new(0, 1, 100, 20),
+                divider_x: 39,
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn dragging_the_divider_resizes_the_panes_and_release_ends_the_drag() {
+        let mut state = state_with_local_paths(&["a.rs"]);
+        state.screen = Screen::List;
+        let layout = split_layout();
+
+        assert_eq!(
+            state.handle_mouse(MouseInput::Click { col: 39, row: 5 }, &layout),
+            KeyOutcome::None
+        );
+        assert!(state.list_split_drag);
+
+        state.handle_mouse(MouseInput::Drag { col: 59 }, &layout);
+        assert_eq!(state.list_split_percent, 60);
+
+        state.handle_mouse(MouseInput::Release, &layout);
+        assert!(!state.list_split_drag);
+        // A release after the drag must not keep resizing.
+        state.handle_mouse(MouseInput::Drag { col: 20 }, &layout);
+        assert_eq!(state.list_split_percent, 60);
+    }
+
+    #[test]
+    fn grabbing_the_divider_does_not_focus_or_select_a_pane() {
+        let mut state = state_with_local_paths(&["a.rs", "b.rs"]);
+        state.screen = Screen::List;
+        state.focus = FocusPane::Gist;
+        state.local_index = 1;
+        let mut layout = split_layout();
+        // The local pane reaches the divider, so without the grab check this would focus it.
+        layout.local = Some(PaneHit {
+            rect: Rect::new(0, 1, 40, 20),
+            offset: 0,
+        });
+
+        state.handle_mouse(MouseInput::Click { col: 39, row: 5 }, &layout);
+        assert!(state.list_split_drag);
+        assert_eq!(state.focus, FocusPane::Gist);
+        assert_eq!(state.local_index, 1);
+    }
+
+    #[test]
+    fn the_grab_zone_is_widened_by_one_cell_on_each_side() {
+        let layout = split_layout();
+        for col in 38..=41 {
+            let mut state = state_with_local_paths(&["a.rs"]);
+            state.screen = Screen::List;
+            state.handle_mouse(MouseInput::Click { col, row: 5 }, &layout);
+            assert!(state.list_split_drag, "col {col} missed the divider");
+        }
+        for col in [37, 42] {
+            let mut state = state_with_local_paths(&["a.rs"]);
+            state.screen = Screen::List;
+            state.handle_mouse(MouseInput::Click { col, row: 5 }, &layout);
+            assert!(!state.list_split_drag, "col {col} grabbed the divider");
+        }
+    }
+
+    #[test]
+    fn a_running_drag_ignores_the_row() {
+        let mut state = state_with_local_paths(&["a.rs"]);
+        state.screen = Screen::List;
+        let layout = split_layout();
+        state.handle_mouse(MouseInput::Click { col: 39, row: 5 }, &layout);
+        // Row 0 is the top bar, well outside the panes: the drag must survive it.
+        state.handle_mouse(MouseInput::Drag { col: 49 }, &layout);
+        assert_eq!(state.list_split_percent, 50);
+    }
+
+    #[test]
+    fn dragging_clamps_to_a_readable_pane_width() {
+        let mut state = state_with_local_paths(&["a.rs"]);
+        state.screen = Screen::List;
+        let layout = split_layout();
+        state.handle_mouse(MouseInput::Click { col: 39, row: 5 }, &layout);
+        state.handle_mouse(MouseInput::Drag { col: 0 }, &layout);
+        assert_eq!(state.list_split_percent, MIN_SPLIT_PERCENT);
+        state.handle_mouse(MouseInput::Drag { col: 99 }, &layout);
+        assert_eq!(state.list_split_percent, MAX_SPLIT_PERCENT);
+    }
+
+    #[test]
+    fn a_terminal_too_narrow_for_two_panes_has_no_grabbable_divider() {
+        let mut state = state_with_local_paths(&["a.rs", "b.rs"]);
+        state.screen = Screen::List;
+        state.focus = FocusPane::Gist;
+        let width = MIN_PANE_CELLS * 2 - 1;
+        let layout = MouseLayout {
+            list_split: Some(SplitHit {
+                area: Rect::new(0, 1, width, 20),
+                divider_x: width / 2,
+            }),
+            local: Some(PaneHit {
+                rect: Rect::new(0, 1, width / 2 + 1, 20),
+                offset: 0,
+            }),
+            ..Default::default()
+        };
+        state.handle_mouse(
+            MouseInput::Click {
+                col: width / 2,
+                row: 5,
+            },
+            &layout,
+        );
+        assert!(!state.list_split_drag);
+        // The press is not swallowed: it focuses the pane it landed in, as any other click would.
+        assert_eq!(state.focus, FocusPane::Local);
+
+        // Nor is the double-click reset, which would otherwise eat the "open this row" gesture
+        // to write a percent that paint discards anyway.
+        state.list_split_percent = 70;
+        assert!(!state.reset_split_divider(width / 2, 5, &layout));
+        assert_eq!(state.list_split_percent, 70);
+    }
+
+    #[test]
+    fn drag_without_grabbing_the_divider_changes_nothing() {
+        let mut state = state_with_local_paths(&["a.rs"]);
+        state.screen = Screen::List;
+        let layout = split_layout();
+        state.handle_mouse(MouseInput::Drag { col: 70 }, &layout);
+        assert_eq!(state.list_split_percent, DEFAULT_SPLIT_PERCENT);
+        assert!(!state.list_split_drag);
+    }
+
+    #[test]
+    fn double_clicking_the_divider_restores_the_default_split() {
+        let mut state = state_with_local_paths(&["a.rs"]);
+        state.screen = Screen::List;
+        let layout = split_layout();
+        state.list_split_percent = 70;
+        assert_eq!(
+            state.handle_mouse(MouseInput::DoubleClick { col: 39, row: 5 }, &layout),
+            KeyOutcome::None
+        );
+        assert_eq!(state.list_split_percent, DEFAULT_SPLIT_PERCENT);
+        assert!(!state.list_split_drag);
+    }
+
+    #[test]
+    fn list_vm_carries_the_split_and_its_drag_state() {
+        let mut state = state_with_local_paths(&["a.rs"]);
+        state.screen = Screen::List;
+        state.list_split_percent = 55;
+        let vm = build_list_vm(&state);
+        assert_eq!(vm.split_percent, 55);
+        assert!(!vm.split_dragging);
+        state.list_split_drag = true;
+        assert!(build_list_vm(&state).split_dragging);
+    }
+
+    /// Pins the percent → cells conversion to what actually reaches the screen: at 40% of a
+    /// 100-column terminal the local pane owns columns 0..=39, so its right border lands on
+    /// column 39 and the gist pane's left border on column 40.
+    #[test]
+    fn render_puts_the_divider_where_the_percent_says() {
+        let mut state = state_with_local_paths(&["a.rs"]);
+        state.screen = Screen::List;
+        let backend = ratatui::backend::TestBackend::new(100, 20);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let vm = crate::tui::build_view_model(&state);
+        let mut layout = MouseLayout::default();
+        let ScreenVm::List(list) = &vm.screen else {
+            panic!("not the List screen");
+        };
+        terminal
+            .draw(|frame| render_list_vm(frame, &state, list, &vm.chrome, &mut layout))
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        // Row 2 is inside both panes (row 0 is the top bar, row 1 the pane titles).
+        assert_eq!(buffer.cell((39, 2)).unwrap().symbol(), "│");
+        assert_eq!(buffer.cell((40, 2)).unwrap().symbol(), "│");
+        assert_eq!(buffer.cell((20, 2)).unwrap().symbol(), " ");
+
+        let hit = layout.list_split.expect("divider hit recorded");
+        assert_eq!(hit.divider_x, 39);
+        assert_eq!(hit.area.width, 100);
     }
 }

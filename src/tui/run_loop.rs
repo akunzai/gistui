@@ -112,6 +112,10 @@ pub(super) fn run_loop(
                         last_click = Some((m.column, m.row, std::time::Instant::now()));
                         Some(classified)
                     }
+                    MouseEventKind::Drag(MouseButton::Left) => {
+                        Some(super::MouseInput::Drag { col: m.column })
+                    }
+                    MouseEventKind::Up(MouseButton::Left) => Some(super::MouseInput::Release),
                     MouseEventKind::Down(MouseButton::Right) => {
                         Some(super::MouseInput::RightClick {
                             col: m.column,

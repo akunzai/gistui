@@ -93,6 +93,7 @@ The app version, the GitHub repo link, and update-check status live in `?` Help'
 | Wheel up/down | scroll the focused list or content pane |
 | Click a row | select it (List panes also switch focus) |
 | Double-click a row | open it — List diff, gist detail, pin diff, revision diff, file preview, or Help topic (same as `Enter`) |
+| Drag the divider (List) | hold the left button on the line between the two panes and move left/right to resize them; double-click it to restore the default 40/60 (session-only — every launch starts at 40/60) |
 | Click a tab (Gist details) | switch between Files / Comments (the tab shows the comment count; newest 30 comments load first; `m` or clicking the top line loads 30 older comments) |
 | Click `[✕]` button (pop-up screens) | close / go back |
 | Click `(g)ists` / `(P)ins` / `(C)onfig` / `(?)Help` (top bar) | jump to that screen, from anywhere — same as pressing `g` / `P` / `C` / `?` |

@@ -16,7 +16,7 @@ use crate::tui::theme::Theme;
 use crate::tui::view_model::{ListPaneEmpty, ListPaneVm, RowEmphasis};
 use crate::tui::PaneHit;
 use ratatui::layout::{Margin, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{
     Block, BorderType, Borders, List, ListItem, ListState, Padding, Scrollbar,
     ScrollbarOrientation, ScrollbarState,
@@ -30,6 +30,12 @@ pub(crate) const LIST_HIGHLIGHT_SYMBOL: &str = "▶ ";
 
 /// Borders (2) + `Padding::horizontal(1)` (2) around a list pane's inner rows.
 const LIST_CHROME_CELLS: u16 = 4;
+
+/// Narrowest a list pane may be made without turning into a slit: [`LIST_CHROME_CELLS`], the
+/// two cells [`LIST_HIGHLIGHT_SYMBOL`] occupies (a const cannot measure its display width, so
+/// the pair is asserted in the tests below), and eight cells of filename. It lives beside the
+/// row budget it is built from; the List screen's divider drag (issue #395) clamps against it.
+pub(crate) const MIN_PANE_CELLS: u16 = LIST_CHROME_CELLS + 2 + 8;
 
 /// Paint one bordered list pane into `area` and, when the mouse is on, record where it landed.
 ///
@@ -110,6 +116,21 @@ pub(crate) fn render_list_pane(
             rect: area,
             offset: list_state.offset(),
         });
+    }
+}
+
+/// Recolour the two adjoining border columns that separate a pair of side-by-side panes,
+/// keeping the corners and title junctions the blocks already painted. The List screen uses
+/// it to show that its divider is being dragged (issue #395) — a highlight that belongs to
+/// neither pane, so it cannot ride on `ListPaneVm::focused`.
+pub(crate) fn highlight_pane_divider(frame: &mut Frame, area: Rect, divider_x: u16, color: Color) {
+    let buffer = frame.buffer_mut();
+    for x in [divider_x, divider_x + 1] {
+        for y in area.y..area.bottom() {
+            if let Some(cell) = buffer.cell_mut((x, y)) {
+                cell.set_fg(color);
+            }
+        }
     }
 }
 
@@ -200,6 +221,13 @@ mod tests {
             hscroll: 0,
             scrollbar: false,
         }
+    }
+
+    /// `MIN_PANE_CELLS` adds the highlight symbol's display width as a literal, because a
+    /// const cannot call `cell_width`. This is what keeps the two in step.
+    #[test]
+    fn min_pane_cells_matches_the_highlight_symbol_it_budgets_for() {
+        assert_eq!(cell_width(LIST_HIGHLIGHT_SYMBOL), 2);
     }
 
     /// Paint one pane on its own backend — the module's interface is the test surface.
