@@ -32,8 +32,10 @@ are kept out of the published tarball); `cargo publish --dry-run` validates the 
 
 1. Bump `version` in `Cargo.toml` (and refresh `Cargo.lock`); confirm `cargo publish --dry-run`
    is clean.
-2. In `CHANGELOG.md`, rename the `## [Unreleased]` section to a dated `## [X.Y.Z] — YYYY-MM-DD`
-   heading and add its release link reference at the bottom.
+2. In `CHANGELOG.md`, date the `## [Unreleased]` section as `## [X.Y.Z] — YYYY-MM-DD` and leave
+   a fresh, empty `## [Unreleased]` heading above it — the section is permanent, so the next
+   change has somewhere to land. At the bottom, add the release link reference and repoint
+   `[unreleased]` at `compare/vX.Y.Z...HEAD`.
 3. Merge to `main` (CI gate green).
 4. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 5. Verify: the GitHub release has the binaries, [crates.io](https://crates.io/crates/gistui)
