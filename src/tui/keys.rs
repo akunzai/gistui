@@ -65,6 +65,10 @@ impl AppState {
     }
 
     pub fn handle_key_with(&mut self, code: KeyCode, modifiers: KeyModifiers) -> KeyOutcome {
+        // A keystroke means the hand left the mouse. Ending the drag here is what keeps the
+        // flag from wedging when a key takes the mouse away before the release lands —
+        // turning mouse support off in Settings, or suspending the TUI for $EDITOR (#395).
+        self.end_split_drag();
         if code == KeyCode::Char(';')
             && modifiers.is_empty()
             && !self.screen.is_palette()
@@ -228,12 +232,22 @@ impl AppState {
     /// logic. Pure (no IO, no clock); returns a `KeyOutcome` so `run_loop` can perform any
     /// follow-up IO (e.g. `PreviewDiff` on double-click).
     pub fn handle_mouse(&mut self, input: MouseInput, layout: &MouseLayout) -> KeyOutcome {
+        // Before anything else: a release ends a divider drag whatever is on screen. An
+        // overlay that swallowed it would leave the flag stuck on, and every later
+        // press-and-move on the List screen would resize without a grab (#395).
+        if input == MouseInput::Release {
+            self.end_split_drag();
+            return KeyOutcome::None;
+        }
         if self.screen.is_palette() {
             return match input {
                 MouseInput::Click { col, row } | MouseInput::DoubleClick { col, row } => {
                     self.palette_click(col, row, layout)
                 }
                 MouseInput::RightClick { .. } => KeyOutcome::None,
+                // The palette overlays the panes, so a drag underneath it resizes nothing.
+                // `Release` never reaches here — it returns at the top of the function.
+                MouseInput::Drag { .. } | MouseInput::Release => KeyOutcome::None,
                 MouseInput::ScrollUp | MouseInput::ScrollDown => {
                     let action = if matches!(input, MouseInput::ScrollUp) {
                         NavAction::Up
@@ -248,7 +262,17 @@ impl AppState {
             };
         }
         match input {
+            // Divider drag (#395). `layout.list_split` is only recorded on the List screen,
+            // so this is a no-op everywhere else. `Release` was handled above.
+            MouseInput::Drag { col } => {
+                self.drag_split_divider(col, layout);
+                KeyOutcome::None
+            }
+            MouseInput::Release => KeyOutcome::None,
             MouseInput::RightClick { col, row } => {
+                // Opening a menu ends any resize: leaving the drag alive would keep the
+                // divider accented under an overlay where dragging does nothing (#395).
+                self.end_split_drag();
                 if self.palette_blocked() {
                     return KeyOutcome::None;
                 }
@@ -318,6 +342,11 @@ impl AppState {
                 if let Some(outcome) = self.click_comments_load_older(col, row, layout) {
                     return outcome;
                 }
+                // Pressing the pane divider starts a resize instead of focusing a pane;
+                // the matching release must not select anything either (#395).
+                if self.grab_split_divider(col, row, layout) {
+                    return KeyOutcome::None;
+                }
                 self.click_select(col, row, layout);
                 KeyOutcome::None
             }
@@ -325,6 +354,9 @@ impl AppState {
                 // A tab double-click is just a tab switch (no "open").
                 if let Some(outcome) = self.click_detail_tab(col, row, layout) {
                     return outcome;
+                }
+                if self.reset_split_divider(col, row, layout) {
+                    return KeyOutcome::None;
                 }
                 if self.click_select(col, row, layout) {
                     // Selection landed on a row — open/activate it.
@@ -829,5 +861,86 @@ mod tests {
         assert_eq!(out, KeyOutcome::None);
         assert!(state.screen.is_palette());
         assert_eq!(state.palette().unwrap().anchor, Some((10, 5)));
+    }
+
+    /// #395: the palette overlays the panes, so a drag under it must not resize — and the
+    /// drag must not outlive the overlay either, or every later press-and-move resizes.
+    #[test]
+    fn an_overlay_never_leaves_a_divider_drag_running() {
+        let mut state = state_with_gists();
+        let layout = MouseLayout {
+            list_split: Some(crate::tui::SplitHit {
+                area: Rect::new(0, 1, 100, 20),
+                divider_x: 39,
+            }),
+            ..Default::default()
+        };
+        state.handle_mouse(MouseInput::Click { col: 39, row: 5 }, &layout);
+        assert!(state.list_split_drag);
+
+        // Opening the context menu ends the resize, so the divider is not left accented
+        // under an overlay where dragging does nothing.
+        state.handle_mouse(MouseInput::RightClick { col: 39, row: 5 }, &layout);
+        assert!(state.screen.is_palette());
+        assert!(!state.list_split_drag);
+
+        // And a release that arrives while the overlay is up still clears the flag, whatever
+        // put it there — otherwise every later press-and-move would resize without a grab.
+        state.list_split_drag = true;
+        state.handle_mouse(MouseInput::Drag { col: 70 }, &layout);
+        assert_eq!(state.list_split_percent, 40, "resized under the palette");
+        state.handle_mouse(MouseInput::Release, &layout);
+        assert!(
+            !state.list_split_drag,
+            "release under the palette left the drag stuck"
+        );
+    }
+
+    /// #395: a keystroke means the hand left the mouse, and some keys take the mouse away
+    /// entirely (turning mouse support off in Settings, suspending the TUI for `$EDITOR`),
+    /// swallowing the release that would otherwise end the drag.
+    #[test]
+    fn a_keystroke_ends_a_divider_drag() {
+        let mut state = state_with_gists();
+        let layout = MouseLayout {
+            list_split: Some(crate::tui::SplitHit {
+                area: Rect::new(0, 1, 100, 20),
+                divider_x: 39,
+            }),
+            ..Default::default()
+        };
+        state.handle_mouse(MouseInput::Click { col: 39, row: 5 }, &layout);
+        assert!(state.list_split_drag);
+        state.handle_key(KeyCode::Tab);
+        assert!(!state.list_split_drag);
+    }
+
+    /// #395: a background-task overlay takes over the mouse and would swallow the release,
+    /// so the drag ends as soon as the overlay appears.
+    #[test]
+    fn a_background_task_ends_a_divider_drag() {
+        let mut state = state_with_gists();
+        let layout = MouseLayout {
+            list_split: Some(crate::tui::SplitHit {
+                area: Rect::new(0, 1, 100, 20),
+                divider_x: 39,
+            }),
+            ..Default::default()
+        };
+        state.handle_mouse(MouseInput::Click { col: 39, row: 5 }, &layout);
+        assert!(state.list_split_drag);
+        state.begin_bg_task();
+        assert!(!state.list_split_drag);
+    }
+
+    #[test]
+    fn release_without_a_drag_is_a_no_op_on_any_screen() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Preview(Box::default());
+        assert_eq!(
+            state.handle_mouse(MouseInput::Release, &MouseLayout::default()),
+            KeyOutcome::None
+        );
+        assert!(!state.list_split_drag);
     }
 }

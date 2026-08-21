@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- The main screen's two file lists can now be resized with the mouse: hold the left button on
+  the divider between them and drag left/right, or double-click it to restore the default
+  40/60. The width lasts for the session and is not written to the config file.
 - Narrow terminals no longer cut the top-bar `gistui` brand mid-word: the shortcuts keep the
   row, and the name gives way rather than being painted over.
 - The `?` help now documents `Tab` on the Help screen (it opens the topic index), and the

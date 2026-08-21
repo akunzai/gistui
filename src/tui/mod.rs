@@ -641,6 +641,32 @@ impl PaneHit {
     }
 }
 
+/// The draggable divider between the List screen's two panes, recorded by `render`.
+///
+/// `area` is the two panes' combined region — the denominator every column-to-percent
+/// conversion needs, which is why it is carried here rather than reconstructed from the
+/// `local` / `gist` hits (that would bake in an unwritten "panes are adjacent and fill
+/// the row" invariant).
+#[derive(Debug, Clone, Copy)]
+pub struct SplitHit {
+    pub area: Rect,
+    /// Column of the local pane's right border; the gist pane's left border sits at `+1`.
+    pub divider_x: u16,
+}
+
+impl SplitHit {
+    /// Whether a press at (`col`, `row`) grabs the divider: the two border columns widened
+    /// by one on each side (four cells, comfortable to hit), anywhere down the panes' height.
+    /// `row` is checked here and only here — once the drag is running the pointer is free to
+    /// leave the panes vertically.
+    pub fn grabbed(&self, col: u16, row: u16) -> bool {
+        row >= self.area.y
+            && row < self.area.bottom()
+            && col + 1 >= self.divider_x
+            && col <= self.divider_x + 2
+    }
+}
+
 /// Per-frame mouse hit regions, owned by `run_loop`, filled by `render`.
 #[derive(Debug, Default, Clone)]
 pub struct MouseLayout {
@@ -648,6 +674,8 @@ pub struct MouseLayout {
     pub gist: Option<PaneHit>,
     /// Single-list screens (Gists / Pins / Revisions) and the Help topic index.
     pub list: Option<PaneHit>,
+    /// List screen only: the draggable divider between the two panes.
+    pub list_split: Option<SplitHit>,
     /// GistDetail file list (Files tab).
     pub detail_files: Option<PaneHit>,
     /// GistDetail "Files" / "Comments" tab headers (clickable to switch focus).
@@ -676,9 +704,25 @@ pub struct MouseLayout {
 pub enum MouseInput {
     ScrollUp,
     ScrollDown,
-    Click { col: u16, row: u16 },
-    DoubleClick { col: u16, row: u16 },
-    RightClick { col: u16, row: u16 },
+    Click {
+        col: u16,
+        row: u16,
+    },
+    DoubleClick {
+        col: u16,
+        row: u16,
+    },
+    RightClick {
+        col: u16,
+        row: u16,
+    },
+    /// Left button held and moved. Carries no row: a divider drag keeps tracking when the
+    /// pointer leaves the panes vertically, so only the column is meaningful.
+    Drag {
+        col: u16,
+    },
+    /// Left button released, ending any drag in progress.
+    Release,
 }
 
 /// Max gap between two left-clicks on the same cell to count as a double-click.
@@ -863,6 +907,12 @@ pub struct AppState {
     pub gist_index: usize,
     pub local_hscroll: u16,
     pub gist_hscroll: u16,
+    /// Share of the List screen's width given to the local pane (issue #395). Session-only:
+    /// dragging the divider moves it, and every launch starts back at
+    /// [`screens::list::DEFAULT_SPLIT_PERCENT`].
+    pub list_split_percent: u16,
+    /// The divider is being dragged: paint highlights it and pointer moves resize the panes.
+    pub list_split_drag: bool,
     pub screen: Screen,
     pub gist_view: GistView,
     pub gist_type_filter: GistTypeFilter,
@@ -1304,6 +1354,9 @@ impl AppState {
 
     /// Mark a new background task as in-flight and return its generation id.
     pub fn begin_bg_task(&mut self) -> u64 {
+        // The overlay takes over the mouse, so it would swallow the release that ends a
+        // divider drag (#395). End it here, when the overlay appears.
+        self.end_split_drag();
         self.bg_task_generation = self.bg_task_generation.wrapping_add(1);
         self.bg_task_generation
     }
@@ -2060,6 +2113,8 @@ pub fn initial_state() -> AppState {
         gist_index: 0,
         local_hscroll: 0,
         gist_hscroll: 0,
+        list_split_percent: screens::list::DEFAULT_SPLIT_PERCENT,
+        list_split_drag: false,
         screen: Screen::List,
         gist_view: GistView::Description,
         gist_type_filter: GistTypeFilter::All,
@@ -2429,6 +2484,19 @@ mod tests {
             offset: 0,
         };
         assert_eq!(hit.index_at(1, 0), None);
+    }
+
+    #[test]
+    fn split_hit_grab_zone_is_bounded_by_the_panes_height() {
+        // Panes at y=1, height 10: rows 1..=10 can grab, the top bar (row 0) cannot.
+        let hit = SplitHit {
+            area: Rect::new(0, 1, 100, 10),
+            divider_x: 39,
+        };
+        assert!(hit.grabbed(39, 1));
+        assert!(hit.grabbed(40, 10));
+        assert!(!hit.grabbed(39, 0)); // top bar shares the column, not the divider
+        assert!(!hit.grabbed(39, 11)); // below the panes (footer)
     }
 
     #[test]

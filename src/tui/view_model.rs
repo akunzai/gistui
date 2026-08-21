@@ -194,6 +194,10 @@ pub struct ListVm {
     pub local: ListPaneVm,
     pub gist: ListPaneVm,
     pub footer: ListFooterVm,
+    /// Share of the width the local pane gets; paint turns it into cells (issue #395).
+    pub split_percent: u16,
+    /// The divider is being dragged, so paint highlights it.
+    pub split_dragging: bool,
 }
 
 /// A pane title split into the parts that must survive and the one part that may shrink,
