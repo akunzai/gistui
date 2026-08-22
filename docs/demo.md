@@ -57,4 +57,4 @@ help (`?`).
 ## Requirements
 
 `mise install` (from the repo root) provisions `cargo` and `tcut` from the
-pinned [`mise.toml`](../../mise.toml).
+pinned [`mise.toml`](../mise.toml).

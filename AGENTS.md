@@ -9,7 +9,7 @@ Toolchains and task wrappers live in [`mise.toml`](mise.toml); run `mise install
 - Verification gate: `mise run check`
 - Single test: `cargo test <name_filter>`
 - Non-TTY readiness check: `cargo run -- --check`
-- Demo regeneration: `mise run demo` (see `@scripts/demo/README.md`)
+- Demo regeneration: `mise run demo` (see `@docs/demo.md`)
 
 ## Pointers
 
