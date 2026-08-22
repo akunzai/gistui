@@ -7,8 +7,7 @@
 
 [tools]
 rust = { version = "stable", components = "rustfmt,clippy" }
-uv = "latest"                    # runs the demo scripts + provisions Python/Pillow on demand
-"aqua:asciinema/agg" = "latest"  # renders website/demo.gif (aqua: checksum-verified)
+"github:AmanVarshney01/tcut" = "1.0.0"
 
 # Tasks mirror the AGENTS.md verification gate and demo harness so the same
 # commands run locally and in CI. List them with `mise tasks`.
@@ -38,14 +37,6 @@ run = [
 description = "Launch the TUI"
 run = "cargo run"
 
-[tasks.demo-gif]
-description = "Regenerate the README demo GIF"
-run = "scripts/demo/record.sh"
-
-[tasks.demo-png]
-description = "Regenerate the still PNG screenshots"
-run = "scripts/demo/shots.sh"
-
 [tasks.demo]
 description = "Regenerate all demo media (GIF + still PNGs)"
-depends = ["demo-gif", "demo-png"]
+run = "tcut scripts/demo.video.ts"

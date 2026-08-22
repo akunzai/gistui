@@ -601,38 +601,44 @@ fn anchor_marker(state: &AppState, pane: FocusPane) -> &'static str {
 pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
     let (visible_locals, ranked) = state.list_pane_snapshots();
 
-    let local_empty;
-    let local_empty_message;
-    let local_rows;
-    if state.local_scanning && state.locals.is_empty() {
-        local_empty = ListPaneEmpty::Loading;
-        local_empty_message = Some(format!(
-            "  {} Scanning files…",
-            crate::tui::render::spinner_glyph(state.spinner_frame)
-        ));
-        local_rows = Vec::new();
-    } else if state.locals.is_empty() {
-        local_empty = ListPaneEmpty::NoItems;
-        local_empty_message = Some("  📭 No local files found".into());
-        local_rows = Vec::new();
-    } else if visible_locals.is_empty() {
-        local_empty = ListPaneEmpty::NoFilterMatch;
-        local_empty_message = Some("  🔍 No files match the filter".into());
-        local_rows = Vec::new();
-    } else {
-        local_empty = ListPaneEmpty::HasRows;
-        local_empty_message = None;
-        local_rows = visible_locals
-            .iter()
-            .map(|r| {
-                let base = crate::tui::text::local_row_label(&r.candidate.path, &state.cwd);
-                RowVm {
-                    label: crate::tui::render::marked_row_text(base, r.mark),
-                    emphasis: row_emphasis(r.mark),
-                }
-            })
-            .collect();
-    }
+    let (local_empty, local_empty_message, local_rows) =
+        if state.local_scanning && state.locals.is_empty() {
+            (
+                ListPaneEmpty::Loading,
+                Some(format!(
+                    "  {} Scanning files…",
+                    crate::tui::render::spinner_glyph(state.spinner_frame)
+                )),
+                Vec::new(),
+            )
+        } else if state.locals.is_empty() {
+            (
+                ListPaneEmpty::NoItems,
+                Some("  📭 No local files found".into()),
+                Vec::new(),
+            )
+        } else if visible_locals.is_empty() {
+            (
+                ListPaneEmpty::NoFilterMatch,
+                Some("  🔍 No files match the filter".into()),
+                Vec::new(),
+            )
+        } else {
+            (
+                ListPaneEmpty::HasRows,
+                None,
+                visible_locals
+                    .iter()
+                    .map(|r| {
+                        let base = crate::tui::text::local_row_label(&r.candidate.path, &state.cwd);
+                        RowVm {
+                            label: crate::tui::render::marked_row_text(base, r.mark),
+                            emphasis: row_emphasis(r.mark),
+                        }
+                    })
+                    .collect(),
+            )
+        };
 
     let recursive_marker = if state.local_recursive { " [↓]" } else { "" };
     let scanning_marker = if state.local_scanning { " …" } else { "" };
