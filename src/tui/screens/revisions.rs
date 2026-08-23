@@ -3,12 +3,16 @@
 
 use crate::actions::SystemRunner;
 use crate::tui::bg::{revision_version_label, Jobs, LoopFlow};
-use crate::tui::keys::{point_in, NavAction, PAGE_SCROLL};
+use crate::tui::keys::{apply_list_cursor_nav, NavAction};
 use crate::tui::render::list_pane::render_list_pane;
+use crate::tui::text::hscroll_max_for_text;
 use crate::tui::view_model::{
     ChromeVm, ListPaneEmpty, ListPaneVm, PaneTitleVm, RevisionsVm, RowEmphasis, RowVm,
 };
-use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneTarget, Screen};
+use crate::tui::{
+    AppState, HelpTopic, HitTarget, KeyOutcome, ListCursor, MouseFrame, PaneTarget, RowTarget,
+    Screen,
+};
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
@@ -34,7 +38,7 @@ pub(crate) fn revisions_guard(state: &AppState, code: KeyCode) -> bool {
         .and_then(|r| r.entries.as_ref().map(|e| e.len()))
         .unwrap_or(0);
     let has_entries = entries_len > 0;
-    let not_head = rev.is_some_and(|r| r.index > 0);
+    let not_head = rev.is_some_and(|r| r.cursor.index > 0);
     let gist_id = rev.and_then(|r| r.gist_id.clone());
     let owned = gist_id
         .as_deref()
@@ -81,7 +85,7 @@ impl AppState {
             // check, so a non-previewable file off-head still gets this precise message
             // instead of falling to the (misleading, head-only) fallback below it.
             KeyCode::Char('D')
-                if entries_len > 0 && self.revision().is_some_and(|r| r.index > 0) =>
+                if entries_len > 0 && self.revision().is_some_and(|r| r.cursor.index > 0) =>
             {
                 return self.revision_diff_intent();
             }
@@ -94,7 +98,7 @@ impl AppState {
             KeyCode::Char('r') if entries_len <= 1 => {
                 self.set_status("only one revision — nothing to restore");
             }
-            KeyCode::Char('r') if self.revision().is_some_and(|r| r.index == 0) => {
+            KeyCode::Char('r') if self.revision().is_some_and(|r| r.cursor.index == 0) => {
                 self.set_status("already at current revision");
             }
             KeyCode::Char('F') if !self.cycle_revision_target_file() => {
@@ -130,7 +134,7 @@ impl AppState {
     fn selected_revision(&self) -> Option<&crate::domain::GistRevision> {
         let rev = self.revision()?;
         let entries = rev.entries.as_ref()?;
-        entries.get(rev.index)
+        entries.get(rev.cursor.index)
     }
 
     fn revision_diff_incremental_intent(&mut self) -> KeyOutcome {
@@ -141,7 +145,7 @@ impl AppState {
             return KeyOutcome::None;
         };
         let filename = rev.target_file.clone();
-        let index = rev.index;
+        let index = rev.cursor.index;
         let parent = rev
             .entries
             .as_ref()
@@ -257,60 +261,53 @@ impl AppState {
     }
 
     /// Arrow / hjkl / page-key navigation for `Screen::Revisions`: moves the entry cursor, or
-    /// scrolls it horizontally.
+    /// scrolls it horizontally. Precomputes len/hmax with `&self`, then mutates the cursor
+    /// (issue #274 pattern, applied here in #408: cannot hold `&mut RevisionState` from
+    /// `match &mut self.screen` while calling `&self` helpers).
     pub(crate) fn apply_navigation_revisions(&mut self, action: NavAction) -> bool {
+        let len = self
+            .revision()
+            .and_then(|r| r.entries.as_ref().map(|e| e.len()))
+            .unwrap_or(0);
+        if len == 0 {
+            return false;
+        }
+        let hmax = self.revisions_hscroll_max();
         let Screen::Revisions(rev) = &mut self.screen else {
             return false;
         };
-        let entries_len = rev.entries.as_ref().map(|e| e.len()).unwrap_or(0);
-        if entries_len == 0 {
-            return false;
-        }
-        match action {
-            NavAction::Down => {
-                rev.index = (rev.index + 1).min(entries_len - 1);
-            }
-            NavAction::Up => {
-                rev.index = rev.index.saturating_sub(1);
-            }
-            NavAction::PageDown => {
-                rev.index = (rev.index + PAGE_SCROLL as usize).min(entries_len - 1);
-            }
-            NavAction::PageUp => {
-                rev.index = rev.index.saturating_sub(PAGE_SCROLL as usize);
-            }
-            NavAction::Left => {
-                rev.hscroll = rev.hscroll.saturating_sub(1);
-            }
-            NavAction::Right => {
-                rev.hscroll = rev.hscroll.saturating_add(1);
-            }
-        }
+        apply_list_cursor_nav(&mut rev.cursor, action, len, hmax);
         true
     }
 
     /// Select the clicked row on `Screen::Revisions`, moving the entry cursor. Returns `true`
     /// when a row was hit.
-    pub(crate) fn click_select_revisions(
-        &mut self,
-        col: u16,
-        row: u16,
-        layout: &MouseFrame,
-    ) -> bool {
+    pub(crate) fn click_select_revisions(&mut self, target: RowTarget) -> bool {
+        let Some(idx) = target.list_index() else {
+            return false;
+        };
         let Screen::Revisions(rev) = &mut self.screen else {
             return false;
         };
-        if let Some(hit) = layout.pane(PaneTarget::List) {
-            if point_in(hit.rect, col, row) {
-                let count = rev.entries.as_ref().map_or(0, |e| e.len());
-                if let Some(idx) = hit.index_at(row, count) {
-                    rev.index = idx;
-                    rev.hscroll = 0;
-                    return true;
-                }
-            }
-        }
-        false
+        rev.cursor.select(idx);
+        true
+    }
+
+    /// Highest horizontal-scroll offset for the Revisions screen, bounded by the selected
+    /// row's complete rendered label (mirrors `gists_hscroll_max` / `pins_hscroll_max`;
+    /// issue #408 — Revisions previously had no bound and could overflow `u16`).
+    fn revisions_hscroll_max(&self) -> u16 {
+        let now = crate::tui::render::unix_now();
+        self.revision()
+            .and_then(|r| {
+                let entries = r.entries.as_ref()?;
+                let idx = r.cursor.index;
+                entries
+                    .get(idx)
+                    .map(|entry| revision_row_label(entry, idx, now))
+            })
+            .map(|label| hscroll_max_for_text(&label))
+            .unwrap_or(0)
     }
 }
 
@@ -385,7 +382,7 @@ pub(crate) fn build_revisions_vm(state: &AppState) -> RevisionsVm {
                     emphasis: RowEmphasis::None,
                 })
                 .collect();
-            (ListPaneEmpty::HasRows, None, rows, Some(rev.index))
+            (ListPaneEmpty::HasRows, None, rows, Some(rev.cursor.index))
         }
     };
 
@@ -401,7 +398,7 @@ pub(crate) fn build_revisions_vm(state: &AppState) -> RevisionsVm {
             empty,
             empty_message,
             rows,
-            hscroll: rev.hscroll,
+            hscroll: rev.cursor.hscroll,
             scrollbar: false,
         },
         footer,
@@ -470,6 +467,11 @@ pub(crate) fn on_revisions_fetched(
             let short = entries.len() <= 1;
             if let Some(rev) = state.revision_mut() {
                 rev.fetch_error = None;
+                let before = rev.cursor.index;
+                rev.cursor.clamp_len(entries.len());
+                if rev.cursor.index != before {
+                    rev.cursor.hscroll = 0;
+                }
                 rev.entries = Some(entries);
             }
             if short {
@@ -530,7 +532,7 @@ pub(crate) fn on_restore_revision_done(
                 state.screen = Screen::Revisions(Box::default());
             }
             let gist_id = state.revision_mut().and_then(|rev| {
-                rev.index = 0;
+                rev.cursor = ListCursor::default();
                 rev.entries = None;
                 rev.fetch_error = None;
                 rev.gist_id.clone()
@@ -592,7 +594,7 @@ mod tests {
         state.screen = Screen::Revisions(Box::default());
         revision_mut(&mut state).gist_id = Some("g1".into());
         revision_mut(&mut state).target_file = "a.txt".into();
-        revision_mut(&mut state).index = 0;
+        revision_mut(&mut state).cursor.index = 0;
         revision_mut(&mut state).entries = Some(vec![
             crate::domain::GistRevision {
                 version: "v2".into(),
@@ -617,7 +619,7 @@ mod tests {
         ]);
         assert_eq!(state.handle_key(KeyCode::Char('D')), KeyOutcome::None);
         assert_eq!(state.status.as_deref(), Some("already at current revision"));
-        revision_mut(&mut state).index = 1;
+        revision_mut(&mut state).cursor.index = 1;
         assert!(matches!(
             state.handle_key(KeyCode::Char('D')),
             KeyOutcome::RevisionDiff { .. }
@@ -630,7 +632,7 @@ mod tests {
         state.screen = Screen::Revisions(Box::default());
         revision_mut(&mut state).gist_id = Some("g1".into());
         revision_mut(&mut state).target_file = "a.txt".into();
-        revision_mut(&mut state).index = 0;
+        revision_mut(&mut state).cursor.index = 0;
         revision_mut(&mut state).entries = Some(vec![
             crate::domain::GistRevision {
                 version: "v2".into(),
@@ -657,7 +659,7 @@ mod tests {
             state.handle_key(KeyCode::Enter),
             KeyOutcome::RevisionDiffIncremental { .. }
         ));
-        revision_mut(&mut state).index = 1;
+        revision_mut(&mut state).cursor.index = 1;
         assert!(matches!(
             state.handle_key(KeyCode::Enter),
             KeyOutcome::RevisionDiffIncremental { .. }
@@ -713,7 +715,7 @@ mod tests {
         state.screen = Screen::Revisions(Box::default());
         revision_mut(&mut state).gist_id = Some("g1".into());
         revision_mut(&mut state).target_file = "a.txt".into();
-        revision_mut(&mut state).index = 0;
+        revision_mut(&mut state).cursor.index = 0;
         revision_mut(&mut state).entries = Some(vec![
             crate::domain::GistRevision {
                 version: "v2".into(),
@@ -744,7 +746,7 @@ mod tests {
         layout.register_pane(PaneTarget::List, hit, 2);
         let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
         assert_eq!(out, KeyOutcome::None);
-        assert_eq!(revision_ref(&state).index, 1);
+        assert_eq!(revision_ref(&state).cursor.index, 1);
         let mut by_key = state.clone();
         let key_out = by_key.handle_key(KeyCode::Enter);
         let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
@@ -753,6 +755,169 @@ mod tests {
             by_mouse,
             KeyOutcome::RevisionDiffIncremental { .. }
         ));
+    }
+
+    /// A click in the pane's blank area does nothing (issue #408).
+    #[test]
+    fn revisions_blank_pane_click_is_a_noop() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Revisions(Box::default());
+        revision_mut(&mut state).entries = Some(vec![crate::domain::GistRevision {
+            version: "v1".into(),
+            committed_at: "2026-06-10T00:00:00Z".into(),
+            user: "u".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 1,
+                additions: 1,
+                deletions: 0,
+            },
+        }]);
+        let hit = PaneHit {
+            rect: Rect::new(0, 0, 40, 10),
+            offset: 0,
+        };
+        let mut layout = MouseFrame::default();
+        layout.register_pane(PaneTarget::List, hit, 1);
+        let out = state.handle_mouse(MouseInput::Click { col: 5, row: 8 }, &layout);
+        assert_eq!(out, KeyOutcome::None);
+        assert_eq!(revision_ref(&state).cursor.index, 0);
+    }
+
+    /// Vertical/page navigation and row clicks reset horizontal scroll; Right stops at the
+    /// selected row's complete rendered label and cannot overflow (issue #408 — previously
+    /// unbounded, so a selected row could scroll entirely blank and `hscroll` could wrap).
+    #[test]
+    fn revisions_navigation_resets_hscroll_and_right_is_clamped() {
+        let mut state = state_with_gists();
+        state.screen = Screen::Revisions(Box::default());
+        let entries = vec![
+            crate::domain::GistRevision {
+                version: "v2".into(),
+                committed_at: "2026-06-10T00:00:00Z".into(),
+                user: "u".into(),
+                change_status: crate::domain::GistRevisionChangeStatus {
+                    total: 1,
+                    additions: 1,
+                    deletions: 0,
+                },
+            },
+            crate::domain::GistRevision {
+                version: "v1".into(),
+                committed_at: "2026-06-01T00:00:00Z".into(),
+                user: "u".into(),
+                change_status: crate::domain::GistRevisionChangeStatus {
+                    total: 2,
+                    additions: 2,
+                    deletions: 0,
+                },
+            },
+        ];
+        revision_mut(&mut state).entries = Some(entries.clone());
+        let label = revision_row_label(&entries[0], 0, crate::tui::render::unix_now());
+        let hmax = hscroll_max_for_text(&label);
+
+        // Right stops at the row's own max — many more presses than the label is long.
+        for _ in 0..hmax + 50 {
+            state.handle_key(KeyCode::Right);
+        }
+        assert_eq!(revision_ref(&state).cursor.hscroll, hmax);
+
+        // Down resets it.
+        state.handle_key(KeyCode::Down);
+        assert_eq!(revision_ref(&state).cursor.index, 1);
+        assert_eq!(revision_ref(&state).cursor.hscroll, 0);
+
+        state.handle_key(KeyCode::Right);
+        assert!(revision_ref(&state).cursor.hscroll > 0);
+        state.handle_key(KeyCode::Up);
+        assert_eq!(revision_ref(&state).cursor.hscroll, 0);
+
+        state.handle_key(KeyCode::Right);
+        state.handle_key(KeyCode::PageDown);
+        assert_eq!(revision_ref(&state).cursor.hscroll, 0);
+
+        state.handle_key(KeyCode::Right);
+        state.handle_key(KeyCode::PageUp);
+        assert_eq!(revision_ref(&state).cursor.hscroll, 0);
+
+        // A row click resets it too.
+        revision_mut(&mut state).cursor.hscroll = 5;
+        let hit = PaneHit {
+            rect: Rect::new(0, 0, 40, 10),
+            offset: 0,
+        };
+        let mut layout = MouseFrame::default();
+        layout.register_pane(PaneTarget::List, hit, 2);
+        state.handle_mouse(MouseInput::Click { col: 5, row: 1 }, &layout);
+        assert_eq!(revision_ref(&state).cursor.hscroll, 0);
+    }
+
+    /// A shrinking revision list clamps an out-of-range cursor and clears its stale
+    /// horizontal scroll; a cursor that stays in range keeps its horizontal scroll
+    /// (issue #408).
+    #[test]
+    fn on_revisions_fetched_clamps_an_out_of_range_cursor() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            cursor: ListCursor {
+                index: 3,
+                hscroll: 7,
+            },
+            ..Default::default()
+        }));
+        let entry = GistRevision {
+            version: "abc123".into(),
+            committed_at: "2026-01-01T00:00:00Z".into(),
+            user: "alice".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 1,
+                additions: 1,
+                deletions: 0,
+            },
+        };
+
+        on_revisions_fetched(&mut state, "g1".into(), Ok(vec![entry.clone(), entry]));
+
+        assert_eq!(revision_ref(&state).cursor.index, 1, "clamped into range");
+        assert_eq!(
+            revision_ref(&state).cursor.hscroll,
+            0,
+            "stale hscroll cleared"
+        );
+    }
+
+    /// An in-range cursor is left untouched by a fetch (issue #408).
+    #[test]
+    fn on_revisions_fetched_preserves_an_in_range_cursor() {
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::new(RevisionState {
+            gist_id: Some("g1".into()),
+            cursor: ListCursor {
+                index: 1,
+                hscroll: 4,
+            },
+            ..Default::default()
+        }));
+        let entry = GistRevision {
+            version: "abc123".into(),
+            committed_at: "2026-01-01T00:00:00Z".into(),
+            user: "alice".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 1,
+                additions: 1,
+                deletions: 0,
+            },
+        };
+
+        on_revisions_fetched(
+            &mut state,
+            "g1".into(),
+            Ok(vec![entry.clone(), entry.clone(), entry]),
+        );
+
+        assert_eq!(revision_ref(&state).cursor.index, 1);
+        assert_eq!(revision_ref(&state).cursor.hscroll, 4);
     }
 
     #[test]
@@ -853,7 +1018,10 @@ mod tests {
         let mut state = initial_state();
         state.screen = Screen::Revisions(Box::new(RevisionState {
             gist_id: Some("g1".into()),
-            index: 3,
+            cursor: ListCursor {
+                index: 3,
+                ..Default::default()
+            },
             entries: Some(Vec::new()),
             fetch_error: Some("old".into()),
             ..Default::default()
@@ -877,7 +1045,7 @@ mod tests {
         assert_eq!(state.revisions_stale.as_deref(), Some("g1"));
         assert!(state.screen.is_revisions());
         let rev = state.revision().unwrap();
-        assert_eq!(rev.index, 0);
+        assert_eq!(rev.cursor.index, 0);
         assert!(rev.entries.is_none());
         assert!(rev.fetch_error.is_none());
         assert_eq!(

@@ -1,10 +1,11 @@
 //! `Screen::Help` — key handling, view-model, paint, and palette items colocated in one
 //! file (issue #287, Phase 2).
 
-use crate::tui::keys::{point_in, NavAction, PAGE_SCROLL};
+use crate::tui::keys::{NavAction, PAGE_SCROLL};
 use crate::tui::view_model::{ChromeVm, HelpIndexItemVm, HelpModeVm, HelpVm};
 use crate::tui::{
-    AppState, HelpState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneHit, PaneTarget, Screen,
+    AppState, HelpState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneHit, PaneTarget,
+    RowTarget, Screen,
 };
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -146,19 +147,15 @@ impl AppState {
     /// Select the clicked topic-index row on `Screen::Help`. Only set when the topic index is
     /// open (render_help), so this is a no-op while viewing a topic's body. Returns `true`
     /// when a row was hit.
-    pub(crate) fn click_select_help(&mut self, col: u16, row: u16, layout: &MouseFrame) -> bool {
+    pub(crate) fn click_select_help(&mut self, target: RowTarget) -> bool {
+        let Some(idx) = target.list_index() else {
+            return false;
+        };
         let Screen::Help(help) = &mut self.screen else {
             return false;
         };
-        if let Some(hit) = layout.pane(PaneTarget::List) {
-            if point_in(hit.rect, col, row) {
-                if let Some(idx) = hit.index_at(row, HelpTopic::all().len()) {
-                    help.index_sel = idx;
-                    return true;
-                }
-            }
-        }
-        false
+        help.index_sel = idx;
+        true
     }
 }
 

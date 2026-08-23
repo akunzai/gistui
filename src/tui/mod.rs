@@ -651,11 +651,9 @@ pub struct RevisionState {
     pub gist_id: Option<String>,
     /// Fetched revision rows (`None` while the initial list fetch is in flight).
     pub entries: Option<Vec<GistRevision>>,
-    /// Cursor into `entries` (0 = current head).
-    /// Not a [`ListCursor`]: Revisions does not reset hscroll on vertical move and does
-    /// not clamp Right to an hmax (issue #274 — out of scope).
-    pub index: usize,
-    pub hscroll: u16,
+    /// Selection + row hscroll into `entries` (0 = current head; shared Pins/Gists policy,
+    /// issue #408).
+    pub cursor: ListCursor,
     /// File within the gist that preview/diff/restore target.
     pub target_file: String,
     /// Error from the commits-list fetch, if any.
@@ -1703,8 +1701,7 @@ impl AppState {
         self.enter(Screen::Revisions(Box::new(RevisionState {
             gist_id: Some(gist_id),
             target_file,
-            index: 0,
-            hscroll: 0,
+            cursor: ListCursor::default(),
             entries: None,
             fetch_error: None,
         })));

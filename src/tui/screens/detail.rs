@@ -3,13 +3,14 @@
 
 use crate::domain::GistComment;
 use crate::tui::bg::LoopFlow;
-use crate::tui::keys::{point_in, NavAction};
+use crate::tui::keys::NavAction;
 use crate::tui::text::comment_lines_count;
 use crate::tui::view_model::{
     ChromeVm, CommentLineVm, CommentsAffordance, CommentsPaneVm, GistDetailVm,
 };
 use crate::tui::{
     AppState, DetailFocus, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneHit, PaneTarget,
+    RowTarget,
 };
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::GistDetail;
@@ -341,26 +342,25 @@ impl AppState {
 
     /// Select the clicked row on `Screen::GistDetail`'s Files tab, focusing it. Returns `true`
     /// when a row was hit (so a double-click should "open"/preview it).
-    pub(crate) fn click_select_detail(&mut self, col: u16, row: u16, layout: &MouseFrame) -> bool {
-        if let Some(hit) = layout.pane(PaneTarget::DetailFiles) {
-            if point_in(hit.rect, col, row) {
-                // Clicking the file list focuses the Files tab; a row also moves the cursor.
-                let count = self
-                    .detail()
-                    .and_then(|d| d.gist_id.as_deref())
-                    .map_or(0, |id| self.gist_filenames(id).len());
-                if let Some(d) = self.detail_mut() {
-                    d.focus = DetailFocus::Files;
-                }
-                if let Some(idx) = hit.index_at(row, count) {
-                    if let Some(d) = self.detail_mut() {
-                        d.file_cursor = idx;
-                    }
-                    return true;
-                }
-            }
+    pub(crate) fn click_select_detail(&mut self, target: RowTarget) -> bool {
+        let RowTarget::Pane {
+            pane: PaneTarget::DetailFiles,
+            index,
+        } = target
+        else {
+            return false;
+        };
+        // Clicking the file list focuses the Files tab; a row also moves the cursor.
+        if let Some(d) = self.detail_mut() {
+            d.focus = DetailFocus::Files;
         }
-        false
+        let Some(idx) = index else {
+            return false;
+        };
+        if let Some(d) = self.detail_mut() {
+            d.file_cursor = idx;
+        }
+        true
     }
 
     /// Switch the GistDetail tab if `col`/`row` lands on a tab header. Returns the outcome
@@ -1435,6 +1435,28 @@ mod tests {
                 ..
             } if f.gist_id == "g1" && f.filename == "b.txt"
         ));
+    }
+
+    /// A click in the file pane's blank area focuses Files without moving the cursor or
+    /// activating anything (issue #408).
+    #[test]
+    fn gist_detail_blank_pane_click_focuses_files_without_activating() {
+        let mut state = state_with_gists(); // g1: a.txt (0), b.txt (1)
+        state.screen = Screen::GistDetail(Box::default());
+        detail_mut(&mut state).gist_id = Some("g1".into());
+        detail_mut(&mut state).focus = DetailFocus::Comments;
+        detail_mut(&mut state).file_cursor = 0;
+        let hit = PaneHit {
+            rect: Rect::new(0, 0, 40, 10),
+            offset: 0,
+        };
+        let mut layout = MouseFrame::default();
+        layout.register_pane(PaneTarget::DetailFiles, hit, 2);
+        // Row 8 is inside the pane but past the two rendered rows.
+        let out = state.handle_mouse(MouseInput::Click { col: 5, row: 8 }, &layout);
+        assert_eq!(out, KeyOutcome::None);
+        assert_eq!(detail_ref(&state).focus, DetailFocus::Files);
+        assert_eq!(detail_ref(&state).file_cursor, 0);
     }
 
     #[test]

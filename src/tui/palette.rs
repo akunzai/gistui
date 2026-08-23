@@ -492,7 +492,7 @@ mod tests {
         state.screen = Screen::Revisions(Box::new(RevisionState {
             gist_id: Some("g1".into()),
             target_file: "a.txt".into(),
-            index: 0,
+            cursor: ListCursor::default(),
             entries: Some(vec![
                 GistRevision {
                     version: "v2".into(),
@@ -538,7 +538,7 @@ mod tests {
         // Off head (index 1): diff/restore become available; "Cycle target file" stays
         // disabled (still a single-file gist).
         if let Screen::Revisions(rev) = &mut state.screen {
-            rev.index = 1;
+            rev.cursor.index = 1;
         }
         let items = menu_items(&state);
         assert_eq!(

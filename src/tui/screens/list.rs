@@ -2,14 +2,14 @@
 //! file (issue #287, Phase 2).
 
 use crate::ranking::MatchMark;
-use crate::tui::keys::{apply_filter_edit, diff_pair_previewable, point_in, FilterKey, NavAction};
+use crate::tui::keys::{apply_filter_edit, diff_pair_previewable, FilterKey, NavAction};
 use crate::tui::render::list_pane::{highlight_pane_divider, render_list_pane, MIN_PANE_CELLS};
 use crate::tui::view_model::{
     ChromeVm, ListFooterVm, ListPaneEmpty, ListPaneVm, ListVm, PaneTitleVm, RowEmphasis, RowVm,
 };
 use crate::tui::{
     AppState, FocusPane, GistView, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneTarget,
-    PendingAction, Screen, SplitHit,
+    PendingAction, RowTarget, Screen, SplitHit,
 };
 use crossterm::event::KeyCode;
 
@@ -550,38 +550,39 @@ impl AppState {
     /// Select the clicked row on `Screen::List`, focusing its pane. Returns `true` when a row
     /// was hit (so a double-click should "open" it). A click in a pane's blank area or border
     /// focuses it but selects nothing (returns `false`); a click off every list returns `false`.
-    pub(crate) fn click_select_list(&mut self, col: u16, row: u16, layout: &MouseFrame) -> bool {
-        if let Some(hit) = layout.pane(PaneTarget::Local) {
-            if point_in(hit.rect, col, row) {
-                // A click anywhere in the pane (incl. blank/border) focuses it; a
-                // click on a row also selects it.
+    pub(crate) fn click_select_list(&mut self, target: RowTarget) -> bool {
+        let RowTarget::Pane { pane, index } = target else {
+            return false;
+        };
+        // A click anywhere in a pane (incl. blank/border) focuses it; a click on a row
+        // also selects it.
+        match pane {
+            PaneTarget::Local => {
                 self.focus = FocusPane::Local;
-                if let Some(idx) = hit.index_at(row, self.visible_locals().len()) {
-                    self.local_index = idx;
-                    self.local_hscroll = 0;
-                    if self.anchor == FocusPane::Local {
-                        self.reset_ranked_pane();
-                    }
-                    return true;
+                let Some(idx) = index else {
+                    return false;
+                };
+                self.local_index = idx;
+                self.local_hscroll = 0;
+                if self.anchor == FocusPane::Local {
+                    self.reset_ranked_pane();
                 }
-                return false;
+                true
             }
-        }
-        if let Some(hit) = layout.pane(PaneTarget::Gist) {
-            if point_in(hit.rect, col, row) {
+            PaneTarget::Gist => {
                 self.focus = FocusPane::Gist;
-                if let Some(idx) = hit.index_at(row, self.ranked_gists().len()) {
-                    self.gist_index = idx;
-                    self.gist_hscroll = 0;
-                    if self.anchor == FocusPane::Gist {
-                        self.reset_ranked_pane();
-                    }
-                    return true;
+                let Some(idx) = index else {
+                    return false;
+                };
+                self.gist_index = idx;
+                self.gist_hscroll = 0;
+                if self.anchor == FocusPane::Gist {
+                    self.reset_ranked_pane();
                 }
-                return false;
+                true
             }
+            PaneTarget::List | PaneTarget::DetailFiles => false,
         }
-        false
     }
 }
 

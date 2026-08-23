@@ -1,11 +1,11 @@
-//! Shared list selection + horizontal scroll for Pins and Gists manager screens.
+//! Shared list selection + horizontal scroll for Pins, Gists manager, and Revisions.
 //!
 //! Bounds (`len`, `hmax`, page `step`) are computed by the caller with `&AppState`
 //! *before* taking `&mut` on the payload, so navigation never fights the borrow
 //! checker (issue #274).
 
 /// Index + horizontal scroll for a single-column list that resets hscroll when the
-/// selection moves vertically (Pins / Gists policy).
+/// selection moves vertically (Pins / Gists / Revisions policy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ListCursor {
     pub index: usize,

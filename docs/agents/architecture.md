@@ -129,8 +129,19 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
   `is_dragging()`.
 - Non-mouse render output belongs in `RenderFeedback`. In particular, comments scroll-to-bottom
   is consumed only after the comments renderer supplies `comments_max_scroll`.
+- `MouseFrame::resolve_pane` is the seam `ScreenLookup::click_select` consumes (issue #408):
+  it walks only `register_pane` hits and returns a resolved `RowTarget::Pane { pane, index }`,
+  never raw `(col, row)`. It deliberately ignores `Divider`/other whole-body `Rect` hits —
+  `HitTarget::Divider` registers over the List screen's *entire* body (feeding `MouseFrame::split`,
+  which just returns the most recently registered `SplitHit` regardless of point containment), far
+  wider than its visual grab zone, and would otherwise mask every pane row underneath it if
+  `resolve` (the priority-ordered `Rect` resolver used for top-bar/tab targets) were reused here.
+  Per-screen `click_select_*` functions match on `pane`/`index` only — List routes Local vs. Gist
+  focus and anchor re-ranking; Pins/Gists/Revisions/Help/Config select on their single `PaneTarget::List`;
+  GistDetail focuses Files on any hit in `PaneTarget::DetailFiles`, moving `file_cursor` only when
+  `index` is `Some`.
 
-List-row horizontal scroll (issue #341) is **per selected row**, not pane-wide: `row_hscroll` applies the pane offset only to the highlighted index; `focused_hscroll_max` / Pins / Gists caps are that row's painted string. A non-zero offset prefixes `…` in `visible_list_row` (then `truncate_end` may still mark a clipped tail). Unselected rows stay at column 0.
+List-row horizontal scroll (issue #341) is **per selected row**, not pane-wide: `row_hscroll` applies the pane offset only to the highlighted index; `focused_hscroll_max` / Pins / Gists / Revisions caps are that row's painted string. A non-zero offset prefixes `…` in `visible_list_row` (then `truncate_end` may still mark a clipped tail). Unselected rows stay at column 0. `RevisionState.cursor` is a `ListCursor` like Pins/Gists (issue #408): vertical/page moves and row clicks reset `hscroll`, and Right clamps to `revisions_hscroll_max` (the selected row's rendered label) instead of growing unbounded.
 
 List-row budget: inner pane width minus borders+padding (`LIST_CHROME_CELLS`) minus `LIST_HIGHLIGHT_SYMBOL`. ratatui's default `HighlightSpacing::WhenSelected` indents **every** row once any row is selected — these lists always `select(...)` when they have rows, so unselected rows still pay the `▶ ` indent. Keep the widget's `highlight_symbol` and the budget on `LIST_HIGHLIGHT_SYMBOL` so they cannot drift.
 

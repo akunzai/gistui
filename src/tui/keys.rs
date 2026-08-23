@@ -36,7 +36,7 @@ fn nav_action(code: KeyCode, modifiers: KeyModifiers) -> Option<NavAction> {
 /// keeps paging predictable without threading terminal size into the key logic.
 pub(crate) const PAGE_SCROLL: u16 = 10;
 
-/// Dispatch [`NavAction`] onto a Pins/Gists [`ListCursor`] (step from [`PAGE_SCROLL`]).
+/// Dispatch [`NavAction`] onto a Pins/Gists/Revisions [`ListCursor`] (step from [`PAGE_SCROLL`]).
 pub(crate) fn apply_list_cursor_nav(
     cursor: &mut ListCursor,
     action: NavAction,
@@ -182,9 +182,13 @@ impl AppState {
     /// Select the clicked list row on the current screen, focusing its pane/list. Returns
     /// `true` when a row was hit (so a double-click should "open" it). A click in a pane's
     /// blank area or border focuses it but selects nothing (returns `false`); a click off
-    /// every list returns `false`.
+    /// every list returns `false`. Resolves the pane/index target once here (issue #408) —
+    /// per-screen handlers consume the resolved `RowTarget`, never raw coordinates.
     fn click_select(&mut self, col: u16, row: u16, layout: &MouseFrame) -> bool {
-        (super::screens::lookup(&self.screen).click_select)(self, col, row, layout)
+        let Some(target) = layout.resolve_pane(col, row) else {
+            return false;
+        };
+        (super::screens::lookup(&self.screen).click_select)(self, target)
     }
 
     /// Open/activate the currently selected row on the current screen (the double-click
@@ -558,11 +562,6 @@ impl AppState {
         let starring = !self.gist_is_starred(&gist_id);
         KeyOutcome::ToggleGistStar { gist_id, starring }
     }
-}
-
-/// Whether a column/row position lands inside a `Rect`.
-pub(crate) fn point_in(rect: ratatui::layout::Rect, col: u16, row: u16) -> bool {
-    col >= rect.x && col < rect.right() && row >= rect.y && row < rect.bottom()
 }
 
 #[cfg(test)]
