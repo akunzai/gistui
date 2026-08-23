@@ -179,12 +179,10 @@ mod tests {
         state.locals = vec![
             LocalCandidate {
                 path: PathBuf::from("other.txt"),
-                pinned: false,
                 modified: None,
             },
             LocalCandidate {
                 path: PathBuf::from("settings.json"),
-                pinned: false,
                 modified: None,
             },
         ];
@@ -201,12 +199,10 @@ mod tests {
         state.locals = vec![
             LocalCandidate {
                 path: PathBuf::from("zeta.txt"),
-                pinned: false,
                 modified: None,
             },
             LocalCandidate {
                 path: PathBuf::from("alpha.txt"),
-                pinned: false,
                 modified: None,
             },
         ];
@@ -223,17 +219,14 @@ mod tests {
         state.locals = vec![
             LocalCandidate {
                 path: PathBuf::from("old"),
-                pinned: false,
                 modified: Some(100),
             },
             LocalCandidate {
                 path: PathBuf::from("none"),
-                pinned: false,
                 modified: None,
             },
             LocalCandidate {
                 path: PathBuf::from("new"),
-                pinned: false,
                 modified: Some(500),
             },
         ];
@@ -264,7 +257,6 @@ mod tests {
         }];
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("f"),
-            pinned: false,
             modified: None,
         }];
         for anchor in [FocusPane::Local, FocusPane::Gist] {
@@ -371,12 +363,10 @@ mod tests {
         state.locals = vec![
             LocalCandidate {
                 path: PathBuf::from("/tmp/settings.json"),
-                pinned: false,
                 modified: None,
             },
             LocalCandidate {
                 path: PathBuf::from("/tmp/statusline.sh"),
-                pinned: false,
                 modified: None,
             },
         ];
@@ -411,12 +401,10 @@ mod tests {
         state.locals = vec![
             LocalCandidate {
                 path: PathBuf::from("/tmp/settings.json"),
-                pinned: false,
                 modified: None,
             },
             LocalCandidate {
                 path: PathBuf::from("/tmp/statusline.sh"),
-                pinned: false,
                 modified: None,
             },
         ];
@@ -485,12 +473,10 @@ mod tests {
         state.locals = vec![
             LocalCandidate {
                 path: PathBuf::from("/tmp/settings.json"),
-                pinned: false,
                 modified: None,
             },
             LocalCandidate {
                 path: PathBuf::from("/tmp/statusline.sh"),
-                pinned: false,
                 modified: None,
             },
         ];

@@ -141,24 +141,22 @@ pub(super) fn spawn_update_check(
     rx
 }
 
-/// Background local-scan result stamped with the generation active at spawn time.
-type LocalScanRx = Option<std::sync::mpsc::Receiver<(u64, Vec<LocalCandidate>)>>;
+/// Background local-scan result, paired with the generation active when `spawn_local_scan`
+/// was called (issue #409 — the generation travels with the receiver, not the channel
+/// payload, so a disconnect can still be checked against it without a value to unpack).
+type LocalScanRx = Option<(
+    u64,
+    std::sync::mpsc::Receiver<Result<Vec<LocalCandidate>, String>>,
+)>;
 
+/// Run `request` off-thread. Errors are carried through, never converted to an empty list
+/// (issue #409) — an empty result must mean "the scan really found nothing," not "it failed."
 fn spawn_local_scan(
-    generation: u64,
-    cwd: std::path::PathBuf,
-    pinned: Vec<crate::domain::PinnedMapping>,
-    recursive: bool,
-    skip_dirs: Vec<String>,
-    max_depth: u32,
-) -> std::sync::mpsc::Receiver<(u64, Vec<LocalCandidate>)> {
+    request: local_scan::ScanRequest,
+) -> std::sync::mpsc::Receiver<Result<Vec<LocalCandidate>, String>> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let candidates = crate::local::discover_local_candidates(
-            &cwd, &pinned, recursive, &skip_dirs, max_depth,
-        )
-        .unwrap_or_default();
-        let _ = tx.send((generation, candidates));
+        let _ = tx.send(request.run().map_err(|e| e.to_string()));
     });
     rx
 }
@@ -704,7 +702,7 @@ pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode)
             if state.screen.is_diff() {
                 state.leave();
             }
-            refresh_locals(state, LocalScanMode::Active, Some(&target));
+            refresh_locals(state, Some(&target));
         }
         Err(error) => {
             state.set_status(format!("download failed: {error}"));
@@ -713,36 +711,35 @@ pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode)
     }
 }
 
-pub(super) enum LocalScanMode {
-    Flat,
-    Active,
-}
-
-/// Quick re-scan used after a download/upload to make the target visible immediately.
-pub(super) fn refresh_locals(
-    state: &mut AppState,
-    scan_mode: LocalScanMode,
-    selection_target: Option<&std::path::Path>,
-) {
-    let selected = selection_target
-        .map(std::path::Path::to_path_buf)
-        .or_else(|| state.selected_local().map(|c| c.path.clone()));
-    if let Ok(locals) = crate::local::discover_local_candidates(
-        &state.cwd,
-        &state.pinned,
-        matches!(scan_mode, LocalScanMode::Active) && state.local_recursive,
-        &state.skip_dirs,
-        state.settings.scan_depth(),
-    ) {
-        state.locals = locals;
-        state.local_index = selected
-            .and_then(|path| state.locals.iter().position(|c| c.path == path))
-            .unwrap_or(0)
-            .min(state.locals.len().saturating_sub(1));
-        if state.gist_index >= state.ranked_gists().len() {
-            state.gist_index = 0;
+/// Synchronous local re-scan after a successful download, using the active recursive mode
+/// (issue #409) so the just-downloaded file is visible immediately without waiting for an
+/// interactive scan. Supersedes any scan already in flight. On failure the last-known-good
+/// candidates and selection are kept, and the failure is appended to whatever status the
+/// caller already set — e.g. "Downloaded a.txt; local refresh failed: …" — instead of
+/// overwriting it.
+pub(super) fn refresh_locals(state: &mut AppState, target: Option<&std::path::Path>) {
+    let request =
+        state.local_scan_request(local_scan::ScanMode::from_active(state.local_recursive));
+    let generation = state.begin_local_scan();
+    match request.run() {
+        Ok(candidates) => {
+            state.apply_local_scan(generation, candidates, target);
+        }
+        Err(error) => {
+            state.end_local_scan(generation);
+            append_status(state, format!("local refresh failed: {error}"));
         }
     }
+}
+
+/// Append a fact to the current status instead of overwriting it — so a synchronous
+/// local-scan failure never erases feedback a caller already set (issue #409).
+fn append_status(state: &mut AppState, message: impl Into<String>) {
+    let message = message.into();
+    state.status = Some(match state.status.take() {
+        Some(existing) if !existing.is_empty() => format!("{existing}; {message}"),
+        _ => message,
+    });
 }
 
 /// Persist Settings-screen fields after a user change (issue #227). Creates config.toml
@@ -843,7 +840,9 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
             if let Some(pins) = state.pins_mut() {
                 pins.cursor.clamp_len(len);
             }
-            refresh_locals(state, LocalScanMode::Flat, None);
+            // No filesystem rescan: unpin never touches the filesystem, and ranking reads
+            // `PinnedMapping` directly — a forced-flat rescan here used to make the local
+            // list drift back to cwd-only even while recursive mode was active (issue #409).
             state.set_status(format!("Unpinned {label}"));
         }
         Err(error) => state.set_status(format!("unpin failed: {error}")),
@@ -862,7 +861,8 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
 /// - **Action jobs** ([`Jobs::spawn_action`] / Esc via [`Jobs::cancel_action`]): each
 ///   spawn stamps `AppState::bg_task_generation`. Only matching generations apply;
 ///   cancel bumps the generation and drops the receiver (issue #221).
-/// - **Local scans** ([`Jobs::request_local_scan`]): stamp `AppState::local_scan_generation`.
+/// - **Local scans** ([`Jobs::request_local_scan`]): generation/in-flight lifecycle lives on
+///   `AppState`'s private `local_scan` (see `local_scan.rs`, issue #409).
 /// - **Gist refreshes** own one generation across their base and enrichment jobs.
 pub(super) struct Jobs {
     update: Option<std::sync::mpsc::Receiver<crate::update_check::UpdateCheckOutcome>>,
@@ -965,17 +965,11 @@ impl Jobs {
 
     /// Start a local file scan stamped with a new generation.
     pub(super) fn request_local_scan(&mut self, state: &mut AppState) {
+        let request =
+            state.local_scan_request(local_scan::ScanMode::from_active(state.local_recursive));
         let generation = state.begin_local_scan();
-        state.set_status("Scanning files…");
-        state.local_scanning = true;
-        self.local = Some(spawn_local_scan(
-            generation,
-            state.cwd.clone(),
-            state.pinned.clone(),
-            state.local_recursive,
-            state.skip_dirs.clone(),
-            state.settings.scan_depth(),
-        ));
+        state.set_status(local_scan::SCANNING_STATUS);
+        self.local = Some((generation, spawn_local_scan(request)));
     }
 
     pub(super) fn set_upload_edit_watch(
@@ -1054,14 +1048,30 @@ impl Jobs {
 
     /// Absorb a completed background local scan (ignore stale generations — issue #221).
     fn on_local_scan_ready(&mut self, state: &mut AppState) {
-        if state.local_scanning {
-            if let Some(ref rx) = self.local {
-                if let Ok((generation, locals)) = rx.try_recv() {
-                    self.local = None;
-                    if state.apply_local_scan_if_current(generation, locals) {
-                        state.status = None;
-                    }
-                    // Stale: a newer scan is (or was) in flight; leave spinner/list alone.
+        let Some((generation, rx)) = self.local.as_ref() else {
+            return;
+        };
+        let generation = *generation;
+        // A disconnected worker (panicked thread) is a failure too — otherwise a current
+        // generation's spinner would spin forever with no way to end it (issue #409).
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                Err("worker disconnected".to_string())
+            }
+        };
+        self.local = None;
+        match result {
+            Ok(candidates) => {
+                // A stale generation changes no candidates, spinner, or status.
+                if state.apply_local_scan(generation, candidates, None) {
+                    state.clear_scan_status();
+                }
+            }
+            Err(error) => {
+                if state.end_local_scan(generation) {
+                    state.set_status(format!("local scan failed: {error}"));
                 }
             }
         }
@@ -1211,42 +1221,53 @@ mod tests {
     // ---- on_local_scan_ready ----------------------------------------------
 
     #[test]
-    fn on_local_scan_ready_noop_when_not_scanning() {
+    fn on_local_scan_ready_noop_when_no_scan_is_in_flight() {
         let mut state = initial_state();
-        state.local_scanning = false;
-        let (tx, rx) = mpsc::channel();
-        tx.send((1, Vec::<LocalCandidate>::new())).unwrap();
         let mut jobs = empty_jobs();
-        jobs.local = Some(rx);
-
-        jobs.on_local_scan_ready(&mut state);
-
-        // Guarded by `state.local_scanning`: the channel is never touched.
-        assert!(jobs.local.is_some());
-    }
-
-    #[test]
-    fn on_local_scan_ready_applies_current_generation() {
-        let mut state = initial_state();
-        let generation = state.begin_local_scan();
-        state.local_scanning = true;
-        state.status = Some("Scanning files…".into());
-        let candidate = LocalCandidate {
-            path: PathBuf::from("a.txt"),
-            pinned: false,
-            modified: None,
-        };
-        let (tx, rx) = mpsc::channel();
-        tx.send((generation, vec![candidate.clone()])).unwrap();
-        let mut jobs = empty_jobs();
-        jobs.local = Some(rx);
 
         jobs.on_local_scan_ready(&mut state);
 
         assert!(jobs.local.is_none());
-        assert!(!state.local_scanning);
+        assert!(!state.local_scanning());
+    }
+
+    #[test]
+    fn on_local_scan_ready_applies_current_generation_and_clears_its_own_status_only() {
+        let mut state = initial_state();
+        let generation = state.begin_local_scan();
+        state.status = Some(local_scan::SCANNING_STATUS.into());
+        let candidate = LocalCandidate {
+            path: PathBuf::from("a.txt"),
+            modified: None,
+        };
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok(vec![candidate.clone()])).unwrap();
+        let mut jobs = empty_jobs();
+        jobs.local = Some((generation, rx));
+
+        jobs.on_local_scan_ready(&mut state);
+
+        assert!(jobs.local.is_none());
+        assert!(!state.local_scanning());
         assert_eq!(state.locals, vec![candidate]);
         assert!(state.status.is_none());
+    }
+
+    /// Success must not clobber a status a newer action set after the scan started
+    /// (issue #409).
+    #[test]
+    fn on_local_scan_ready_success_preserves_a_newer_status() {
+        let mut state = initial_state();
+        let generation = state.begin_local_scan();
+        state.status = Some("a newer action's status".into());
+        let (tx, rx) = mpsc::channel();
+        tx.send(Ok(Vec::<LocalCandidate>::new())).unwrap();
+        let mut jobs = empty_jobs();
+        jobs.local = Some((generation, rx));
+
+        jobs.on_local_scan_ready(&mut state);
+
+        assert_eq!(state.status.as_deref(), Some("a newer action's status"));
     }
 
     #[test]
@@ -1254,27 +1275,85 @@ mod tests {
         let mut state = initial_state();
         let stale = state.begin_local_scan();
         let _current = state.begin_local_scan();
-        state.local_scanning = true;
         let (tx, rx) = mpsc::channel();
-        tx.send((
-            stale,
-            vec![LocalCandidate {
-                path: PathBuf::from("stale.txt"),
-                pinned: false,
-                modified: None,
-            }],
-        ))
+        tx.send(Ok(vec![LocalCandidate {
+            path: PathBuf::from("stale.txt"),
+            modified: None,
+        }]))
         .unwrap();
         let mut jobs = empty_jobs();
-        jobs.local = Some(rx);
+        jobs.local = Some((stale, rx));
 
         jobs.on_local_scan_ready(&mut state);
 
         // The stale result is drained off the channel but not applied — spinner/list
         // stay as they were (a newer scan is still expected).
         assert!(jobs.local.is_none());
-        assert!(state.local_scanning);
+        assert!(state.local_scanning());
         assert!(state.locals.is_empty());
+    }
+
+    /// A current-generation failure keeps last-known-good candidates, ends the spinner, and
+    /// reports the error (issue #409).
+    #[test]
+    fn on_local_scan_ready_current_failure_keeps_candidates_and_reports_error() {
+        let mut state = initial_state();
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("kept.txt"),
+            modified: None,
+        }];
+        let generation = state.begin_local_scan();
+        let (tx, rx) = mpsc::channel();
+        tx.send(Err("permission denied".to_string())).unwrap();
+        let mut jobs = empty_jobs();
+        jobs.local = Some((generation, rx));
+
+        jobs.on_local_scan_ready(&mut state);
+
+        assert!(!state.local_scanning());
+        assert_eq!(state.locals.len(), 1);
+        assert_eq!(state.locals[0].path, PathBuf::from("kept.txt"));
+        assert_eq!(
+            state.status.as_deref(),
+            Some("local scan failed: permission denied")
+        );
+    }
+
+    /// A disconnected worker (panicked thread) must still end the spinner instead of
+    /// spinning forever (issue #409).
+    #[test]
+    fn on_local_scan_ready_current_disconnect_ends_the_spinner() {
+        let mut state = initial_state();
+        let generation = state.begin_local_scan();
+        let (tx, rx) = mpsc::channel::<Result<Vec<LocalCandidate>, String>>();
+        drop(tx);
+        let mut jobs = empty_jobs();
+        jobs.local = Some((generation, rx));
+
+        jobs.on_local_scan_ready(&mut state);
+
+        assert!(jobs.local.is_none());
+        assert!(!state.local_scanning());
+        assert!(state.status.is_some());
+    }
+
+    /// A stale generation's disconnect must not touch the current scan's spinner or status
+    /// (issue #409).
+    #[test]
+    fn on_local_scan_ready_stale_disconnect_is_ignored() {
+        let mut state = initial_state();
+        let stale = state.begin_local_scan();
+        let _current = state.begin_local_scan();
+        let (tx, rx) = mpsc::channel::<Result<Vec<LocalCandidate>, String>>();
+        drop(tx);
+        let mut jobs = empty_jobs();
+        jobs.local = Some((stale, rx));
+
+        jobs.on_local_scan_ready(&mut state);
+
+        assert!(jobs.local.is_none());
+        assert!(state.local_scanning(), "current generation still in flight");
+        assert!(state.status.is_none());
     }
 
     // ---- on_update_check_ready ---------------------------------------------
@@ -1431,13 +1510,39 @@ mod tests {
         state.local_recursive = true;
         state.locals = vec![crate::domain::LocalCandidate {
             path: compared,
-            pinned: false,
             modified: None,
         }];
 
-        refresh_locals(&mut state, LocalScanMode::Active, Some(&target));
+        refresh_locals(&mut state, Some(&target));
 
         assert_eq!(state.selected_local().map(|file| file.path), Some(target));
+    }
+
+    /// A failed synchronous refresh keeps last-known-good candidates and appends its own
+    /// failure onto whatever status the caller already set (issue #409).
+    #[test]
+    fn refresh_locals_failure_keeps_candidates_and_appends_to_the_existing_status() {
+        let mut state = initial_state();
+        // A cwd that cannot be scanned (never created) makes discovery fail.
+        state.cwd = tempfile::tempdir().unwrap().path().join("does-not-exist");
+        state.locals = vec![crate::domain::LocalCandidate {
+            path: PathBuf::from("kept.txt"),
+            modified: None,
+        }];
+        state.status = Some("Downloaded a.txt".into());
+
+        refresh_locals(&mut state, None);
+
+        assert_eq!(state.locals.len(), 1);
+        assert_eq!(state.locals[0].path, PathBuf::from("kept.txt"));
+        assert!(
+            state
+                .status
+                .as_deref()
+                .is_some_and(|s| s.starts_with("Downloaded a.txt; local refresh failed: ")),
+            "status was {:?}",
+            state.status
+        );
     }
 
     #[test]

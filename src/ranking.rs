@@ -201,7 +201,6 @@ mod tests {
     fn local(path: &str) -> LocalCandidate {
         LocalCandidate {
             path: PathBuf::from(path),
-            pinned: false,
             modified: None,
         }
     }

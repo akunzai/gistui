@@ -600,7 +600,7 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
     let (visible_locals, ranked) = state.list_pane_snapshots();
 
     let (local_empty, local_empty_message, local_rows) =
-        if state.local_scanning && state.locals.is_empty() {
+        if state.local_scanning() && state.locals.is_empty() {
             (
                 ListPaneEmpty::Loading,
                 Some(format!(
@@ -639,7 +639,7 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
         };
 
     let recursive_marker = if state.local_recursive { " [↓]" } else { "" };
-    let scanning_marker = if state.local_scanning { " …" } else { "" };
+    let scanning_marker = if state.local_scanning() { " …" } else { "" };
     // Order per `PaneTitleVm` (#338): the anchor rides in the head so pressing `a` always shows,
     // the state a keypress just changed follows, and the cwd is the context that gives way.
     // The pane name is the one part of the head a reader can re-derive from `[1]` and the
@@ -1830,12 +1830,10 @@ mod tests {
         state.locals = vec![
             LocalCandidate {
                 path: PathBuf::from("/tmp/a.json"),
-                pinned: false,
                 modified: None,
             },
             LocalCandidate {
                 path: PathBuf::from("/tmp/b.json"),
-                pinned: false,
                 modified: None,
             },
         ];
@@ -1885,7 +1883,6 @@ mod tests {
         let mut state = initial_state();
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/x"),
-            pinned: false,
             modified: None,
         }];
         state.focus = FocusPane::Local;
@@ -1913,7 +1910,6 @@ mod tests {
         let mut state = initial_state();
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/x"),
-            pinned: false,
             modified: None,
         }];
         state.focus = FocusPane::Gist;
@@ -1925,7 +1921,6 @@ mod tests {
         let mut state = initial_state();
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/x"),
-            pinned: false,
             modified: None,
         }];
         state.focus = FocusPane::Gist;
@@ -1963,7 +1958,6 @@ mod tests {
         let mut state = initial_state();
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/config"),
-            pinned: false,
             modified: None,
         }];
         state.gist_catalog.owned = vec![GistFile {
@@ -1984,7 +1978,6 @@ mod tests {
         let mut state = initial_state();
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/settings.json"),
-            pinned: false,
             modified: None,
         }];
         state.gist_catalog.owned = vec![GistFile {
@@ -2011,7 +2004,6 @@ mod tests {
         let mut state = initial_state();
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/config"),
-            pinned: false,
             modified: None,
         }];
         assert!(matches!(
@@ -2031,7 +2023,6 @@ mod tests {
         let mut state = initial_state();
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/config.toml"),
-            pinned: false,
             modified: None,
         }];
         assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
@@ -2080,7 +2071,6 @@ mod tests {
         let mut state = initial_state();
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("a.txt"),
-            pinned: true,
             modified: None,
         }];
         state.gist_catalog.owned = vec![GistFile::fixture("g1", "a.txt")];
@@ -2243,7 +2233,6 @@ mod tests {
         state.gist_catalog.user_login = Some("me".into());
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/cwd/a.txt"),
-            pinned: false,
             modified: None,
         }];
         state.gist_catalog.owned = vec![GistFile {

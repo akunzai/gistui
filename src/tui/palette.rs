@@ -464,7 +464,6 @@ mod tests {
         state.gist_catalog.user_login = Some("me".into());
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("a.txt"),
-            pinned: false,
             modified: None,
         }];
         state.gist_catalog.owned = vec![GistFile {

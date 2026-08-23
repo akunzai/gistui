@@ -129,7 +129,6 @@ pub(super) fn state_with_local_paths(paths: &[&str]) -> AppState {
         .iter()
         .map(|p| LocalCandidate {
             path: PathBuf::from(p),
-            pinned: false,
             modified: None,
         })
         .collect();
@@ -141,12 +140,10 @@ pub(super) fn list_state_with_matches() -> AppState {
     state.locals = vec![
         LocalCandidate {
             path: std::path::PathBuf::from("/cwd/settings.json"),
-            pinned: false,
             modified: None,
         },
         LocalCandidate {
             path: std::path::PathBuf::from("/cwd/other.txt"),
-            pinned: false,
             modified: None,
         },
     ];
@@ -196,7 +193,6 @@ pub(super) fn state_with_selection() -> AppState {
     let mut state = initial_state();
     state.locals = vec![LocalCandidate {
         path: PathBuf::from("/tmp/settings.json"),
-        pinned: false,
         modified: None,
     }];
     state.gist_catalog.owned = vec![GistFile {
@@ -213,7 +209,6 @@ pub(super) fn state_ready_to_create() -> AppState {
     let mut state = initial_state();
     state.locals = vec![LocalCandidate {
         path: PathBuf::from("/tmp/config.toml"),
-        pinned: false,
         modified: None,
     }];
     state
