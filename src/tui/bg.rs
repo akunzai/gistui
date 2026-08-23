@@ -455,7 +455,7 @@ pub(super) fn edit_local_path(
         return Ok(());
     };
 
-    if state.mouse_enabled {
+    if state.settings.mouse_enabled() {
         execute!(terminal.backend_mut(), DisableMouseCapture)?;
     }
     disable_raw_mode()?;
@@ -466,7 +466,7 @@ pub(super) fn edit_local_path(
         .status();
     enable_raw_mode()?;
     execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-    if state.mouse_enabled {
+    if state.settings.mouse_enabled() {
         execute!(terminal.backend_mut(), EnableMouseCapture)?;
     }
     terminal.clear()?;
@@ -609,7 +609,7 @@ pub(super) fn edit_upload_buffer(
         return Ok(());
     }
 
-    if state.mouse_enabled {
+    if state.settings.mouse_enabled() {
         execute!(terminal.backend_mut(), DisableMouseCapture)?;
     }
     disable_raw_mode()?;
@@ -620,7 +620,7 @@ pub(super) fn edit_upload_buffer(
         .status();
     enable_raw_mode()?;
     execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-    if state.mouse_enabled {
+    if state.settings.mouse_enabled() {
         execute!(terminal.backend_mut(), EnableMouseCapture)?;
     }
     terminal.clear()?;
@@ -732,7 +732,7 @@ pub(super) fn refresh_locals(
         &state.pinned,
         matches!(scan_mode, LocalScanMode::Active) && state.local_recursive,
         &state.skip_dirs,
-        state.scan_depth,
+        state.settings.scan_depth(),
     ) {
         state.locals = locals;
         state.local_index = selected
@@ -745,65 +745,17 @@ pub(super) fn refresh_locals(
     }
 }
 
-/// Persist the diff-context toggle (`diff_show_full`) to the config file, leaving the
-/// configured `diff_context` radius untouched. IO boundary, called from `run_loop`.
-pub(super) fn persist_theme(state: &mut AppState) {
-    let result = crate::config::config_path().and_then(|path| {
-        let mut config = crate::config::load_config(&path)?;
-        config.theme = state.theme_choice;
-        crate::config::save_config(&path, &config)?;
-        Ok(())
-    });
-    let name = match state.theme_choice {
-        crate::config::ThemeChoice::Dark => "dark",
-        crate::config::ThemeChoice::Light => "light",
-    };
-    match result {
-        Ok(()) => state.set_status(format!("Theme: {name}")),
-        Err(error) => state.set_status(format!("save config failed: {error}")),
-    }
-}
-
-pub(super) fn persist_diff_context(state: &mut AppState) {
-    let result = crate::config::config_path().and_then(|path| {
-        let mut config = crate::config::load_config(&path)?;
-        config.diff_show_full = state.diff_show_full;
-        crate::config::save_config(&path, &config)?;
-        Ok(())
-    });
-    match result {
-        Ok(()) if state.diff_show_full => state.set_status("Diff context: full file"),
-        Ok(()) => state.set_status(format!("Diff context: {} lines", state.diff_context)),
-        Err(error) => state.set_status(format!("save config failed: {error}")),
-    }
-}
-
 /// Persist Settings-screen fields after a user change (issue #227). Creates config.toml
 /// only when a value actually changed (opening Config never calls this).
-pub(super) fn persist_settings(state: &mut AppState) {
+pub(super) fn persist_settings(state: &mut AppState, success_message: String) {
     let result = crate::config::config_path().and_then(|path| {
         let mut config = crate::config::load_config(&path)?;
-        config.theme = state.theme_choice;
-        config.mouse = state.config_mouse;
-        config.check_updates = state.config_check_updates;
-        config.ignore_trailing_newline = state.ignore_trailing_newline;
-        config.scan_depth = state.scan_depth;
-        config.diff_context = state.diff_context;
+        state.settings.apply_to_config(&mut config);
         crate::config::save_config(&path, &config)?;
         Ok(())
     });
     match result {
-        Ok(()) => {
-            let field = ConfigField::ALL
-                .get(state.config().map(|c| c.index).unwrap_or(0))
-                .copied()
-                .unwrap_or(ConfigField::Theme);
-            state.set_status(format!(
-                "{}: {}",
-                field.label(),
-                state.config_field_value(field)
-            ));
-        }
+        Ok(()) => state.set_status(success_message),
         Err(error) => state.set_status(format!("save config failed: {error}")),
     }
 }
@@ -846,7 +798,6 @@ pub(super) fn pin_paths(
         Ok(config) => {
             state.pinned = config.pinned;
             state.skip_dirs = config.skip_dirs;
-            state.scan_depth = config.scan_depth;
             state.mark_pin_sync_cache_dirty();
             state.set_status(format!("Pinned {} <-> {}", local_path.display(), filename));
         }
@@ -863,7 +814,6 @@ pub(super) fn unpin_path(state: &mut AppState, local_path: &std::path::Path) {
         Ok(config) => {
             state.pinned = config.pinned;
             state.skip_dirs = config.skip_dirs;
-            state.scan_depth = config.scan_depth;
             state.mark_pin_sync_cache_dirty();
             state.set_status(format!(
                 "Unpinned {}",
@@ -888,7 +838,6 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
         Ok(config) => {
             state.pinned = config.pinned;
             state.skip_dirs = config.skip_dirs;
-            state.scan_depth = config.scan_depth;
             state.mark_pin_sync_cache_dirty();
             let len = state.visible_pin_indices().len();
             if let Some(pins) = state.pins_mut() {
@@ -1025,7 +974,7 @@ impl Jobs {
             state.pinned.clone(),
             state.local_recursive,
             state.skip_dirs.clone(),
-            state.scan_depth,
+            state.settings.scan_depth(),
         ));
     }
 

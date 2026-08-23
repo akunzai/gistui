@@ -145,7 +145,13 @@ pub(crate) fn render_preview_vm(
     layout: &mut MouseFrame,
 ) {
     let area = frame.area();
-    let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
+    let area = crate::tui::render_top_bar(
+        frame,
+        area,
+        &state.settings.theme(),
+        chrome.mouse_enabled,
+        layout,
+    );
     let footer_lines = if preview.footer_colored {
         1
     } else {
@@ -165,20 +171,20 @@ pub(crate) fn render_preview_vm(
         ))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .style(state.theme.base_style())
+        .style(state.settings.theme().base_style())
         .padding(Padding::horizontal(1));
     let line_spans = preview_line_spans(
         &preview.body,
         preview.syntax_highlight,
         preview.ext.as_deref(),
-        &state.theme,
+        &state.settings.theme(),
     );
     let total_lines = line_spans.len();
     let paragraph = if preview.wrap {
         // Wrapping needs the full line set; vertical scroll goes through Paragraph (no hscroll).
         let body = Text::from(line_spans.into_iter().map(Line::from).collect::<Vec<_>>());
         Paragraph::new(body)
-            .style(state.theme.base_style())
+            .style(state.settings.theme().base_style())
             .scroll((preview.scroll, 0))
             .wrap(Wrap { trim: false })
             .block(block)
@@ -191,7 +197,7 @@ pub(crate) fn render_preview_vm(
             .skip(preview.scroll as usize)
             .collect();
         Paragraph::new(Text::from(visible))
-            .style(state.theme.base_style())
+            .style(state.settings.theme().base_style())
             .block(block)
     };
     frame.render_widget(paragraph, chunks[0]);
@@ -207,10 +213,10 @@ pub(crate) fn render_preview_vm(
         &preview.footer,
         preview.footer_colored,
         crate::tui::keymap::for_screen(&state.screen),
-        &state.theme,
+        &state.settings.theme(),
     );
     if chrome.mouse_enabled {
-        let close = crate::tui::render_close_button(frame, area, &state.theme);
+        let close = crate::tui::render_close_button(frame, area, &state.settings.theme());
         layout.register(HitTarget::Close, close);
     }
 }

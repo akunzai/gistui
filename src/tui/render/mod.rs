@@ -42,7 +42,7 @@ pub(super) fn render(
     // Paint the full canvas so every unfilled cell uses the theme background (no-op for dark
     // theme where bg=Reset, effective for light theme which sets a grey canvas).
     frame.render_widget(
-        Block::default().style(state.theme.base_style()),
+        Block::default().style(state.settings.theme().base_style()),
         frame.area(),
     );
     // Pure presentation seam (issues #241 / #250): every screen paints from the view model.
@@ -50,7 +50,7 @@ pub(super) fn render(
     let vm = super::build_view_model(state);
     render_screen_vm_with_feedback(frame, state, &vm.screen, &vm.chrome, layout, feedback);
     if let Some(ref msg) = vm.chrome.bg_task_msg {
-        render_loading_overlay(frame, msg, vm.chrome.spinner_frame, &state.theme);
+        render_loading_overlay(frame, msg, vm.chrome.spinner_frame, &state.settings.theme());
     }
 }
 

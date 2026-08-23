@@ -370,7 +370,7 @@ pub struct HelpIndexItemVm {
 /// Pure chrome facts shared across screens (and palette backgrounds).
 pub(crate) fn build_chrome(state: &AppState) -> ChromeVm {
     ChromeVm {
-        mouse_enabled: state.mouse_enabled,
+        mouse_enabled: state.settings.mouse_enabled(),
         bg_task_msg: state.bg_task_msg.clone(),
         spinner_frame: state.spinner_frame,
     }

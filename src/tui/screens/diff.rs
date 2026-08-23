@@ -4,7 +4,7 @@
 use crate::tui::bg::{record_pin_sync, refresh_locals, LocalScanMode, LoopFlow};
 use crate::tui::render::{diff_labels, preview_diff_text};
 use crate::tui::view_model::{ChromeVm, DiffVm};
-use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, PendingAction};
+use crate::tui::{AppState, ConfigField, HelpTopic, HitTarget, KeyOutcome, PendingAction};
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
@@ -85,11 +85,21 @@ impl AppState {
             // Toggle between the configured context radius and the full file; the line
             // count changes, so reset the vertical scroll. The choice is persisted.
             KeyCode::Char('c') => {
-                self.diff_show_full = !self.diff_show_full;
+                let change = self
+                    .settings
+                    .adjust(ConfigField::DiffShowFull, true)
+                    .unwrap();
                 if let Some(body) = self.scroll_body_mut() {
                     body.scroll = 0;
                 }
-                return KeyOutcome::PersistDiffContext;
+                return KeyOutcome::PersistSettings {
+                    effect: change.effect,
+                    success_message: if self.settings.diff_show_full() {
+                        "Diff context: full file".into()
+                    } else {
+                        format!("Diff context: {} lines", self.settings.diff_context())
+                    },
+                };
             }
             // Soft-wrap long lines instead of horizontal scrolling; reset the now-meaningless
             // horizontal offset so wrapped lines start at column 0.
@@ -155,10 +165,10 @@ pub(crate) fn diff_title(state: &AppState) -> String {
 /// on those destination screens (which read `state.status`), so no status is set while on Diff.
 /// Footer hints for `Screen::Diff` (pure for tests).
 pub(crate) fn diff_footer(state: &AppState) -> String {
-    let context = if state.diff_show_full {
+    let context = if state.settings.diff_show_full() {
         "c context [full]".to_string()
     } else {
-        format!("c context [{}]", state.diff_context)
+        format!("c context [{}]", state.settings.diff_context())
     };
     // When wrapping, horizontal scroll (←→) is meaningless — drop it from the hint.
     let scroll = if state.diff_wrap {
@@ -222,7 +232,13 @@ pub(crate) fn render_diff_vm(
     layout: &mut crate::tui::MouseFrame,
 ) {
     let area = frame.area();
-    let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
+    let area = crate::tui::render_top_bar(
+        frame,
+        area,
+        &state.settings.theme(),
+        chrome.mouse_enabled,
+        layout,
+    );
     // Hint lines are trimmed to one row (#342); they never wrap.
     let footer_lines = 1;
     let chunks = Layout::default()
@@ -230,7 +246,7 @@ pub(crate) fn render_diff_vm(
         .constraints([Constraint::Min(5), Constraint::Length(footer_lines)])
         .split(area);
 
-    crate::tui::render_diff_pane_vm(frame, chunks[0], diff, &state.theme);
+    crate::tui::render_diff_pane_vm(frame, chunks[0], diff, &state.settings.theme());
 
     crate::tui::render_footer(
         frame,
@@ -239,10 +255,10 @@ pub(crate) fn render_diff_vm(
         &diff.footer,
         true,
         crate::tui::keymap::for_screen(&state.screen),
-        &state.theme,
+        &state.settings.theme(),
     );
     if chrome.mouse_enabled {
-        let close = crate::tui::render_close_button(frame, area, &state.theme);
+        let close = crate::tui::render_close_button(frame, area, &state.settings.theme());
         layout.register(HitTarget::Close, close);
     }
 }
@@ -277,12 +293,12 @@ pub(crate) fn on_preview_diff(
                         &local_content,
                         &gist_label,
                         &remote,
-                        state.ignore_trailing_newline,
+                        state.settings.ignore_trailing_newline(),
                     );
                     let identical = crate::diff::content_eq(
                         &local_content,
                         &remote,
-                        state.ignore_trailing_newline,
+                        state.settings.ignore_trailing_newline(),
                     );
                     state.open_deferred(
                         entry,
@@ -349,12 +365,12 @@ pub(crate) fn on_download_selected(
                             &local_content,
                             &gist_label,
                             &remote,
-                            state.ignore_trailing_newline,
+                            state.settings.ignore_trailing_newline(),
                         );
                         let identical = crate::diff::content_eq(
                             &local_content,
                             &remote,
-                            state.ignore_trailing_newline,
+                            state.settings.ignore_trailing_newline(),
                         );
                         state.open_deferred(
                             entry,
@@ -423,7 +439,7 @@ pub(crate) fn on_revision_diff(
                 &old_content,
                 &new_label,
                 &new_content,
-                state.ignore_trailing_newline,
+                state.settings.ignore_trailing_newline(),
             );
             let identical = old_content == new_content;
             // `enter_diff` (via `enter`) parks the live Revisions screen so Esc
@@ -519,21 +535,26 @@ mod tests {
     #[test]
     fn diff_context_toggle_flips_effective_radius() {
         let mut state = initial_state();
-        state.diff_context = 3;
         assert_eq!(state.effective_diff_context(), Some(3));
 
         // Pressing `c` in the diff view flips to full view and resets the scroll.
         state.screen = Screen::Diff(Box::default());
         set_diff_scroll(&mut state, 12);
         let outcome = state.handle_key(KeyCode::Char('c'));
-        assert_eq!(outcome, KeyOutcome::PersistDiffContext);
-        assert!(state.diff_show_full);
+        assert_eq!(
+            outcome,
+            KeyOutcome::PersistSettings {
+                effect: None,
+                success_message: "Diff context: full file".into(),
+            }
+        );
+        assert!(state.settings.diff_show_full());
         assert_eq!(state.scroll_body().expect("Diff ScrollBody").scroll, 0);
         assert_eq!(state.effective_diff_context(), None);
 
         // Pressing it again returns to the configured radius.
         state.handle_key(KeyCode::Char('c'));
-        assert!(!state.diff_show_full);
+        assert!(!state.settings.diff_show_full());
         assert_eq!(state.effective_diff_context(), Some(3));
     }
 

@@ -92,12 +92,14 @@ impl AppState {
             && !self.is_any_filtering()
             && !self.editing_description
         {
-            self.theme_choice = match self.theme_choice {
-                crate::config::ThemeChoice::Dark => crate::config::ThemeChoice::Light,
-                crate::config::ThemeChoice::Light => crate::config::ThemeChoice::Dark,
+            let change = self.settings.adjust(ConfigField::Theme, true).unwrap();
+            return KeyOutcome::PersistSettings {
+                effect: change.effect,
+                success_message: format!(
+                    "Theme: {}",
+                    self.settings.field_value(ConfigField::Theme)
+                ),
             };
-            self.theme = Theme::for_choice(self.theme_choice);
-            return KeyOutcome::ThemeToggle;
         }
         if let Some(action) = nav_action(code, modifiers) {
             if self.apply_navigation(action) {
@@ -135,36 +137,7 @@ impl AppState {
 
     /// Value string shown for a Config field row.
     pub(crate) fn config_field_value(&self, field: ConfigField) -> String {
-        match field {
-            ConfigField::Theme => match self.theme_choice {
-                crate::config::ThemeChoice::Dark => "dark".into(),
-                crate::config::ThemeChoice::Light => "light".into(),
-            },
-            ConfigField::Mouse => {
-                if self.config_mouse {
-                    "on".into()
-                } else {
-                    "off".into()
-                }
-            }
-            ConfigField::CheckUpdates => {
-                if self.config_check_updates {
-                    "on".into()
-                } else {
-                    "off".into()
-                }
-            }
-            ConfigField::DiffShowFull => if self.diff_show_full { "on" } else { "off" }.into(),
-            ConfigField::IgnoreTrailingNewline => {
-                if self.ignore_trailing_newline {
-                    "on".into()
-                } else {
-                    "off".into()
-                }
-            }
-            ConfigField::ScanDepth => self.scan_depth.to_string(),
-            ConfigField::DiffContext => self.diff_context.to_string(),
-        }
+        self.settings.field_value(field)
     }
 
     /// Arrow / hjkl / Ctrl+b/f navigation. Returns true when the key was consumed.
@@ -732,10 +705,22 @@ mod tests {
     fn shift_t_toggles_theme() {
         use crossterm::event::KeyModifiers;
         let mut state = initial_state();
-        assert_eq!(state.theme_choice, crate::config::ThemeChoice::Dark);
+        assert_eq!(
+            state.settings.theme_choice(),
+            crate::config::ThemeChoice::Dark
+        );
         let outcome = state.handle_key_with(KeyCode::Char('T'), KeyModifiers::SHIFT);
-        assert_eq!(outcome, KeyOutcome::ThemeToggle);
-        assert_eq!(state.theme_choice, crate::config::ThemeChoice::Light);
+        assert_eq!(
+            outcome,
+            KeyOutcome::PersistSettings {
+                effect: None,
+                success_message: "Theme: light".into(),
+            }
+        );
+        assert_eq!(
+            state.settings.theme_choice(),
+            crate::config::ThemeChoice::Light
+        );
     }
 
     #[test]

@@ -438,7 +438,13 @@ pub(crate) fn render_help_vm(
     layout: &mut MouseFrame,
 ) {
     let area = frame.area();
-    let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
+    let area = crate::tui::render_top_bar(
+        frame,
+        area,
+        &state.settings.theme(),
+        chrome.mouse_enabled,
+        layout,
+    );
     match &help.mode {
         HelpModeVm::Index { items, selected } => {
             let list_items: Vec<ListItem> = items
@@ -454,14 +460,14 @@ pub(crate) fn render_help_vm(
                         ))
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
-                        .style(state.theme.base_style())
+                        .style(state.settings.theme().base_style())
                         .padding(Padding::horizontal(1)),
                 )
-                .style(state.theme.base_style())
+                .style(state.settings.theme().base_style())
                 .highlight_style(
                     Style::default()
-                        .bg(state.theme.accent)
-                        .fg(state.theme.fg_on_accent)
+                        .bg(state.settings.theme().accent)
+                        .fg(state.settings.theme().fg_on_accent)
                         .add_modifier(Modifier::BOLD),
                 )
                 .highlight_symbol(crate::tui::render::list_pane::LIST_HIGHLIGHT_SYMBOL);
@@ -505,7 +511,7 @@ pub(crate) fn render_help_vm(
                                     Span::styled(
                                         repo.to_string(),
                                         Style::default()
-                                            .fg(state.theme.fg)
+                                            .fg(state.settings.theme().fg)
                                             .add_modifier(Modifier::UNDERLINED),
                                     ),
                                 ])
@@ -517,14 +523,14 @@ pub(crate) fn render_help_vm(
                 .collect();
             frame.render_widget(
                 Paragraph::new(Text::from(body_lines))
-                    .style(state.theme.base_style())
+                    .style(state.settings.theme().base_style())
                     .scroll((*scroll, 0))
                     .block(
                         Block::default()
                             .title(crate::tui::render::fit_block_title(title, area.width))
                             .borders(Borders::ALL)
                             .border_type(BorderType::Rounded)
-                            .style(state.theme.base_style())
+                            .style(state.settings.theme().base_style())
                             .padding(Padding::horizontal(1)),
                     ),
                 area,
@@ -547,7 +553,7 @@ pub(crate) fn render_help_vm(
         }
     }
     if chrome.mouse_enabled {
-        let close = crate::tui::render_close_button(frame, area, &state.theme);
+        let close = crate::tui::render_close_button(frame, area, &state.settings.theme());
         layout.register(HitTarget::Close, close);
     }
 }

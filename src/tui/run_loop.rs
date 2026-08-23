@@ -15,7 +15,7 @@ pub(super) fn run_loop(
     no_update_check: bool,
 ) -> Result<()> {
     let mut state = load_startup_state(no_mouse, no_update_check)?;
-    if state.mouse_enabled {
+    if state.settings.mouse_enabled() {
         execute!(terminal.backend_mut(), EnableMouseCapture)?;
     }
     let mut mouse_layout = MouseFrame::default();
@@ -27,7 +27,7 @@ pub(super) fn run_loop(
     let update_check_path = crate::update_check::state_path().ok();
     let mut update_rx: Option<std::sync::mpsc::Receiver<crate::update_check::UpdateCheckOutcome>> =
         None;
-    if state.update_check_enabled {
+    if state.settings.update_check_enabled() {
         let due = update_check_path.as_ref().is_none_or(|path| {
             crate::update_check::should_check(
                 crate::update_check::load_state(path).last_check,
@@ -95,7 +95,7 @@ pub(super) fn run_loop(
                 }
                 state.handle_key_with(key.code, key.modifiers)
             }
-            Event::Mouse(m) if state.mouse_enabled => {
+            Event::Mouse(m) if state.settings.mouse_enabled() => {
                 if state.bg_task_msg.is_some() {
                     continue; // ignore mouse while a background task overlay is up, mirroring keys
                 }

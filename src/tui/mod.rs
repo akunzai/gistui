@@ -139,58 +139,6 @@ impl Screen {
     );
 }
 
-/// Fields shown on [`Screen::Config`] in order (issue #227).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigField {
-    Theme,
-    Mouse,
-    CheckUpdates,
-    DiffShowFull,
-    IgnoreTrailingNewline,
-    ScanDepth,
-    DiffContext,
-}
-
-impl ConfigField {
-    pub const ALL: [ConfigField; 7] = [
-        ConfigField::Theme,
-        ConfigField::Mouse,
-        ConfigField::CheckUpdates,
-        ConfigField::DiffShowFull,
-        ConfigField::IgnoreTrailingNewline,
-        ConfigField::ScanDepth,
-        ConfigField::DiffContext,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            ConfigField::Theme => "Theme",
-            ConfigField::Mouse => "Mouse support",
-            ConfigField::CheckUpdates => "Check for updates",
-            ConfigField::DiffShowFull => "Show full diff",
-            ConfigField::IgnoreTrailingNewline => "Ignore trailing newline",
-            ConfigField::ScanDepth => "Recursive scan depth",
-            ConfigField::DiffContext => "Diff context lines",
-        }
-    }
-
-    pub fn is_numeric(self) -> bool {
-        matches!(self, ConfigField::ScanDepth | ConfigField::DiffContext)
-    }
-
-    pub fn description(self) -> &'static str {
-        match self {
-            ConfigField::Theme => "terminal colours",
-            ConfigField::Mouse => "click and wheel input",
-            ConfigField::CheckUpdates => "daily GitHub version check",
-            ConfigField::DiffShowFull => "open Diff expanded",
-            ConfigField::IgnoreTrailingNewline => "hide newline-only diffs",
-            ConfigField::ScanDepth => "directory levels to scan",
-            ConfigField::DiffContext => "unchanged lines around edits",
-        }
-    }
-}
-
 /// Settings-screen state — carried on [`Screen::Config`] (issue #242).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ConfigState {
@@ -589,13 +537,14 @@ pub enum KeyOutcome {
         entry: DeferredEntry,
         index: usize,
     },
-    PersistDiffContext,
     CopyGistUrl {
         gist_id: String,
     },
     CopyPreviewContent,
-    ThemeToggle,
-    PersistSettings,
+    PersistSettings {
+        effect: Option<SettingsEffect>,
+        success_message: String,
+    },
     FetchRevisions {
         gist_id: String,
     },
@@ -856,14 +805,7 @@ pub struct AppState {
     /// Soft-wrap long lines in the diff view instead of horizontal scrolling (`w` toggles;
     /// session-scoped, mirrors `preview_wrap`).
     pub diff_wrap: bool,
-    /// Unchanged context lines kept around each change in the diff view (from config).
-    pub diff_context: u32,
-    /// When true the diff view shows the full file; when false it collapses to
-    /// `diff_context` lines. Toggled with `c` and persisted to config.
-    pub diff_show_full: bool,
-    /// Treat a file-final-newline-only delta as no change in the diff view and the
-    /// overwrite-confirm gate (from config; default `true`).
-    pub ignore_trailing_newline: bool,
+    pub settings: RuntimeSettings,
     pub cwd: PathBuf,
     pub status: Option<String>,
     pub loading: bool,
@@ -878,20 +820,6 @@ pub struct AppState {
     /// Syntax-highlight file content in the preview and diff-context lines (issue #69).
     /// Defaults on; `load_startup_state` turns it off when `NO_COLOR` is set in the environment.
     pub syntax_highlight: bool,
-    /// Config preference for mouse (before CLI force-off). Edited on [`Screen::Config`].
-    pub config_mouse: bool,
-    /// Whether mouse capture is active this session (config `mouse` AND-NOT `--no-mouse`).
-    /// Gates the `Event::Mouse` branch and the close-button rendering.
-    pub mouse_enabled: bool,
-    /// CLI `--no-mouse` for the process (re-applied when config mouse toggles).
-    pub no_mouse_cli: bool,
-    /// Config preference for daily update checks. Edited on [`Screen::Config`].
-    pub config_check_updates: bool,
-    /// Whether the startup update check runs this session (config `check_updates` AND-NOT
-    /// `--no-update-check`).
-    pub update_check_enabled: bool,
-    /// CLI `--no-update-check` for the process.
-    pub no_update_check_cli: bool,
     /// Newer release version found by the background check, if any (footer hint on the List).
     pub update_available: Option<String>,
     /// How this binary was installed — resolved once at startup so the update hint can show
@@ -900,7 +828,6 @@ pub struct AppState {
     pub(crate) gist_content_cache: crate::lru::LruCache<(String, String), String>,
     pub local_recursive: bool,
     pub skip_dirs: Vec<String>,
-    pub scan_depth: u32,
     pub local_scanning: bool,
     /// Generation token for the in-flight local scan. Bumped on each
     /// [`Self::begin_local_scan`]; absorb ignores results with a mismatched id so a
@@ -924,11 +851,6 @@ pub struct AppState {
     /// Monotonic tick advanced once per event-loop iteration (~150ms); drives the in-progress
     /// spinner animation. Wraps freely — only its value modulo the frame count is observed.
     pub spinner_frame: usize,
-    /// Active theme selection (persisted to config when toggled with `T`).
-    pub theme_choice: crate::config::ThemeChoice,
-    /// Resolved colour palette for the current theme choice (from config).
-    pub theme: Theme,
-
     /// Presentation cache for the Pins list: sync status + mtimes, filled by
     /// [`Self::refresh_pin_sync_cache`] (impure). The pure view-model builder and Pins paint
     /// read only this cache — never `fs::read` / hash on the draw path (issue #241).
@@ -1254,7 +1176,7 @@ impl AppState {
             &remote,
             &local_label,
             &local_content,
-            self.ignore_trailing_newline,
+            self.settings.ignore_trailing_newline(),
         );
         if let Some(body) = self.scroll_body_mut() {
             body.text = diff;
@@ -2044,11 +1966,7 @@ impl AppState {
     /// Context radius to render the diff with: `None` shows the full file, `Some(n)`
     /// collapses unchanged regions to `n` lines around each change.
     pub fn effective_diff_context(&self) -> Option<usize> {
-        if self.diff_show_full {
-            None
-        } else {
-            Some(self.diff_context as usize)
-        }
+        self.settings.effective_diff_context()
     }
 }
 
@@ -2082,9 +2000,7 @@ pub fn initial_state() -> AppState {
         filter_query: TextInput::default(),
         local_filter_query: TextInput::default(),
         diff_wrap: false,
-        diff_context: 3,
-        diff_show_full: false,
-        ignore_trailing_newline: true,
+        settings: RuntimeSettings::default(),
         cwd: PathBuf::from("."),
         status: None,
         loading: false,
@@ -2092,12 +2008,6 @@ pub fn initial_state() -> AppState {
         revisions_stale: None,
         preview_wrap: false,
         syntax_highlight: true,
-        config_mouse: true,
-        mouse_enabled: true,
-        no_mouse_cli: false,
-        config_check_updates: true,
-        update_check_enabled: true,
-        no_update_check_cli: false,
         update_available: None,
         install_method: crate::upgrade::InstallMethod::Standalone,
         // Bound the in-memory preview cache so browsing many/large gists can't grow unbounded;
@@ -2105,7 +2015,6 @@ pub fn initial_state() -> AppState {
         gist_content_cache: crate::lru::LruCache::new(64),
         local_recursive: false,
         skip_dirs: crate::config::AppConfig::default().skip_dirs,
-        scan_depth: crate::config::AppConfig::default().scan_depth,
         local_scanning: false,
         local_scan_generation: 0,
 
@@ -2117,8 +2026,6 @@ pub fn initial_state() -> AppState {
         upload: UploadState::default(),
         nav_stack: Vec::new(),
         spinner_frame: 0,
-        theme_choice: crate::config::ThemeChoice::Dark,
-        theme: Theme::DARK,
         pin_sync_cache: Vec::new(),
         pin_sync_cache_dirty: true,
     }
@@ -2130,27 +2037,15 @@ pub fn load_startup_state(no_mouse: bool, no_update_check: bool) -> Result<AppSt
     let config = crate::config::load_config(&config_path)?;
     let cwd = std::env::current_dir()?;
 
+    state.settings = RuntimeSettings::from_config(&config, no_mouse, no_update_check);
     state.pinned = config.pinned;
     state.mark_pin_sync_cache_dirty();
     state.skip_dirs = config.skip_dirs;
-    state.scan_depth = config.scan_depth;
-    state.diff_context = config.diff_context;
-    state.diff_show_full = config.diff_show_full;
-    state.ignore_trailing_newline = config.ignore_trailing_newline;
-    state.theme_choice = config.theme;
-    state.theme = Theme::for_choice(config.theme);
     // Honour NO_COLOR for the syntax-highlight feature only (existing semantic colours stay).
     state.syntax_highlight = std::env::var_os("NO_COLOR").is_none();
-    state.config_mouse = config.mouse;
-    state.no_mouse_cli = no_mouse;
-    // `--no-mouse` / `--no-update-check` force off; no flag forces on (edit config instead).
-    state.mouse_enabled = config.mouse && !no_mouse;
-    state.config_check_updates = config.check_updates;
-    state.no_update_check_cli = no_update_check;
-    state.update_check_enabled = config.check_updates && !no_update_check;
     // Surface a previously-seen newer release immediately (even when the daily check is
     // throttled), so the hint persists across launches without re-hitting the network.
-    if state.update_check_enabled {
+    if state.settings.update_check_enabled() {
         if let Ok(exe) = std::env::current_exe() {
             state.install_method = crate::upgrade::detect_install_method(&exe);
         }
@@ -2165,7 +2060,7 @@ pub fn load_startup_state(no_mouse: bool, no_update_check: bool) -> Result<AppSt
         &state.pinned,
         false,
         &state.skip_dirs,
-        state.scan_depth,
+        state.settings.scan_depth(),
     )?;
     state.cwd = cwd;
     // Start focused on the gist pane: the common flow is to pick a gist and pull it
@@ -2235,6 +2130,8 @@ mod run_loop;
 use run_loop::run_loop;
 mod text_input;
 pub use text_input::{EditResult, TextInput};
+mod settings;
+pub use settings::{ConfigField, RuntimeSettings, SettingsEffect};
 mod theme;
 pub use theme::Theme;
 mod view_model;
@@ -2396,7 +2293,7 @@ mod tests {
 
     #[test]
     fn initial_state_enables_mouse_by_default() {
-        assert!(super::initial_state().mouse_enabled);
+        assert!(super::initial_state().settings.mouse_enabled());
     }
 
     #[test]

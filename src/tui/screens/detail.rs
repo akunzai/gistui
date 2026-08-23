@@ -677,7 +677,13 @@ pub(crate) fn render_gist_detail_vm(
     feedback: &mut crate::tui::render::RenderFeedback,
 ) {
     let area = frame.area();
-    let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
+    let area = crate::tui::render_top_bar(
+        frame,
+        area,
+        &state.settings.theme(),
+        chrome.mouse_enabled,
+        layout,
+    );
     // Fixed 4-row header (borders + basic-info line + focus tabs); the active tab — the file
     // list or the comments, never both — fills the rest above the footer.
     let chunks = ratatui::layout::Layout::default()
@@ -694,16 +700,28 @@ pub(crate) fn render_gist_detail_vm(
         ])
         .split(area);
     if !detail.missing {
-        render_detail_header_vm(frame, chunks[0], detail, chrome, &state.theme, layout);
+        render_detail_header_vm(
+            frame,
+            chunks[0],
+            detail,
+            chrome,
+            &state.settings.theme(),
+            layout,
+        );
         match detail.focus {
-            DetailFocus::Files => {
-                render_gist_file_list_vm(frame, chunks[1], detail, chrome, &state.theme, layout)
-            }
+            DetailFocus::Files => render_gist_file_list_vm(
+                frame,
+                chunks[1],
+                detail,
+                chrome,
+                &state.settings.theme(),
+                layout,
+            ),
             DetailFocus::Comments => render_gist_comments_vm(
                 frame,
                 chunks[1],
                 &detail.comments,
-                &state.theme,
+                &state.settings.theme(),
                 layout,
                 feedback,
             ),
@@ -716,7 +734,7 @@ pub(crate) fn render_gist_detail_vm(
         &detail.footer,
         detail.footer_colored,
         crate::tui::keymap::for_screen(&state.screen),
-        &state.theme,
+        &state.settings.theme(),
     );
 
     let edit_modal = if let Some(input) = &detail.description_input {
@@ -729,8 +747,8 @@ pub(crate) fn render_gist_detail_vm(
             "",
             input,
             "",
-            state.theme.accent,
-            &state.theme,
+            state.settings.theme().accent,
+            &state.settings.theme(),
         ))
     } else {
         None
@@ -738,8 +756,11 @@ pub(crate) fn render_gist_detail_vm(
     if chrome.mouse_enabled {
         // When the edit-description modal is open, the close button belongs on it;
         // otherwise it sits on the full-screen detail view's top-right corner.
-        let close =
-            crate::tui::render_close_button(frame, edit_modal.unwrap_or(area), &state.theme);
+        let close = crate::tui::render_close_button(
+            frame,
+            edit_modal.unwrap_or(area),
+            &state.settings.theme(),
+        );
         layout.register(HitTarget::Close, close);
     }
 }
