@@ -406,8 +406,8 @@ mod tests {
             revision("aaa-FIRSTROW-marker"),
             revision("bbb-SECONDROW-marker"),
         ]);
-        rev.index = 1;
-        rev.hscroll = 8;
+        rev.cursor.index = 1;
+        rev.cursor.hscroll = 8;
 
         let text = render_state_size(&state, 40, 12);
         assert!(

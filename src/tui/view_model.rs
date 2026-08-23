@@ -1051,7 +1051,7 @@ mod tests {
                     deletions: 0,
                 },
             }]);
-            r.index = 0;
+            r.cursor.index = 0;
         }
         match build_view_model(&state).screen {
             ScreenVm::Revisions(r) => {

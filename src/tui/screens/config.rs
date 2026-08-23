@@ -1,11 +1,11 @@
 //! `Screen::Config` (Settings) — key handling, view-model, paint, and palette items
 //! colocated in one file (issue #287, Phase 2).
 
-use crate::tui::keys::{point_in, NavAction};
+use crate::tui::keys::NavAction;
 use crate::tui::view_model::{ChromeVm, ConfigVm};
 use crate::tui::{
     AppState, ConfigField, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneHit, PaneTarget,
-    Screen,
+    RowTarget, Screen,
 };
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -101,19 +101,15 @@ impl AppState {
     }
 
     /// Select the clicked field row on `Screen::Config`. Returns `true` when a row was hit.
-    pub(crate) fn click_select_config(&mut self, col: u16, row: u16, layout: &MouseFrame) -> bool {
+    pub(crate) fn click_select_config(&mut self, target: RowTarget) -> bool {
+        let Some(idx) = target.list_index() else {
+            return false;
+        };
         let Screen::Config(cfg) = &mut self.screen else {
             return false;
         };
-        if let Some(hit) = layout.pane(PaneTarget::List) {
-            if point_in(hit.rect, col, row) {
-                if let Some(idx) = hit.index_at(row, ConfigField::ALL.len()) {
-                    cfg.index = idx;
-                    return true;
-                }
-            }
-        }
-        false
+        cfg.index = idx;
+        true
     }
 }
 

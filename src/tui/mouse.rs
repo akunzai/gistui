@@ -54,6 +54,22 @@ pub enum RowTarget {
     Palette(usize),
 }
 
+impl RowTarget {
+    /// The row index for a hit on `PaneTarget::List`, or `None` for any other pane, a blank
+    /// area, or a Palette row. Shared by every single-list-pane screen's `click_select_*`
+    /// (Config, Help, Pins, Gists, Revisions; issue #408) — List and GistDetail have more than
+    /// one named pane and match `Pane { pane, index }` directly instead.
+    pub fn list_index(self) -> Option<usize> {
+        match self {
+            RowTarget::Pane {
+                pane: PaneTarget::List,
+                index,
+            } => index,
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HitTarget {
     PaletteClose,
@@ -111,6 +127,22 @@ impl MouseFrame {
     pub fn split(&self) -> Option<SplitHit> {
         self.hits.iter().rev().find_map(|hit| match hit {
             HitRegion::Rect(HitTarget::Divider(split), _) => Some(*split),
+            _ => None,
+        })
+    }
+
+    /// Resolve the semantic pane/index target at `(col, row)`, considering only
+    /// `register_pane` hits — never `Divider` or other whole-body `Rect` hits, which
+    /// register far wider than their visual grab zone and would otherwise mask every
+    /// row underneath them (issue #408). Panes never overlap, so at most one can match.
+    pub fn resolve_pane(&self, col: u16, row: u16) -> Option<RowTarget> {
+        self.hits.iter().rev().find_map(|hit| match *hit {
+            HitRegion::Pane(pane, hit, len) if point_in(hit.rect, col, row) => {
+                Some(RowTarget::Pane {
+                    pane,
+                    index: hit.index_at(row, len),
+                })
+            }
             _ => None,
         })
     }
@@ -219,6 +251,37 @@ mod tests {
             frame.resolve(2, 2),
             Some(HitTarget::Row(RowTarget::Palette(3)))
         );
+    }
+
+    #[test]
+    fn resolve_pane_ignores_a_wide_divider_rect_covering_the_pane() {
+        let mut frame = MouseFrame::default();
+        // Mirrors the List screen: Divider registers over the whole body, wider than its
+        // visual grab zone, while the pane occupies a narrower column within it.
+        frame.register(
+            HitTarget::Divider(SplitHit {
+                area: Rect::new(0, 0, 40, 10),
+                divider_x: 20,
+            }),
+            Rect::new(0, 0, 40, 10),
+        );
+        frame.register_pane(
+            PaneTarget::Local,
+            PaneHit {
+                rect: Rect::new(0, 0, 20, 10),
+                offset: 0,
+            },
+            3,
+        );
+        assert_eq!(
+            frame.resolve_pane(2, 1),
+            Some(RowTarget::Pane {
+                pane: PaneTarget::Local,
+                index: Some(0),
+            })
+        );
+        // Off every pane, even though it is still inside the Divider's wide rect.
+        assert_eq!(frame.resolve_pane(30, 1), None);
     }
 
     #[test]

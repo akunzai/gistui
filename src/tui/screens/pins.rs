@@ -1,12 +1,14 @@
 //! `Screen::Pins` — key handling, view-model, paint, and palette items colocated in one
 //! file (issue #287, Phase 2).
 
-use crate::tui::keys::{apply_list_cursor_nav, point_in, NavAction};
+use crate::tui::keys::{apply_list_cursor_nav, NavAction};
 use crate::tui::render::list_pane::render_list_pane;
 use crate::tui::view_model::{
     ChromeVm, ListPaneEmpty, ListPaneVm, PaneTitleVm, PinsVm, RowEmphasis, RowVm,
 };
-use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneTarget, Screen};
+use crate::tui::{
+    AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneTarget, RowTarget, Screen,
+};
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
@@ -143,19 +145,15 @@ impl AppState {
 
     /// Select the clicked row on `Screen::Pins`, moving the list cursor. Returns `true` when
     /// a row was hit.
-    pub(crate) fn click_select_pins(&mut self, col: u16, row: u16, layout: &MouseFrame) -> bool {
-        if let Some(hit) = layout.pane(PaneTarget::List) {
-            if point_in(hit.rect, col, row) {
-                let count = self.visible_pin_indices().len();
-                if let Some(idx) = hit.index_at(row, count) {
-                    if let Some(pins) = self.pins_mut() {
-                        pins.cursor.select(idx);
-                        return true;
-                    }
-                }
-            }
-        }
-        false
+    pub(crate) fn click_select_pins(&mut self, target: RowTarget) -> bool {
+        let Some(idx) = target.list_index() else {
+            return false;
+        };
+        let Some(pins) = self.pins_mut() else {
+            return false;
+        };
+        pins.cursor.select(idx);
+        true
     }
 }
 
@@ -650,6 +648,24 @@ mod tests {
         let key_out = by_key.handle_key(KeyCode::Enter);
         let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
         assert_eq!(by_mouse, key_out);
+    }
+
+    /// A click in the pane's blank area (below the rows) does nothing — Pins has no focus
+    /// concept to switch, unlike the dual-pane List screen (issue #408).
+    #[test]
+    fn pins_blank_pane_click_is_a_noop() {
+        let mut state = state_with_pins(&[("a.txt", "g1", "a.txt")]);
+        pins_mut(&mut state).cursor.select(0);
+        let hit = PaneHit {
+            rect: Rect::new(0, 0, 40, 10),
+            offset: 0,
+        };
+        let mut layout = MouseFrame::default();
+        layout.register_pane(PaneTarget::List, hit, 1);
+        // Row 5 is inside the pane rect but past the single rendered row.
+        let out = state.handle_mouse(MouseInput::Click { col: 5, row: 5 }, &layout);
+        assert_eq!(out, KeyOutcome::None);
+        assert_eq!(pins_ref(&state).cursor.index, 0);
     }
 
     #[test]

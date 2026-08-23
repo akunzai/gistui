@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of falling through to the row underneath.
 - Command-palette mouse clicks now execute the row under the pointer when disabled commands are
   visible above it.
+- Revision history now scrolls like every other list: moving the selection resets the horizontal
+  scroll, and scrolling right stops at the selected row's own text instead of running unbounded.
 
 ## [0.18.0] — 2026-08-21
 
