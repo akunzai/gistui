@@ -515,8 +515,11 @@ pub(crate) fn on_restore_revision_done(
     match result {
         Ok(()) => {
             state
-                .gist_content_cache
-                .remove(&(gist_id.clone(), filename.clone()));
+                .gist_content_store
+                .invalidate_file(&crate::domain::GistFileRef::id_name(
+                    gist_id.clone(),
+                    filename.clone(),
+                ));
             state.set_status(format!(
                 "Restored {filename} from old revision (new revision created)"
             ));
@@ -865,9 +868,8 @@ mod tests {
             },
             String::new(),
         );
-        state
-            .gist_content_cache
-            .insert(("g1".into(), "a.txt".into()), "stale".into());
+        let file = crate::domain::GistFileRef::id_name("g1", "a.txt");
+        state.gist_content_store.insert(&file, "stale".into());
 
         on_restore_revision_done(&mut state, Ok(()), "g1".into(), "a.txt".into());
 
@@ -882,9 +884,13 @@ mod tests {
             state.status.as_deref(),
             Some("Restored a.txt from old revision (new revision created)")
         );
-        assert!(state
-            .gist_content_cache
-            .get(&("g1".into(), "a.txt".into()))
-            .is_none());
+        assert!(matches!(
+            state.gist_content_store.lookup(
+                &state.gist_catalog,
+                file,
+                crate::tui::gist_content::FetchPolicy::PreferCache
+            ),
+            crate::tui::gist_content::ContentLookup::Miss(_)
+        ));
     }
 }

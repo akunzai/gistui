@@ -6,7 +6,7 @@ Index: [`AGENTS.md`](../../AGENTS.md). Source of truth for types lives in the mo
 
 | Kind | Modules | Testing |
 | --- | --- | --- |
-| **Pure** (unit-tested) | `domain`, `config`, `ranking`, `local`, `diff`, actions **plan/guard**, `tui::view_model`, `tui::list_ranking`, `tui::settings` | In-crate unit tests |
+| **Pure** (unit-tested) | `domain`, `config`, `ranking`, `local`, `diff`, actions **plan/guard**, `tui::view_model`, `tui::list_ranking`, `tui::settings`, `tui::gist_content` | In-crate unit tests |
 | **Impure** (thin IO) | `gh`, actions **execute**, `tui::run_loop` / `tui::bg` / `tui::gist_refresh` / `tui::pin_sync` | No live `gh`. Spawn/absorb is thin IO; action-job `on_*` apply handlers (screen modules / `gist_mutation.rs`) are unit-tested (#298, #383) |
 
 `build_view_model` (`@src/tui/view_model.rs`): `AppState` + pin-sync cache → presentation facts. Paint helpers apply theme/layout only — no business rules, FS, or network.
@@ -16,6 +16,17 @@ Index: [`AGENTS.md`](../../AGENTS.md). Source of truth for types lives in the mo
 - `RuntimeSettings` is the only runtime owner of the seven Settings-screen preferences and the `--no-mouse` / `--no-update-check` session overrides. Effective mouse and update-check values are derived; `Theme` is derived from `ThemeChoice`.
 - Settings-screen edits, global theme toggle, and Diff context toggle all call `RuntimeSettings::adjust`. Only a mouse change returns `SettingsEffect::SyncMouseCapture`; dispatch owns that terminal IO.
 - Persistence loads the current `AppConfig`, calls `apply_to_config`, then saves. That projection updates every runtime-owned field and leaves pins, skip directories, and other config data intact.
+
+## Gist content store (`@src/tui/gist_content.rs`, issue #406)
+
+- `GistContentStore` is the only owner of the 64-entry in-memory content LRU. Callers request
+  `PreferCache` for Preview or `Refresh` for every explicit/fresh fetch; both miss paths hydrate
+  a missing raw URL from `GistCatalog` before IO starts.
+- `Refresh` bypasses but does not evict last-known-good content. Only a successful Preview fetch
+  inserts its result. Failed, cancelled, or superseded work therefore leaves the store unchanged.
+- Successful file-content mutations invalidate that file after upload, remove, or revision
+  restore. Successful Gist deletion invalidates every file for the Gist. Metadata-only mutations
+  (description, compact, star, fork) do not invalidate content.
 
 ## GistFile construction (`@src/domain.rs`, issue #379)
 

@@ -31,7 +31,7 @@ pub(crate) fn on_upload_replace(
     file: crate::domain::GistFileRef,
 ) -> LoopFlow {
     apply(state, result, "upload", |state| {
-        state.gist_content_cache.remove(&file.cache_key());
+        state.gist_content_store.invalidate_file(&file);
         if let Some(local_path) = state.upload_local_path() {
             let content = state.content_to_upload();
             record_pin_sync(
@@ -84,7 +84,8 @@ pub(crate) fn on_delete_gist(
     result: Result<(), String>,
     gist_id: String,
 ) -> LoopFlow {
-    apply(state, result, "delete", |_| {
+    apply(state, result, "delete", |state| {
+        state.gist_content_store.invalidate_gist(&gist_id);
         format!("Deleted gist {gist_id}")
     })
 }
@@ -98,8 +99,11 @@ pub(crate) fn on_remove_file(
 ) -> LoopFlow {
     apply(state, result, "remove", |state| {
         state
-            .gist_content_cache
-            .remove(&(gist_id.clone(), filename.clone()));
+            .gist_content_store
+            .invalidate_file(&crate::domain::GistFileRef::id_name(
+                gist_id.clone(),
+                filename.clone(),
+            ));
         format!("Removed {filename} from gist {gist_id}")
     })
 }
@@ -199,9 +203,8 @@ mod tests {
         let mut state = initial_state();
         state.cwd = dir.path().to_path_buf();
         state.pinned = vec![mapping];
-        state
-            .gist_content_cache
-            .insert(("g1".into(), "a.txt".into()), "stale".into());
+        let file = crate::domain::GistFileRef::id_name("g1", "a.txt");
+        state.gist_content_store.insert(&file, "stale".into());
         state.enter_confirm(
             PendingAction::Upload {
                 gist_id: "g1".into(),
@@ -216,10 +219,14 @@ mod tests {
 
         assert!(state.gist_list_stale);
         assert_eq!(state.status.as_deref(), Some("Uploaded a.txt to gist g1"));
-        assert!(state
-            .gist_content_cache
-            .get(&("g1".into(), "a.txt".into()))
-            .is_none());
+        assert!(matches!(
+            state.gist_content_store.lookup(
+                &state.gist_catalog,
+                file,
+                crate::tui::gist_content::FetchPolicy::PreferCache
+            ),
+            crate::tui::gist_content::ContentLookup::Miss(_)
+        ));
         assert_eq!(state.pinned[0].direction, Some(SyncDirection::Upload));
         assert_eq!(
             state.pinned[0].last_seen_hash.as_deref(),
@@ -265,21 +272,53 @@ mod tests {
     #[test]
     fn on_delete_gist_err_sets_status() {
         let mut state = initial_state();
+        let file = crate::domain::GistFileRef::id_name("g1", "a.txt");
+        state.gist_content_store.insert(&file, "body".into());
 
         on_delete_gist(&mut state, Err("boom".into()), "g1".into());
 
         assert_eq!(state.status.as_deref(), Some("delete failed: boom"));
         assert!(!state.gist_list_stale);
+        assert!(matches!(
+            state.gist_content_store.lookup(
+                &state.gist_catalog,
+                file,
+                crate::tui::gist_content::FetchPolicy::PreferCache
+            ),
+            crate::tui::gist_content::ContentLookup::Hit(_)
+        ));
     }
 
     #[test]
     fn on_delete_gist_ok_marks_list_stale() {
         let mut state = initial_state();
+        let deleted = crate::domain::GistFileRef::id_name("g1", "a.txt");
+        let retained = crate::domain::GistFileRef::id_name("g2", "b.txt");
+        state.gist_content_store.insert(&deleted, "deleted".into());
+        state
+            .gist_content_store
+            .insert(&retained, "retained".into());
 
         on_delete_gist(&mut state, Ok(()), "g1".into());
 
         assert!(state.gist_list_stale);
         assert_eq!(state.status.as_deref(), Some("Deleted gist g1"));
+        assert!(matches!(
+            state.gist_content_store.lookup(
+                &state.gist_catalog,
+                deleted,
+                crate::tui::gist_content::FetchPolicy::PreferCache
+            ),
+            crate::tui::gist_content::ContentLookup::Miss(_)
+        ));
+        assert!(matches!(
+            state.gist_content_store.lookup(
+                &state.gist_catalog,
+                retained,
+                crate::tui::gist_content::FetchPolicy::PreferCache
+            ),
+            crate::tui::gist_content::ContentLookup::Hit(_)
+        ));
     }
 
     #[test]
@@ -295,18 +334,21 @@ mod tests {
     #[test]
     fn on_remove_file_ok_drops_cache_and_marks_list_stale() {
         let mut state = initial_state();
-        state
-            .gist_content_cache
-            .insert(("g1".into(), "a.txt".into()), "body".into());
+        let file = crate::domain::GistFileRef::id_name("g1", "a.txt");
+        state.gist_content_store.insert(&file, "body".into());
 
         on_remove_file(&mut state, Ok(()), "g1".into(), "a.txt".into());
 
         assert!(state.gist_list_stale);
         assert_eq!(state.status.as_deref(), Some("Removed a.txt from gist g1"));
-        assert!(state
-            .gist_content_cache
-            .get(&("g1".into(), "a.txt".into()))
-            .is_none());
+        assert!(matches!(
+            state.gist_content_store.lookup(
+                &state.gist_catalog,
+                file,
+                crate::tui::gist_content::FetchPolicy::PreferCache
+            ),
+            crate::tui::gist_content::ContentLookup::Miss(_)
+        ));
     }
 
     #[test]

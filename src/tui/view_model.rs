@@ -1110,7 +1110,7 @@ mod tests {
         state.enter_preview(
             "gist: notes.txt".into(),
             "hello preview\n".into(),
-            Some(("g1".into(), "notes.rs".into())),
+            Some(crate::domain::GistFileRef::id_name("g1", "notes.rs")),
         );
         state.status = Some("refresh failed".into());
         match build_view_model(&state).screen {

@@ -66,6 +66,19 @@ impl<K: Clone + Eq + Hash, V> LruCache<K, V> {
         self.map.remove(key)
     }
 
+    /// Remove every entry whose key matches `predicate`.
+    pub(crate) fn remove_where(&mut self, mut predicate: impl FnMut(&K) -> bool) {
+        let keys: Vec<K> = self
+            .order
+            .iter()
+            .filter(|key| predicate(key))
+            .cloned()
+            .collect();
+        for key in keys {
+            self.remove(&key);
+        }
+    }
+
     /// Move an existing key to the most-recently-used (back) position.
     fn touch(&mut self, key: &K) {
         if let Some(pos) = self.order.iter().position(|k| k == key) {
@@ -136,5 +149,16 @@ mod tests {
 
         assert_eq!(cache.len(), 1);
         assert_eq!(cache.get(&"b"), Some(&2));
+    }
+
+    #[test]
+    fn remove_where_drops_every_matching_entry() {
+        let mut cache = LruCache::new(3);
+        cache.insert(("g1", "a"), 1);
+        cache.insert(("g2", "b"), 2);
+        cache.insert(("g1", "c"), 3);
+        cache.remove_where(|(gist_id, _)| *gist_id == "g1");
+        assert_eq!(cache.len(), 1);
+        assert_eq!(cache.get(&("g2", "b")), Some(&2));
     }
 }

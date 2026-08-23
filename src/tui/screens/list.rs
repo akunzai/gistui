@@ -967,7 +967,7 @@ mod tests {
         state.enter_preview(
             "Preview: a / x".into(),
             "raw content".into(),
-            Some(("a".into(), "x".into())),
+            Some(crate::domain::GistFileRef::id_name("a", "x")),
         );
         assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
         assert_eq!(state.screen, Screen::List);

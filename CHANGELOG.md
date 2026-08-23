@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Deleting a Gist no longer leaves its files available through the preview cache, and a failed
+  preview refresh keeps the last usable cached content for the next preview.
 - Settings now reliably remember the "Show full diff" choice alongside the other preferences.
 - Gist refreshes now keep the last usable list and counts when one GitHub request fails, and a
   superseded refresh can no longer overwrite newer results.
