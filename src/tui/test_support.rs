@@ -53,8 +53,7 @@ pub(super) fn detail_mut(state: &mut AppState) -> &mut DetailState {
 }
 
 /// Open Confirm with the given action (keeps existing body text when already on Diff/Confirm).
-/// Mirrors production `enter_confirm`/`enter_confirm_from_diff`: a staged `pending_return`
-/// becomes the cancel path (via `AppState::enter`) when present, otherwise the live screen does.
+/// Mirrors production `enter_confirm`/`enter_confirm_from_diff` for synchronous tests.
 pub(super) fn set_pending(state: &mut AppState, action: PendingAction) {
     if state.screen.is_confirm() {
         if let Some(c) = state.confirm_mut() {

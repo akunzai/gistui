@@ -78,7 +78,10 @@ impl AppState {
                 let Some(index) = self.selected_pin_index() else {
                     return KeyOutcome::None;
                 };
-                return KeyOutcome::PreviewPinDiff { index };
+                return KeyOutcome::PreviewPinDiff {
+                    entry: self.defer_entry(),
+                    index,
+                };
             }
             KeyCode::Char('x') if pins_guard(self, code) => {
                 let Some(index) = self.selected_pin_index() else {
@@ -90,19 +93,28 @@ impl AppState {
                 let Some(index) = self.selected_pin_index() else {
                     return KeyOutcome::None;
                 };
-                return KeyOutcome::SyncPinAuto { index };
+                return KeyOutcome::SyncPinAuto {
+                    entry: self.defer_entry(),
+                    index,
+                };
             }
             KeyCode::Char('u') if pins_guard(self, code) => {
                 let Some(index) = self.selected_pin_index() else {
                     return KeyOutcome::None;
                 };
-                return KeyOutcome::SyncPinPush { index };
+                return KeyOutcome::SyncPinPush {
+                    entry: self.defer_entry(),
+                    index,
+                };
             }
             KeyCode::Char('d') if pins_guard(self, code) => {
                 let Some(index) = self.selected_pin_index() else {
                     return KeyOutcome::None;
                 };
-                return KeyOutcome::SyncPinPull { index };
+                return KeyOutcome::SyncPinPull {
+                    entry: self.defer_entry(),
+                    index,
+                };
             }
             KeyCode::Char('o') => {
                 if let Some(pins) = self.pins_mut() {
@@ -362,7 +374,7 @@ mod tests {
     #[test]
     fn confirm_upload_n_cancels_to_diff_return_screen() {
         let mut state = initial_state();
-        state.pending_return = Some(Screen::Pins(Box::default()));
+        state.screen = Screen::Pins(Box::default());
         set_pending(
             &mut state,
             PendingAction::Upload {
@@ -420,10 +432,10 @@ mod tests {
             direction: None,
             last_seen_hash: None,
         }];
-        assert!(matches!(
-            state.handle_key(KeyCode::Enter),
-            KeyOutcome::PreviewPinDiff { .. }
-        ));
+        let KeyOutcome::PreviewPinDiff { entry, .. } = state.handle_key(KeyCode::Enter) else {
+            panic!("expected deferred pin diff");
+        };
+        assert!(entry.return_to.is_pins());
     }
 
     #[test]

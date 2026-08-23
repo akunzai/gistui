@@ -40,14 +40,11 @@ pub(crate) fn stage_preview_content(
     Some((file, title))
 }
 
-/// Restage the return path and invalidate cached content before refetching a preview.
+/// Invalidate cached content and build the fetch payload for refreshing a preview.
 pub(crate) fn stage_refresh_preview(
     state: &mut AppState,
     mut file: crate::domain::GistFileRef,
 ) -> (crate::domain::GistFileRef, String) {
-    if state.screen.is_preview() {
-        state.pending_return = state.nav_stack.last().cloned();
-    }
     state.gist_content_cache.remove(&file.cache_key());
     if file.raw_url.is_none() {
         file.raw_url = state.gist_file_raw_url(&file.gist_id, &file.filename);
@@ -75,6 +72,9 @@ impl AppState {
                     return KeyOutcome::None;
                 };
                 return KeyOutcome::RefreshPreview {
+                    entry: self
+                        .defer_replacement()
+                        .unwrap_or_else(|| self.defer_entry()),
                     file: crate::domain::GistFileRef::id_name(gist_id, filename),
                 };
             }
@@ -217,6 +217,7 @@ pub(crate) fn render_preview_vm(
 /// `PreviewContent` outcome: cache the fetched content and open the read-only preview.
 pub(crate) fn on_preview_content(
     state: &mut AppState,
+    entry: crate::tui::DeferredEntry,
     result: std::result::Result<String, String>,
     file: crate::domain::GistFileRef,
     preview_title: String,
@@ -227,7 +228,17 @@ pub(crate) fn on_preview_content(
             state
                 .gist_content_cache
                 .insert(key.clone(), content.clone());
-            state.enter_preview(preview_title, content, Some(key));
+            state.open_deferred(
+                entry,
+                crate::tui::Screen::Preview(Box::new(crate::tui::PreviewState {
+                    title: preview_title,
+                    body: crate::tui::ScrollBody {
+                        text: content,
+                        ..crate::tui::ScrollBody::default()
+                    },
+                    gist_key: Some(key),
+                })),
+            );
         }
         Err(error) => state.set_status(format!("fetch failed: {error}")),
     }
@@ -268,7 +279,7 @@ mod tests {
     }
 
     #[test]
-    fn stage_refresh_preview_restages_return_drops_cache_and_returns_fetch_payload() {
+    fn stage_refresh_preview_drops_cache_and_returns_fetch_payload() {
         let mut state = state_with_gists();
         state.gists[0].raw_url = Some("https://example.test/a.txt".into());
         let file = gist_file_ref("g1", "a.txt");
@@ -277,9 +288,10 @@ mod tests {
             .insert(file.cache_key(), "cached".into());
         state.enter_preview("a.txt".into(), "cached".into(), Some(file.cache_key()));
 
+        let entry = state.defer_replacement().unwrap();
         let (file, title) = stage_refresh_preview(&mut state, file);
 
-        assert!(matches!(state.pending_return, Some(Screen::Gists(_))));
+        assert!(entry.return_to.is_gists());
         assert!(state.gist_content_cache.get(&file.cache_key()).is_none());
         assert_eq!(file.raw_url.as_deref(), Some("https://example.test/a.txt"));
         assert!(title.contains("a.txt"));
@@ -441,7 +453,13 @@ mod tests {
         let mut state = initial_state();
         let file = gist_file_ref("g1", "a.txt");
 
-        on_preview_content(&mut state, Ok("body".into()), file.clone(), "a.txt".into());
+        on_preview_content(
+            &mut state,
+            initial_state().defer_entry(),
+            Ok("body".into()),
+            file.clone(),
+            "a.txt".into(),
+        );
 
         assert_eq!(
             state.gist_content_cache.get(&file.cache_key()),
@@ -457,6 +475,7 @@ mod tests {
 
         on_preview_content(
             &mut state,
+            initial_state().defer_entry(),
             Err("boom".into()),
             gist_file_ref("g1", "a.txt"),
             "a.txt".into(),

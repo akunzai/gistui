@@ -325,8 +325,7 @@ mod tests {
     #[test]
     fn compact_confirm_y_executes_and_n_returns_to_gist_manager() {
         let mut state = state_with_two_gists();
-        // CompactAnalyze parks the restore target before Confirm opens (staged pending_return).
-        state.pending_return = Some(Screen::Gists(Box::default()));
+        state.screen = Screen::Gists(Box::default());
         set_pending(
             &mut state,
             PendingAction::CompactGist {
@@ -341,7 +340,7 @@ mod tests {
         );
 
         // Re-open confirm for the cancel path (y does not leave Confirm until IO runs).
-        state.pending_return = Some(Screen::Gists(Box::default()));
+        state.screen = Screen::Gists(Box::default());
         set_pending(
             &mut state,
             PendingAction::CompactGist {

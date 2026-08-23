@@ -45,7 +45,6 @@ pub(crate) fn on_upload_replace(
         }
         // Return to wherever this upload was initiated from (List, or Pins
         // for a pin push) instead of always snapping to List.
-        state.staged_diff_gist = None;
         state.leave();
         format!("Uploaded {} to gist {}", file.filename, file.gist_id)
     })

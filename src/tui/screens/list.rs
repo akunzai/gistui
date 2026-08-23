@@ -249,6 +249,7 @@ impl AppState {
                     return KeyOutcome::None;
                 };
                 return KeyOutcome::SyncSelectedPair {
+                    entry: self.defer_entry(),
                     local_path: local.path.clone(),
                     gist_id: gist.file.gist_id.clone(),
                     filename: gist.file.filename.clone(),
@@ -281,8 +282,8 @@ impl AppState {
                 let Some(gist) = ranked.get(self.gist_index) else {
                     return KeyOutcome::None;
                 };
-                self.pending_return = Some(Screen::List);
                 return KeyOutcome::PreviewContent {
+                    entry: self.defer_entry(),
                     file: crate::domain::GistFileRef::new(
                         gist.file.gist_id.clone(),
                         gist.file.filename.clone(),
@@ -307,6 +308,7 @@ impl AppState {
                 if let Some(gist) = ranked.get(self.gist_index) {
                     let filename = gist.file.filename.clone();
                     return KeyOutcome::DownloadGist {
+                        entry: self.defer_entry(),
                         file: crate::domain::GistFileRef::new(
                             gist.file.gist_id.clone(),
                             filename.clone(),
@@ -334,6 +336,7 @@ impl AppState {
                     .unwrap_or(&self.cwd)
                     .join(&filename);
                 return KeyOutcome::PreviewDiff {
+                    entry: self.defer_entry(),
                     local_path,
                     file: crate::domain::GistFileRef::new(
                         gist.file.gist_id.clone(),
@@ -446,7 +449,6 @@ impl AppState {
         } else {
             gist.file.description.clone()
         };
-        self.pending_return = Some(Screen::List);
         let text = format!(
             "Remove file \"{filename}\" from gist {gist_id} ({label}).\n\nThe other files in this gist are kept. This cannot be undone."
         );
@@ -470,7 +472,6 @@ impl AppState {
         };
         self.editing_description = true;
         self.description_input.clear();
-        self.pending_return = Some(Screen::List);
         self.enter_confirm(
             PendingAction::Create {
                 local_path: local.path.clone(),
@@ -2085,10 +2086,11 @@ mod tests {
             modified: None,
         }];
         state.gists = vec![GistFile::fixture("g1", "a.txt")];
-        assert!(matches!(
-            state.handle_key(KeyCode::Char('S')),
-            KeyOutcome::SyncSelectedPair { .. }
-        ));
+        let KeyOutcome::SyncSelectedPair { entry, .. } = state.handle_key(KeyCode::Char('S'))
+        else {
+            panic!("expected deferred pair sync");
+        };
+        assert!(matches!(entry.return_to, Screen::List));
     }
 
     #[test]

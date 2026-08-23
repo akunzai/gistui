@@ -29,7 +29,12 @@ Fields stay `pub`. No `#[serde(default)]` on the struct.
 - Other variants (`Diff`, `Confirm`, `Preview`, `Help`, `Config`, `Revisions`, `Pins`, `Gists`, `GistDetail`, `Palette`, …) carry payloads (body/scroll/return/origin as needed).
 - **Diff/Confirm/Preview body+scroll** is `ScrollBody` (`@src/tui/scroll.rs`, issue #385), reached only via `scroll_body` / `scroll_body_mut`. The ten `diff_body_text` / `scroll_diff_*` methods are gone. Their `screens::lookup` rows share `scroll_navigation`; Help and Detail comments have no `ScrollBody`.
 - **`nav_stack`** (issue #271) holds return targets; Esc pops. Prefer stack ops over parallel “return” root fields for new navigation.
-- Staged root fields (`diff_return` / `preview_return` / `staged_diff_gist` and similar) are consumed on enter only when still present.
+- **Async screen entry is a moved value, not root staging.** `DeferredEntry` snapshots the
+  return screen at intent time and moves through `KeyOutcome` and the job apply closure.
+  Success consumes it through `open_deferred`; failure, cancellation, and generation
+  supersession drop it without touching navigation. Preview refresh captures the current
+  parent through `defer_replacement`, so refresh replaces Preview instead of stacking it.
+  Diff Gist identity is built directly into `DiffState`; do not add another staging field.
 - **`back_to_list()` is a hard reset** (clears `nav_stack`) — reserve it for paths whose only possible origin is `Screen::List` itself. Confirm-execute paths with more than one possible origin (e.g. `ExecuteDelete`, `ExecuteCompactGist` in `dispatch.rs`) use `leave()`/`cancel_confirm()` instead, to return to whichever screen actually launched them; pop an extra time if the popped screen is now stale (e.g. `GistDetail` for a gist just deleted).
 
 ## Key path (pure intent → impure dispatch)
