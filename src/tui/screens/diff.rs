@@ -4,7 +4,7 @@
 use crate::tui::bg::{record_pin_sync, refresh_locals, LocalScanMode, LoopFlow};
 use crate::tui::render::{diff_labels, preview_diff_text};
 use crate::tui::view_model::{ChromeVm, DiffVm};
-use crate::tui::{AppState, HelpTopic, KeyOutcome, PendingAction};
+use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, PendingAction};
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
@@ -219,7 +219,7 @@ pub(crate) fn render_diff_vm(
     state: &AppState,
     diff: &DiffVm,
     chrome: &ChromeVm,
-    layout: &mut crate::tui::MouseLayout,
+    layout: &mut crate::tui::MouseFrame,
 ) {
     let area = frame.area();
     let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
@@ -242,7 +242,8 @@ pub(crate) fn render_diff_vm(
         &state.theme,
     );
     if chrome.mouse_enabled {
-        layout.close_button = Some(crate::tui::render_close_button(frame, area, &state.theme));
+        let close = crate::tui::render_close_button(frame, area, &state.theme);
+        layout.register(HitTarget::Close, close);
     }
 }
 

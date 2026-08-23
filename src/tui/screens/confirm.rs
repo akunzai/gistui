@@ -3,7 +3,7 @@
 
 use crate::tui::bg::LoopFlow;
 use crate::tui::view_model::{ConfirmBackgroundVm, ConfirmModalKind, ConfirmVm};
-use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, PendingAction, Screen};
+use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PendingAction, Screen};
 use crossterm::event::KeyCode;
 use ratatui::{style::Color, Frame};
 use std::path::PathBuf;
@@ -203,7 +203,7 @@ pub(crate) fn render_confirm_vm(
     state: &AppState,
     confirm: &ConfirmVm,
     chrome: &crate::tui::view_model::ChromeVm,
-    layout: &mut MouseLayout,
+    layout: &mut MouseFrame,
 ) {
     match &confirm.background {
         ConfirmBackgroundVm::CompactGist(bg) => {
@@ -238,11 +238,8 @@ pub(crate) fn render_confirm_vm(
     };
     if chrome.mouse_enabled {
         // Put the close button on the modal box itself, not the full-screen corner.
-        layout.close_button = Some(crate::tui::render::render_close_button(
-            frame,
-            modal,
-            &state.theme,
-        ));
+        let close = crate::tui::render::render_close_button(frame, modal, &state.theme);
+        layout.register(HitTarget::Close, close);
     }
 }
 

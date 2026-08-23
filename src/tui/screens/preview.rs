@@ -3,7 +3,7 @@
 
 use crate::tui::bg::LoopFlow;
 use crate::tui::view_model::{ChromeVm, PreviewVm};
-use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout};
+use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame};
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
@@ -142,7 +142,7 @@ pub(crate) fn render_preview_vm(
     state: &AppState,
     preview: &PreviewVm,
     chrome: &ChromeVm,
-    layout: &mut MouseLayout,
+    layout: &mut MouseFrame,
 ) {
     let area = frame.area();
     let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
@@ -210,7 +210,8 @@ pub(crate) fn render_preview_vm(
         &state.theme,
     );
     if chrome.mouse_enabled {
-        layout.close_button = Some(crate::tui::render_close_button(frame, area, &state.theme));
+        let close = crate::tui::render_close_button(frame, area, &state.theme);
+        layout.register(HitTarget::Close, close);
     }
 }
 
@@ -359,10 +360,8 @@ mod tests {
     fn top_bar_gists_click_opens_gist_manager_from_any_screen() {
         let mut state = state_with_gists();
         state.screen = Screen::Preview(Box::default()); // arbitrary screen that has no 'g' binding of its own
-        let layout = MouseLayout {
-            top_bar_gists: Some(Rect::new(10, 0, 7, 1)),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register(HitTarget::TopGists, Rect::new(10, 0, 7, 1));
         let out = state.handle_mouse(MouseInput::Click { col: 12, row: 0 }, &layout);
         assert!(state.screen.is_gists());
         assert_eq!(out, KeyOutcome::None);
@@ -372,10 +371,8 @@ mod tests {
     fn top_bar_config_click_opens_settings_from_any_screen() {
         let mut state = state_with_gists();
         state.screen = Screen::Preview(Box::default());
-        let layout = MouseLayout {
-            top_bar_config: Some(Rect::new(28, 0, 8, 1)),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register(HitTarget::TopConfig, Rect::new(28, 0, 8, 1));
         let out = state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
         assert!(state.screen.is_config());
         assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
@@ -386,10 +383,8 @@ mod tests {
     fn top_bar_config_click_while_already_on_config_does_not_trap_keyboard_exit() {
         let mut state = state_with_gists();
         state.screen = Screen::Preview(Box::default());
-        let layout = MouseLayout {
-            top_bar_config: Some(Rect::new(28, 0, 8, 1)),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register(HitTarget::TopConfig, Rect::new(28, 0, 8, 1));
         state.handle_mouse(MouseInput::Click { col: 30, row: 0 }, &layout);
         assert!(state.screen.is_config());
         assert!(state.nav_stack.last().is_some_and(Screen::is_preview));
@@ -408,10 +403,8 @@ mod tests {
     fn top_bar_help_click_opens_help_and_remembers_return_screen_from_any_screen() {
         let mut state = state_with_gists();
         state.screen = Screen::Preview(Box::default());
-        let layout = MouseLayout {
-            top_bar_help: Some(Rect::new(30, 0, 7, 1)),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register(HitTarget::TopHelp, Rect::new(30, 0, 7, 1));
         let out = state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
         assert!(state.screen.is_help());
         assert!(state.nav_stack.last().is_some_and(Screen::is_preview));

@@ -28,7 +28,7 @@ pub(crate) fn render_top_bar(
     area: Rect,
     theme: &Theme,
     mouse_enabled: bool,
-    layout: &mut MouseLayout,
+    layout: &mut MouseFrame,
 ) -> Rect {
     if area.height == 0 {
         return area;
@@ -68,12 +68,13 @@ pub(crate) fn render_top_bar(
         };
         frame.render_widget(Paragraph::new(line).style(theme.base_style()), rect);
         if mouse_enabled {
-            match item.index {
-                0 => layout.top_bar_gists = Some(rect),
-                1 => layout.top_bar_pins = Some(rect),
-                2 => layout.top_bar_config = Some(rect),
-                _ => layout.top_bar_help = Some(rect),
-            }
+            let target = match item.index {
+                0 => HitTarget::TopGists,
+                1 => HitTarget::TopPins,
+                2 => HitTarget::TopConfig,
+                _ => HitTarget::TopHelp,
+            };
+            layout.register(target, rect);
         }
     }
 
@@ -282,7 +283,7 @@ pub(crate) fn render_footer_line(
     title: &str,
     line: Line,
     theme: &Theme,
-    _layout: &mut MouseLayout,
+    _layout: &mut MouseFrame,
 ) {
     frame.render_widget(
         Paragraph::new(line)

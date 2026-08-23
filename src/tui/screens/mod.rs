@@ -10,7 +10,7 @@
 
 use super::keys::NavAction;
 use super::view_model::ScreenVm;
-use super::{AppState, HelpTopic, KeyOutcome, MouseLayout, Screen};
+use super::{AppState, HelpTopic, KeyOutcome, MouseFrame, Screen};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 pub(crate) mod config;
@@ -35,14 +35,14 @@ pub(crate) struct ScreenLookup {
     pub build_vm: fn(&AppState) -> ScreenVm,
     pub handle_key: fn(&mut AppState, KeyCode, KeyModifiers) -> KeyOutcome,
     pub apply_navigation: fn(&mut AppState, NavAction) -> bool,
-    pub click_select: fn(&mut AppState, u16, u16, &MouseLayout) -> bool,
+    pub click_select: fn(&mut AppState, u16, u16, &MouseFrame) -> bool,
 }
 
 fn ungated(_: &AppState, _: KeyCode) -> bool {
     true
 }
 
-fn no_click(_: &mut AppState, _: u16, _: u16, _: &MouseLayout) -> bool {
+fn no_click(_: &mut AppState, _: u16, _: u16, _: &MouseFrame) -> bool {
     false
 }
 fn scroll_navigation(state: &mut AppState, action: NavAction) -> bool {

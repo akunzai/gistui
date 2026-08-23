@@ -18,8 +18,9 @@ pub(super) fn run_loop(
     if state.mouse_enabled {
         execute!(terminal.backend_mut(), EnableMouseCapture)?;
     }
-    let mut mouse_layout = MouseLayout::default();
-    let mut last_click: Option<(u16, u16, std::time::Instant)> = None;
+    let mut mouse_layout = MouseFrame::default();
+    let mut render_feedback = super::render::RenderFeedback::default();
+    let mut last_press_at: Option<std::time::Instant> = None;
 
     // Background "is a newer release available?" check — off-thread, throttled to once a day,
     // silent on failure. The result (if any) is absorbed in the loop below.
@@ -54,15 +55,13 @@ pub(super) fn run_loop(
         }
         pin_sync_screen_active = pins_active;
 
-        terminal.draw(|frame| render(frame, &state, &mut mouse_layout))?;
+        terminal.draw(|frame| render(frame, &state, &mut mouse_layout, &mut render_feedback))?;
         if state.detail().is_some_and(|d| d.comments_scroll_to_bottom) {
-            if let Some(max) = mouse_layout.comments_max_scroll {
+            if let Some(max) = render_feedback.comments_max_scroll {
                 if let Some(d) = state.detail_mut() {
                     d.scroll = max;
+                    d.comments_scroll_to_bottom = false;
                 }
-            }
-            if let Some(d) = state.detail_mut() {
-                d.comments_scroll_to_bottom = false;
             }
         }
         // Advance the spinner once per iteration; the poll below caps the loop at ~150ms, so
@@ -104,13 +103,21 @@ pub(super) fn run_loop(
                     MouseEventKind::ScrollUp => Some(super::MouseInput::ScrollUp),
                     MouseEventKind::ScrollDown => Some(super::MouseInput::ScrollDown),
                     MouseEventKind::Down(MouseButton::Left) => {
-                        let prev = last_click.map(|(c, r, _)| (c, r));
-                        let elapsed = last_click
-                            .map(|(_, _, t)| t.elapsed().as_millis())
+                        let elapsed = last_press_at
+                            .map(|t| t.elapsed().as_millis())
                             .unwrap_or(u128::MAX);
-                        let classified = super::classify_click(prev, elapsed, m.column, m.row);
-                        last_click = Some((m.column, m.row, std::time::Instant::now()));
-                        Some(classified)
+                        let kind = state.mouse_session.press(m.column, m.row, elapsed);
+                        last_press_at = Some(std::time::Instant::now());
+                        Some(match kind {
+                            PressKind::Click => super::MouseInput::Click {
+                                col: m.column,
+                                row: m.row,
+                            },
+                            PressKind::DoubleClick => super::MouseInput::DoubleClick {
+                                col: m.column,
+                                row: m.row,
+                            },
+                        })
                     }
                     MouseEventKind::Drag(MouseButton::Left) => {
                         Some(super::MouseInput::Drag { col: m.column })

@@ -8,8 +8,8 @@ use crate::tui::view_model::{
     ChromeVm, ListFooterVm, ListPaneEmpty, ListPaneVm, ListVm, PaneTitleVm, RowEmphasis, RowVm,
 };
 use crate::tui::{
-    AppState, FocusPane, GistView, HelpTopic, KeyOutcome, MouseLayout, PendingAction, Screen,
-    SplitHit,
+    AppState, FocusPane, GistView, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneTarget,
+    PendingAction, Screen, SplitHit,
 };
 use crossterm::event::KeyCode;
 
@@ -501,10 +501,10 @@ impl AppState {
     /// a resize to mean anything. Both the grab and the double-click reset go through it, so
     /// a too-narrow terminal swallows neither press — they fall through to the normal
     /// focus/select handling instead of being eaten by a gesture that can only be clamped
-    /// away. It lives here rather than on `MouseLayout` because the width policy is the List
+    /// away. It lives here rather than on `MouseFrame` because the width policy is the List
     /// screen's (`clamp_split_percent`), not the hit map's.
-    fn grabbable_divider(&self, col: u16, row: u16, layout: &MouseLayout) -> bool {
-        layout.list_split.is_some_and(|hit| {
+    fn grabbable_divider(&self, col: u16, row: u16, layout: &MouseFrame) -> bool {
+        layout.split().is_some_and(|hit| {
             hit.grabbed(col, row)
                 && clamp_split_percent(self.list_split_percent, hit.area.width).is_some()
         })
@@ -512,21 +512,21 @@ impl AppState {
 
     /// Grab the divider if the press landed on it, starting a drag. Returns `true` when
     /// grabbed, so the caller can skip the click's usual focus/select handling.
-    pub(crate) fn grab_split_divider(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
+    pub(crate) fn grab_split_divider(&mut self, col: u16, row: u16, layout: &MouseFrame) -> bool {
         let grabbed = self.grabbable_divider(col, row, layout);
         if grabbed {
-            self.list_split_drag = true;
+            self.mouse_session.begin_divider_drag();
         }
         grabbed
     }
 
     /// Move the divider under `col` while a drag is in progress. Only `col` is consulted:
     /// letting the pointer wander above or below the panes must not break the drag.
-    pub(crate) fn drag_split_divider(&mut self, col: u16, layout: &MouseLayout) {
-        if !self.list_split_drag {
+    pub(crate) fn drag_split_divider(&mut self, col: u16, layout: &MouseFrame) {
+        if !self.mouse_session.is_dragging() {
             return;
         }
-        let Some(hit) = layout.list_split else {
+        let Some(hit) = layout.split() else {
             return;
         };
         if let Some(percent) = clamp_split_percent(percent_for_col(hit.area, col), hit.area.width) {
@@ -536,17 +536,13 @@ impl AppState {
 
     /// End any divider drag. Called on mouse-up and whenever a background-task overlay
     /// takes over the mouse, which would otherwise swallow the release and wedge the drag.
-    pub(crate) fn end_split_drag(&mut self) {
-        self.list_split_drag = false;
-    }
-
     /// Restore the default split — the double-click action on the divider. Returns `true`
     /// when the double-click landed on it.
-    pub(crate) fn reset_split_divider(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
+    pub(crate) fn reset_split_divider(&mut self, col: u16, row: u16, layout: &MouseFrame) -> bool {
         let grabbed = self.grabbable_divider(col, row, layout);
         if grabbed {
             self.list_split_percent = DEFAULT_SPLIT_PERCENT;
-            self.list_split_drag = false;
+            self.mouse_session.interrupt();
         }
         grabbed
     }
@@ -554,8 +550,8 @@ impl AppState {
     /// Select the clicked row on `Screen::List`, focusing its pane. Returns `true` when a row
     /// was hit (so a double-click should "open" it). A click in a pane's blank area or border
     /// focuses it but selects nothing (returns `false`); a click off every list returns `false`.
-    pub(crate) fn click_select_list(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
-        if let Some(hit) = layout.local {
+    pub(crate) fn click_select_list(&mut self, col: u16, row: u16, layout: &MouseFrame) -> bool {
+        if let Some(hit) = layout.pane(PaneTarget::Local) {
             if point_in(hit.rect, col, row) {
                 // A click anywhere in the pane (incl. blank/border) focuses it; a
                 // click on a row also selects it.
@@ -571,7 +567,7 @@ impl AppState {
                 return false;
             }
         }
-        if let Some(hit) = layout.gist {
+        if let Some(hit) = layout.pane(PaneTarget::Gist) {
             if point_in(hit.rect, col, row) {
                 self.focus = FocusPane::Gist;
                 if let Some(idx) = hit.index_at(row, self.ranked_gists().len()) {
@@ -753,7 +749,7 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
         },
         footer,
         split_percent: state.list_split_percent,
-        split_dragging: state.list_split_drag,
+        split_dragging: state.mouse_session.is_dragging(),
     }
 }
 
@@ -772,7 +768,7 @@ pub(crate) fn render_list_vm(
     state: &AppState,
     list: &ListVm,
     chrome: &ChromeVm,
-    layout: &mut MouseLayout,
+    layout: &mut MouseFrame,
 ) {
     let area = frame.area();
     let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
@@ -819,7 +815,8 @@ pub(crate) fn render_list_vm(
         &list.local,
         &state.theme,
         chrome.mouse_enabled,
-        &mut layout.local,
+        layout,
+        PaneTarget::Local,
     );
     render_list_pane(
         frame,
@@ -827,7 +824,8 @@ pub(crate) fn render_list_vm(
         &list.gist,
         &state.theme,
         chrome.mouse_enabled,
-        &mut layout.gist,
+        layout,
+        PaneTarget::Gist,
     );
 
     let divider_x = columns[0].right().saturating_sub(1);
@@ -835,10 +833,11 @@ pub(crate) fn render_list_vm(
         highlight_pane_divider(frame, chunks[0], divider_x, state.theme.accent);
     }
     if chrome.mouse_enabled {
-        layout.list_split = Some(SplitHit {
+        let split = SplitHit {
             area: chunks[0],
             divider_x,
-        });
+        };
+        layout.register(HitTarget::Divider(split), split.area);
     }
 
     match &list.footer {
@@ -1175,7 +1174,7 @@ mod tests {
         state.screen = Screen::List;
         state.focus = FocusPane::Local;
         state.local_index = 0;
-        let out = state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+        let out = state.handle_mouse(MouseInput::ScrollDown, &MouseFrame::default());
         assert_eq!(out, KeyOutcome::None);
         assert_eq!(state.local_index, 1);
     }
@@ -1186,7 +1185,7 @@ mod tests {
         state.screen = Screen::List;
         state.focus = FocusPane::Local;
         state.local_index = 2;
-        let out = state.handle_mouse(MouseInput::ScrollUp, &MouseLayout::default());
+        let out = state.handle_mouse(MouseInput::ScrollUp, &MouseFrame::default());
         assert_eq!(out, KeyOutcome::None);
         assert_eq!(state.local_index, 1);
     }
@@ -1201,10 +1200,8 @@ mod tests {
             rect: Rect::new(20, 0, 20, 10),
             offset: 0,
         };
-        let layout = MouseLayout {
-            gist: Some(hit),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register_pane(PaneTarget::Gist, hit, 2);
         // row 2 -> content idx 1 (top border is row 0, row 1 = idx 0, row 2 = idx 1)
         let out = state.handle_mouse(MouseInput::Click { col: 25, row: 2 }, &layout);
         assert_eq!(out, KeyOutcome::None);
@@ -1224,10 +1221,8 @@ mod tests {
             rect: Rect::new(0, 0, 20, 10),
             offset: 0,
         };
-        let layout = MouseLayout {
-            local: Some(hit),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register_pane(PaneTarget::Local, hit, 3);
         // row 1 -> idx 0 (first content row after top border)
         let out = state.handle_mouse(MouseInput::Click { col: 5, row: 1 }, &layout);
         assert_eq!(out, KeyOutcome::None);
@@ -1244,10 +1239,8 @@ mod tests {
             rect: Rect::new(20, 0, 20, 10),
             offset: 0,
         };
-        let layout = MouseLayout {
-            gist: Some(hit),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register_pane(PaneTarget::Gist, hit, 2);
         // row 1 -> idx 0 (first gist)
         let out = state.handle_mouse(MouseInput::DoubleClick { col: 25, row: 1 }, &layout);
         assert_eq!(state.focus, FocusPane::Gist);
@@ -1265,10 +1258,8 @@ mod tests {
             rect: Rect::new(20, 0, 20, 4),
             offset: 0,
         };
-        let layout = MouseLayout {
-            gist: Some(hit),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register_pane(PaneTarget::Gist, hit, 2);
         // row 0 is the top border (no row there): clicking the gist pane's blank/border area
         // switches focus to it but selects nothing.
         let out = state.handle_mouse(MouseInput::Click { col: 25, row: 0 }, &layout);
@@ -1284,7 +1275,7 @@ mod tests {
         state.screen = Screen::List;
         state.focus = FocusPane::Local;
         state.local_index = 0;
-        state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+        state.handle_mouse(MouseInput::ScrollDown, &MouseFrame::default());
         assert_eq!(state.local_index, 0);
     }
 
@@ -2339,14 +2330,14 @@ mod tests {
     }
 
     /// A `SplitHit` for a 100-column List screen split at the default 40%.
-    fn split_layout() -> MouseLayout {
-        MouseLayout {
-            list_split: Some(SplitHit {
-                area: Rect::new(0, 1, 100, 20),
-                divider_x: 39,
-            }),
-            ..Default::default()
-        }
+    fn split_layout() -> MouseFrame {
+        let mut layout = MouseFrame::default();
+        let split = SplitHit {
+            area: Rect::new(0, 1, 100, 20),
+            divider_x: 39,
+        };
+        layout.register(HitTarget::Divider(split), split.area);
+        layout
     }
 
     #[test]
@@ -2359,13 +2350,13 @@ mod tests {
             state.handle_mouse(MouseInput::Click { col: 39, row: 5 }, &layout),
             KeyOutcome::None
         );
-        assert!(state.list_split_drag);
+        assert!(state.mouse_session.is_dragging());
 
         state.handle_mouse(MouseInput::Drag { col: 59 }, &layout);
         assert_eq!(state.list_split_percent, 60);
 
         state.handle_mouse(MouseInput::Release, &layout);
-        assert!(!state.list_split_drag);
+        assert!(!state.mouse_session.is_dragging());
         // A release after the drag must not keep resizing.
         state.handle_mouse(MouseInput::Drag { col: 20 }, &layout);
         assert_eq!(state.list_split_percent, 60);
@@ -2379,13 +2370,17 @@ mod tests {
         state.local_index = 1;
         let mut layout = split_layout();
         // The local pane reaches the divider, so without the grab check this would focus it.
-        layout.local = Some(PaneHit {
-            rect: Rect::new(0, 1, 40, 20),
-            offset: 0,
-        });
+        layout.register_pane(
+            PaneTarget::Local,
+            PaneHit {
+                rect: Rect::new(0, 1, 40, 20),
+                offset: 0,
+            },
+            2,
+        );
 
         state.handle_mouse(MouseInput::Click { col: 39, row: 5 }, &layout);
-        assert!(state.list_split_drag);
+        assert!(state.mouse_session.is_dragging());
         assert_eq!(state.focus, FocusPane::Gist);
         assert_eq!(state.local_index, 1);
     }
@@ -2397,13 +2392,19 @@ mod tests {
             let mut state = state_with_local_paths(&["a.rs"]);
             state.screen = Screen::List;
             state.handle_mouse(MouseInput::Click { col, row: 5 }, &layout);
-            assert!(state.list_split_drag, "col {col} missed the divider");
+            assert!(
+                state.mouse_session.is_dragging(),
+                "col {col} missed the divider"
+            );
         }
         for col in [37, 42] {
             let mut state = state_with_local_paths(&["a.rs"]);
             state.screen = Screen::List;
             state.handle_mouse(MouseInput::Click { col, row: 5 }, &layout);
-            assert!(!state.list_split_drag, "col {col} grabbed the divider");
+            assert!(
+                !state.mouse_session.is_dragging(),
+                "col {col} grabbed the divider"
+            );
         }
     }
 
@@ -2436,17 +2437,20 @@ mod tests {
         state.screen = Screen::List;
         state.focus = FocusPane::Gist;
         let width = MIN_PANE_CELLS * 2 - 1;
-        let layout = MouseLayout {
-            list_split: Some(SplitHit {
-                area: Rect::new(0, 1, width, 20),
-                divider_x: width / 2,
-            }),
-            local: Some(PaneHit {
+        let mut layout = MouseFrame::default();
+        let split = SplitHit {
+            area: Rect::new(0, 1, width, 20),
+            divider_x: width / 2,
+        };
+        layout.register(HitTarget::Divider(split), split.area);
+        layout.register_pane(
+            PaneTarget::Local,
+            PaneHit {
                 rect: Rect::new(0, 1, width / 2 + 1, 20),
                 offset: 0,
-            }),
-            ..Default::default()
-        };
+            },
+            2,
+        );
         state.handle_mouse(
             MouseInput::Click {
                 col: width / 2,
@@ -2454,7 +2458,7 @@ mod tests {
             },
             &layout,
         );
-        assert!(!state.list_split_drag);
+        assert!(!state.mouse_session.is_dragging());
         // The press is not swallowed: it focuses the pane it landed in, as any other click would.
         assert_eq!(state.focus, FocusPane::Local);
 
@@ -2472,7 +2476,7 @@ mod tests {
         let layout = split_layout();
         state.handle_mouse(MouseInput::Drag { col: 70 }, &layout);
         assert_eq!(state.list_split_percent, DEFAULT_SPLIT_PERCENT);
-        assert!(!state.list_split_drag);
+        assert!(!state.mouse_session.is_dragging());
     }
 
     #[test]
@@ -2486,7 +2490,7 @@ mod tests {
             KeyOutcome::None
         );
         assert_eq!(state.list_split_percent, DEFAULT_SPLIT_PERCENT);
-        assert!(!state.list_split_drag);
+        assert!(!state.mouse_session.is_dragging());
     }
 
     #[test]
@@ -2497,7 +2501,7 @@ mod tests {
         let vm = build_list_vm(&state);
         assert_eq!(vm.split_percent, 55);
         assert!(!vm.split_dragging);
-        state.list_split_drag = true;
+        state.mouse_session.begin_divider_drag();
         assert!(build_list_vm(&state).split_dragging);
     }
 
@@ -2511,7 +2515,7 @@ mod tests {
         let backend = ratatui::backend::TestBackend::new(100, 20);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         let vm = crate::tui::build_view_model(&state);
-        let mut layout = MouseLayout::default();
+        let mut layout = MouseFrame::default();
         let ScreenVm::List(list) = &vm.screen else {
             panic!("not the List screen");
         };
@@ -2525,7 +2529,7 @@ mod tests {
         assert_eq!(buffer.cell((40, 2)).unwrap().symbol(), "│");
         assert_eq!(buffer.cell((20, 2)).unwrap().symbol(), " ");
 
-        let hit = layout.list_split.expect("divider hit recorded");
+        let hit = layout.split().expect("divider hit recorded");
         assert_eq!(hit.divider_x, 39);
         assert_eq!(hit.area.width, 100);
     }

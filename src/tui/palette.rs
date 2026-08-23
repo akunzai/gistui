@@ -1,5 +1,5 @@
 use super::keymap::Category;
-use super::{keys::point_in, *};
+use super::*;
 use crossterm::event::{KeyCode, KeyModifiers};
 
 /// Menu = context-filtered actions near the click; Command = full list + fuzzy query.
@@ -124,22 +124,20 @@ impl AppState {
         }
     }
 
-    pub(crate) fn palette_click(&mut self, col: u16, row: u16, layout: &MouseLayout) -> KeyOutcome {
-        if let Some(rect) = layout.palette_close {
-            if point_in(rect, col, row) {
+    pub(crate) fn palette_click(&mut self, col: u16, row: u16, layout: &MouseFrame) -> KeyOutcome {
+        match layout.resolve(col, row) {
+            Some(HitTarget::PaletteClose) => {
                 self.close_palette();
-                return KeyOutcome::None;
+                KeyOutcome::None
             }
-        }
-        for (i, rect) in layout.palette_rows.iter().enumerate() {
-            if point_in(*rect, col, row) {
+            Some(HitTarget::Row(RowTarget::Palette(index))) => {
                 if let Some(p) = self.palette_mut() {
-                    p.selected = i;
+                    p.selected = index;
                 }
-                return self.execute_palette_selection();
+                self.execute_palette_selection()
             }
+            _ => KeyOutcome::None,
         }
-        KeyOutcome::None
     }
 }
 

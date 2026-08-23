@@ -4,7 +4,7 @@
 use crate::tui::palette::{CrossAction, PaletteExec, PaletteMode};
 use crate::tui::view_model::{ChromeVm, PaletteVm};
 use crate::tui::EditResult;
-use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, Screen};
+use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, RowTarget, Screen};
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{
     layout::{Margin, Rect},
@@ -184,11 +184,19 @@ pub(crate) fn render_palette_vm(
     state: &AppState,
     palette: &PaletteVm,
     chrome: &ChromeVm,
-    layout: &mut MouseLayout,
+    layout: &mut MouseFrame,
+    feedback: &mut crate::tui::render::RenderFeedback,
 ) {
-    let mut bg_layout = MouseLayout::default();
+    let mut bg_layout = MouseFrame::default();
     if let Some(background) = &palette.background {
-        crate::tui::render::render_screen_vm(frame, state, background, chrome, &mut bg_layout);
+        crate::tui::render::render_screen_vm_with_feedback(
+            frame,
+            state,
+            background,
+            chrome,
+            &mut bg_layout,
+            feedback,
+        );
     }
 
     let area = frame.area();
@@ -230,7 +238,7 @@ pub(crate) fn render_palette_vm(
 
     frame.render_widget(Clear, rect);
 
-    layout.palette_rows.clear();
+    layout.intercept_all();
     let dim = Style::default().fg(state.theme.dim);
     let active = Style::default()
         .fg(state.theme.fg_on_accent)
@@ -278,22 +286,80 @@ pub(crate) fn render_palette_vm(
 
     let inner = rect.inner(Margin::new(1, 1));
     let mut y = inner.y + u16::from(palette.has_query);
-    for item in palette.items.iter() {
+    for (index, item) in palette.items.iter().enumerate() {
         if y >= inner.bottom() {
             break;
         }
         if chrome.mouse_enabled && item.enabled {
-            layout
-                .palette_rows
-                .push(Rect::new(inner.x, y, inner.width, 1));
+            layout.register(
+                HitTarget::Row(RowTarget::Palette(index)),
+                Rect::new(inner.x, y, inner.width, 1),
+            );
         }
         y = y.saturating_add(1);
     }
     if chrome.mouse_enabled {
-        layout.palette_close = Some(crate::tui::render::render_close_button(
-            frame,
-            rect,
-            &state.theme,
-        ));
+        let close = crate::tui::render::render_close_button(frame, rect, &state.theme);
+        layout.register(HitTarget::PaletteClose, close);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tui::initial_state;
+    use crate::tui::keymap::Category;
+    use crate::tui::palette::{PaletteItem, PaletteState};
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn enabled_row_after_disabled_row_keeps_its_palette_index() {
+        let mut state = initial_state();
+        state.screen = Screen::Palette(Box::new(PaletteState {
+            mode: PaletteMode::Command,
+            items: vec![
+                PaletteItem {
+                    key_hint: "x".into(),
+                    label: "Disabled".into(),
+                    exec: PaletteExec::Cross(CrossAction::Quit),
+                    enabled: false,
+                    category: Category::Nav,
+                    search: "x disabled".into(),
+                },
+                PaletteItem {
+                    key_hint: "t".into(),
+                    label: "Toggle theme".into(),
+                    exec: PaletteExec::Cross(CrossAction::ToggleTheme),
+                    enabled: true,
+                    category: Category::Nav,
+                    search: "t toggle theme".into(),
+                },
+            ],
+            origin_screen: Screen::List,
+            ..PaletteState::default()
+        }));
+        let vm = build_palette_vm(&state);
+        let chrome = ChromeVm {
+            mouse_enabled: true,
+            bg_task_msg: None,
+            spinner_frame: 0,
+        };
+        let mut mouse = MouseFrame::default();
+        let mut feedback = crate::tui::render::RenderFeedback::default();
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|frame| render_palette_vm(frame, &state, &vm, &chrome, &mut mouse, &mut feedback))
+            .unwrap();
+        let (col, row) = (0..20)
+            .flat_map(|row| (0..80).map(move |col| (col, row)))
+            .find(|&(col, row)| {
+                mouse.resolve(col, row) == Some(HitTarget::Row(RowTarget::Palette(1)))
+            })
+            .expect("enabled row hit");
+
+        let outcome = state.palette_click(col, row, &mouse);
+
+        assert_eq!(outcome, KeyOutcome::ThemeToggle);
+        assert_eq!(state.theme_choice, crate::config::ThemeChoice::Light);
     }
 }

@@ -68,7 +68,7 @@ impl AppState {
         // A keystroke means the hand left the mouse. Ending the drag here is what keeps the
         // flag from wedging when a key takes the mouse away before the release lands —
         // turning mouse support off in Settings, or suspending the TUI for $EDITOR (#395).
-        self.end_split_drag();
+        self.mouse_session.interrupt();
         if code == KeyCode::Char(';')
             && modifiers.is_empty()
             && !self.screen.is_palette()
@@ -210,7 +210,7 @@ impl AppState {
     /// `true` when a row was hit (so a double-click should "open" it). A click in a pane's
     /// blank area or border focuses it but selects nothing (returns `false`); a click off
     /// every list returns `false`.
-    fn click_select(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
+    fn click_select(&mut self, col: u16, row: u16, layout: &MouseFrame) -> bool {
         (super::screens::lookup(&self.screen).click_select)(self, col, row, layout)
     }
 
@@ -231,13 +231,13 @@ impl AppState {
     /// Translate a classified mouse intent into a state change, reusing existing keyboard
     /// logic. Pure (no IO, no clock); returns a `KeyOutcome` so `run_loop` can perform any
     /// follow-up IO (e.g. `PreviewDiff` on double-click).
-    pub fn handle_mouse(&mut self, input: MouseInput, layout: &MouseLayout) -> KeyOutcome {
-        // Before anything else: a release ends a divider drag whatever is on screen. An
-        // overlay that swallowed it would leave the flag stuck on, and every later
-        // press-and-move on the List screen would resize without a grab (#395).
+    pub fn handle_mouse(&mut self, input: MouseInput, layout: &MouseFrame) -> KeyOutcome {
         if input == MouseInput::Release {
-            self.end_split_drag();
+            self.mouse_session.interrupt();
             return KeyOutcome::None;
+        }
+        if matches!(input, MouseInput::RightClick { .. }) {
+            self.mouse_session.interrupt();
         }
         if self.screen.is_palette() {
             return match input {
@@ -262,17 +262,14 @@ impl AppState {
             };
         }
         match input {
-            // Divider drag (#395). `layout.list_split` is only recorded on the List screen,
-            // so this is a no-op everywhere else. `Release` was handled above.
+            // Divider geometry is only registered on the List screen, so this is a no-op
+            // everywhere else. `Release` was handled above.
             MouseInput::Drag { col } => {
                 self.drag_split_divider(col, layout);
                 KeyOutcome::None
             }
             MouseInput::Release => KeyOutcome::None,
             MouseInput::RightClick { col, row } => {
-                // Opening a menu ends any resize: leaving the drag alive would keep the
-                // divider accented under an overlay where dragging does nothing (#395).
-                self.end_split_drag();
                 if self.palette_blocked() {
                     return KeyOutcome::None;
                 }
@@ -292,58 +289,9 @@ impl AppState {
                 KeyOutcome::None
             }
             MouseInput::Click { col, row } => {
-                // Close button takes priority on non-List screens.
-                if let Some(rect) = layout.close_button {
-                    if point_in(rect, col, row) {
-                        // Esc is the universal cancel across all screens and all
-                        // pending-action variants (including the create-description
-                        // editing sub-state where 'n' would type into the field).
-                        return self.handle_key_with(KeyCode::Esc, KeyModifiers::NONE);
-                    }
-                }
-                // GitHub repo link click opens it in the browser.
-                if let Some(rect) = layout.repo_link {
-                    if point_in(rect, col, row) {
-                        return KeyOutcome::OpenRepoUrl {
-                            url: env!("CARGO_PKG_REPOSITORY").to_string(),
-                        };
-                    }
-                }
-                // Top-bar (g)ists / (P)ins / (C)onfig / (?)Help — same effect as pressing
-                // the key, from any screen (not just wherever that key happens to be bound).
-                if let Some(rect) = layout.top_bar_gists {
-                    if point_in(rect, col, row) {
-                        self.open_gist_manager();
-                        return KeyOutcome::None;
-                    }
-                }
-                if let Some(rect) = layout.top_bar_pins {
-                    if point_in(rect, col, row) {
-                        self.open_pins();
-                        return KeyOutcome::None;
-                    }
-                }
-                if let Some(rect) = layout.top_bar_config {
-                    if point_in(rect, col, row) {
-                        self.open_config();
-                        return KeyOutcome::None;
-                    }
-                }
-                if let Some(rect) = layout.top_bar_help {
-                    if point_in(rect, col, row) {
-                        self.open_help();
-                        return KeyOutcome::None;
-                    }
-                }
-                // A GistDetail tab header click switches focus (single-click action).
-                if let Some(outcome) = self.click_detail_tab(col, row, layout) {
+                if let Some(outcome) = self.activate_global_mouse_target(col, row, layout) {
                     return outcome;
                 }
-                if let Some(outcome) = self.click_comments_load_older(col, row, layout) {
-                    return outcome;
-                }
-                // Pressing the pane divider starts a resize instead of focusing a pane;
-                // the matching release must not select anything either (#395).
                 if self.grab_split_divider(col, row, layout) {
                     return KeyOutcome::None;
                 }
@@ -351,8 +299,7 @@ impl AppState {
                 KeyOutcome::None
             }
             MouseInput::DoubleClick { col, row } => {
-                // A tab double-click is just a tab switch (no "open").
-                if let Some(outcome) = self.click_detail_tab(col, row, layout) {
+                if let Some(outcome) = self.activate_global_mouse_target(col, row, layout) {
                     return outcome;
                 }
                 if self.reset_split_divider(col, row, layout) {
@@ -364,6 +311,41 @@ impl AppState {
                 }
                 KeyOutcome::None
             }
+        }
+    }
+
+    fn activate_global_mouse_target(
+        &mut self,
+        col: u16,
+        row: u16,
+        layout: &MouseFrame,
+    ) -> Option<KeyOutcome> {
+        match layout.resolve(col, row)? {
+            HitTarget::Close => Some(self.handle_key_with(KeyCode::Esc, KeyModifiers::NONE)),
+            HitTarget::Repo => Some(KeyOutcome::OpenRepoUrl {
+                url: env!("CARGO_PKG_REPOSITORY").to_string(),
+            }),
+            HitTarget::TopGists => {
+                self.open_gist_manager();
+                Some(KeyOutcome::None)
+            }
+            HitTarget::TopPins => {
+                self.open_pins();
+                Some(KeyOutcome::None)
+            }
+            HitTarget::TopConfig => {
+                self.open_config();
+                Some(KeyOutcome::None)
+            }
+            HitTarget::TopHelp => {
+                self.open_help();
+                Some(KeyOutcome::None)
+            }
+            HitTarget::DetailFilesTab | HitTarget::DetailCommentsTab => {
+                self.click_detail_tab(col, row, layout)
+            }
+            HitTarget::CommentsLoadOlder => self.click_comments_load_older(col, row, layout),
+            HitTarget::PaletteClose | HitTarget::Divider(_) | HitTarget::Row(_) => None,
         }
     }
 }
@@ -699,10 +681,8 @@ mod tests {
         state.handle_key(KeyCode::Right); // dirty the hscroll so the reset is observable
         assert!(pins_ref(&state).cursor.hscroll > 0);
         state.screen = Screen::Preview(Box::default());
-        let layout = MouseLayout {
-            top_bar_pins: Some(Rect::new(20, 0, 6, 1)),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register(HitTarget::TopPins, Rect::new(20, 0, 6, 1));
         let out = state.handle_mouse(MouseInput::Click { col: 22, row: 0 }, &layout);
         assert!(state.screen.is_pins());
         assert_eq!(pins_ref(&state).cursor.hscroll, 0);
@@ -710,13 +690,26 @@ mod tests {
     }
 
     #[test]
+    fn double_click_uses_the_same_global_priority_as_click() {
+        let mut state = initial_state();
+        state.screen = Screen::Preview(Box::default());
+        let mut layout = MouseFrame::default();
+        let rect = Rect::new(20, 0, 6, 1);
+        layout.register_pane(PaneTarget::List, PaneHit { rect, offset: 0 }, 1);
+        layout.register(HitTarget::TopPins, rect);
+
+        let out = state.handle_mouse(MouseInput::DoubleClick { col: 22, row: 0 }, &layout);
+
+        assert_eq!(out, KeyOutcome::None);
+        assert!(state.screen.is_pins());
+    }
+
+    #[test]
     fn top_bar_help_click_while_already_on_help_does_not_trap_keyboard_exit() {
         let mut state = state_with_gists();
         state.screen = Screen::Preview(Box::default());
-        let layout = MouseLayout {
-            top_bar_help: Some(Rect::new(30, 0, 7, 1)),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register(HitTarget::TopHelp, Rect::new(30, 0, 7, 1));
         // First click opens Help from Preview, remembering Preview as the return screen.
         state.handle_mouse(MouseInput::Click { col: 32, row: 0 }, &layout);
         assert!(state.screen.is_help());
@@ -748,10 +741,8 @@ mod tests {
     #[test]
     fn repo_link_click_opens_repo_url_regardless_of_which_screen_set_the_rect() {
         let mut state = initial_state();
-        let layout = MouseLayout {
-            repo_link: Some(Rect::new(5, 10, 20, 1)),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register(HitTarget::Repo, Rect::new(5, 10, 20, 1));
         let out = state.handle_mouse(MouseInput::Click { col: 10, row: 10 }, &layout);
         assert!(matches!(out, KeyOutcome::OpenRepoUrl { .. }));
     }
@@ -768,7 +759,7 @@ mod tests {
         );
         assert!(state.screen.is_diff());
         assert_eq!(state.scroll_body().expect("Diff ScrollBody").scroll, 0);
-        state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+        state.handle_mouse(MouseInput::ScrollDown, &MouseFrame::default());
         assert_eq!(state.scroll_body().expect("Diff ScrollBody").scroll, 3);
     }
 
@@ -782,7 +773,7 @@ mod tests {
             std::path::PathBuf::from("/tmp/cwd/x"),
         );
         set_diff_scroll(&mut state, 3);
-        state.handle_mouse(MouseInput::ScrollUp, &MouseLayout::default());
+        state.handle_mouse(MouseInput::ScrollUp, &MouseFrame::default());
         assert_eq!(state.scroll_body().expect("Diff ScrollBody").scroll, 0);
     }
 
@@ -791,10 +782,8 @@ mod tests {
         let mut state = state_with_gists();
         // Simulate entering Help (mirrors what open_help() does).
         state.screen = Screen::Help(Box::default());
-        let layout = MouseLayout {
-            close_button: Some(Rect::new(36, 0, 5, 1)),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register(HitTarget::Close, Rect::new(36, 0, 5, 1));
         let out = state.handle_mouse(MouseInput::Click { col: 38, row: 0 }, &layout);
         assert_eq!(out, KeyOutcome::None);
         assert_eq!(state.screen, Screen::List);
@@ -807,10 +796,8 @@ mod tests {
         let mut state = state_with_gists();
         set_diff_body(&mut state, "line1\nline2\nline3");
         set_pending(&mut state, PendingAction::Download);
-        let layout = MouseLayout {
-            close_button: Some(Rect::new(36, 0, 5, 1)),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register(HitTarget::Close, Rect::new(36, 0, 5, 1));
         let out = state.handle_mouse(MouseInput::Click { col: 38, row: 0 }, &layout);
         assert_eq!(out, KeyOutcome::None);
         assert!(state.pending_action().is_none());
@@ -833,10 +820,8 @@ mod tests {
         state.editing_description = true;
         // Pre-fill description so we can assert it was cleared (not grown by a typed 'n').
         state.description_input = "my desc".into();
-        let layout = MouseLayout {
-            close_button: Some(Rect::new(36, 0, 5, 1)),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register(HitTarget::Close, Rect::new(36, 0, 5, 1));
         state.handle_mouse(MouseInput::Click { col: 38, row: 0 }, &layout);
         // Esc on create-description clears description, exits editing, and calls back_to_list.
         assert!(
@@ -856,7 +841,7 @@ mod tests {
         let mut state = crate::tui::initial_state();
         let out = state.handle_mouse(
             MouseInput::RightClick { col: 10, row: 5 },
-            &MouseLayout::default(),
+            &MouseFrame::default(),
         );
         assert_eq!(out, KeyOutcome::None);
         assert!(state.screen.is_palette());
@@ -868,32 +853,46 @@ mod tests {
     #[test]
     fn an_overlay_never_leaves_a_divider_drag_running() {
         let mut state = state_with_gists();
-        let layout = MouseLayout {
-            list_split: Some(crate::tui::SplitHit {
-                area: Rect::new(0, 1, 100, 20),
-                divider_x: 39,
-            }),
-            ..Default::default()
+        let mut layout = MouseFrame::default();
+        let split = crate::tui::SplitHit {
+            area: Rect::new(0, 1, 100, 20),
+            divider_x: 39,
         };
+        layout.register(HitTarget::Divider(split), split.area);
         state.handle_mouse(MouseInput::Click { col: 39, row: 5 }, &layout);
-        assert!(state.list_split_drag);
+        assert!(state.mouse_session.is_dragging());
 
         // Opening the context menu ends the resize, so the divider is not left accented
         // under an overlay where dragging does nothing.
         state.handle_mouse(MouseInput::RightClick { col: 39, row: 5 }, &layout);
         assert!(state.screen.is_palette());
-        assert!(!state.list_split_drag);
+        assert!(!state.mouse_session.is_dragging());
 
         // And a release that arrives while the overlay is up still clears the flag, whatever
         // put it there — otherwise every later press-and-move would resize without a grab.
-        state.list_split_drag = true;
+        state.mouse_session.begin_divider_drag();
         state.handle_mouse(MouseInput::Drag { col: 70 }, &layout);
         assert_eq!(state.list_split_percent, 40, "resized under the palette");
         state.handle_mouse(MouseInput::Release, &layout);
         assert!(
-            !state.list_split_drag,
+            !state.mouse_session.is_dragging(),
             "release under the palette left the drag stuck"
         );
+    }
+
+    #[test]
+    fn right_click_interrupts_a_drag_even_when_palette_is_already_open() {
+        let mut state = state_with_gists();
+        state.open_palette_menu(None);
+        state.mouse_session.begin_divider_drag();
+
+        let out = state.handle_mouse(
+            MouseInput::RightClick { col: 1, row: 1 },
+            &MouseFrame::default(),
+        );
+
+        assert_eq!(out, KeyOutcome::None);
+        assert!(!state.mouse_session.is_dragging());
     }
 
     /// #395: a keystroke means the hand left the mouse, and some keys take the mouse away
@@ -902,17 +901,16 @@ mod tests {
     #[test]
     fn a_keystroke_ends_a_divider_drag() {
         let mut state = state_with_gists();
-        let layout = MouseLayout {
-            list_split: Some(crate::tui::SplitHit {
-                area: Rect::new(0, 1, 100, 20),
-                divider_x: 39,
-            }),
-            ..Default::default()
+        let mut layout = MouseFrame::default();
+        let split = crate::tui::SplitHit {
+            area: Rect::new(0, 1, 100, 20),
+            divider_x: 39,
         };
+        layout.register(HitTarget::Divider(split), split.area);
         state.handle_mouse(MouseInput::Click { col: 39, row: 5 }, &layout);
-        assert!(state.list_split_drag);
+        assert!(state.mouse_session.is_dragging());
         state.handle_key(KeyCode::Tab);
-        assert!(!state.list_split_drag);
+        assert!(!state.mouse_session.is_dragging());
     }
 
     /// #395: a background-task overlay takes over the mouse and would swallow the release,
@@ -920,17 +918,16 @@ mod tests {
     #[test]
     fn a_background_task_ends_a_divider_drag() {
         let mut state = state_with_gists();
-        let layout = MouseLayout {
-            list_split: Some(crate::tui::SplitHit {
-                area: Rect::new(0, 1, 100, 20),
-                divider_x: 39,
-            }),
-            ..Default::default()
+        let mut layout = MouseFrame::default();
+        let split = crate::tui::SplitHit {
+            area: Rect::new(0, 1, 100, 20),
+            divider_x: 39,
         };
+        layout.register(HitTarget::Divider(split), split.area);
         state.handle_mouse(MouseInput::Click { col: 39, row: 5 }, &layout);
-        assert!(state.list_split_drag);
+        assert!(state.mouse_session.is_dragging());
         state.begin_bg_task();
-        assert!(!state.list_split_drag);
+        assert!(!state.mouse_session.is_dragging());
     }
 
     #[test]
@@ -938,9 +935,9 @@ mod tests {
         let mut state = state_with_gists();
         state.screen = Screen::Preview(Box::default());
         assert_eq!(
-            state.handle_mouse(MouseInput::Release, &MouseLayout::default()),
+            state.handle_mouse(MouseInput::Release, &MouseFrame::default()),
             KeyOutcome::None
         );
-        assert!(!state.list_split_drag);
+        assert!(!state.mouse_session.is_dragging());
     }
 }

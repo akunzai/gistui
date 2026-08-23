@@ -26,8 +26,19 @@ use ratatui::{
 };
 use similar::{ChangeTag, TextDiff};
 
-pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayout) {
-    *layout = MouseLayout::default();
+#[derive(Debug, Default)]
+pub(super) struct RenderFeedback {
+    pub comments_max_scroll: Option<u16>,
+}
+
+pub(super) fn render(
+    frame: &mut Frame,
+    state: &AppState,
+    layout: &mut MouseFrame,
+    feedback: &mut RenderFeedback,
+) {
+    layout.clear();
+    *feedback = RenderFeedback::default();
     // Paint the full canvas so every unfilled cell uses the theme background (no-op for dark
     // theme where bg=Reset, effective for light theme which sets a grey canvas).
     frame.render_widget(
@@ -37,7 +48,7 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
     // Pure presentation seam (issues #241 / #250): every screen paints from the view model.
     // Pin sync IO is never done here — only cache reads.
     let vm = super::build_view_model(state);
-    render_screen_vm(frame, state, &vm.screen, &vm.chrome, layout);
+    render_screen_vm_with_feedback(frame, state, &vm.screen, &vm.chrome, layout, feedback);
     if let Some(ref msg) = vm.chrome.bg_task_msg {
         render_loading_overlay(frame, msg, vm.chrome.spinner_frame, &state.theme);
     }
@@ -46,17 +57,20 @@ pub(super) fn render(frame: &mut Frame, state: &AppState, layout: &mut MouseLayo
 /// Paints one `ScreenVm`. Shared by `render()` (the primary per-frame path) and
 /// `render_palette_vm` (the palette's already-built background, issue #272) — one seam, two
 /// real callers, so a new `Screen` variant only needs wiring here once.
-pub(crate) fn render_screen_vm(
+pub(crate) fn render_screen_vm_with_feedback(
     frame: &mut Frame,
     state: &AppState,
     screen: &super::ScreenVm,
     chrome: &super::view_model::ChromeVm,
-    layout: &mut MouseLayout,
+    layout: &mut MouseFrame,
+    feedback: &mut RenderFeedback,
 ) {
     match screen {
         ScreenVm::List(list) => render_list(frame, state, list, chrome, layout),
         ScreenVm::Gists(gists) => render_gists(frame, state, gists, chrome, layout),
-        ScreenVm::GistDetail(detail) => render_detail(frame, state, detail, chrome, layout),
+        ScreenVm::GistDetail(detail) => {
+            render_detail(frame, state, detail, chrome, layout, feedback)
+        }
         ScreenVm::Revisions(revs) => render_revisions(frame, state, revs, chrome, layout),
         ScreenVm::Config(config) => render_config(frame, state, config, chrome, layout),
         ScreenVm::Diff(diff) => render_diff(frame, state, diff, chrome, layout),
@@ -64,8 +78,28 @@ pub(crate) fn render_screen_vm(
         ScreenVm::Pins(pins) => render_pins(frame, state, pins, chrome, layout),
         ScreenVm::Confirm(confirm) => render_confirm(frame, state, confirm, chrome, layout),
         ScreenVm::Help(help) => render_help(frame, state, help, chrome, layout),
-        ScreenVm::Palette(palette) => render_palette(frame, state, palette, chrome, layout),
+        ScreenVm::Palette(palette) => {
+            render_palette(frame, state, palette, chrome, layout, feedback)
+        }
     }
+}
+
+#[cfg(test)]
+pub(crate) fn render_screen_vm(
+    frame: &mut Frame,
+    state: &AppState,
+    screen: &super::ScreenVm,
+    chrome: &super::view_model::ChromeVm,
+    layout: &mut MouseFrame,
+) {
+    render_screen_vm_with_feedback(
+        frame,
+        state,
+        screen,
+        chrome,
+        layout,
+        &mut RenderFeedback::default(),
+    );
 }
 
 mod chrome;
@@ -104,7 +138,7 @@ mod tests {
         let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
         let vm = super::super::build_view_model(state);
-        let mut layout = MouseLayout::default();
+        let mut layout = MouseFrame::default();
         terminal
             .draw(|frame| render_screen_vm(frame, state, &vm.screen, &vm.chrome, &mut layout))
             .unwrap();
@@ -201,7 +235,7 @@ mod tests {
         let backend = TestBackend::new(137, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         let vm = super::super::build_view_model(&state);
-        let mut layout = MouseLayout::default();
+        let mut layout = MouseFrame::default();
         terminal
             .draw(|frame| render_screen_vm(frame, &state, &vm.screen, &vm.chrome, &mut layout))
             .unwrap();
@@ -235,7 +269,7 @@ mod tests {
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         let vm = super::super::build_view_model(&state);
-        let mut layout = MouseLayout::default();
+        let mut layout = MouseFrame::default();
         terminal
             .draw(|frame| render_screen_vm(frame, &state, &vm.screen, &vm.chrome, &mut layout))
             .unwrap();
@@ -269,7 +303,7 @@ mod tests {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         let vm = super::super::build_view_model(state);
-        let mut layout = MouseLayout::default();
+        let mut layout = MouseFrame::default();
         terminal
             .draw(|frame| render_screen_vm(frame, state, &vm.screen, &vm.chrome, &mut layout))
             .unwrap();
@@ -487,7 +521,7 @@ mod tests {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
         let vm = super::super::build_view_model(state);
-        let mut layout = MouseLayout::default();
+        let mut layout = MouseFrame::default();
         terminal
             .draw(|frame| render_screen_vm(frame, state, &vm.screen, &vm.chrome, &mut layout))
             .unwrap();

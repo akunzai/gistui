@@ -9,9 +9,17 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{backend::CrosstermBackend, layout::Rect, widgets::Clear, Terminal};
+#[cfg(test)]
+use ratatui::layout::Rect;
+use ratatui::{backend::CrosstermBackend, widgets::Clear, Terminal};
 use std::io;
 use std::path::PathBuf;
+
+mod mouse;
+pub use mouse::{
+    point_in, HitTarget, MouseFrame, MouseSession, PaneHit, PaneTarget, PressKind, RowTarget,
+    SplitHit,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FocusPane {
@@ -642,87 +650,6 @@ pub struct DeferredEntry {
     replaces_current: bool,
 }
 
-/// A clickable list pane recorded by `render` for the current frame.
-/// `offset` is ratatui's first-visible-item index, captured after the list renders.
-#[derive(Debug, Clone, Copy)]
-pub struct PaneHit {
-    pub rect: Rect,
-    pub offset: usize,
-}
-
-impl PaneHit {
-    /// Map an absolute terminal `row` to a list index, or `None` for border rows,
-    /// rows past the last item, or an empty list. `visible_len` is the count of
-    /// currently visible rows (e.g. `visible_locals().len()` / `ranked_gists().len()`).
-    pub fn index_at(&self, row: u16, visible_len: usize) -> Option<usize> {
-        let top = self.rect.y + 1; // skip the top border
-        let bottom = self.rect.bottom().saturating_sub(1); // exclusive of bottom border
-        if row < top || row >= bottom {
-            return None;
-        }
-        let idx = self.offset + (row - top) as usize;
-        (idx < visible_len).then_some(idx)
-    }
-}
-
-/// The draggable divider between the List screen's two panes, recorded by `render`.
-///
-/// `area` is the two panes' combined region — the denominator every column-to-percent
-/// conversion needs, which is why it is carried here rather than reconstructed from the
-/// `local` / `gist` hits (that would bake in an unwritten "panes are adjacent and fill
-/// the row" invariant).
-#[derive(Debug, Clone, Copy)]
-pub struct SplitHit {
-    pub area: Rect,
-    /// Column of the local pane's right border; the gist pane's left border sits at `+1`.
-    pub divider_x: u16,
-}
-
-impl SplitHit {
-    /// Whether a press at (`col`, `row`) grabs the divider: the two border columns widened
-    /// by one on each side (four cells, comfortable to hit), anywhere down the panes' height.
-    /// `row` is checked here and only here — once the drag is running the pointer is free to
-    /// leave the panes vertically.
-    pub fn grabbed(&self, col: u16, row: u16) -> bool {
-        row >= self.area.y
-            && row < self.area.bottom()
-            && col + 1 >= self.divider_x
-            && col <= self.divider_x + 2
-    }
-}
-
-/// Per-frame mouse hit regions, owned by `run_loop`, filled by `render`.
-#[derive(Debug, Default, Clone)]
-pub struct MouseLayout {
-    pub local: Option<PaneHit>,
-    pub gist: Option<PaneHit>,
-    /// Single-list screens (Gists / Pins / Revisions) and the Help topic index.
-    pub list: Option<PaneHit>,
-    /// List screen only: the draggable divider between the two panes.
-    pub list_split: Option<SplitHit>,
-    /// GistDetail file list (Files tab).
-    pub detail_files: Option<PaneHit>,
-    /// GistDetail "Files" / "Comments" tab headers (clickable to switch focus).
-    pub detail_tab_files: Option<Rect>,
-    pub detail_tab_comments: Option<Rect>,
-    pub close_button: Option<Rect>,
-    /// GistDetail Comments: the clickable "load older" affordance line.
-    pub comments_load_older: Option<Rect>,
-    /// GistDetail Comments: max useful vertical scroll (set by render; used by run_loop
-    /// to honour a one-shot scroll-to-bottom after the newest page loads).
-    pub comments_max_scroll: Option<u16>,
-    pub repo_link: Option<Rect>,
-    /// Cross-screen top-bar shortcut hit-rects — `(g)ists`, `(P)ins`, `(C)onfig`, `(?)Help`.
-    /// Set by `render_top_bar` on every screen except the transient `Confirm` y/n modal.
-    pub top_bar_gists: Option<Rect>,
-    pub top_bar_pins: Option<Rect>,
-    pub top_bar_config: Option<Rect>,
-    pub top_bar_help: Option<Rect>,
-    /// Palette overlay: one hit-rect per visible row, plus the `[✕]` close button.
-    pub palette_rows: Vec<Rect>,
-    pub palette_close: Option<Rect>,
-}
-
 /// A classified mouse intent handed to the pure `handle_mouse`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseInput {
@@ -747,25 +674,6 @@ pub enum MouseInput {
     },
     /// Left button released, ending any drag in progress.
     Release,
-}
-
-/// Max gap between two left-clicks on the same cell to count as a double-click.
-pub const DOUBLE_CLICK_MS: u128 = 400;
-
-/// Classify a left-button press as a single or double click. `prev` is the (col,row) of
-/// the previous left press; `elapsed_ms` is the time since it. Pure: the caller (run_loop)
-/// owns the clock and supplies the elapsed milliseconds.
-pub fn classify_click(
-    prev: Option<(u16, u16)>,
-    elapsed_ms: u128,
-    col: u16,
-    row: u16,
-) -> MouseInput {
-    if prev == Some((col, row)) && elapsed_ms <= DOUBLE_CLICK_MS {
-        MouseInput::DoubleClick { col, row }
-    } else {
-        MouseInput::Click { col, row }
-    }
 }
 
 /// Per-screen upload-diff state (the `u` flow). Data only — the upload methods
@@ -936,7 +844,7 @@ pub struct AppState {
     /// [`screens::list::DEFAULT_SPLIT_PERCENT`].
     pub list_split_percent: u16,
     /// The divider is being dragged: paint highlights it and pointer moves resize the panes.
-    pub list_split_drag: bool,
+    pub mouse_session: MouseSession,
     pub screen: Screen,
     pub gist_view: GistView,
     pub gist_type_filter: GistTypeFilter,
@@ -1396,7 +1304,7 @@ impl AppState {
     pub fn begin_bg_task(&mut self) -> u64 {
         // The overlay takes over the mouse, so it would swallow the release that ends a
         // divider drag (#395). End it here, when the overlay appears.
-        self.end_split_drag();
+        self.mouse_session.interrupt();
         self.bg_task_generation = self.bg_task_generation.wrapping_add(1);
         self.bg_task_generation
     }
@@ -2147,7 +2055,7 @@ pub fn initial_state() -> AppState {
         local_hscroll: 0,
         gist_hscroll: 0,
         list_split_percent: screens::list::DEFAULT_SPLIT_PERCENT,
-        list_split_drag: false,
+        mouse_session: MouseSession::default(),
         screen: Screen::List,
         gist_view: GistView::Description,
         gist_type_filter: GistTypeFilter::All,
@@ -2528,38 +2436,6 @@ mod tests {
         assert!(hit.grabbed(40, 10));
         assert!(!hit.grabbed(39, 0)); // top bar shares the column, not the divider
         assert!(!hit.grabbed(39, 11)); // below the panes (footer)
-    }
-
-    #[test]
-    fn classify_click_detects_double_click() {
-        // Same cell within the threshold -> DoubleClick.
-        let r = super::classify_click(Some((5, 5)), 100, 5, 5);
-        assert_eq!(r, MouseInput::DoubleClick { col: 5, row: 5 });
-    }
-
-    #[test]
-    fn classify_click_single_when_too_slow() {
-        let r = super::classify_click(Some((5, 5)), super::DOUBLE_CLICK_MS + 1, 5, 5);
-        assert_eq!(r, MouseInput::Click { col: 5, row: 5 });
-    }
-
-    #[test]
-    fn classify_click_single_on_different_cell() {
-        let r = super::classify_click(Some((5, 5)), 100, 6, 5);
-        assert_eq!(r, MouseInput::Click { col: 6, row: 5 });
-    }
-
-    #[test]
-    fn classify_click_single_when_no_prior() {
-        let r = super::classify_click(None, 0, 5, 5);
-        assert_eq!(r, MouseInput::Click { col: 5, row: 5 });
-    }
-
-    #[test]
-    fn classify_click_at_exact_threshold() {
-        // Exactly at the boundary: still counts as a double-click (inclusive `<=`).
-        let r = super::classify_click(Some((5, 5)), super::DOUBLE_CLICK_MS, 5, 5);
-        assert_eq!(r, MouseInput::DoubleClick { col: 5, row: 5 });
     }
 
     #[test]
