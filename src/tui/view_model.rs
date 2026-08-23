@@ -415,7 +415,7 @@ pub(crate) fn build_compact_gist_bg_vm(state: &AppState, gist_id: &str) -> Optio
         info_line: gist_info_line(
             &group,
             unix_now(),
-            state.current_user_login.as_deref(),
+            state.gist_catalog.user_login.as_deref(),
             state.gist_is_starred(gist_id),
             state.gist_counts(gist_id),
         ),
@@ -731,11 +731,11 @@ mod tests {
             pinned: true,
             modified: None,
         }];
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "demo notes".into(),
             ..GistFile::fixture("g1", "notes.txt")
         }];
-        state.starred_gist_ids.insert("g1".into());
+        state.gist_catalog.starred_ids.insert("g1".into());
         state.pinned = vec![PinnedMapping {
             local_path: PathBuf::from("notes.txt"),
             gist_id: "g1".into(),
@@ -856,7 +856,7 @@ mod tests {
             other => panic!("expected Gists, got {other:?}"),
         }
 
-        state.gists = vec![
+        state.gist_catalog.owned = vec![
             GistFile {
                 description: "alpha".into(),
                 ..GistFile::fixture("g1", "a.txt")
@@ -866,8 +866,8 @@ mod tests {
                 ..GistFile::fixture("g2", "b.txt")
             },
         ];
-        state.starred_gist_ids.insert("g1".into());
-        state.gist_comment_counts.insert("g1".into(), 2);
+        state.gist_catalog.starred_ids.insert("g1".into());
+        state.gist_catalog.comment_counts.insert("g1".into(), 2);
         match build_view_model(&state).screen {
             ScreenVm::Gists(g) => {
                 assert_eq!(g.pane.empty, ListPaneEmpty::HasRows);
@@ -895,7 +895,7 @@ mod tests {
 
         let mut state = initial_state();
         state.screen = Screen::Gists(Box::default());
-        state.gists = vec![GistFile::fixture("g1", "a.txt")];
+        state.gist_catalog.owned = vec![GistFile::fixture("g1", "a.txt")];
         if let Some(gm) = state.gist_manager_mut() {
             gm.filter_query = crate::tui::TextInput::from("zzz-nope");
         }
@@ -936,7 +936,7 @@ mod tests {
 
         let mut state = initial_state();
         state.screen = Screen::GistDetail(Box::default());
-        state.gists = vec![
+        state.gist_catalog.owned = vec![
             GistFile {
                 description: "demo".into(),
                 content_type: Some("text/plain".into()),
@@ -950,7 +950,7 @@ mod tests {
             d.focus = DetailFocus::Files;
             d.file_cursor = 1;
         }
-        state.gist_comment_counts.insert("g1".into(), 3);
+        state.gist_catalog.comment_counts.insert("g1".into(), 3);
 
         match build_view_model(&state).screen {
             ScreenVm::GistDetail(d) => {
@@ -1024,7 +1024,7 @@ mod tests {
         if let Some(r) = state.revision_mut() {
             r.gist_id = Some("g1".into());
         }
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "hist".into(),
             ..GistFile::fixture("g1", "a.txt")
         }];
@@ -1187,7 +1187,7 @@ mod tests {
         use crate::domain::GistFile;
 
         let mut state = initial_state();
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "pack".into(),
             ..GistFile::fixture("g1", "a.txt")
         }];

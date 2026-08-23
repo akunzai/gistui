@@ -684,7 +684,7 @@ mod tests {
     #[test]
     fn revisions_capital_f_on_single_file_gist_shows_status() {
         let mut state = initial_state();
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "solo".into(),
             updated_at: "x".into(),
             created_at: "x".into(),

@@ -545,7 +545,7 @@ mod tests {
             pinned: false,
             modified: None,
         }];
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "x".into(),
             updated_at: "x".into(),
             created_at: "x".into(),

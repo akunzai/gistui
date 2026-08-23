@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn gists_palette_items_enable_selection_actions_when_selected() {
         let mut state = initial_state();
-        state.gists = vec![test_gist("g1", "a.txt")];
+        state.gist_catalog.owned = vec![test_gist("g1", "a.txt")];
         state.screen = Screen::Gists(Box::default());
         let items = menu_items(&state);
         assert!(items.iter().all(|i| i.enabled));
@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn detail_palette_items_enable_owned_actions_for_owned_previewable_gist() {
         let mut state = initial_state();
-        state.gists = vec![test_gist("g1", "a.txt")];
+        state.gist_catalog.owned = vec![test_gist("g1", "a.txt")];
         state.screen = Screen::GistDetail(Box::new(DetailState {
             gist_id: Some("g1".into()),
             focus: DetailFocus::Files,
@@ -418,8 +418,8 @@ mod tests {
     #[test]
     fn detail_palette_items_gate_fork_on_ownership() {
         let mut state = initial_state();
-        state.gists = vec![test_gist("g1", "a.txt")];
-        state.current_user_login = Some("someone-else".into());
+        state.gist_catalog.owned = vec![test_gist("g1", "a.txt")];
+        state.gist_catalog.user_login = Some("someone-else".into());
         state.screen = Screen::GistDetail(Box::new(DetailState {
             gist_id: Some("g1".into()),
             focus: DetailFocus::Files,
@@ -437,7 +437,7 @@ mod tests {
         // previously showed "Load older comments" enabled even while the Files tab was
         // focused (where `m` is a no-op in `handle_key_detail`).
         let mut state = initial_state();
-        state.gists = vec![test_gist("g1", "a.txt")];
+        state.gist_catalog.owned = vec![test_gist("g1", "a.txt")];
         state.screen = Screen::GistDetail(Box::new(DetailState {
             gist_id: Some("g1".into()),
             focus: DetailFocus::Files,
@@ -461,13 +461,13 @@ mod tests {
         // allows creating a *new* pin on an owned gist — the palette previously enabled "Pin
         // / unpin pair" for any local+gist selection regardless of ownership.
         let mut state = initial_state();
-        state.current_user_login = Some("me".into());
+        state.gist_catalog.user_login = Some("me".into());
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("a.txt"),
             pinned: false,
             modified: None,
         }];
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             owner_login: "someone-else".into(),
             ..test_gist("g1", "a.txt")
         }];
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn revisions_palette_items_gate_diff_and_restore_on_head_position() {
         let mut state = initial_state();
-        state.gists = vec![test_gist("g1", "a.txt")];
+        state.gist_catalog.owned = vec![test_gist("g1", "a.txt")];
         state.screen = Screen::Revisions(Box::new(RevisionState {
             gist_id: Some("g1".into()),
             target_file: "a.txt".into(),
@@ -579,7 +579,7 @@ mod tests {
         // `entries`. A multi-file gist should show "Cycle target file" enabled even while
         // entries are still `None`.
         let mut state = initial_state();
-        state.gists = vec![test_gist("g1", "a.txt"), test_gist("g1", "b.txt")];
+        state.gist_catalog.owned = vec![test_gist("g1", "a.txt"), test_gist("g1", "b.txt")];
         state.screen = Screen::Revisions(Box::new(RevisionState {
             gist_id: Some("g1".into()),
             target_file: "a.txt".into(),

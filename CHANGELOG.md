@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Gist refreshes now keep the last usable list and counts when one GitHub request fails, and a
+  superseded refresh can no longer overwrite newer results.
 - Mouse double-clicks now respect close buttons, repository links, and top-bar shortcuts instead
   of falling through to the row underneath.
 - Command-palette mouse clicks now execute the row under the pointer when disabled commands are

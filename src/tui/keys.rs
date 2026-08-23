@@ -550,7 +550,7 @@ impl AppState {
     /// selected file row. Resets the manager's own filters first so the target is always
     /// visible. No-op (with a status hint) when there are no gists to manage.
     pub(crate) fn open_gist_manager(&mut self) {
-        if self.gists.is_empty() {
+        if self.gist_catalog.owned.is_empty() {
             self.status = Some("no gists to manage".into());
             return;
         }

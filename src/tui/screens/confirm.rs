@@ -390,7 +390,7 @@ mod tests {
     #[test]
     fn stage_upload_preview_falls_back_to_list_raw_url() {
         let mut state = state_with_gists();
-        state.gists[0].raw_url = Some("https://example.test/a.txt".into());
+        state.gist_catalog.owned[0].raw_url = Some("https://example.test/a.txt".into());
         let file = gist_file_ref("g1", "a.txt");
 
         let (file, local_label, gist_label) =

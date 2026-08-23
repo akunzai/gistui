@@ -57,7 +57,7 @@ impl AppState {
             // never appear in `self.locals`. Fall back to stat-ing the path so the
             // Pins list and sync status still reflect the real mtime.
             .or_else(|| crate::local::file_mtime_secs(&local_abs));
-        let remote_ts = self.gists.iter().find_map(|g| {
+        let remote_ts = self.gist_catalog.owned.iter().find_map(|g| {
             (g.gist_id == m.gist_id && g.filename == m.gist_filename)
                 .then(|| crate::domain::parse_rfc3339_to_unix(&g.updated_at))
                 .flatten()
@@ -177,7 +177,7 @@ mod tests {
             direction: None,
             last_seen_hash: None,
         }];
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             updated_at: "2026-01-01T00:00:00Z".into(),
             ..GistFile::fixture("g1", "settings.json")
         }];
@@ -213,7 +213,7 @@ mod tests {
             direction: None,
             last_seen_hash: Some(hash),
         }];
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             // Far in the past, so the just-written local file (mtime ~ now) reads as newer —
             // sync_status(Some(local_ts), Some(remote_ts)) would normally resolve to Push.
             updated_at: "2020-01-01T00:00:00Z".into(),
@@ -247,7 +247,7 @@ mod tests {
             direction: None,
             last_seen_hash: Some("does-not-match-anything".into()),
         }];
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             updated_at: "2020-01-01T00:00:00Z".into(),
             ..GistFile::fixture("g1", "settings.json")
         }];
@@ -279,7 +279,7 @@ mod tests {
             direction: None,
             last_seen_hash: None,
         }];
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             updated_at: "2020-01-01T00:00:00Z".into(),
             ..GistFile::fixture("g1", "settings.json")
         }];

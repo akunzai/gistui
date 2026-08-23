@@ -38,7 +38,7 @@ pub(super) fn run_loop(
             update_rx = Some(spawn_update_check());
         }
     }
-    let mut jobs = Jobs::startup(update_rx, true);
+    let mut jobs = Jobs::startup(update_rx, true, &state.gist_catalog);
     // Pins presentation cache: refresh on enter/return to Pins (or Pins-as-palette-bg) and
     // whenever the dirty flag is set — never every frame while already on Pins (#241).
     let mut pin_sync_screen_active = false;

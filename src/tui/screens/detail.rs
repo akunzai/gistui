@@ -567,7 +567,7 @@ pub(crate) fn build_gist_detail_vm(state: &AppState) -> GistDetailVm {
     let info_line = crate::tui::render::gist_info_line(
         &group,
         crate::tui::render::unix_now(),
-        state.current_user_login.as_deref(),
+        state.gist_catalog.user_login.as_deref(),
         state.gist_is_starred(gist_id),
         state.gist_counts(gist_id),
     );
@@ -1046,7 +1046,7 @@ mod tests {
 
     fn state_with_many_files(n: usize) -> AppState {
         let mut state = initial_state();
-        state.gists = (0..n)
+        state.gist_catalog.owned = (0..n)
             .map(|i| GistFile {
                 description: "demo".into(),
                 updated_at: "2026-06-10T00:00:00Z".into(),
@@ -1319,10 +1319,10 @@ mod tests {
     #[test]
     fn fork_key_returns_fork_intent_for_foreign_gist_in_detail() {
         let mut state = initial_state();
-        state.current_user_login = Some("me".into());
+        state.gist_catalog.user_login = Some("me".into());
         state.screen = Screen::GistDetail(Box::default());
         detail_mut(&mut state).gist_id = Some("foreign".into());
-        state.starred_gists = vec![GistFile {
+        state.gist_catalog.starred = vec![GistFile {
             description: "x".into(),
             public: true,
             updated_at: "x".into(),
@@ -1339,10 +1339,10 @@ mod tests {
     #[test]
     fn fork_key_blocked_for_owned_gist_in_detail() {
         let mut state = initial_state();
-        state.current_user_login = Some("me".into());
+        state.gist_catalog.user_login = Some("me".into());
         state.screen = Screen::GistDetail(Box::default());
         detail_mut(&mut state).gist_id = Some("mine".into());
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "x".into(),
             public: true,
             updated_at: "x".into(),
@@ -1357,10 +1357,10 @@ mod tests {
     #[test]
     fn foreign_detail_mutate_keys_are_silent_noop() {
         let mut state = initial_state();
-        state.current_user_login = Some("me".into());
+        state.gist_catalog.user_login = Some("me".into());
         state.screen = Screen::GistDetail(Box::default());
         detail_mut(&mut state).gist_id = Some("foreign".into());
-        state.starred_gists = vec![GistFile {
+        state.gist_catalog.starred = vec![GistFile {
             description: "x".into(),
             public: true,
             updated_at: "x".into(),
@@ -1473,7 +1473,7 @@ mod tests {
         let mut state = initial_state();
         state.screen = Screen::GistDetail(Box::default());
         detail_mut(&mut state).gist_id = Some("g1".into());
-        state.gists = vec![GistFile::fixture("g1", "a.txt")];
+        state.gist_catalog.owned = vec![GistFile::fixture("g1", "a.txt")];
         detail_mut(&mut state).comments = Some(comments);
         detail_mut(&mut state).comments_loaded_oldest_page = 1;
         let detail = build_gist_detail_vm(&state);

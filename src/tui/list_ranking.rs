@@ -171,7 +171,7 @@ mod tests {
     fn reverse_ranking_orders_locals_by_selected_gist() {
         let mut state = initial_state();
         state.anchor = FocusPane::Gist;
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             updated_at: "x".into(),
             created_at: "x".into(),
             ..GistFile::fixture("a", "settings.json")
@@ -257,7 +257,7 @@ mod tests {
         // Regression: eagerly evaluating the cross-pane selection caused the two
         // anchor-driven rankings to recurse into each other.
         let mut state = initial_state();
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             updated_at: "x".into(),
             created_at: "x".into(),
             ..GistFile::fixture("a", "f")
@@ -279,7 +279,7 @@ mod tests {
     #[test]
     fn sort_by_name_and_recent_reorders_gists() {
         let mut state = initial_state();
-        state.gists = vec![
+        state.gist_catalog.owned = vec![
             GistFile {
                 public: true,
                 updated_at: "2026-01-01T00:00:00Z".into(),
@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn gist_type_filter_limits_ranked_gists() {
         let mut state = initial_state();
-        state.gists = vec![
+        state.gist_catalog.owned = vec![
             GistFile {
                 description: "p".into(),
                 public: true,
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn no_local_selected_lists_all_gists_unranked() {
         let mut state = initial_state();
-        state.gists = vec![
+        state.gist_catalog.owned = vec![
             GistFile {
                 description: "first".into(),
                 updated_at: "x".into(),
@@ -380,7 +380,7 @@ mod tests {
                 modified: None,
             },
         ];
-        state.gists = vec![
+        state.gist_catalog.owned = vec![
             GistFile {
                 description: "settings".into(),
                 updated_at: "x".into(),
@@ -420,7 +420,7 @@ mod tests {
                 modified: None,
             },
         ];
-        state.gists = vec![
+        state.gist_catalog.owned = vec![
             GistFile {
                 description: "settings".into(),
                 updated_at: "x".into(),
@@ -494,7 +494,7 @@ mod tests {
                 modified: None,
             },
         ];
-        state.gists = vec![
+        state.gist_catalog.owned = vec![
             GistFile {
                 description: "settings".into(),
                 updated_at: "x".into(),
@@ -542,7 +542,7 @@ mod tests {
     #[test]
     fn forked_filter_shows_only_forks() {
         let mut state = initial_state();
-        state.gists = vec![
+        state.gist_catalog.owned = vec![
             GistFile {
                 description: "mine".into(),
                 public: true,
@@ -561,7 +561,7 @@ mod tests {
                 ..GistFile::fixture("forked", "b.txt")
             },
         ];
-        state.current_user_login = Some("me".into());
+        state.gist_catalog.user_login = Some("me".into());
         state.gist_type_filter = GistTypeFilter::Forked;
         let ids: Vec<_> = state
             .ranked_gists()
@@ -576,7 +576,7 @@ mod tests {
         // With the Starred type filter active, ranked_gists must draw from starred_gists, not the
         // owned list — exercises the owned/starred source switch with data on both sides.
         let mut state = initial_state();
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "mine".into(),
             public: true,
             updated_at: "x".into(),
@@ -584,7 +584,7 @@ mod tests {
             owner_login: "me".into(),
             ..GistFile::fixture("owned", "a.txt")
         }];
-        state.starred_gists = vec![GistFile {
+        state.gist_catalog.starred = vec![GistFile {
             description: "theirs".into(),
             public: true,
             updated_at: "x".into(),

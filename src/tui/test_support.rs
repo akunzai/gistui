@@ -104,7 +104,7 @@ pub(super) fn set_diff_scroll(state: &mut AppState, scroll: u16) {
 
 pub(super) fn state_with_gists() -> AppState {
     let mut state = initial_state();
-    state.gists = vec![
+    state.gist_catalog.owned = vec![
         GistFile {
             description: "demo".into(),
             updated_at: "2026-06-10T00:00:00Z".into(),
@@ -150,7 +150,7 @@ pub(super) fn list_state_with_matches() -> AppState {
             modified: None,
         },
     ];
-    state.gists = vec![
+    state.gist_catalog.owned = vec![
         GistFile {
             description: "Zed".into(),
             public: true,
@@ -173,7 +173,7 @@ pub(super) fn list_state_with_matches() -> AppState {
 
 pub(super) fn state_with_two_gists() -> AppState {
     let mut state = initial_state();
-    state.gists = vec![
+    state.gist_catalog.owned = vec![
         GistFile {
             description: "My Ghostty config".into(),
             public: true,
@@ -199,7 +199,7 @@ pub(super) fn state_with_selection() -> AppState {
         pinned: false,
         modified: None,
     }];
-    state.gists = vec![GistFile {
+    state.gist_catalog.owned = vec![GistFile {
         description: "settings".into(),
         updated_at: "x".into(),
         created_at: "x".into(),

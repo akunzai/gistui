@@ -240,7 +240,8 @@ pub(super) fn dispatch_outcome(
             };
 
             let has_same_name = state
-                .gists
+                .gist_catalog
+                .owned
                 .iter()
                 .any(|g| g.gist_id == gist_id && g.filename == filename);
 

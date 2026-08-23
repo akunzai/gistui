@@ -121,7 +121,7 @@ pub(crate) fn list_guard(state: &AppState, code: KeyCode) -> bool {
         // handler's (looser, tested) condition instead of narrowing the handler to match the
         // palette, since the palette's extra restriction wasn't guarding against a real bug.
         KeyCode::Char('S') => has_local && has_gist,
-        KeyCode::Char('g') => !state.gists.is_empty(),
+        KeyCode::Char('g') => !state.gist_catalog.owned.is_empty(),
         KeyCode::Char('X') => {
             has_gist
                 && owned
@@ -697,7 +697,7 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
     let gist_head = |name: &str| {
         format!(
             "[2] {name}{}{}",
-            crate::tui::render::count_label(ranked.len(), state.gists.len()),
+            crate::tui::render::count_label(ranked.len(), state.gist_catalog.owned.len()),
             anchor_marker(state, FocusPane::Gist)
         )
     };
@@ -1099,7 +1099,7 @@ mod tests {
     fn x_on_a_gists_only_file_is_blocked() {
         let mut state = initial_state();
         state.focus = FocusPane::Gist;
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             updated_at: "2026-01-01T00:00:00Z".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
             ..GistFile::fixture("abc123", "notes.md")
@@ -1213,7 +1213,7 @@ mod tests {
     #[test]
     fn list_click_selects_and_focuses_local_pane() {
         let mut state = state_with_local_paths(&["a.rs", "b.rs", "c.rs"]);
-        state.gists = vec![];
+        state.gist_catalog.owned = vec![];
         state.screen = Screen::List;
         state.focus = FocusPane::Gist;
         state.local_hscroll = 5;
@@ -1579,8 +1579,8 @@ mod tests {
     #[test]
     fn space_blocks_preview_for_image_gist_file() {
         let mut state = state_with_two_gists();
-        state.gists[0].filename = "logo.png".into();
-        state.gists[0].content_type = Some("image/png".into());
+        state.gist_catalog.owned[0].filename = "logo.png".into();
+        state.gist_catalog.owned[0].content_type = Some("image/png".into());
         assert_eq!(state.handle_key(KeyCode::Char(' ')), KeyOutcome::None);
         assert!(state
             .status
@@ -1591,8 +1591,8 @@ mod tests {
     #[test]
     fn enter_blocks_diff_for_image_gist_file() {
         let mut state = state_with_two_gists();
-        state.gists[0].filename = "photo.jpg".into();
-        state.gists[0].content_type = Some("image/jpeg".into());
+        state.gist_catalog.owned[0].filename = "photo.jpg".into();
+        state.gist_catalog.owned[0].content_type = Some("image/jpeg".into());
         assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
         assert!(state
             .status
@@ -1609,7 +1609,7 @@ mod tests {
     #[test]
     fn left_right_scrolls_focused_gist_pane() {
         let mut state = initial_state();
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "a fairly long description for scrolling".into(),
             updated_at: "x".into(),
             created_at: "x".into(),
@@ -1629,7 +1629,7 @@ mod tests {
     #[test]
     fn gist_hscroll_caps_at_painted_row() {
         let mut state = initial_state();
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "tiny".into(),
             updated_at: "x".into(),
             created_at: "x".into(),
@@ -1654,7 +1654,7 @@ mod tests {
     fn gist_hscroll_follows_the_selected_row() {
         let mut state = initial_state();
         state.gist_sort = GistSort::Name;
-        state.gists = vec![
+        state.gist_catalog.owned = vec![
             GistFile {
                 description: "ab".into(),
                 updated_at: "x".into(),
@@ -1739,13 +1739,13 @@ mod tests {
     #[test]
     fn gist_hscroll_caps_include_star_prefix() {
         let mut state = initial_state();
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "tiny".into(),
             updated_at: "x".into(),
             created_at: "x".into(),
             ..GistFile::fixture("starred-id", "f")
         }];
-        state.starred_gist_ids.insert("starred-id".into());
+        state.gist_catalog.starred_ids.insert("starred-id".into());
         state.focus = FocusPane::Gist;
 
         let ranked = state.ranked_gists();
@@ -1779,7 +1779,7 @@ mod tests {
     #[test]
     fn moving_gist_selection_resets_hscroll() {
         let mut state = initial_state();
-        state.gists = vec![
+        state.gist_catalog.owned = vec![
             GistFile {
                 description: "first long description here".into(),
                 updated_at: "x".into(),
@@ -1803,7 +1803,7 @@ mod tests {
     #[test]
     fn enter_with_no_local_but_gist_selected_returns_preview() {
         let mut state = initial_state();
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "first".into(),
             updated_at: "x".into(),
             created_at: "x".into(),
@@ -1959,7 +1959,7 @@ mod tests {
             pinned: false,
             modified: None,
         }];
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "x".into(),
             updated_at: "x".into(),
             created_at: "x".into(),
@@ -1980,7 +1980,7 @@ mod tests {
             pinned: false,
             modified: None,
         }];
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "x".into(),
             updated_at: "x".into(),
             created_at: "x".into(),
@@ -2041,7 +2041,7 @@ mod tests {
     fn x_removes_selected_file_from_a_multifile_gist() {
         let mut state = initial_state();
         state.focus = FocusPane::Gist;
-        state.gists = vec![
+        state.gist_catalog.owned = vec![
             GistFile {
                 description: "my notes".into(),
                 updated_at: "2026-01-01T00:00:00Z".into(),
@@ -2076,7 +2076,7 @@ mod tests {
             pinned: true,
             modified: None,
         }];
-        state.gists = vec![GistFile::fixture("g1", "a.txt")];
+        state.gist_catalog.owned = vec![GistFile::fixture("g1", "a.txt")];
         let KeyOutcome::SyncSelectedPair { entry, .. } = state.handle_key(KeyCode::Char('S'))
         else {
             panic!("expected deferred pair sync");
@@ -2233,13 +2233,13 @@ mod tests {
     #[test]
     fn foreign_gist_blocks_pin() {
         let mut state = initial_state();
-        state.current_user_login = Some("me".into());
+        state.gist_catalog.user_login = Some("me".into());
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/cwd/a.txt"),
             pinned: false,
             modified: None,
         }];
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "x".into(),
             public: true,
             updated_at: "x".into(),
@@ -2256,7 +2256,7 @@ mod tests {
     #[test]
     fn star_key_returns_toggle_intent() {
         let mut state = initial_state();
-        state.gists = vec![GistFile {
+        state.gist_catalog.owned = vec![GistFile {
             description: "x".into(),
             public: true,
             updated_at: "x".into(),
