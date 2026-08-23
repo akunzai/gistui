@@ -452,12 +452,15 @@ pub(super) fn dispatch_outcome(
                 spawn_pin_diff(state, jobs, &m, entry);
             }
         }
-        KeyOutcome::PersistDiffContext => persist_diff_context(state),
-        KeyOutcome::PersistSettings => {
-            persist_settings(state);
-            sync_mouse_capture(terminal, state.mouse_enabled)?;
+        KeyOutcome::PersistSettings {
+            effect,
+            success_message,
+        } => {
+            persist_settings(state, success_message);
+            if effect == Some(SettingsEffect::SyncMouseCapture) {
+                sync_mouse_capture(terminal, state.settings.mouse_enabled())?;
+            }
         }
-        KeyOutcome::ThemeToggle => persist_theme(state),
         KeyOutcome::FetchRevisions { gist_id } => {
             screens::revisions::request_revisions(jobs, state, gist_id);
         }

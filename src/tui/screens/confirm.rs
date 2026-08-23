@@ -178,7 +178,7 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
 /// theme's `del_color` so the stakes read at a glance; non-destructive writes use the neutral
 /// `notice_color` prompt.
 pub(crate) fn confirm_modal_style(state: &AppState) -> (&'static str, Color) {
-    let theme = &state.theme;
+    let theme = &state.settings.theme();
     match state.pending_action() {
         Some(PendingAction::Create { .. }) if state.editing_description => {
             ("Description", theme.accent)
@@ -207,10 +207,20 @@ pub(crate) fn render_confirm_vm(
 ) {
     match &confirm.background {
         ConfirmBackgroundVm::CompactGist(bg) => {
-            crate::tui::render::render_compact_gist_bg_vm(frame, frame.area(), bg, &state.theme);
+            crate::tui::render::render_compact_gist_bg_vm(
+                frame,
+                frame.area(),
+                bg,
+                &state.settings.theme(),
+            );
         }
         ConfirmBackgroundVm::Diff(diff) => {
-            crate::tui::render::render_diff_pane_vm(frame, frame.area(), diff, &state.theme);
+            crate::tui::render::render_diff_pane_vm(
+                frame,
+                frame.area(),
+                diff,
+                &state.settings.theme(),
+            );
         }
         ConfirmBackgroundVm::Empty => {}
     }
@@ -226,19 +236,19 @@ pub(crate) fn render_confirm_vm(
             input,
             suffix,
             confirm.border,
-            &state.theme,
+            &state.settings.theme(),
         ),
         ConfirmModalKind::Prompt { text } => crate::tui::render::render_centered_modal(
             frame,
             confirm.title,
             text,
             confirm.border,
-            &state.theme,
+            &state.settings.theme(),
         ),
     };
     if chrome.mouse_enabled {
         // Put the close button on the modal box itself, not the full-screen corner.
-        let close = crate::tui::render::render_close_button(frame, modal, &state.theme);
+        let close = crate::tui::render::render_close_button(frame, modal, &state.settings.theme());
         layout.register(HitTarget::Close, close);
     }
 }
@@ -351,7 +361,7 @@ pub(crate) fn on_restore_revision_ready(
                 &revision_content,
                 &new_label,
                 &current_content,
-                state.ignore_trailing_newline,
+                state.settings.ignore_trailing_newline(),
             );
             state.open_deferred(
                 entry,

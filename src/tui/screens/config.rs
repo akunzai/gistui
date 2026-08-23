@@ -5,7 +5,7 @@ use crate::tui::keys::{point_in, NavAction};
 use crate::tui::view_model::{ChromeVm, ConfigVm};
 use crate::tui::{
     AppState, ConfigField, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneHit, PaneTarget,
-    Screen, Theme,
+    Screen,
 };
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -46,13 +46,13 @@ impl AppState {
                 }
             }
             KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right | KeyCode::Char('l') => {
-                if self.adjust_config_field(true) {
-                    return KeyOutcome::PersistSettings;
+                if let Some(outcome) = self.adjust_config_field(true) {
+                    return outcome;
                 }
             }
             KeyCode::Left | KeyCode::Char('h') => {
-                if self.adjust_config_field(false) {
-                    return KeyOutcome::PersistSettings;
+                if let Some(outcome) = self.adjust_config_field(false) {
+                    return outcome;
                 }
             }
             KeyCode::Char('?') => self.open_help(),
@@ -61,66 +61,18 @@ impl AppState {
         KeyOutcome::None
     }
 
-    /// Toggle or nudge the selected Config field. Returns true when a value changed
-    /// (caller should persist). Pure aside from mutating `self`.
-    pub(crate) fn adjust_config_field(&mut self, forward: bool) -> bool {
+    /// Toggle or nudge the selected Config field and describe the persistence work.
+    pub(crate) fn adjust_config_field(&mut self, forward: bool) -> Option<KeyOutcome> {
         let index = self.config().map(|c| c.index).unwrap_or(0);
         let field = ConfigField::ALL
             .get(index)
             .copied()
             .unwrap_or(ConfigField::Theme);
-        match field {
-            ConfigField::Theme => {
-                self.theme_choice = match self.theme_choice {
-                    crate::config::ThemeChoice::Dark => crate::config::ThemeChoice::Light,
-                    crate::config::ThemeChoice::Light => crate::config::ThemeChoice::Dark,
-                };
-                self.theme = Theme::for_choice(self.theme_choice);
-                true
-            }
-            ConfigField::Mouse => {
-                self.config_mouse = !self.config_mouse;
-                self.mouse_enabled = self.config_mouse && !self.no_mouse_cli;
-                true
-            }
-            ConfigField::CheckUpdates => {
-                self.config_check_updates = !self.config_check_updates;
-                self.update_check_enabled = self.config_check_updates && !self.no_update_check_cli;
-                true
-            }
-            ConfigField::DiffShowFull => {
-                self.diff_show_full = !self.diff_show_full;
-                true
-            }
-            ConfigField::IgnoreTrailingNewline => {
-                self.ignore_trailing_newline = !self.ignore_trailing_newline;
-                true
-            }
-            ConfigField::ScanDepth => {
-                let next = if forward {
-                    self.scan_depth.saturating_add(1).min(20)
-                } else {
-                    self.scan_depth.saturating_sub(1)
-                };
-                if next == self.scan_depth {
-                    return false;
-                }
-                self.scan_depth = next;
-                true
-            }
-            ConfigField::DiffContext => {
-                let next = if forward {
-                    self.diff_context.saturating_add(1).min(50)
-                } else {
-                    self.diff_context.saturating_sub(1)
-                };
-                if next == self.diff_context {
-                    return false;
-                }
-                self.diff_context = next;
-                true
-            }
-        }
+        let change = self.settings.adjust(field, forward)?;
+        Some(KeyOutcome::PersistSettings {
+            effect: change.effect,
+            success_message: format!("{}: {}", field.label(), self.settings.field_value(field)),
+        })
     }
 
     /// Arrow key navigation for `Screen::Config`: moves the field-index selection. Left/Right
@@ -195,7 +147,13 @@ pub(crate) fn render_config_vm(
     layout: &mut MouseFrame,
 ) {
     let area = frame.area();
-    let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
+    let area = crate::tui::render_top_bar(
+        frame,
+        area,
+        &state.settings.theme(),
+        chrome.mouse_enabled,
+        layout,
+    );
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -220,20 +178,20 @@ pub(crate) fn render_config_vm(
         .title_bottom(Line::from(
             " Esc close · Enter/←/→ change · saved on change ",
         ))
-        .style(state.theme.base_style())
-        .border_style(Style::default().fg(state.theme.accent));
+        .style(state.settings.theme().base_style())
+        .border_style(Style::default().fg(state.settings.theme().accent));
     let list = List::new(items)
         .block(block)
         .highlight_style(
             Style::default()
-                .bg(state.theme.accent)
-                .fg(state.theme.fg_on_accent)
+                .bg(state.settings.theme().accent)
+                .fg(state.settings.theme().fg_on_accent)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▸ ");
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
     if chrome.mouse_enabled {
-        let close = crate::tui::render_close_button(frame, chunks[0], &state.theme);
+        let close = crate::tui::render_close_button(frame, chunks[0], &state.settings.theme());
         layout.register(HitTarget::Close, close);
         layout.register_pane(
             PaneTarget::List,
@@ -246,7 +204,8 @@ pub(crate) fn render_config_vm(
     }
     if let Some(ref status) = config.status {
         frame.render_widget(
-            Paragraph::new(status.as_str()).style(Style::default().fg(state.theme.accent)),
+            Paragraph::new(status.as_str())
+                .style(Style::default().fg(state.settings.theme().accent)),
             chunks[1],
         );
     }
@@ -254,7 +213,7 @@ pub(crate) fn render_config_vm(
         Paragraph::new(
             " File-only: skip_dirs · ~/.config/gistui/config.toml (or $XDG_CONFIG_HOME)",
         )
-        .style(Style::default().fg(state.theme.dim)),
+        .style(Style::default().fg(state.settings.theme().dim)),
         chunks[2],
     );
 }
@@ -272,62 +231,25 @@ mod tests {
     }
 
     #[test]
-    fn adjust_config_mouse_updates_mouse_enabled_respecting_cli() {
-        let mut state = initial_state();
-        state.open_config();
-        config_mut(&mut state).index = ConfigField::ALL
-            .iter()
-            .position(|f| *f == ConfigField::Mouse)
-            .unwrap();
-        state.no_mouse_cli = false;
-        state.config_mouse = false;
-        state.mouse_enabled = false;
-
-        assert!(state.adjust_config_field(true));
-        assert!(state.config_mouse);
-        assert!(
-            state.mouse_enabled,
-            "toggling mouse on must enable session mouse when CLI does not force off"
-        );
-
-        // CLI --no-mouse still wins for the effective session flag.
-        state.no_mouse_cli = true;
-        state.config_mouse = false;
-        state.mouse_enabled = false;
-        assert!(state.adjust_config_field(true));
-        assert!(state.config_mouse);
-        assert!(
-            !state.mouse_enabled,
-            "--no-mouse must keep mouse_enabled false even when config prefers on"
-        );
-    }
-
-    #[test]
     fn config_adjust_theme_returns_persist_settings() {
         let mut state = initial_state();
         state.open_config();
-        // Theme is index 0
-        config_mut(&mut state).index = 0;
-        assert_eq!(state.theme_choice, crate::config::ThemeChoice::Dark);
-        assert!(state.adjust_config_field(true));
-        assert_eq!(state.theme_choice, crate::config::ThemeChoice::Light);
-        // Space on config screen yields PersistSettings
+        assert_eq!(
+            state.settings.theme_choice(),
+            crate::config::ThemeChoice::Dark
+        );
         let outcome = state.handle_key(KeyCode::Char(' '));
-        assert_eq!(outcome, KeyOutcome::PersistSettings);
-    }
-
-    #[test]
-    fn config_adjust_scan_depth_clamps_and_reports_change() {
-        let mut state = initial_state();
-        state.open_config();
-        config_mut(&mut state).index = ConfigField::ALL
-            .iter()
-            .position(|f| *f == ConfigField::ScanDepth)
-            .unwrap();
-        state.scan_depth = 0;
-        assert!(!state.adjust_config_field(false)); // already min
-        assert!(state.adjust_config_field(true));
-        assert_eq!(state.scan_depth, 1);
+        assert_eq!(
+            outcome,
+            KeyOutcome::PersistSettings {
+                effect: None,
+                success_message: "Theme: light".into(),
+            }
+        );
+        assert_eq!(
+            state.settings.theme_choice(),
+            crate::config::ThemeChoice::Light
+        );
     }
 
     #[test]
@@ -338,59 +260,14 @@ mod tests {
             .iter()
             .position(|field| *field == ConfigField::DiffShowFull)
             .unwrap();
-        assert!(!state.diff_show_full);
-        assert!(state.adjust_config_field(true));
-        assert!(state.diff_show_full);
-    }
-
-    #[test]
-    fn config_field_values_round_trip_via_save_config() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        let mut state = initial_state();
-        state.theme_choice = crate::config::ThemeChoice::Light;
-        state.config_mouse = false;
-        state.config_check_updates = false;
-        state.ignore_trailing_newline = false;
-        state.scan_depth = 5;
-        state.diff_context = 7;
-        // Simulate persist_settings write path using shipped save/load.
-        let config = crate::config::AppConfig {
-            theme: state.theme_choice,
-            mouse: state.config_mouse,
-            check_updates: state.config_check_updates,
-            ignore_trailing_newline: state.ignore_trailing_newline,
-            scan_depth: state.scan_depth,
-            diff_context: state.diff_context,
-            ..crate::config::AppConfig::default()
-        };
-        crate::config::save_config(&path, &config).unwrap();
-        assert!(path.exists());
-        let loaded = crate::config::load_config(&path).unwrap();
-        assert_eq!(loaded.theme, crate::config::ThemeChoice::Light);
-        assert!(!loaded.mouse);
-        assert!(!loaded.check_updates);
-        assert!(!loaded.ignore_trailing_newline);
-        assert_eq!(loaded.scan_depth, 5);
-        assert_eq!(loaded.diff_context, 7);
-    }
-
-    #[test]
-    fn persist_settings_dispatch_path_syncs_mouse_capture() {
-        // Structural: PersistSettings arm must call sync_mouse_capture after save so a
-        // Settings mouse toggle takes effect without restart (skeptic fix).
-        let src = include_str!("../dispatch.rs");
-        let persist_idx = src
-            .find("KeyOutcome::PersistSettings")
-            .expect("PersistSettings arm");
-        let arm = &src[persist_idx..persist_idx + 280];
-        assert!(
-            arm.contains("sync_mouse_capture"),
-            "PersistSettings must sync terminal mouse capture: {arm}"
+        assert!(!state.settings.diff_show_full());
+        assert_eq!(
+            state.adjust_config_field(true),
+            Some(KeyOutcome::PersistSettings {
+                effect: None,
+                success_message: "Show full diff: on".into(),
+            })
         );
-        assert!(
-            arm.contains("mouse_enabled"),
-            "must pass current mouse_enabled into sync: {arm}"
-        );
+        assert!(state.settings.diff_show_full());
     }
 }

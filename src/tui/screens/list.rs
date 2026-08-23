@@ -771,7 +771,13 @@ pub(crate) fn render_list_vm(
     layout: &mut MouseFrame,
 ) {
     let area = frame.area();
-    let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
+    let area = crate::tui::render_top_bar(
+        frame,
+        area,
+        &state.settings.theme(),
+        chrome.mouse_enabled,
+        layout,
+    );
     let footer_body = match &list.footer {
         ListFooterVm::Hints { text } | ListFooterVm::Status { text } => text.clone(),
         ListFooterVm::Filtering { focus, query } => {
@@ -813,7 +819,7 @@ pub(crate) fn render_list_vm(
         frame,
         columns[0],
         &list.local,
-        &state.theme,
+        &state.settings.theme(),
         chrome.mouse_enabled,
         layout,
         PaneTarget::Local,
@@ -822,7 +828,7 @@ pub(crate) fn render_list_vm(
         frame,
         columns[1],
         &list.gist,
-        &state.theme,
+        &state.settings.theme(),
         chrome.mouse_enabled,
         layout,
         PaneTarget::Gist,
@@ -830,7 +836,7 @@ pub(crate) fn render_list_vm(
 
     let divider_x = columns[0].right().saturating_sub(1);
     if list.split_dragging {
-        highlight_pane_divider(frame, chunks[0], divider_x, state.theme.accent);
+        highlight_pane_divider(frame, chunks[0], divider_x, state.settings.theme().accent);
     }
     if chrome.mouse_enabled {
         let split = SplitHit {
@@ -856,7 +862,7 @@ pub(crate) fn render_list_vm(
                 chunks[1],
                 "",
                 line,
-                &state.theme,
+                &state.settings.theme(),
                 layout,
             );
         }
@@ -868,7 +874,7 @@ pub(crate) fn render_list_vm(
                 &footer_body,
                 footer_is_command,
                 crate::tui::keymap::for_screen(&state.screen),
-                &state.theme,
+                &state.settings.theme(),
             );
         }
     }

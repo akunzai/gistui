@@ -46,7 +46,7 @@ impl SyntaxPalette {
 }
 
 /// Semantic colour palette for the TUI. All render code uses these fields rather than
-/// hard-coded `Color::*` values so that swapping themes only requires changing `AppState::theme`.
+/// hard-coded `Color::*` values; `RuntimeSettings` derives one from the selected theme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
     /// Canvas background — `Color::Reset` for dark (terminal native), `Color::White` for light.

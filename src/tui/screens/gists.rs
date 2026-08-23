@@ -247,7 +247,13 @@ pub(crate) fn render_gists_vm(
     layout: &mut MouseFrame,
 ) {
     let area = frame.area();
-    let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
+    let area = crate::tui::render_top_bar(
+        frame,
+        area,
+        &state.settings.theme(),
+        chrome.mouse_enabled,
+        layout,
+    );
     // Footer: filter input while filtering, else status or hints (see #72 / #250).
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -266,7 +272,7 @@ pub(crate) fn render_gists_vm(
         frame,
         chunks[0],
         &gists.pane,
-        &state.theme,
+        &state.settings.theme(),
         chrome.mouse_enabled,
         layout,
         PaneTarget::List,
@@ -278,7 +284,7 @@ pub(crate) fn render_gists_vm(
             chunks[1],
             &gists.footer_title,
             crate::tui::render::input_line("/", &gists.filter_query, ""),
-            &state.theme,
+            &state.settings.theme(),
             layout,
         );
     } else {
@@ -289,11 +295,11 @@ pub(crate) fn render_gists_vm(
             &gists.footer,
             gists.footer_colored,
             crate::tui::keymap::for_screen(&state.screen),
-            &state.theme,
+            &state.settings.theme(),
         );
     }
     if chrome.mouse_enabled {
-        let close = crate::tui::render_close_button(frame, area, &state.theme);
+        let close = crate::tui::render_close_button(frame, area, &state.settings.theme());
         layout.register(HitTarget::Close, close);
     }
 }

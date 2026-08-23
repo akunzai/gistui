@@ -4,7 +4,9 @@
 use crate::tui::palette::{CrossAction, PaletteExec, PaletteMode};
 use crate::tui::view_model::{ChromeVm, PaletteVm};
 use crate::tui::EditResult;
-use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, RowTarget, Screen};
+use crate::tui::{
+    AppState, ConfigField, HelpTopic, HitTarget, KeyOutcome, MouseFrame, RowTarget, Screen,
+};
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{
     layout::{Margin, Rect},
@@ -129,12 +131,14 @@ impl AppState {
                 KeyOutcome::None
             }
             PaletteExec::Cross(CrossAction::ToggleTheme) => {
-                self.theme_choice = match self.theme_choice {
-                    crate::config::ThemeChoice::Dark => crate::config::ThemeChoice::Light,
-                    crate::config::ThemeChoice::Light => crate::config::ThemeChoice::Dark,
-                };
-                self.theme = crate::tui::Theme::for_choice(self.theme_choice);
-                KeyOutcome::ThemeToggle
+                let change = self.settings.adjust(ConfigField::Theme, true).unwrap();
+                KeyOutcome::PersistSettings {
+                    effect: change.effect,
+                    success_message: format!(
+                        "Theme: {}",
+                        self.settings.field_value(ConfigField::Theme)
+                    ),
+                }
             }
             PaletteExec::Cross(CrossAction::Quit) => KeyOutcome::Quit,
         }
@@ -239,10 +243,10 @@ pub(crate) fn render_palette_vm(
     frame.render_widget(Clear, rect);
 
     layout.intercept_all();
-    let dim = Style::default().fg(state.theme.dim);
+    let dim = Style::default().fg(state.settings.theme().dim);
     let active = Style::default()
-        .fg(state.theme.fg_on_accent)
-        .bg(state.theme.accent)
+        .fg(state.settings.theme().fg_on_accent)
+        .bg(state.settings.theme().accent)
         .add_modifier(Modifier::BOLD);
     let mut lines: Vec<Line<'static>> = Vec::new();
     if palette.has_query {
@@ -255,32 +259,34 @@ pub(crate) fn render_palette_vm(
             let row_style = if i == palette.selected {
                 active
             } else if item.enabled {
-                state.theme.base_style()
+                state.settings.theme().base_style()
             } else {
-                Style::default().fg(state.theme.dim)
+                Style::default().fg(state.settings.theme().dim)
             };
             lines.push(crate::tui::render::palette_row_spans(
                 &item.key_hint,
                 &item.label,
                 item.category,
                 palette.key_width,
-                &state.theme,
+                &state.settings.theme(),
                 row_style,
             ));
         }
     }
     frame.render_widget(
-        Paragraph::new(lines).style(state.theme.base_style()).block(
-            Block::default()
-                .title(crate::tui::render::fit_block_title(
-                    palette.title,
-                    rect.width,
-                ))
-                .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
-                .border_style(Style::default().fg(state.theme.accent))
-                .style(state.theme.base_style()),
-        ),
+        Paragraph::new(lines)
+            .style(state.settings.theme().base_style())
+            .block(
+                Block::default()
+                    .title(crate::tui::render::fit_block_title(
+                        palette.title,
+                        rect.width,
+                    ))
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::default().fg(state.settings.theme().accent))
+                    .style(state.settings.theme().base_style()),
+            ),
         rect,
     );
 
@@ -299,7 +305,7 @@ pub(crate) fn render_palette_vm(
         y = y.saturating_add(1);
     }
     if chrome.mouse_enabled {
-        let close = crate::tui::render::render_close_button(frame, rect, &state.theme);
+        let close = crate::tui::render::render_close_button(frame, rect, &state.settings.theme());
         layout.register(HitTarget::PaletteClose, close);
     }
 }
@@ -359,7 +365,16 @@ mod tests {
 
         let outcome = state.palette_click(col, row, &mouse);
 
-        assert_eq!(outcome, KeyOutcome::ThemeToggle);
-        assert_eq!(state.theme_choice, crate::config::ThemeChoice::Light);
+        assert_eq!(
+            outcome,
+            KeyOutcome::PersistSettings {
+                effect: None,
+                success_message: "Theme: light".into(),
+            }
+        );
+        assert_eq!(
+            state.settings.theme_choice(),
+            crate::config::ThemeChoice::Light
+        );
     }
 }
