@@ -2,6 +2,7 @@
 //! one file (issue #287, Phase 2; issue #383).
 
 use crate::tui::bg::LoopFlow;
+use crate::tui::gist_content::{ContentLookup, FetchPolicy};
 use crate::tui::view_model::{ConfirmBackgroundVm, ConfirmModalKind, ConfirmVm};
 use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PendingAction, Screen};
 use crossterm::event::KeyCode;
@@ -22,13 +23,17 @@ pub(crate) fn wheel_step() -> usize {
 pub(crate) fn stage_upload_preview(
     state: &mut AppState,
     local_path: PathBuf,
-    mut file: crate::domain::GistFileRef,
+    file: crate::domain::GistFileRef,
 ) -> (crate::domain::GistFileRef, String, String) {
     let gist_file = state.gist_file_for_diff(&file);
     let (local_label, gist_label) = crate::tui::render::diff_labels(Some(&local_path), &gist_file);
-    if file.raw_url.is_none() {
-        file.raw_url = gist_file.raw_url;
-    }
+    let ContentLookup::Miss(file) =
+        state
+            .gist_content_store
+            .lookup(&state.gist_catalog, file, FetchPolicy::Refresh)
+    else {
+        unreachable!("fresh fetch always bypasses cached content")
+    };
     (file, local_label, gist_label)
 }
 

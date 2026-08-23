@@ -15,6 +15,7 @@ use ratatui::{backend::CrosstermBackend, widgets::Clear, Terminal};
 use std::io;
 use std::path::PathBuf;
 
+mod gist_content;
 mod gist_refresh;
 mod mouse;
 pub use mouse::{
@@ -688,8 +689,8 @@ pub struct PinsState {
 pub struct PreviewState {
     pub title: String,
     pub body: ScrollBody,
-    /// `(gist_id, filename)` for refresh / copy-url context.
-    pub gist_key: Option<(String, String)>,
+    /// Gist file identity for refresh / copy-url context.
+    pub gist_file: Option<GistFileRef>,
 }
 
 /// Unified-diff view — carried on [`Screen::Diff`] (issue #242).
@@ -825,7 +826,7 @@ pub struct AppState {
     /// How this binary was installed — resolved once at startup so the update hint can show
     /// the right upgrade command without per-frame IO.
     pub install_method: crate::upgrade::InstallMethod,
-    pub(crate) gist_content_cache: crate::lru::LruCache<(String, String), String>,
+    gist_content_store: gist_content::GistContentStore,
     pub local_recursive: bool,
     pub skip_dirs: Vec<String>,
     pub local_scanning: bool,
@@ -1030,12 +1031,7 @@ impl AppState {
     }
 
     /// Enter full-screen content preview with the given body and gist identity.
-    pub fn enter_preview(
-        &mut self,
-        title: String,
-        text: String,
-        gist_key: Option<(String, String)>,
-    ) {
+    pub fn enter_preview(&mut self, title: String, text: String, gist_file: Option<GistFileRef>) {
         self.status = None;
         self.enter(Screen::Preview(Box::new(PreviewState {
             title,
@@ -1043,7 +1039,7 @@ impl AppState {
                 text,
                 ..ScrollBody::default()
             },
-            gist_key,
+            gist_file,
         })));
     }
 
@@ -2010,9 +2006,7 @@ pub fn initial_state() -> AppState {
         syntax_highlight: true,
         update_available: None,
         install_method: crate::upgrade::InstallMethod::Standalone,
-        // Bound the in-memory preview cache so browsing many/large gists can't grow unbounded;
-        // evicted entries are simply re-fetched on demand.
-        gist_content_cache: crate::lru::LruCache::new(64),
+        gist_content_store: gist_content::GistContentStore::default(),
         local_recursive: false,
         skip_dirs: crate::config::AppConfig::default().skip_dirs,
         local_scanning: false,

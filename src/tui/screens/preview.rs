@@ -2,6 +2,7 @@
 //! colocated in one file (issue #287, Phase 2; issue #383).
 
 use crate::tui::bg::LoopFlow;
+use crate::tui::gist_content::{ContentLookup, FetchPolicy};
 use crate::tui::view_model::{ChromeVm, PreviewVm};
 use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame};
 use crossterm::event::KeyCode;
@@ -25,30 +26,37 @@ pub(crate) fn wheel_step() -> usize {
 /// Stage a content preview. A cache hit enters Preview immediately; a miss returns fetch data.
 pub(crate) fn stage_preview_content(
     state: &mut AppState,
-    mut file: crate::domain::GistFileRef,
+    file: crate::domain::GistFileRef,
 ) -> Option<(crate::domain::GistFileRef, String)> {
-    let key = file.cache_key();
-    if let Some(content) = state.gist_content_cache.get(&key).cloned() {
-        let title = state.preview_title(&file.gist_id, &file.filename);
-        state.enter_preview(title, content, Some(key));
-        return None;
+    match state.gist_content_store.lookup(
+        &state.gist_catalog,
+        file.clone(),
+        FetchPolicy::PreferCache,
+    ) {
+        ContentLookup::Hit(content) => {
+            let title = state.preview_title(&file.gist_id, &file.filename);
+            state.enter_preview(title, content, Some(file));
+            None
+        }
+        ContentLookup::Miss(file) => {
+            let title = state.preview_title(&file.gist_id, &file.filename);
+            Some((file, title))
+        }
     }
-    if file.raw_url.is_none() {
-        file.raw_url = state.gist_file_raw_url(&file.gist_id, &file.filename);
-    }
-    let title = state.preview_title(&file.gist_id, &file.filename);
-    Some((file, title))
 }
 
-/// Invalidate cached content and build the fetch payload for refreshing a preview.
+/// Bypass cached content and build the fetch payload for refreshing a preview.
 pub(crate) fn stage_refresh_preview(
     state: &mut AppState,
-    mut file: crate::domain::GistFileRef,
+    file: crate::domain::GistFileRef,
 ) -> (crate::domain::GistFileRef, String) {
-    state.gist_content_cache.remove(&file.cache_key());
-    if file.raw_url.is_none() {
-        file.raw_url = state.gist_file_raw_url(&file.gist_id, &file.filename);
-    }
+    let ContentLookup::Miss(file) =
+        state
+            .gist_content_store
+            .lookup(&state.gist_catalog, file, FetchPolicy::Refresh)
+    else {
+        unreachable!("refresh always bypasses cached content")
+    };
     let title = state.preview_title(&file.gist_id, &file.filename);
     (file, title)
 }
@@ -68,21 +76,21 @@ impl AppState {
                 let Some(p) = self.preview() else {
                     return KeyOutcome::None;
                 };
-                let Some((gist_id, filename)) = p.gist_key.clone() else {
+                let Some(file) = p.gist_file.clone() else {
                     return KeyOutcome::None;
                 };
                 return KeyOutcome::RefreshPreview {
                     entry: self
                         .defer_replacement()
                         .unwrap_or_else(|| self.defer_entry()),
-                    file: crate::domain::GistFileRef::id_name(gist_id, filename),
+                    file,
                 };
             }
             KeyCode::Char('w') => self.preview_wrap = !self.preview_wrap,
             KeyCode::Char('y') => {
                 let gist_id = self
                     .preview()
-                    .and_then(|p| p.gist_key.as_ref().map(|(id, _)| id.clone()))
+                    .and_then(|p| p.gist_file.as_ref().map(|file| file.gist_id.clone()))
                     .or_else(|| self.context_gist_id());
                 let Some(gist_id) = gist_id else {
                     return KeyOutcome::None;
@@ -106,9 +114,9 @@ pub(crate) fn build_preview_vm(state: &AppState) -> PreviewVm {
     };
     let (footer, footer_colored) = crate::tui::footer_with_status(state.status.as_deref(), hints);
     let ext = p
-        .gist_key
+        .gist_file
         .as_ref()
-        .and_then(|(_, filename)| crate::tui::view_model::file_ext(filename));
+        .and_then(|file| crate::tui::view_model::file_ext(&file.filename));
     PreviewVm {
         title: p.title,
         body: p.body.text,
@@ -231,10 +239,7 @@ pub(crate) fn on_preview_content(
 ) -> LoopFlow {
     match result {
         Ok(content) => {
-            let key = file.cache_key();
-            state
-                .gist_content_cache
-                .insert(key.clone(), content.clone());
+            state.gist_content_store.insert(&file, content.clone());
             state.open_deferred(
                 entry,
                 crate::tui::Screen::Preview(Box::new(crate::tui::PreviewState {
@@ -243,7 +248,7 @@ pub(crate) fn on_preview_content(
                         text: content,
                         ..crate::tui::ScrollBody::default()
                     },
-                    gist_key: Some(key),
+                    gist_file: Some(file),
                 })),
             );
         }
@@ -264,9 +269,7 @@ mod tests {
     fn stage_preview_content_cache_hit_enters_preview_without_spawn_payload() {
         let mut state = state_with_gists();
         let file = gist_file_ref("g1", "a.txt");
-        state
-            .gist_content_cache
-            .insert(file.cache_key(), "cached".into());
+        state.gist_content_store.insert(&file, "cached".into());
 
         assert!(stage_preview_content(&mut state, file).is_none());
 
@@ -286,20 +289,25 @@ mod tests {
     }
 
     #[test]
-    fn stage_refresh_preview_drops_cache_and_returns_fetch_payload() {
+    fn stage_refresh_preview_keeps_cache_and_returns_fetch_payload() {
         let mut state = state_with_gists();
         state.gist_catalog.owned[0].raw_url = Some("https://example.test/a.txt".into());
         let file = gist_file_ref("g1", "a.txt");
-        state
-            .gist_content_cache
-            .insert(file.cache_key(), "cached".into());
-        state.enter_preview("a.txt".into(), "cached".into(), Some(file.cache_key()));
+        state.gist_content_store.insert(&file, "cached".into());
+        state.enter_preview("a.txt".into(), "cached".into(), Some(file.clone()));
 
         let entry = state.defer_replacement().unwrap();
         let (file, title) = stage_refresh_preview(&mut state, file);
 
         assert!(entry.return_to.is_gists());
-        assert!(state.gist_content_cache.get(&file.cache_key()).is_none());
+        assert!(matches!(
+            state.gist_content_store.lookup(
+                &state.gist_catalog,
+                file.clone(),
+                FetchPolicy::PreferCache
+            ),
+            ContentLookup::Hit(ref content) if content == "cached"
+        ));
         assert_eq!(file.raw_url.as_deref(), Some("https://example.test/a.txt"));
         assert!(title.contains("a.txt"));
     }
@@ -460,10 +468,14 @@ mod tests {
             "a.txt".into(),
         );
 
-        assert_eq!(
-            state.gist_content_cache.get(&file.cache_key()),
-            Some(&"body".to_string())
-        );
+        assert!(matches!(
+            state.gist_content_store.lookup(
+                &state.gist_catalog,
+                file.clone(),
+                FetchPolicy::PreferCache
+            ),
+            ContentLookup::Hit(ref content) if content == "body"
+        ));
         let preview = state.preview().expect("expected Screen::Preview");
         assert_eq!(preview.body.text, "body");
     }

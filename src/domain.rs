@@ -364,11 +364,6 @@ impl GistFileRef {
             self.raw_url.clone(),
         )
     }
-
-    /// Key for the gist content LRU: `(gist_id, filename)` only.
-    pub fn cache_key(&self) -> (String, String) {
-        (self.gist_id.clone(), self.filename.clone())
-    }
 }
 
 /// One entry from `gh api /gists/{id}/commits` — a gist revision (newest-first in the API).
@@ -542,13 +537,6 @@ mod tests {
                 ..GistFile::fixture("g1", "a.txt")
             }
         );
-    }
-
-    #[test]
-    fn gist_file_ref_cache_key_is_id_and_filename() {
-        let r = GistFileRef::new("g1", "f.toml", Some("https://raw".into()));
-        assert_eq!(r.cache_key(), ("g1".into(), "f.toml".into()));
-        assert_eq!(GistFileRef::id_name("g1", "f.toml").raw_url, None);
     }
 
     #[test]
