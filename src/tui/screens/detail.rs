@@ -8,7 +8,7 @@ use crate::tui::text::comment_lines_count;
 use crate::tui::view_model::{
     ChromeVm, CommentLineVm, CommentsAffordance, CommentsPaneVm, GistDetailVm,
 };
-use crate::tui::{AppState, DetailFocus, HelpTopic, KeyOutcome, MouseLayout, PaneHit, Screen};
+use crate::tui::{AppState, DetailFocus, HelpTopic, KeyOutcome, MouseLayout, PaneHit};
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::GistDetail;
 
@@ -166,7 +166,6 @@ impl AppState {
                 let Some(id) = self.detail().and_then(|d| d.gist_id.clone()) else {
                     return KeyOutcome::None;
                 };
-                self.pending_return = Some(self.park_gist_detail_screen());
                 let label = self
                     .group_by_id(&id)
                     .map(|g| {
@@ -177,7 +176,11 @@ impl AppState {
                         }
                     })
                     .unwrap_or_else(|| id.clone());
-                return KeyOutcome::CompactGist { gist_id: id, label };
+                return KeyOutcome::CompactGist {
+                    entry: self.defer_entry(),
+                    gist_id: id,
+                    label,
+                };
             }
             // Not gated through `detail_guard`: `star_toggle_intent`/`fork_intent` already have
             // their own complete messages for the disabled cases ("select a gist first",
@@ -235,8 +238,8 @@ impl AppState {
                 if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
                     let cursor = self.detail().map(|d| d.file_cursor).unwrap_or(0);
                     if let Some(filename) = self.gist_filenames(&gist_id).into_iter().nth(cursor) {
-                        self.pending_return = Some(self.park_gist_detail_screen());
                         return KeyOutcome::PreviewContent {
+                            entry: self.defer_entry(),
                             file: crate::domain::GistFileRef::id_name(gist_id, filename),
                         };
                     }
@@ -280,22 +283,13 @@ impl AppState {
                 if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
                     return KeyOutcome::None;
                 }
-                self.pending_return = Some(self.park_gist_detail_screen());
                 return KeyOutcome::PreviewContent {
+                    entry: self.defer_entry(),
                     file: crate::domain::GistFileRef::id_name(gist_id, filename),
                 };
             }
         }
         KeyOutcome::None
-    }
-
-    /// Snapshot the live GistDetail payload as a `Screen`, to stage into
-    /// [`AppState::pending_return`] before an async fetch (preview/revisions/compact) that will
-    /// eventually call [`AppState::enter`] once its result lands. Every caller is itself part of
-    /// GistDetail's own key handling, so `self.screen` is always `Screen::GistDetail` here.
-    fn park_gist_detail_screen(&self) -> Screen {
-        debug_assert!(self.screen.is_gist_detail());
-        self.screen.clone()
     }
 
     /// Arrow / hjkl / page-key navigation for `Screen::GistDetail`: moves within the focused
@@ -1140,10 +1134,10 @@ mod tests {
                 ..
             } if f.gist_id == "g1" && f.filename == "f9.txt"
         ));
-        assert!(state
-            .pending_return
-            .as_ref()
-            .is_some_and(Screen::is_gist_detail));
+        let KeyOutcome::PreviewContent { entry, .. } = outcome else {
+            unreachable!();
+        };
+        assert!(entry.return_to.is_gist_detail());
     }
 
     #[test]
@@ -1175,10 +1169,10 @@ mod tests {
         detail_mut(&mut state).gist_id = Some("g1".into());
         let outcome = state.handle_key(KeyCode::Char('c'));
         assert!(matches!(outcome, KeyOutcome::CompactGist { .. }));
-        assert!(state
-            .pending_return
-            .as_ref()
-            .is_some_and(Screen::is_gist_detail));
+        let KeyOutcome::CompactGist { entry, .. } = outcome else {
+            unreachable!();
+        };
+        assert!(entry.return_to.is_gist_detail());
     }
 
     #[test]
@@ -1194,10 +1188,10 @@ mod tests {
                 ..
             } if f.gist_id == "g1" && f.filename == "a.txt"
         ));
-        assert!(state
-            .pending_return
-            .as_ref()
-            .is_some_and(Screen::is_gist_detail));
+        let KeyOutcome::PreviewContent { entry, .. } = outcome else {
+            unreachable!();
+        };
+        assert!(entry.return_to.is_gist_detail());
     }
 
     #[test]

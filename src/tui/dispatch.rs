@@ -17,17 +17,14 @@ pub(super) fn dispatch_outcome(
     match outcome {
         KeyOutcome::Quit => return Ok(LoopFlow::Quit),
         KeyOutcome::PreviewDiff {
+            entry,
             local_path,
             file,
             target,
             upload_orientation,
         } => {
-            let (file, local_label, gist_label) = screens::diff::stage_preview_diff(
-                state,
-                local_path.clone(),
-                file,
-                Some(Screen::List),
-            );
+            let (file, local_label, gist_label) =
+                screens::diff::stage_preview_diff(state, local_path.clone(), file);
 
             jobs.spawn_gist_fetch_action(
                 state,
@@ -36,12 +33,14 @@ pub(super) fn dispatch_outcome(
                 move |result, _file, state| {
                     screens::diff::on_preview_diff(
                         state,
+                        entry,
                         result,
                         local_path,
                         local_label,
                         gist_label,
                         target,
                         upload_orientation,
+                        None,
                     )
                 },
             );
@@ -54,7 +53,11 @@ pub(super) fn dispatch_outcome(
                 download(state, crate::actions::DownloadMode::CreateNew);
             }
         }
-        KeyOutcome::DownloadGist { file, target } => {
+        KeyOutcome::DownloadGist {
+            entry,
+            file,
+            target,
+        } => {
             let (file, local_label, gist_label) =
                 screens::diff::stage_download_gist(state, target.clone(), file);
 
@@ -65,6 +68,7 @@ pub(super) fn dispatch_outcome(
                 move |result, file, state| {
                     screens::diff::on_download_selected(
                         state,
+                        entry,
                         result,
                         target,
                         local_label,
@@ -126,7 +130,11 @@ pub(super) fn dispatch_outcome(
                 },
             );
         }
-        KeyOutcome::CompactGist { gist_id, label } => {
+        KeyOutcome::CompactGist {
+            entry,
+            gist_id,
+            label,
+        } => {
             jobs.spawn_action(
                 state,
                 "Checking revisions…",
@@ -142,7 +150,7 @@ pub(super) fn dispatch_outcome(
                     (result, gist_id, label)
                 },
                 move |(result, gist_id, label), state| {
-                    screens::confirm::on_compact_analyze(state, result, gist_id, label)
+                    screens::confirm::on_compact_analyze(state, entry, result, gist_id, label)
                 },
             );
         }
@@ -161,9 +169,6 @@ pub(super) fn dispatch_outcome(
             gist_id,
             filename,
         } => {
-            if !state.is_pin_diff_context() {
-                state.pending_return = Some(Screen::List);
-            }
             let action = PendingAction::Upload {
                 gist_id,
                 filename: filename.clone(),
@@ -186,16 +191,12 @@ pub(super) fn dispatch_outcome(
             }
         }
         KeyOutcome::UploadPreview {
+            entry,
             local_path,
             file,
-            from_pin_diff,
         } => {
-            let (file, local_label, gist_label) = screens::confirm::stage_upload_preview(
-                state,
-                local_path.clone(),
-                file,
-                from_pin_diff,
-            );
+            let (file, local_label, gist_label) =
+                screens::confirm::stage_upload_preview(state, local_path.clone(), file);
 
             jobs.spawn_gist_fetch_action(
                 state,
@@ -204,6 +205,7 @@ pub(super) fn dispatch_outcome(
                 move |result, file, state| {
                     screens::confirm::on_upload_preview(
                         state,
+                        entry,
                         result,
                         file,
                         local_path,
@@ -249,7 +251,6 @@ pub(super) fn dispatch_outcome(
                 crate::actions::upload_add_command(&temp_file_path, &file.gist_id)
             };
 
-            state.staged_diff_gist = None;
             state.leave();
             jobs.spawn_action(
                 state,
@@ -287,7 +288,7 @@ pub(super) fn dispatch_outcome(
                 },
             );
         }
-        KeyOutcome::PreviewContent { file } => {
+        KeyOutcome::PreviewContent { entry, file } => {
             if let Some((file, preview_title)) =
                 screens::preview::stage_preview_content(state, file)
             {
@@ -296,19 +297,25 @@ pub(super) fn dispatch_outcome(
                     "Loading preview…",
                     file,
                     move |result, file, state| {
-                        screens::preview::on_preview_content(state, result, file, preview_title)
+                        screens::preview::on_preview_content(
+                            state,
+                            entry,
+                            result,
+                            file,
+                            preview_title,
+                        )
                     },
                 );
             }
         }
-        KeyOutcome::RefreshPreview { file } => {
+        KeyOutcome::RefreshPreview { entry, file } => {
             let (file, preview_title) = screens::preview::stage_refresh_preview(state, file);
             jobs.spawn_gist_fetch_action(
                 state,
                 "Loading preview…",
                 file,
                 move |result, file, state| {
-                    screens::preview::on_preview_content(state, result, file, preview_title)
+                    screens::preview::on_preview_content(state, entry, result, file, preview_title)
                 },
             );
         }
@@ -403,6 +410,7 @@ pub(super) fn dispatch_outcome(
         }
         KeyOutcome::UnpinAtPin { index } => unpin_at_pin_index(state, index),
         KeyOutcome::SyncSelectedPair {
+            entry,
             local_path,
             gist_id,
             filename,
@@ -419,29 +427,28 @@ pub(super) fn dispatch_outcome(
             };
             let m = state.pinned[idx].clone();
             let status = state.compute_pin_sync_status(idx);
-            apply_sync_status(state, jobs, &m, status);
+            apply_sync_status(state, jobs, &m, status, entry);
         }
-        KeyOutcome::SyncPinPush { index } => {
+        KeyOutcome::SyncPinPush { entry, index } => {
             if let Some(m) = state.pinned.get(index).cloned() {
-                spawn_pin_push(state, jobs, &m);
+                spawn_pin_push(state, jobs, &m, entry);
             }
         }
-        KeyOutcome::SyncPinPull { index } => {
+        KeyOutcome::SyncPinPull { entry, index } => {
             if let Some(m) = state.pinned.get(index).cloned() {
-                spawn_pin_pull(state, jobs, &m);
+                spawn_pin_pull(state, jobs, &m, entry);
             }
         }
-        KeyOutcome::SyncPinAuto { index } => {
+        KeyOutcome::SyncPinAuto { entry, index } => {
             let Some(m) = state.pinned.get(index).cloned() else {
                 return Ok(LoopFlow::Proceed);
             };
             let status = state.compute_pin_sync_status(index);
-            apply_sync_status(state, jobs, &m, status);
+            apply_sync_status(state, jobs, &m, status, entry);
         }
-        KeyOutcome::PreviewPinDiff { index } => {
+        KeyOutcome::PreviewPinDiff { entry, index } => {
             if let Some(m) = state.pinned.get(index).cloned() {
-                park_pins_on_diff_return(state);
-                spawn_pin_diff(state, jobs, &m);
+                spawn_pin_diff(state, jobs, &m, entry);
             }
         }
         KeyOutcome::PersistDiffContext => persist_diff_context(state),
@@ -454,6 +461,7 @@ pub(super) fn dispatch_outcome(
             screens::revisions::request_revisions(jobs, state, gist_id);
         }
         KeyOutcome::RevisionDiffIncremental {
+            entry,
             gist_id,
             filename,
             child_version,
@@ -475,11 +483,12 @@ pub(super) fn dispatch_outcome(
                     )
                 },
                 move |result, state| {
-                    screens::diff::on_revision_diff(state, result, old_label, new_label)
+                    screens::diff::on_revision_diff(state, entry, result, old_label, new_label)
                 },
             );
         }
         KeyOutcome::RevisionDiff {
+            entry,
             gist_id,
             filename,
             version,
@@ -504,11 +513,12 @@ pub(super) fn dispatch_outcome(
                     (result, old_label, new_label)
                 },
                 move |(result, old_label, new_label), state| {
-                    screens::diff::on_revision_diff(state, result, old_label, new_label)
+                    screens::diff::on_revision_diff(state, entry, result, old_label, new_label)
                 },
             );
         }
         KeyOutcome::RestoreRevisionPreview {
+            entry,
             gist_id,
             filename,
             version,
@@ -532,6 +542,7 @@ pub(super) fn dispatch_outcome(
                 move |(result, gist_id, filename, version), state| {
                     screens::confirm::on_restore_revision_ready(
                         state,
+                        entry,
                         result,
                         gist_id,
                         filename,
@@ -634,10 +645,11 @@ fn apply_sync_status(
     jobs: &mut Jobs,
     m: &crate::domain::PinnedMapping,
     status: crate::domain::SyncStatus,
+    entry: DeferredEntry,
 ) {
     match status {
-        crate::domain::SyncStatus::Push => spawn_pin_push(state, jobs, m),
-        crate::domain::SyncStatus::Pull => spawn_pin_pull(state, jobs, m),
+        crate::domain::SyncStatus::Push => spawn_pin_push(state, jobs, m, entry),
+        crate::domain::SyncStatus::Pull => spawn_pin_pull(state, jobs, m, entry),
         crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
         crate::domain::SyncStatus::Missing => {
             state.set_status("local file is missing — use d to pull it back")

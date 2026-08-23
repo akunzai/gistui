@@ -27,11 +27,7 @@ pub(crate) fn stage_preview_diff(
     state: &mut AppState,
     local_path: Option<PathBuf>,
     file: crate::domain::GistFileRef,
-    pending_return: Option<crate::tui::Screen>,
 ) -> (crate::domain::GistFileRef, String, String) {
-    if let Some(screen) = pending_return {
-        state.pending_return = Some(screen);
-    }
     stage_gist_diff_fetch(state, local_path.as_deref(), file)
 }
 
@@ -74,7 +70,6 @@ impl AppState {
             KeyCode::Char('q') | KeyCode::Esc => {
                 // Diff pairing identity lives on the payload; leaving drops it (not a full
                 // `back_to_list()` — that would also discard the rest of `nav_stack`).
-                self.staged_diff_gist = None;
                 self.leave();
             }
             // Identical files have nothing to sync, so download/upload are not offered.
@@ -257,12 +252,14 @@ pub(crate) fn render_diff_vm(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn on_preview_diff(
     state: &mut AppState,
+    entry: crate::tui::DeferredEntry,
     result: std::result::Result<String, String>,
     local_path: Option<PathBuf>,
     local_label: String,
     gist_label: String,
     target: PathBuf,
     upload_orientation: bool,
+    gist_file: Option<crate::domain::GistFileRef>,
 ) -> LoopFlow {
     match result {
         Ok(remote) => {
@@ -286,8 +283,21 @@ pub(crate) fn on_preview_diff(
                         &remote,
                         state.ignore_trailing_newline,
                     );
-                    state.enter_diff(diff, remote, local_path.unwrap_or_default(), target);
-                    set_diff_identical(state, identical);
+                    state.open_deferred(
+                        entry,
+                        crate::tui::Screen::Diff(Box::new(crate::tui::DiffState {
+                            body: crate::tui::ScrollBody {
+                                text: diff,
+                                ..crate::tui::ScrollBody::default()
+                            },
+                            remote_content: remote,
+                            local_path: local_path.unwrap_or_default(),
+                            download_target: target,
+                            identical,
+                            gist_id: gist_file.as_ref().map(|file| file.gist_id.clone()),
+                            gist_filename: gist_file.map(|file| file.filename),
+                        })),
+                    );
                     // A pin diff that turns out identical confirms the cached
                     // last_seen_hash is (still) accurate — refresh it for free
                     // using the content we already fetched, so the Pins list's
@@ -321,6 +331,7 @@ pub(crate) fn on_preview_diff(
 /// `DownloadSelected` outcome: diff against an existing local file, or write a new one.
 pub(crate) fn on_download_selected(
     state: &mut AppState,
+    entry: crate::tui::DeferredEntry,
     result: std::result::Result<String, String>,
     target: PathBuf,
     local_label: String,
@@ -344,10 +355,21 @@ pub(crate) fn on_download_selected(
                             &remote,
                             state.ignore_trailing_newline,
                         );
-                        state.staged_diff_gist =
-                            Some((file.gist_id.clone(), file.filename.clone()));
-                        state.enter_diff(diff, remote, target.clone(), target);
-                        set_diff_identical(state, identical);
+                        state.open_deferred(
+                            entry,
+                            crate::tui::Screen::Diff(Box::new(crate::tui::DiffState {
+                                body: crate::tui::ScrollBody {
+                                    text: diff,
+                                    ..crate::tui::ScrollBody::default()
+                                },
+                                remote_content: remote,
+                                local_path: target.clone(),
+                                download_target: target,
+                                identical,
+                                gist_id: Some(file.gist_id),
+                                gist_filename: Some(file.filename),
+                            })),
+                        );
                     }
                     Err(error) => state.set_status(error),
                 }
@@ -388,6 +410,7 @@ pub(crate) fn on_download_selected(
 /// `RevisionDiff` outcome: diff two historical revisions of the same file.
 pub(crate) fn on_revision_diff(
     state: &mut AppState,
+    entry: crate::tui::DeferredEntry,
     result: std::result::Result<(String, String), String>,
     old_label: String,
     new_label: String,
@@ -404,22 +427,22 @@ pub(crate) fn on_revision_diff(
             let identical = old_content == new_content;
             // `enter_diff` (via `enter`) parks the live Revisions screen so Esc
             // restores list cursor/entries.
-            state.enter_diff(diff, String::new(), PathBuf::new(), PathBuf::new());
-            set_diff_identical(state, identical);
+            state.open_deferred(
+                entry,
+                crate::tui::Screen::Diff(Box::new(crate::tui::DiffState {
+                    body: crate::tui::ScrollBody {
+                        text: diff,
+                        ..crate::tui::ScrollBody::default()
+                    },
+                    identical,
+                    ..crate::tui::DiffState::default()
+                })),
+            );
         }
         Err(error) => state.set_status(error),
     }
 
     LoopFlow::Proceed
-}
-
-/// Set `state`'s diff-payload `identical` flag, if a diff payload is currently open. Shared by
-/// the three action outcomes that build a diff and check content identity byte-for-byte:
-/// [`on_preview_diff`], [`on_download_selected`], [`on_revision_diff`].
-fn set_diff_identical(state: &mut AppState, identical: bool) {
-    if let Some(d) = state.diff_mut() {
-        d.identical = identical;
-    }
 }
 
 #[cfg(test)]
@@ -433,18 +456,13 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn stage_preview_diff_sets_list_return_and_labels() {
+    fn stage_preview_diff_builds_labels() {
         let mut state = state_with_gists();
         let file = gist_file_ref("g1", "a.txt");
 
-        let (_, local_label, gist_label) = stage_preview_diff(
-            &mut state,
-            Some(PathBuf::from("/tmp/a.txt")),
-            file,
-            Some(Screen::List),
-        );
+        let (_, local_label, gist_label) =
+            stage_preview_diff(&mut state, Some(PathBuf::from("/tmp/a.txt")), file);
 
-        assert!(matches!(state.pending_return, Some(Screen::List)));
         assert!(local_label.starts_with("local: a.txt"));
         assert!(gist_label.starts_with("gist g1 / a.txt"));
     }
@@ -689,12 +707,14 @@ mod tests {
 
         on_preview_diff(
             &mut state,
+            initial_state().defer_entry(),
             Err("boom".into()),
             None,
             "local".into(),
             "gist".into(),
             PathBuf::from("target"),
             false,
+            None,
         );
 
         assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
@@ -706,12 +726,14 @@ mod tests {
 
         on_preview_diff(
             &mut state,
+            initial_state().defer_entry(),
             Ok("remote body".into()),
             None,
             "local".into(),
             "gist".into(),
             PathBuf::from("target"),
             false,
+            None,
         );
 
         let diff = state.diff().expect("expected Screen::Diff");
@@ -725,6 +747,7 @@ mod tests {
 
         on_download_selected(
             &mut state,
+            initial_state().defer_entry(),
             Err("boom".into()),
             PathBuf::from("target"),
             "local".into(),
@@ -744,6 +767,7 @@ mod tests {
 
         on_download_selected(
             &mut state,
+            initial_state().defer_entry(),
             Ok("remote body".into()),
             target.clone(),
             "local".into(),
@@ -753,10 +777,8 @@ mod tests {
 
         let diff = state.diff().expect("expected Screen::Diff");
         assert_eq!(diff.remote_content, "remote body");
-        // `enter_diff` takes `staged_diff_gist` and moves it onto the `DiffState` itself.
         assert_eq!(diff.gist_id.as_deref(), Some("g1"));
         assert_eq!(diff.gist_filename.as_deref(), Some("a.txt"));
-        assert!(state.staged_diff_gist.is_none());
     }
 
     #[test]
@@ -765,6 +787,7 @@ mod tests {
 
         on_revision_diff(
             &mut state,
+            initial_state().defer_entry(),
             Ok(("old body".into(), "new body".into())),
             "old".into(),
             "new".into(),
@@ -778,7 +801,13 @@ mod tests {
     fn on_revision_diff_err_sets_status() {
         let mut state = initial_state();
 
-        on_revision_diff(&mut state, Err("boom".into()), "old".into(), "new".into());
+        on_revision_diff(
+            &mut state,
+            initial_state().defer_entry(),
+            Err("boom".into()),
+            "old".into(),
+            "new".into(),
+        );
 
         assert_eq!(state.status.as_deref(), Some("boom"));
     }

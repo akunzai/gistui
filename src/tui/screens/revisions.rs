@@ -164,6 +164,7 @@ impl AppState {
         let new_label = format!("revision {child_label}");
         let owner_login = self.gist_owner_login(&gist_id);
         KeyOutcome::RevisionDiffIncremental {
+            entry: self.defer_entry(),
             gist_id,
             filename,
             child_version,
@@ -195,6 +196,7 @@ impl AppState {
         let raw_url = self.gist_file_raw_url(&gist_id, &filename);
         let owner_login = self.gist_owner_login(&gist_id);
         KeyOutcome::RevisionDiff {
+            entry: self.defer_entry(),
             gist_id,
             filename,
             version,
@@ -224,6 +226,7 @@ impl AppState {
         let raw_url = self.gist_file_raw_url(&gist_id, &filename);
         let owner_login = self.gist_owner_login(&gist_id);
         KeyOutcome::RestoreRevisionPreview {
+            entry: self.defer_entry(),
             gist_id,
             filename,
             version,
@@ -653,7 +656,7 @@ mod tests {
     #[test]
     fn revision_diff_omits_download_upload() {
         let mut state = initial_state();
-        state.pending_return = Some(Screen::Revisions(Box::default()));
+        state.screen = Screen::Revisions(Box::default());
         state.enter_diff("diff".into(), String::new(), PathBuf::new(), PathBuf::new());
         let footer = diff_footer(&state);
         assert!(!footer.contains("download"));

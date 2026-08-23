@@ -461,12 +461,13 @@ impl GistTypeFilter {
 /// Pure key/mouse intent returned by [`AppState::handle_key`]. IO-bearing variants carry
 /// the snapshot needed to execute so dispatch does not re-resolve selection (issue #244).
 /// Not `Copy` — payloads own small strings/paths.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum KeyOutcome {
     None,
     Quit,
     /// List-originated local↔gist diff.
     PreviewDiff {
+        entry: DeferredEntry,
         local_path: Option<PathBuf>,
         file: GistFileRef,
         target: PathBuf,
@@ -486,6 +487,7 @@ pub enum KeyOutcome {
     },
     /// Download/fetch a selected gist file (may land on Diff/Confirm).
     DownloadGist {
+        entry: DeferredEntry,
         file: GistFileRef,
         target: PathBuf,
     },
@@ -505,15 +507,15 @@ pub enum KeyOutcome {
         filename: String,
     },
     UploadPreview {
+        entry: DeferredEntry,
         local_path: PathBuf,
         file: GistFileRef,
-        /// When true, keep pin-originated `diff_return`; when false, reset to List.
-        from_pin_diff: bool,
     },
     /// Confirm-owned upload execute.
     Upload,
     Create(bool),
     PreviewContent {
+        entry: DeferredEntry,
         file: GistFileRef,
     },
     OpenBrowser {
@@ -536,6 +538,7 @@ pub enum KeyOutcome {
         page: u32,
     },
     CompactGist {
+        entry: DeferredEntry,
         gist_id: String,
         label: String,
     },
@@ -549,26 +552,32 @@ pub enum KeyOutcome {
         url: String,
     },
     RefreshPreview {
+        entry: DeferredEntry,
         file: GistFileRef,
     },
     UnpinAtPin {
         index: usize,
     },
     SyncPinAuto {
+        entry: DeferredEntry,
         index: usize,
     },
     SyncPinPush {
+        entry: DeferredEntry,
         index: usize,
     },
     SyncPinPull {
+        entry: DeferredEntry,
         index: usize,
     },
     SyncSelectedPair {
+        entry: DeferredEntry,
         local_path: PathBuf,
         gist_id: String,
         filename: String,
     },
     PreviewPinDiff {
+        entry: DeferredEntry,
         index: usize,
     },
     PersistDiffContext,
@@ -582,6 +591,7 @@ pub enum KeyOutcome {
         gist_id: String,
     },
     RevisionDiffIncremental {
+        entry: DeferredEntry,
         gist_id: String,
         filename: String,
         child_version: String,
@@ -591,6 +601,7 @@ pub enum KeyOutcome {
         owner_login: String,
     },
     RevisionDiff {
+        entry: DeferredEntry,
         gist_id: String,
         filename: String,
         version: String,
@@ -600,6 +611,7 @@ pub enum KeyOutcome {
         owner_login: String,
     },
     RestoreRevisionPreview {
+        entry: DeferredEntry,
         gist_id: String,
         filename: String,
         version: String,
@@ -616,6 +628,18 @@ pub enum KeyOutcome {
     ForkGist {
         gist_id: String,
     },
+}
+
+/// One-shot return path for a screen opened by background work.
+///
+/// Moving this value through the job closure keeps the transition's origin attached to the
+/// work that captured it. Dropping a failed, cancelled, or superseded job leaves navigation
+/// untouched.
+#[must_use]
+#[derive(Debug, PartialEq, Eq)]
+pub struct DeferredEntry {
+    return_to: Screen,
+    replaces_current: bool,
 }
 
 /// A clickable list pane recorded by `render` for the current frame.
@@ -988,18 +1012,10 @@ pub struct AppState {
     /// other key clears it. Prevents an accidental single-key exit.
     pub quit_armed: bool,
     pub upload: UploadState,
-    /// Staged pin/pull gist identity for the next [`Self::enter_diff`] (consumed into
-    /// [`DiffState`]). Live identity while Diff/Confirm is open lives on the payload.
-    pub staged_diff_gist: Option<(String, String)>,
     /// Navigation history (issue #271): every [`Self::enter`] pushes the screen being left;
     /// every [`Self::leave`] pops back to it. Flat — a screen's own return path never lives on
     /// its payload.
     pub nav_stack: Vec<Screen>,
-    /// Staged return target for a screen entered asynchronously (issue #271): set at the
-    /// triggering keypress (before the background fetch that will eventually call
-    /// [`Self::enter`] completes), since `self.screen` may have changed by the time that
-    /// happens. [`Self::enter`] consumes it in place of the live screen when present.
-    pub pending_return: Option<Screen>,
     /// Monotonic tick advanced once per event-loop iteration (~150ms); drives the in-progress
     /// spinner animation. Wraps freely — only its value modulo the frame count is observed.
     pub spinner_frame: usize,
@@ -1150,15 +1166,41 @@ impl AppState {
         preview, preview_mut, is_preview, PreviewState, preview_state, preview_state_mut
     }
 
-    /// Navigate to `new_screen`, remembering how to get back (issue #271). The screen being
-    /// left is pushed onto [`Self::nav_stack`] — or, if a [`Self::pending_return`] was staged
-    /// (an async entry: the triggering keypress ran before `self.screen` necessarily still
-    /// matched what the user meant), that staged screen is pushed instead and the live one is
-    /// discarded.
+    /// Navigate to `new_screen`, remembering how to get back (issue #271).
     pub fn enter(&mut self, new_screen: Screen) {
         let live = std::mem::replace(&mut self.screen, new_screen);
-        let prev = self.pending_return.take().unwrap_or(live);
-        self.nav_stack.push(prev);
+        self.nav_stack.push(live);
+    }
+
+    /// Capture the current screen as the return path for background work.
+    pub(crate) fn defer_entry(&self) -> DeferredEntry {
+        DeferredEntry {
+            return_to: self.screen.clone(),
+            replaces_current: false,
+        }
+    }
+
+    /// Capture the current screen's parent so an async refresh replaces, rather than stacks,
+    /// the live screen.
+    pub(crate) fn defer_replacement(&self) -> Option<DeferredEntry> {
+        self.nav_stack
+            .last()
+            .cloned()
+            .map(|return_to| DeferredEntry {
+                return_to,
+                replaces_current: true,
+            })
+    }
+
+    /// Complete a deferred transition atomically. The live screen at completion is discarded;
+    /// Back returns to the screen captured when the work started.
+    pub(crate) fn open_deferred(&mut self, entry: DeferredEntry, new_screen: Screen) {
+        self.status = None;
+        self.screen = new_screen;
+        if entry.replaces_current {
+            self.nav_stack.pop();
+        }
+        self.nav_stack.push(entry.return_to);
     }
 
     /// Leave the current screen, restoring whatever [`Self::enter`] pushed for it. Falls back
@@ -1221,8 +1263,7 @@ impl AppState {
         }
     }
 
-    /// Open Confirm with background `text`. Cancel path is whatever [`Self::enter`] captures —
-    /// the staged [`Self::pending_return`] if this follows an async fetch, else the live screen.
+    /// Open Confirm with background `text`.
     pub fn enter_confirm(&mut self, action: PendingAction, text: String) {
         self.status = None;
         self.enter(Screen::Confirm(Box::new(ConfirmState {
@@ -1242,8 +1283,7 @@ impl AppState {
         self.status = None;
         let body = d.body.clone();
         // Park full Diff (pairing + identity) so cancel/download IO still have it; not a
-        // `pending_return` case (synchronous — `d` came straight off `self.screen`), so push it
-        // directly rather than going through `enter()`.
+        // This synchronous path parks Diff directly rather than going through `enter()`.
         self.nav_stack.push(Screen::Diff(d));
         self.screen = Screen::Confirm(Box::new(ConfirmState { action, body }));
     }
@@ -1905,9 +1945,9 @@ impl AppState {
                 .any(|g| g.gist_id == gist_id && g.filename == local_filename);
             return if has_same_name {
                 KeyOutcome::UploadPreview {
+                    entry: self.defer_entry(),
                     local_path,
                     file: GistFileRef::new(gist_id, local_filename, raw_url),
-                    from_pin_diff: true,
                 }
             } else {
                 KeyOutcome::UploadAdd {
@@ -1939,9 +1979,9 @@ impl AppState {
             .any(|g| g.gist_id == gist_id && g.filename == local_filename);
         if has_same_name {
             KeyOutcome::UploadPreview {
+                entry: self.defer_entry(),
                 local_path,
                 file: GistFileRef::new(gist_id, local_filename, raw_url),
-                from_pin_diff: false,
             }
         } else {
             KeyOutcome::UploadAdd {
@@ -2013,10 +2053,6 @@ impl AppState {
         local: PathBuf,
         target: PathBuf,
     ) {
-        let (gist_id, gist_filename) = match self.staged_diff_gist.take() {
-            Some((id, name)) => (Some(id), Some(name)),
-            None => (None, None),
-        };
         self.status = None;
         self.enter(Screen::Diff(Box::new(DiffState {
             body: ScrollBody {
@@ -2027,8 +2063,8 @@ impl AppState {
             local_path: local,
             download_target: target,
             identical: false,
-            gist_id,
-            gist_filename,
+            gist_id: None,
+            gist_filename: None,
         })));
     }
 
@@ -2068,9 +2104,6 @@ impl AppState {
 
     pub fn back_to_list(&mut self) {
         self.screen = Screen::List;
-        // Diff pairing identity lives on the payload; leaving drops it.
-        self.staged_diff_gist = None;
-        self.pending_return = None;
         // A hard reset, not a `leave()` — nothing on the stack corresponds to List, so discard
         // it rather than let stale entries resurface on some later, unrelated `leave()`.
         self.nav_stack.clear();
@@ -2157,9 +2190,7 @@ pub fn initial_state() -> AppState {
         bg_task_generation: 0,
         quit_armed: false,
         upload: UploadState::default(),
-        staged_diff_gist: None,
         nav_stack: Vec::new(),
-        pending_return: None,
         spinner_frame: 0,
         gist_comment_counts: std::collections::HashMap::new(),
         gist_fork_counts: std::collections::HashMap::new(),
@@ -2529,6 +2560,46 @@ mod tests {
         // Exactly at the boundary: still counts as a double-click (inclusive `<=`).
         let r = super::classify_click(Some((5, 5)), super::DOUBLE_CLICK_MS, 5, 5);
         assert_eq!(r, MouseInput::DoubleClick { col: 5, row: 5 });
+    }
+
+    #[test]
+    fn deferred_entry_returns_to_the_screen_captured_before_work_started() {
+        let mut state = initial_state();
+        state.screen = Screen::Gists(Box::default());
+        let entry = state.defer_entry();
+        state.screen = Screen::Help(Box::default());
+
+        state.open_deferred(entry, Screen::Preview(Box::default()));
+        state.leave();
+
+        assert!(state.screen.is_gists());
+        assert!(state.nav_stack.is_empty());
+    }
+
+    #[test]
+    fn dropping_deferred_entry_does_not_touch_navigation() {
+        let mut state = initial_state();
+        state.screen = Screen::Gists(Box::default());
+        let entry = state.defer_entry();
+
+        drop(entry);
+
+        assert!(state.screen.is_gists());
+        assert!(state.nav_stack.is_empty());
+    }
+
+    #[test]
+    fn deferred_replacement_keeps_the_current_screens_parent() {
+        let mut state = initial_state();
+        state.screen = Screen::Gists(Box::default());
+        state.enter(Screen::Preview(Box::default()));
+        let entry = state.defer_replacement().unwrap();
+
+        state.open_deferred(entry, Screen::Preview(Box::default()));
+        state.leave();
+
+        assert!(state.screen.is_gists());
+        assert!(state.nav_stack.is_empty());
     }
 
     #[test]

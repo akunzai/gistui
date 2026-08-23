@@ -351,32 +351,21 @@ pub(super) fn pin_local_abs(state: &AppState, m: &crate::domain::PinnedMapping) 
     }
 }
 
-/// Stage the current Pins payload as `pending_return` so the pin diff/confirm entered once this
-/// (async) flow's background fetch lands restores list state, not wherever the user has since
-/// navigated to.
-pub(super) fn park_pins_on_diff_return(state: &mut AppState) {
-    let pins = match &state.screen {
-        Screen::Pins(p) => p.as_ref().clone(),
-        _ => state.pins().cloned().unwrap_or_default(),
-    };
-    state.pending_return = Some(Screen::Pins(Box::new(pins)));
-}
-
 /// Spawn the push (upload local → gist) flow for a pin: lands in the existing
 /// upload `Screen::Confirm` diff.
 pub(super) fn spawn_pin_push(
     state: &mut AppState,
     jobs: &mut Jobs,
     m: &crate::domain::PinnedMapping,
+    entry: crate::tui::DeferredEntry,
 ) {
-    park_pins_on_diff_return(state);
     let local_path = pin_local_abs(state, m);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
-    // Upload Confirm is opened when UploadPreview completes (staged return is Pins).
+    // Upload Confirm returns to the screen captured by `entry`.
     let file = crate::domain::GistFileRef::id_name(gist_id, filename);
     let (file, local_label, gist_label) =
-        screens::confirm::stage_upload_preview(state, local_path.clone(), file, true);
+        screens::confirm::stage_upload_preview(state, local_path.clone(), file);
     jobs.spawn_gist_fetch_action(
         state,
         "Loading diff…",
@@ -384,6 +373,7 @@ pub(super) fn spawn_pin_push(
         move |result, file, state| {
             screens::confirm::on_upload_preview(
                 state,
+                entry,
                 result,
                 file,
                 local_path,
@@ -400,8 +390,8 @@ pub(super) fn spawn_pin_pull(
     state: &mut AppState,
     jobs: &mut Jobs,
     m: &crate::domain::PinnedMapping,
+    entry: crate::tui::DeferredEntry,
 ) {
-    park_pins_on_diff_return(state);
     let target = pin_local_abs(state, m);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
@@ -409,7 +399,15 @@ pub(super) fn spawn_pin_pull(
     let (file, local_label, gist_label) =
         screens::diff::stage_download_gist(state, target.clone(), file);
     jobs.spawn_gist_fetch_action(state, "Downloading…", file, move |result, file, state| {
-        screens::diff::on_download_selected(state, result, target, local_label, gist_label, file)
+        screens::diff::on_download_selected(
+            state,
+            entry,
+            result,
+            target,
+            local_label,
+            gist_label,
+            file,
+        )
     });
 }
 
@@ -418,15 +416,15 @@ pub(super) fn spawn_pin_diff(
     state: &mut AppState,
     jobs: &mut Jobs,
     m: &crate::domain::PinnedMapping,
+    entry: crate::tui::DeferredEntry,
 ) {
     let local_abs = pin_local_abs(state, m);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
-    // Stage pin identity so enter_diff copies it onto DiffState (is_pin_diff_context).
-    state.staged_diff_gist = Some((gist_id.clone(), filename.clone()));
     let file = crate::domain::GistFileRef::id_name(gist_id, filename);
+    let gist_file = file.clone();
     let (file, local_label, gist_label) =
-        screens::diff::stage_preview_diff(state, Some(local_abs.clone()), file, None);
+        screens::diff::stage_preview_diff(state, Some(local_abs.clone()), file);
     let target = local_abs.clone();
     jobs.spawn_gist_fetch_action(
         state,
@@ -437,12 +435,14 @@ pub(super) fn spawn_pin_diff(
             // historical download orientation (old = local, new = gist).
             screens::diff::on_preview_diff(
                 state,
+                entry,
                 result,
                 Some(local_abs),
                 local_label,
                 gist_label,
                 target,
                 false,
+                Some(gist_file),
             )
         },
     );
@@ -838,8 +838,6 @@ pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode)
                     Some(crate::domain::SyncDirection::Download),
                 );
             }
-            // Diff pairing identity lives on the payload; leaving drops it.
-            state.staged_diff_gist = None;
             // Skip past the download overwrite gate's Confirm (if any) and its parked Diff to
             // land on whatever was behind them.
             if state.screen.is_confirm() {

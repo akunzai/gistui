@@ -23,11 +23,7 @@ pub(crate) fn stage_upload_preview(
     state: &mut AppState,
     local_path: PathBuf,
     mut file: crate::domain::GistFileRef,
-    from_pin_diff: bool,
 ) -> (crate::domain::GistFileRef, String, String) {
-    if !from_pin_diff {
-        state.pending_return = Some(Screen::List);
-    }
     let gist_file = state.gist_file_for_diff(&file);
     let (local_label, gist_label) = crate::tui::render::diff_labels(Some(&local_path), &gist_file);
     if file.raw_url.is_none() {
@@ -254,6 +250,7 @@ pub(crate) fn render_confirm_vm(
 /// local-vs-gist diff.
 pub(crate) fn on_upload_preview(
     state: &mut AppState,
+    entry: crate::tui::DeferredEntry,
     result: std::result::Result<String, String>,
     file: crate::domain::GistFileRef,
     local_path: PathBuf,
@@ -262,7 +259,6 @@ pub(crate) fn on_upload_preview(
 ) -> LoopFlow {
     match result {
         Ok(remote) => {
-            // Keep staged pin/list return; enter_confirm consumes it.
             let action = PendingAction::Upload {
                 gist_id: file.gist_id,
                 filename: file.filename,
@@ -273,7 +269,13 @@ pub(crate) fn on_upload_preview(
                     // init_upload_state writes via update_upload_diff only when
                     // Confirm is already open; open Confirm first with empty
                     // body, then rebuild the upload diff into the payload.
-                    state.enter_confirm(action, String::new());
+                    state.open_deferred(
+                        entry,
+                        Screen::Confirm(Box::new(crate::tui::ConfirmState {
+                            action,
+                            body: crate::tui::ScrollBody::default(),
+                        })),
+                    );
                     state.update_upload_diff();
                 }
                 Err(error) => {
@@ -294,6 +296,7 @@ pub(crate) fn on_upload_preview(
 /// the Confirm warning before compacting.
 pub(crate) fn on_compact_analyze(
     state: &mut AppState,
+    entry: crate::tui::DeferredEntry,
     result: std::result::Result<usize, String>,
     gist_id: String,
     label: String,
@@ -303,18 +306,22 @@ pub(crate) fn on_compact_analyze(
             "\"{label}\" already has a single revision — nothing to compact"
         )),
         Ok(count) => {
-            // `pending_return` was staged at the 'c' keypress (keys.rs); `enter`
-            // (inside `enter_confirm`) consumes it as the Confirm cancel path.
-            state.enter_confirm(
-                PendingAction::CompactGist {
+            state.open_deferred(
+                entry,
+                Screen::Confirm(Box::new(crate::tui::ConfirmState {
+                    action: PendingAction::CompactGist {
                     gist_id: gist_id.clone(),
                     label: label.clone(),
                     count,
-                },
-                format!(
-                    "Compact gist {gist_id} (\"{label}\").\n\nIt has {count} revisions. Compacting clones it to a temp dir, squashes the history to a single commit, and force-pushes — the {} older revisions are gone for good.",
-                    count - 1
-                ),
+                    },
+                    body: crate::tui::ScrollBody {
+                        text: format!(
+                            "Compact gist {gist_id} (\"{label}\").\n\nIt has {count} revisions. Compacting clones it to a temp dir, squashes the history to a single commit, and force-pushes — the {} older revisions are gone for good.",
+                            count - 1
+                        ),
+                        ..crate::tui::ScrollBody::default()
+                    },
+                })),
             );
         }
         Err(error) => state.set_status(format!("revision check failed: {error}")),
@@ -327,6 +334,7 @@ pub(crate) fn on_compact_analyze(
 /// content matches current (nothing to restore).
 pub(crate) fn on_restore_revision_ready(
     state: &mut AppState,
+    entry: crate::tui::DeferredEntry,
     result: std::result::Result<(String, String), String>,
     gist_id: String,
     filename: String,
@@ -348,17 +356,21 @@ pub(crate) fn on_restore_revision_ready(
                 &current_content,
                 state.ignore_trailing_newline,
             );
-            // `enter_confirm` (via `enter`) parks the live Revisions screen so
-            // cancel restores cursor/entries.
-            state.enter_confirm(
-                PendingAction::RestoreRevision {
-                    gist_id,
-                    filename,
-                    version,
-                    version_label,
-                    content: revision_content,
-                },
-                diff,
+            state.open_deferred(
+                entry,
+                Screen::Confirm(Box::new(crate::tui::ConfirmState {
+                    action: PendingAction::RestoreRevision {
+                        gist_id,
+                        filename,
+                        version,
+                        version_label,
+                        content: revision_content,
+                    },
+                    body: crate::tui::ScrollBody {
+                        text: diff,
+                        ..crate::tui::ScrollBody::default()
+                    },
+                })),
             );
         }
         Err(error) => state.set_status(error),
@@ -379,15 +391,14 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn stage_upload_preview_sets_list_return_and_falls_back_to_list_raw_url() {
+    fn stage_upload_preview_falls_back_to_list_raw_url() {
         let mut state = state_with_gists();
         state.gists[0].raw_url = Some("https://example.test/a.txt".into());
         let file = gist_file_ref("g1", "a.txt");
 
         let (file, local_label, gist_label) =
-            stage_upload_preview(&mut state, PathBuf::from("/tmp/a.txt"), file, false);
+            stage_upload_preview(&mut state, PathBuf::from("/tmp/a.txt"), file);
 
-        assert!(matches!(state.pending_return, Some(Screen::List)));
         assert_eq!(file.raw_url.as_deref(), Some("https://example.test/a.txt"));
         assert!(local_label.starts_with("local: a.txt"));
         assert!(gist_label.starts_with("gist g1 / a.txt"));
@@ -877,6 +888,7 @@ mod tests {
 
         on_upload_preview(
             &mut state,
+            initial_state().defer_entry(),
             Err("boom".into()),
             gist_file_ref("g1", "a.txt"),
             PathBuf::from("a.txt"),
@@ -896,6 +908,7 @@ mod tests {
 
         on_upload_preview(
             &mut state,
+            initial_state().defer_entry(),
             Ok("remote body".into()),
             gist_file_ref("g1", "a.txt"),
             local_path.clone(),
@@ -915,7 +928,8 @@ mod tests {
     fn on_compact_analyze_single_revision_sets_status() {
         let mut state = initial_state();
 
-        on_compact_analyze(&mut state, Ok(1), "g1".into(), "demo".into());
+        let entry = state.defer_entry();
+        on_compact_analyze(&mut state, entry, Ok(1), "g1".into(), "demo".into());
 
         assert_eq!(
             state.status.as_deref(),
@@ -927,7 +941,8 @@ mod tests {
     fn on_compact_analyze_multi_revision_enters_confirm() {
         let mut state = initial_state();
 
-        on_compact_analyze(&mut state, Ok(4), "g1".into(), "demo".into());
+        let entry = state.defer_entry();
+        on_compact_analyze(&mut state, entry, Ok(4), "g1".into(), "demo".into());
 
         assert!(matches!(
             state.pending_action(),
@@ -940,7 +955,14 @@ mod tests {
     fn on_compact_analyze_err_sets_status() {
         let mut state = initial_state();
 
-        on_compact_analyze(&mut state, Err("boom".into()), "g1".into(), "demo".into());
+        let entry = state.defer_entry();
+        on_compact_analyze(
+            &mut state,
+            entry,
+            Err("boom".into()),
+            "g1".into(),
+            "demo".into(),
+        );
 
         assert_eq!(state.status.as_deref(), Some("revision check failed: boom"));
     }
@@ -951,6 +973,7 @@ mod tests {
 
         let flow = on_restore_revision_ready(
             &mut state,
+            initial_state().defer_entry(),
             Ok(("same".into(), "same".into())),
             "g1".into(),
             "a.txt".into(),
@@ -971,6 +994,7 @@ mod tests {
 
         let flow = on_restore_revision_ready(
             &mut state,
+            initial_state().defer_entry(),
             Ok(("old".into(), "new".into())),
             "g1".into(),
             "a.txt".into(),
@@ -992,6 +1016,7 @@ mod tests {
 
         on_restore_revision_ready(
             &mut state,
+            initial_state().defer_entry(),
             Err("boom".into()),
             "g1".into(),
             "a.txt".into(),
