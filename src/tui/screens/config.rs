@@ -4,7 +4,8 @@
 use crate::tui::keys::{point_in, NavAction};
 use crate::tui::view_model::{ChromeVm, ConfigVm};
 use crate::tui::{
-    AppState, ConfigField, HelpTopic, KeyOutcome, MouseLayout, PaneHit, Screen, Theme,
+    AppState, ConfigField, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneHit, PaneTarget,
+    Screen, Theme,
 };
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -148,11 +149,11 @@ impl AppState {
     }
 
     /// Select the clicked field row on `Screen::Config`. Returns `true` when a row was hit.
-    pub(crate) fn click_select_config(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
+    pub(crate) fn click_select_config(&mut self, col: u16, row: u16, layout: &MouseFrame) -> bool {
         let Screen::Config(cfg) = &mut self.screen else {
             return false;
         };
-        if let Some(hit) = layout.list {
+        if let Some(hit) = layout.pane(PaneTarget::List) {
             if point_in(hit.rect, col, row) {
                 if let Some(idx) = hit.index_at(row, ConfigField::ALL.len()) {
                     cfg.index = idx;
@@ -191,7 +192,7 @@ pub(crate) fn render_config_vm(
     state: &AppState,
     config: &ConfigVm,
     chrome: &ChromeVm,
-    layout: &mut MouseLayout,
+    layout: &mut MouseFrame,
 ) {
     let area = frame.area();
     let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
@@ -232,15 +233,16 @@ pub(crate) fn render_config_vm(
         .highlight_symbol("▸ ");
     frame.render_stateful_widget(list, chunks[0], &mut list_state);
     if chrome.mouse_enabled {
-        layout.close_button = Some(crate::tui::render_close_button(
-            frame,
-            chunks[0],
-            &state.theme,
-        ));
-        layout.list = Some(PaneHit {
-            rect: chunks[0],
-            offset: 0,
-        });
+        let close = crate::tui::render_close_button(frame, chunks[0], &state.theme);
+        layout.register(HitTarget::Close, close);
+        layout.register_pane(
+            PaneTarget::List,
+            PaneHit {
+                rect: chunks[0],
+                offset: 0,
+            },
+            config.rows.len(),
+        );
     }
     if let Some(ref status) = config.status {
         frame.render_widget(

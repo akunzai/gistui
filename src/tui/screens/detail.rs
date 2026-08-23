@@ -8,7 +8,9 @@ use crate::tui::text::comment_lines_count;
 use crate::tui::view_model::{
     ChromeVm, CommentLineVm, CommentsAffordance, CommentsPaneVm, GistDetailVm,
 };
-use crate::tui::{AppState, DetailFocus, HelpTopic, KeyOutcome, MouseLayout, PaneHit};
+use crate::tui::{
+    AppState, DetailFocus, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneHit, PaneTarget,
+};
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::GistDetail;
 
@@ -339,8 +341,8 @@ impl AppState {
 
     /// Select the clicked row on `Screen::GistDetail`'s Files tab, focusing it. Returns `true`
     /// when a row was hit (so a double-click should "open"/preview it).
-    pub(crate) fn click_select_detail(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
-        if let Some(hit) = layout.detail_files {
+    pub(crate) fn click_select_detail(&mut self, col: u16, row: u16, layout: &MouseFrame) -> bool {
+        if let Some(hit) = layout.pane(PaneTarget::DetailFiles) {
             if point_in(hit.rect, col, row) {
                 // Clicking the file list focuses the Files tab; a row also moves the cursor.
                 let count = self
@@ -367,34 +369,30 @@ impl AppState {
         &mut self,
         col: u16,
         row: u16,
-        layout: &MouseLayout,
+        layout: &MouseFrame,
     ) -> Option<KeyOutcome> {
         if !self.screen.is_gist_detail() {
             return None;
         }
-        if let Some(rect) = layout.detail_tab_files {
-            if point_in(rect, col, row) {
-                if let Some(d) = self.detail_mut() {
-                    d.focus = DetailFocus::Files;
-                }
-                return Some(KeyOutcome::None);
+        if matches!(layout.resolve(col, row), Some(HitTarget::DetailFilesTab)) {
+            if let Some(d) = self.detail_mut() {
+                d.focus = DetailFocus::Files;
             }
+            return Some(KeyOutcome::None);
         }
-        if let Some(rect) = layout.detail_tab_comments {
-            if point_in(rect, col, row) {
-                let fetch = if let Some(d) = self.detail_mut() {
-                    d.focus = DetailFocus::Comments;
-                    d.comments.is_none() && !d.comments_loading
-                } else {
-                    false
-                };
-                if fetch {
-                    if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
-                        return Some(KeyOutcome::FetchComments { gist_id });
-                    }
+        if matches!(layout.resolve(col, row), Some(HitTarget::DetailCommentsTab)) {
+            let fetch = if let Some(d) = self.detail_mut() {
+                d.focus = DetailFocus::Comments;
+                d.comments.is_none() && !d.comments_loading
+            } else {
+                false
+            };
+            if fetch {
+                if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
+                    return Some(KeyOutcome::FetchComments { gist_id });
                 }
-                return Some(KeyOutcome::None);
             }
+            return Some(KeyOutcome::None);
         }
         None
     }
@@ -404,7 +402,7 @@ impl AppState {
         &mut self,
         col: u16,
         row: u16,
-        layout: &MouseLayout,
+        layout: &MouseFrame,
     ) -> Option<KeyOutcome> {
         if !self.screen.is_gist_detail()
             || !self
@@ -413,8 +411,9 @@ impl AppState {
         {
             return None;
         }
-        let rect = layout.comments_load_older?;
-        if point_in(rect, col, row) && self.can_load_older_comments() {
+        if matches!(layout.resolve(col, row), Some(HitTarget::CommentsLoadOlder))
+            && self.can_load_older_comments()
+        {
             if let Some(gist_id) = self.detail().and_then(|d| d.gist_id.clone()) {
                 let page = self
                     .detail()
@@ -674,7 +673,8 @@ pub(crate) fn render_gist_detail_vm(
     state: &AppState,
     detail: &GistDetailVm,
     chrome: &ChromeVm,
-    layout: &mut MouseLayout,
+    layout: &mut MouseFrame,
+    feedback: &mut crate::tui::render::RenderFeedback,
 ) {
     let area = frame.area();
     let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
@@ -699,9 +699,14 @@ pub(crate) fn render_gist_detail_vm(
             DetailFocus::Files => {
                 render_gist_file_list_vm(frame, chunks[1], detail, chrome, &state.theme, layout)
             }
-            DetailFocus::Comments => {
-                render_gist_comments_vm(frame, chunks[1], &detail.comments, &state.theme, layout)
-            }
+            DetailFocus::Comments => render_gist_comments_vm(
+                frame,
+                chunks[1],
+                &detail.comments,
+                &state.theme,
+                layout,
+                feedback,
+            ),
         }
     }
     crate::tui::render_footer(
@@ -717,10 +722,7 @@ pub(crate) fn render_gist_detail_vm(
     let edit_modal = if let Some(input) = &detail.description_input {
         // The modal covers the file list and tabs; drop their hit regions so a click
         // behind the modal doesn't move the cursor or switch tabs.
-        layout.detail_files = None;
-        layout.detail_tab_files = None;
-        layout.detail_tab_comments = None;
-        layout.comments_load_older = None;
+        layout.clear();
         Some(crate::tui::render::render_centered_modal_input(
             frame,
             "Edit description (Enter apply · Esc cancel)",
@@ -736,11 +738,9 @@ pub(crate) fn render_gist_detail_vm(
     if chrome.mouse_enabled {
         // When the edit-description modal is open, the close button belongs on it;
         // otherwise it sits on the full-screen detail view's top-right corner.
-        layout.close_button = Some(crate::tui::render_close_button(
-            frame,
-            edit_modal.unwrap_or(area),
-            &state.theme,
-        ));
+        let close =
+            crate::tui::render_close_button(frame, edit_modal.unwrap_or(area), &state.theme);
+        layout.register(HitTarget::Close, close);
     }
 }
 
@@ -750,7 +750,7 @@ fn render_detail_header_vm(
     detail: &GistDetailVm,
     chrome: &ChromeVm,
     theme: &crate::tui::Theme,
-    layout: &mut MouseLayout,
+    layout: &mut MouseFrame,
 ) {
     let lines = vec![
         Line::from(detail.info_line.clone()),
@@ -777,14 +777,15 @@ fn render_detail_header_vm(
         // count, so derive its click target from the same formatted label as the renderer.
         let content_x = area.x + 2;
         let tabs_y = area.y + 2;
-        layout.detail_tab_files = Some(ratatui::layout::Rect::new(content_x, tabs_y, 7, 1));
+        layout.register(
+            HitTarget::DetailFilesTab,
+            ratatui::layout::Rect::new(content_x, tabs_y, 7, 1),
+        );
         let comments_width = format!(" Comments ({}) ", detail.comments_count).len() as u16;
-        layout.detail_tab_comments = Some(ratatui::layout::Rect::new(
-            content_x + 10,
-            tabs_y,
-            comments_width,
-            1,
-        ));
+        layout.register(
+            HitTarget::DetailCommentsTab,
+            ratatui::layout::Rect::new(content_x + 10, tabs_y, comments_width, 1),
+        );
     }
 }
 
@@ -795,7 +796,7 @@ fn render_gist_file_list_vm(
     detail: &GistDetailVm,
     chrome: &ChromeVm,
     theme: &crate::tui::Theme,
-    layout: &mut MouseLayout,
+    layout: &mut MouseFrame,
 ) {
     let file_list_height = u16::try_from(detail.files.len().saturating_add(2))
         .unwrap_or(u16::MAX)
@@ -806,7 +807,11 @@ fn render_gist_file_list_vm(
     let visible_rows = (area.height as usize).saturating_sub(2);
     let offset = crate::tui::render::file_list_scroll(cursor, visible_rows, files.len());
     if chrome.mouse_enabled {
-        layout.detail_files = Some(PaneHit { rect: area, offset });
+        layout.register_pane(
+            PaneTarget::DetailFiles,
+            PaneHit { rect: area, offset },
+            files.len(),
+        );
     }
     let lines = crate::tui::render::file_rows(files, cursor, offset, visible_rows, true, theme);
     frame.render_widget(
@@ -832,7 +837,8 @@ fn render_gist_comments_vm(
     area: ratatui::layout::Rect,
     comments: &CommentsPaneVm,
     theme: &crate::tui::Theme,
-    layout: &mut MouseLayout,
+    layout: &mut MouseFrame,
+    feedback: &mut crate::tui::render::RenderFeedback,
 ) {
     let mut body: Vec<Line> = Vec::new();
     let mut affordance_present = false;
@@ -901,20 +907,16 @@ fn render_gist_comments_vm(
         }
     }
 
-    layout.comments_load_older = if affordance_present {
-        Some(ratatui::layout::Rect::new(
-            area.x + 1,
-            area.y + 1,
-            area.width.saturating_sub(2),
-            1,
-        ))
-    } else {
-        None
-    };
+    if affordance_present {
+        layout.register(
+            HitTarget::CommentsLoadOlder,
+            ratatui::layout::Rect::new(area.x + 1, area.y + 1, area.width.saturating_sub(2), 1),
+        );
+    }
 
     let total_lines = body.len();
     let inner_rows = area.height.saturating_sub(2);
-    layout.comments_max_scroll = Some((total_lines as u16).saturating_sub(inner_rows));
+    feedback.comments_max_scroll = Some((total_lines as u16).saturating_sub(inner_rows));
 
     frame.render_widget(
         Paragraph::new(body)
@@ -1382,7 +1384,7 @@ mod tests {
         detail_mut(&mut state).focus = DetailFocus::Comments;
         detail_mut(&mut state).comments = Some(Vec::new());
         assert_eq!(detail_ref(&state).scroll, 0);
-        state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+        state.handle_mouse(MouseInput::ScrollDown, &MouseFrame::default());
         assert_eq!(detail_ref(&state).scroll, 3);
     }
 
@@ -1396,10 +1398,8 @@ mod tests {
             rect: Rect::new(0, 0, 40, 10),
             offset: 0,
         };
-        let layout = MouseLayout {
-            detail_files: Some(hit),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register_pane(PaneTarget::DetailFiles, hit, 2);
         // Click the 2nd file row -> Files focus + cursor 1, but no open yet.
         let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
         assert_eq!(out, KeyOutcome::None);
@@ -1423,11 +1423,9 @@ mod tests {
         detail_mut(&mut state).gist_id = Some("g1".into());
         detail_mut(&mut state).focus = DetailFocus::Files;
         // Header at chunks[0] y=0: content_x = 2, tabs_y = 2; " Files " (7), " Comments " (10 @ +10).
-        let layout = MouseLayout {
-            detail_tab_files: Some(Rect::new(2, 2, 7, 1)),
-            detail_tab_comments: Some(Rect::new(12, 2, 10, 1)),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register(HitTarget::DetailFilesTab, Rect::new(2, 2, 7, 1));
+        layout.register(HitTarget::DetailCommentsTab, Rect::new(12, 2, 10, 1));
         // Click the Comments tab: switches focus and (comments unloaded) requests a fetch.
         let out = state.handle_mouse(MouseInput::Click { col: 14, row: 2 }, &layout);
         assert_eq!(detail_ref(&state).focus, DetailFocus::Comments);
@@ -1446,7 +1444,7 @@ mod tests {
         detail_mut(&mut state).gist_id = Some("g1".into());
         detail_mut(&mut state).focus = DetailFocus::Files;
         detail_mut(&mut state).file_cursor = 0;
-        state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+        state.handle_mouse(MouseInput::ScrollDown, &MouseFrame::default());
         assert_eq!(detail_ref(&state).file_cursor, 1);
     }
 

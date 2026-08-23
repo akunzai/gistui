@@ -96,7 +96,20 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
 - **`focused`** drives border colour *and* selection highlight together (solid bar when focused, bold when not); single-pane screens pass `true`. `scrollbar` is `true` only for the two List panes.
 - **Empty state** is `ListPaneEmpty` plus a prebuilt `empty_message` from the builder. No screen hard-codes an empty message at paint time.
 
-**The two List panes are user-resizable** (issue #395): `AppState::list_split_percent` is the local pane's share, session-only (no config field, no Settings row, no key binding — a restart is back at `DEFAULT_SPLIT_PERCENT`). Percent is the stored fact but `render_list_vm` sizes the panes in **cells** (`split_cells` → `Length`/`Min`) — handing ratatui a second percentage makes the divider lag the pointer mid-drag. `clamp_split_percent` holds 15–85% *and* `list_pane::MIN_PANE_CELLS` on both sides, and returns `None` when no split leaves two readable panes. The drag itself is pure (`MouseInput::Drag`/`Release` → `handle_mouse`, hit-tested by `SplitHit::grabbed` and gated on width by `AppState::grabbable_divider` — the hit map records where the divider is, but how narrow a pane may get is the List screen's policy); the highlight belongs to neither pane, so it is `highlight_pane_divider`, not a `ListPaneVm::focused` variant. **Anything that takes the mouse away mid-drag swallows the release and would wedge `list_split_drag` on** — a background overlay, mouse support switched off in Settings, `$EDITOR` suspending the TUI. Rather than chase each one, four seams end the drag unconditionally: `handle_mouse` on `Release` before any screen dispatch and on `RightClick`, `handle_key_with` on *any* key, and `begin_bg_task`. A new mouse-stealing path needs no fifth.
+**The two List panes are user-resizable** (issue #395): `AppState::list_split_percent` is the local pane's share, session-only (no config field, no Settings row, no key binding — a restart is back at `DEFAULT_SPLIT_PERCENT`). Percent is the stored fact but `render_list_vm` sizes the panes in **cells** (`split_cells` → `Length`/`Min`) — handing ratatui a second percentage makes the divider lag the pointer mid-drag. `clamp_split_percent` holds 15–85% *and* `list_pane::MIN_PANE_CELLS` on both sides, and returns `None` when no split leaves two readable panes. The drag policy stays on the List screen; `MouseSession` owns only its lifecycle. The highlight belongs to neither pane, so it is `highlight_pane_divider`, not a `ListPaneVm::focused` variant.
+
+## Mouse interaction (`@src/tui/mouse.rs`)
+
+- `MouseFrame` is rebuilt on every paint. Renderers register closed `HitTarget` values; its
+  resolver owns cross-screen priority, independent of registration order. Palette overlays use
+  `intercept_all`, and palette row targets carry their original item index.
+- Screen adapters retain domain behavior: resolved row geometry still delegates selection and
+  activation to the active screen. The mouse module knows no Gist or navigation policy.
+- `MouseSession` owns facts that survive a frame: previous press identity and divider-drag state.
+  Any key, right-click, release, or background-task takeover calls `interrupt()`; render only asks
+  `is_dragging()`.
+- Non-mouse render output belongs in `RenderFeedback`. In particular, comments scroll-to-bottom
+  is consumed only after the comments renderer supplies `comments_max_scroll`.
 
 List-row horizontal scroll (issue #341) is **per selected row**, not pane-wide: `row_hscroll` applies the pane offset only to the highlighted index; `focused_hscroll_max` / Pins / Gists caps are that row's painted string. A non-zero offset prefixes `…` in `visible_list_row` (then `truncate_end` may still mark a clipped tail). Unselected rows stay at column 0.
 

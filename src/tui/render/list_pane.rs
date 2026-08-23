@@ -14,7 +14,7 @@ use super::{cell_width, fit_title, truncate_end, ELLIPSIS};
 use crate::tui::text::hscroll_str;
 use crate::tui::theme::Theme;
 use crate::tui::view_model::{ListPaneEmpty, ListPaneVm, RowEmphasis};
-use crate::tui::PaneHit;
+use crate::tui::{MouseFrame, PaneHit, PaneTarget};
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::widgets::{
@@ -47,7 +47,8 @@ pub(crate) fn render_list_pane(
     pane: &ListPaneVm,
     theme: &Theme,
     mouse_enabled: bool,
-    hit: &mut Option<PaneHit>,
+    layout: &mut MouseFrame,
+    target: PaneTarget,
 ) {
     let items = pane_items(pane, area.width, theme);
     let item_count = items.len();
@@ -112,10 +113,14 @@ pub(crate) fn render_list_pane(
     }
 
     if mouse_enabled {
-        *hit = Some(PaneHit {
-            rect: area,
-            offset: list_state.offset(),
-        });
+        layout.register_pane(
+            target,
+            PaneHit {
+                rect: area,
+                offset: list_state.offset(),
+            },
+            item_count,
+        );
     }
 }
 
@@ -234,14 +239,25 @@ mod tests {
     fn paint(pane: &ListPaneVm, width: u16, height: u16, mouse: bool) -> (Buffer, Option<PaneHit>) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let theme = Theme::for_choice(ThemeChoice::Dark);
-        let mut hit = None;
+        let mut layout = MouseFrame::default();
         terminal
             .draw(|frame| {
                 let area = frame.area();
-                render_list_pane(frame, area, pane, &theme, mouse, &mut hit);
+                render_list_pane(
+                    frame,
+                    area,
+                    pane,
+                    &theme,
+                    mouse,
+                    &mut layout,
+                    PaneTarget::List,
+                );
             })
             .unwrap();
-        (terminal.backend().buffer().clone(), hit)
+        (
+            terminal.backend().buffer().clone(),
+            layout.pane(PaneTarget::List),
+        )
     }
 
     /// First cell of row `index`'s label: border, `Padding::horizontal(1)`, then the highlight

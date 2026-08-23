@@ -6,7 +6,7 @@ use crate::tui::render::list_pane::render_list_pane;
 use crate::tui::view_model::{
     ChromeVm, ListPaneEmpty, ListPaneVm, PaneTitleVm, PinsVm, RowEmphasis, RowVm,
 };
-use crate::tui::{AppState, HelpTopic, KeyOutcome, MouseLayout, Screen};
+use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneTarget, Screen};
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::{Constraint, Direction, Layout},
@@ -143,8 +143,8 @@ impl AppState {
 
     /// Select the clicked row on `Screen::Pins`, moving the list cursor. Returns `true` when
     /// a row was hit.
-    pub(crate) fn click_select_pins(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
-        if let Some(hit) = layout.list {
+    pub(crate) fn click_select_pins(&mut self, col: u16, row: u16, layout: &MouseFrame) -> bool {
+        if let Some(hit) = layout.pane(PaneTarget::List) {
             if point_in(hit.rect, col, row) {
                 let count = self.visible_pin_indices().len();
                 if let Some(idx) = hit.index_at(row, count) {
@@ -300,7 +300,7 @@ pub(crate) fn render_pins_vm(
     state: &AppState,
     pins: &PinsVm,
     chrome: &ChromeVm,
-    layout: &mut MouseLayout,
+    layout: &mut MouseFrame,
 ) {
     let area = frame.area();
     let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
@@ -324,7 +324,8 @@ pub(crate) fn render_pins_vm(
         &pins.pane,
         &state.theme,
         chrome.mouse_enabled,
-        &mut layout.list,
+        layout,
+        PaneTarget::List,
     );
 
     if pins.filtering {
@@ -348,7 +349,8 @@ pub(crate) fn render_pins_vm(
         );
     }
     if chrome.mouse_enabled {
-        layout.close_button = Some(crate::tui::render_close_button(frame, area, &state.theme));
+        let close = crate::tui::render_close_button(frame, area, &state.theme);
+        layout.register(HitTarget::Close, close);
     }
 }
 
@@ -633,10 +635,8 @@ mod tests {
             rect: Rect::new(0, 0, 40, 10),
             offset: 0,
         };
-        let layout = MouseLayout {
-            list: Some(hit),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register_pane(PaneTarget::List, hit, 2);
         let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
         assert_eq!(out, KeyOutcome::None);
         assert_eq!(pins_ref(&state).cursor.index, 1);

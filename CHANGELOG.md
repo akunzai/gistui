@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Mouse double-clicks now respect close buttons, repository links, and top-bar shortcuts instead
+  of falling through to the row underneath.
+- Command-palette mouse clicks now execute the row under the pointer when disabled commands are
+  visible above it.
+
 ## [0.18.0] — 2026-08-21
 
 - The main screen's two file lists can now be resized with the mouse: hold the left button on

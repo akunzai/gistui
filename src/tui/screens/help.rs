@@ -3,7 +3,9 @@
 
 use crate::tui::keys::{point_in, NavAction, PAGE_SCROLL};
 use crate::tui::view_model::{ChromeVm, HelpIndexItemVm, HelpModeVm, HelpVm};
-use crate::tui::{AppState, HelpState, HelpTopic, KeyOutcome, MouseLayout, PaneHit, Screen};
+use crate::tui::{
+    AppState, HelpState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneHit, PaneTarget, Screen,
+};
 use crossterm::event::KeyCode;
 use ratatui::{
     layout::Rect,
@@ -144,11 +146,11 @@ impl AppState {
     /// Select the clicked topic-index row on `Screen::Help`. Only set when the topic index is
     /// open (render_help), so this is a no-op while viewing a topic's body. Returns `true`
     /// when a row was hit.
-    pub(crate) fn click_select_help(&mut self, col: u16, row: u16, layout: &MouseLayout) -> bool {
+    pub(crate) fn click_select_help(&mut self, col: u16, row: u16, layout: &MouseFrame) -> bool {
         let Screen::Help(help) = &mut self.screen else {
             return false;
         };
-        if let Some(hit) = layout.list {
+        if let Some(hit) = layout.pane(PaneTarget::List) {
             if point_in(hit.rect, col, row) {
                 if let Some(idx) = hit.index_at(row, HelpTopic::all().len()) {
                     help.index_sel = idx;
@@ -202,7 +204,7 @@ pub(crate) fn build_help_vm(state: &AppState) -> HelpVm {
 }
 
 /// Fixed row (0-indexed, within the topic body) of the clickable repo-URL line — used to
-/// place `MouseLayout::repo_link`'s hit-rect. Kept stable regardless of update-check state
+/// place `MouseFrame::repo_link`'s hit-rect. Kept stable regardless of update-check state
 /// (see `about_topic_lines`) so this constant never has to change.
 pub(crate) const ABOUT_REPO_LINE: usize = 2;
 
@@ -433,7 +435,7 @@ pub(crate) fn render_help_vm(
     state: &AppState,
     help: &HelpVm,
     chrome: &ChromeVm,
-    layout: &mut MouseLayout,
+    layout: &mut MouseFrame,
 ) {
     let area = frame.area();
     let area = crate::tui::render_top_bar(frame, area, &state.theme, chrome.mouse_enabled, layout);
@@ -467,10 +469,14 @@ pub(crate) fn render_help_vm(
             list_state.select(Some(*selected));
             frame.render_stateful_widget(list, area, &mut list_state);
             if chrome.mouse_enabled {
-                layout.list = Some(PaneHit {
-                    rect: area,
-                    offset: list_state.offset(),
-                });
+                layout.register_pane(
+                    PaneTarget::List,
+                    PaneHit {
+                        rect: area,
+                        offset: list_state.offset(),
+                    },
+                    items.len(),
+                );
             }
         }
         HelpModeVm::Topic {
@@ -527,18 +533,22 @@ pub(crate) fn render_help_vm(
                 let visible_row = repo_line as i32 - *scroll as i32;
                 let inner_height = area.height.saturating_sub(2);
                 if visible_row >= 0 && (visible_row as u16) < inner_height {
-                    layout.repo_link = Some(Rect::new(
-                        area.x + 1,
-                        area.y + 1 + visible_row as u16,
-                        area.width.saturating_sub(2),
-                        1,
-                    ));
+                    layout.register(
+                        HitTarget::Repo,
+                        Rect::new(
+                            area.x + 1,
+                            area.y + 1 + visible_row as u16,
+                            area.width.saturating_sub(2),
+                            1,
+                        ),
+                    );
                 }
             }
         }
     }
     if chrome.mouse_enabled {
-        layout.close_button = Some(crate::tui::render_close_button(frame, area, &state.theme));
+        let close = crate::tui::render_close_button(frame, area, &state.theme);
+        layout.register(HitTarget::Close, close);
     }
 }
 
@@ -666,10 +676,8 @@ mod tests {
     fn close_button_click_outside_is_noop() {
         let mut state = state_with_gists();
         state.screen = Screen::Help(Box::default());
-        let layout = MouseLayout {
-            close_button: Some(Rect::new(36, 0, 5, 1)),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register(HitTarget::Close, Rect::new(36, 0, 5, 1));
         // col 35 is just outside the left edge of the close button
         let out = state.handle_mouse(MouseInput::Click { col: 35, row: 0 }, &layout);
         assert_eq!(out, KeyOutcome::None);
@@ -684,10 +692,8 @@ mod tests {
             rect: Rect::new(20, 0, 20, 10),
             offset: 0,
         };
-        let layout = MouseLayout {
-            gist: Some(hit),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register_pane(PaneTarget::Gist, hit, 1);
         let before_screen = state.screen.clone();
         let out = state.handle_mouse(MouseInput::Click { col: 25, row: 1 }, &layout);
         assert_eq!(out, KeyOutcome::None);
@@ -701,7 +707,7 @@ mod tests {
         state.screen = Screen::Help(Box::default());
         help_mut(&mut state).index_open = false;
         help_mut(&mut state).scroll = 0;
-        state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+        state.handle_mouse(MouseInput::ScrollDown, &MouseFrame::default());
         assert_eq!(help_ref(&state).scroll, 3);
     }
 
@@ -712,7 +718,7 @@ mod tests {
         state.screen = Screen::Help(Box::default());
         help_mut(&mut state).index_open = true;
         help_mut(&mut state).index_sel = 0;
-        state.handle_mouse(MouseInput::ScrollDown, &MouseLayout::default());
+        state.handle_mouse(MouseInput::ScrollDown, &MouseFrame::default());
         assert_eq!(help_ref(&state).index_sel, 1);
     }
 
@@ -725,10 +731,8 @@ mod tests {
             rect: Rect::new(0, 0, 40, 15),
             offset: 0,
         };
-        let layout = MouseLayout {
-            list: Some(hit),
-            ..Default::default()
-        };
+        let mut layout = MouseFrame::default();
+        layout.register_pane(PaneTarget::List, hit, usize::MAX);
         // Row 2 is the 2nd content row (border at row 0) -> idx 1 (Pins).
         let out = state.handle_mouse(MouseInput::Click { col: 5, row: 2 }, &layout);
         assert_eq!(out, KeyOutcome::None);
