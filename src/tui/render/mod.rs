@@ -313,7 +313,7 @@ mod tests {
     #[test]
     fn render_screen_vm_list_row_marks_clipped_description() {
         let mut state = initial_state();
-        state.gists = vec![gist_file(
+        state.gist_catalog.owned = vec![gist_file(
             "MicrosoftDateTimeJsonConverter.cs",
             "System.Text.Json deserialize legacy JSON data TAILMARKER",
         )];
@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn render_screen_vm_list_row_does_not_split_a_wide_character() {
         let mut state = initial_state();
-        state.gists = vec![gist_file(
+        state.gist_catalog.owned = vec![gist_file(
             "日本語テストファイル名前がとても長いです.txt",
             "desc",
         )];
@@ -347,7 +347,7 @@ mod tests {
     #[test]
     fn render_screen_vm_list_row_leaves_a_fitting_label_untouched() {
         let mut state = initial_state();
-        state.gists = vec![gist_file("a.txt", "short")];
+        state.gist_catalog.owned = vec![gist_file("a.txt", "short")];
         let text = render_state_size(&state, 137, 20);
         assert!(
             text.contains("a.txt — short"),
@@ -360,7 +360,7 @@ mod tests {
     fn render_screen_vm_gists_row_marks_clipped_description() {
         let mut state = initial_state();
         state.screen = Screen::Gists(Box::default());
-        state.gists = vec![gist_file(
+        state.gist_catalog.owned = vec![gist_file(
             "file.txt",
             "a very long gist description that must not survive a narrow manager row TAILMARKER",
         )];
@@ -417,13 +417,16 @@ mod tests {
     fn render_gist_detail_metadata_fits_at_eighty_columns() {
         let mut state = initial_state();
         state.screen = Screen::GistDetail(Box::default());
-        state.gists = vec![crate::domain::GistFile {
+        state.gist_catalog.owned = vec![crate::domain::GistFile {
             content_type: Some("text/plain".into()),
             size: 1_536,
             ..gist_file("notes.txt", "metadata")
         }];
         state.detail_mut().unwrap().gist_id = Some("abc123def".into());
-        state.gist_comment_counts.insert("abc123def".into(), 3);
+        state
+            .gist_catalog
+            .comment_counts
+            .insert("abc123def".into(), 3);
 
         let text = render_state_size(&state, 80, 24);
         assert!(text.contains("notes.txt · 1.5 KiB · text/plain"), "{text}");
@@ -574,7 +577,7 @@ mod tests {
     fn render_comments_keep_hanging_indent_at_eighty_columns() {
         let mut state = initial_state();
         state.screen = Screen::GistDetail(Box::default());
-        state.gists = vec![crate::domain::GistFile::fixture("g1", "a.txt")];
+        state.gist_catalog.owned = vec![crate::domain::GistFile::fixture("g1", "a.txt")];
         if let Some(d) = state.detail_mut() {
             d.gist_id = Some("g1".into());
             d.focus = DetailFocus::Comments;

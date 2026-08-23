@@ -1,6 +1,6 @@
 use crate::domain::{
-    group_gists, GistComment, GistFile, GistFileRef, GistGroup, GistRevision, LocalCandidate,
-    PinnedMapping,
+    group_gists, GistCatalog, GistComment, GistFile, GistFileRef, GistGroup, GistRevision,
+    LocalCandidate, PinnedMapping,
 };
 use crate::ranking::{RankedGistFile, RankedLocal};
 use anyhow::Result;
@@ -15,6 +15,7 @@ use ratatui::{backend::CrosstermBackend, widgets::Clear, Terminal};
 use std::io;
 use std::path::PathBuf;
 
+mod gist_refresh;
 mod mouse;
 pub use mouse::{
     point_in, HitTarget, MouseFrame, MouseSession, PaneHit, PaneTarget, PressKind, RowTarget,
@@ -824,11 +825,7 @@ pub struct DetailState {
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub locals: Vec<LocalCandidate>,
-    pub gists: Vec<GistFile>,
-    /// Starred gists from `GET /gists/starred` (may include others' gists).
-    pub starred_gists: Vec<GistFile>,
-    pub starred_gist_ids: std::collections::HashSet<String>,
-    pub current_user_login: Option<String>,
+    pub gist_catalog: GistCatalog,
     pub pinned: Vec<PinnedMapping>,
     pub focus: FocusPane,
     /// The pane that DRIVES the match ranking, decoupled from `focus`: the anchored pane
@@ -927,14 +924,6 @@ pub struct AppState {
     /// Monotonic tick advanced once per event-loop iteration (~150ms); drives the in-progress
     /// spinner animation. Wraps freely — only its value modulo the frame count is observed.
     pub spinner_frame: usize,
-    /// Per-gist comment counts (`gist_id` → count) from the gist-list fetch, surfaced in the
-    /// gist manager rows. Kept off `GistFile` since the count is a gist-level value, not a
-    /// per-file one; empty until the first live fetch lands (cached startup gists show 0).
-    pub gist_comment_counts: std::collections::HashMap<String, u32>,
-    /// Per-gist fork counts (`gist_id` → how many users forked it), from `/gists/{id}/forks`.
-    pub gist_fork_counts: std::collections::HashMap<String, u32>,
-    /// Per-gist stargazer counts (`gist_id` → count), from GraphQL `stargazerCount`.
-    pub gist_star_counts: std::collections::HashMap<String, u32>,
     /// Active theme selection (persisted to config when toggled with `T`).
     pub theme_choice: crate::config::ThemeChoice,
     /// Resolved colour palette for the current theme choice (from config).
@@ -1407,9 +1396,9 @@ impl AppState {
 
     fn list_gist_source(&self) -> &[GistFile] {
         if self.gist_type_filter.uses_starred_source() {
-            &self.starred_gists
+            &self.gist_catalog.starred
         } else {
-            &self.gists
+            &self.gist_catalog.owned
         }
     }
 
@@ -1418,9 +1407,9 @@ impl AppState {
             .gist_manager()
             .is_some_and(|g| g.type_filter.uses_starred_source());
         if starred {
-            &self.starred_gists
+            &self.gist_catalog.starred
         } else {
-            &self.gists
+            &self.gist_catalog.owned
         }
     }
 
@@ -1431,10 +1420,15 @@ impl AppState {
         // A gist you own *and* starred is fetched by both `/gists` and `/gists/starred`,
         // so it appears in both lists. Owned takes precedence; skip the starred copy to
         // avoid showing each of its files twice in the detail view (issue #188).
-        let owned_ids: std::collections::HashSet<&str> =
-            self.gists.iter().map(|g| g.gist_id.as_str()).collect();
-        self.gists.iter().chain(
-            self.starred_gists
+        let owned_ids: std::collections::HashSet<&str> = self
+            .gist_catalog
+            .owned
+            .iter()
+            .map(|g| g.gist_id.as_str())
+            .collect();
+        self.gist_catalog.owned.iter().chain(
+            self.gist_catalog
+                .starred
                 .iter()
                 .filter(move |g| !owned_ids.contains(g.gist_id.as_str())),
         )
@@ -1473,37 +1467,49 @@ impl AppState {
     }
 
     pub fn gist_is_owned(&self, gist_id: &str) -> bool {
-        if let Some(me) = self.current_user_login.as_deref() {
+        if let Some(me) = self.gist_catalog.user_login.as_deref() {
             self.all_gist_files()
                 .find(|g| g.gist_id == gist_id)
                 .is_some_and(|g| g.is_owned_by(me))
         } else {
-            self.gists.iter().any(|g| g.gist_id == gist_id)
+            self.gist_catalog.owned.iter().any(|g| g.gist_id == gist_id)
         }
     }
 
     pub fn gist_is_starred(&self, gist_id: &str) -> bool {
-        self.starred_gist_ids.contains(gist_id)
+        self.gist_catalog.starred_ids.contains(gist_id)
     }
 
     /// Per-gist comment, stargazer, and fork counts for row/detail labels.
     pub fn gist_counts(&self, gist_id: &str) -> (u32, u32, u32) {
         (
-            self.gist_comment_counts.get(gist_id).copied().unwrap_or(0),
-            self.gist_star_counts.get(gist_id).copied().unwrap_or(0),
-            self.gist_fork_counts.get(gist_id).copied().unwrap_or(0),
+            self.gist_catalog
+                .comment_counts
+                .get(gist_id)
+                .copied()
+                .unwrap_or(0),
+            self.gist_catalog
+                .star_counts
+                .get(gist_id)
+                .copied()
+                .unwrap_or(0),
+            self.gist_catalog
+                .fork_counts
+                .get(gist_id)
+                .copied()
+                .unwrap_or(0),
         )
     }
 
     /// Gists you have starred (unique ids from the starred list fetch).
     pub fn starred_gist_count(&self) -> usize {
-        self.starred_gist_ids.len()
+        self.gist_catalog.starred_ids.len()
     }
 
     /// Owned gists that are forks of an upstream gist.
     pub fn owned_fork_gist_count(&self) -> usize {
         let mut seen = std::collections::HashSet::new();
-        for g in &self.gists {
+        for g in &self.gist_catalog.owned {
             if g.is_fork() {
                 seen.insert(g.gist_id.as_str());
             }
@@ -1527,7 +1533,7 @@ impl AppState {
 
     /// All gists collapsed to one entry each (raw, unfiltered) from the owned list.
     pub fn gist_groups(&self) -> Vec<GistGroup> {
-        group_gists(&self.gists)
+        group_gists(&self.gist_catalog.owned)
     }
 
     /// The gist-level view's rows after the visibility filter, text filter, and sort
@@ -1571,12 +1577,24 @@ impl AppState {
                     unix_now(),
                     sort,
                     (
-                        self.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
-                        self.gist_star_counts.get(&g.id).copied().unwrap_or(0),
-                        self.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
+                        self.gist_catalog
+                            .comment_counts
+                            .get(&g.id)
+                            .copied()
+                            .unwrap_or(0),
+                        self.gist_catalog
+                            .star_counts
+                            .get(&g.id)
+                            .copied()
+                            .unwrap_or(0),
+                        self.gist_catalog
+                            .fork_counts
+                            .get(&g.id)
+                            .copied()
+                            .unwrap_or(0),
                     ),
                     self.gist_is_starred(&g.id),
-                    self.current_user_login.as_deref(),
+                    self.gist_catalog.user_login.as_deref(),
                 )
             })
             .map(|t| hscroll_max_for_text(&t))
@@ -1848,7 +1866,8 @@ impl AppState {
             let gist_id = self.download_gist_id().unwrap_or_default().to_string();
             let raw_url = self.gist_file_raw_url(&gist_id, &local_filename);
             let has_same_name = self
-                .gists
+                .gist_catalog
+                .owned
                 .iter()
                 .any(|g| g.gist_id == gist_id && g.filename == local_filename);
             return if has_same_name {
@@ -1882,7 +1901,8 @@ impl AppState {
         let gist_id = gist.file.gist_id.clone();
         let raw_url = gist.file.raw_url.clone();
         let has_same_name = self
-            .gists
+            .gist_catalog
+            .owned
             .iter()
             .any(|g| g.gist_id == gist_id && g.filename == local_filename);
         if has_same_name {
@@ -2043,10 +2063,7 @@ pub(crate) fn format_file_size(bytes: u64) -> String {
 pub fn initial_state() -> AppState {
     AppState {
         locals: Vec::new(),
-        gists: Vec::new(),
-        starred_gists: Vec::new(),
-        starred_gist_ids: std::collections::HashSet::new(),
-        current_user_login: None,
+        gist_catalog: GistCatalog::default(),
         pinned: Vec::new(),
         focus: FocusPane::Local,
         anchor: FocusPane::Local,
@@ -2100,9 +2117,6 @@ pub fn initial_state() -> AppState {
         upload: UploadState::default(),
         nav_stack: Vec::new(),
         spinner_frame: 0,
-        gist_comment_counts: std::collections::HashMap::new(),
-        gist_fork_counts: std::collections::HashMap::new(),
-        gist_star_counts: std::collections::HashMap::new(),
         theme_choice: crate::config::ThemeChoice::Dark,
         theme: Theme::DARK,
         pin_sync_cache: Vec::new(),
@@ -2162,13 +2176,7 @@ pub fn load_startup_state(no_mouse: bool, no_update_check: bool) -> Result<AppSt
     // Show last-known gists (owned + starred + counts) from cache; background fetch refreshes.
     if let Ok(path) = crate::cache::cache_path() {
         if let Some(cache) = crate::cache::load_gist_cache(&path) {
-            state.starred_gist_ids = cache.starred_ids_set();
-            state.gists = cache.owned;
-            state.starred_gists = cache.starred;
-            state.current_user_login = cache.user_login;
-            state.gist_comment_counts = cache.comment_counts;
-            state.gist_fork_counts = cache.fork_counts;
-            state.gist_star_counts = cache.star_counts;
+            state.gist_catalog = cache;
         }
     }
 
@@ -2271,12 +2279,12 @@ mod tests {
     }
 
     /// Issue #348: the lookup must also cover starred (not just owned) gists — one of the call
-    /// sites this fix replaced only checked `state.gists`, so a starred gist's diff header still
+    /// sites this fix replaced only checked `state.gist_catalog.owned`, so a starred gist's diff header still
     /// showed `(unknown)` even though its age was visible in Pinned Mappings.
     #[test]
     fn gist_file_for_diff_finds_a_starred_gist_too() {
         let mut state = initial_state();
-        state.starred_gists = vec![GistFile {
+        state.gist_catalog.starred = vec![GistFile {
             description: "starred demo".into(),
             public: true,
             updated_at: "2026-06-12T08:00:00Z".into(),
@@ -2336,9 +2344,9 @@ mod tests {
             ..GistFile::fixture("g1", filename)
         };
         let mut state = initial_state();
-        state.gists = vec![make(".zprofile"), make(".zshenv"), make(".zshrc")];
+        state.gist_catalog.owned = vec![make(".zprofile"), make(".zshenv"), make(".zshrc")];
         // Same gist, fetched again from /gists/starred because the owner starred it.
-        state.starred_gists = vec![make(".zprofile"), make(".zshenv"), make(".zshrc")];
+        state.gist_catalog.starred = vec![make(".zprofile"), make(".zshenv"), make(".zshrc")];
 
         assert_eq!(
             state.gist_filenames("g1"),

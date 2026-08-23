@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PinnedMapping {
@@ -96,6 +99,25 @@ pub struct GistFile {
     /// GraphQL global id from the gist list API (`node_id`), for stargazer counts.
     #[serde(default)]
     pub node_id: Option<String>,
+}
+
+/// Publishable, cacheable owned/starred Gists and their list-level enrichment metadata.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct GistCatalog {
+    #[serde(default)]
+    pub owned: Vec<GistFile>,
+    #[serde(default)]
+    pub starred: Vec<GistFile>,
+    #[serde(default)]
+    pub starred_ids: HashSet<String>,
+    #[serde(default)]
+    pub user_login: Option<String>,
+    #[serde(default)]
+    pub comment_counts: HashMap<String, u32>,
+    #[serde(default)]
+    pub fork_counts: HashMap<String, u32>,
+    #[serde(default)]
+    pub star_counts: HashMap<String, u32>,
 }
 
 /// Image file extensions — the single source of truth for the "image file" classification,

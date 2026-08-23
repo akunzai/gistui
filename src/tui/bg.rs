@@ -8,9 +8,6 @@ use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 use std::path::PathBuf;
 
-/// Owned-fork metadata (gist id → upstream id), or the reason fork detection failed.
-pub(super) type ForkMetaResult = Result<std::collections::HashMap<String, Option<String>>, String>;
-
 pub(super) enum UploadEditWatchEvent {
     /// The temp file's mtime changed — re-read and live-update the diff.
     ContentChanged {
@@ -126,51 +123,10 @@ pub(super) fn fetch_revision_pair_for_restore(
 }
 
 pub(super) fn persist_gist_cache_from_state(state: &AppState) {
-    persist_gist_cache_from_state_fields(
-        &state.gists,
-        &state.starred_gists,
-        &state.starred_gist_ids,
-        &state.current_user_login,
-        &state.gist_comment_counts,
-        &state.gist_fork_counts,
-        &state.gist_star_counts,
-    );
-}
-
-pub(super) fn persist_gist_cache_from_state_fields(
-    owned: &[GistFile],
-    starred: &[GistFile],
-    starred_ids: &std::collections::HashSet<String>,
-    user_login: &Option<String>,
-    comment_counts: &std::collections::HashMap<String, u32>,
-    fork_counts: &std::collections::HashMap<String, u32>,
-    star_counts: &std::collections::HashMap<String, u32>,
-) {
     if let Ok(path) = crate::cache::cache_path() {
-        let cache = crate::cache::GistListCache {
-            owned: owned.to_vec(),
-            starred: starred.to_vec(),
-            starred_ids: starred_ids.iter().cloned().collect(),
-            user_login: user_login.clone(),
-            comment_counts: comment_counts.clone(),
-            fork_counts: fork_counts.clone(),
-            star_counts: star_counts.clone(),
-        };
-        crate::cache::save_gist_cache(&path, &cache);
+        crate::cache::save_gist_cache(&path, &state.gist_catalog);
     }
 }
-
-/// Fetches the gist list on a background thread so startup does not block on `gh`.
-/// Fork counts are fetched separately so the UI can render lists without waiting.
-pub(super) type GistFetchResult = (
-    Vec<GistFile>,
-    Vec<GistFile>,
-    std::collections::HashSet<String>,
-    Option<String>,
-    std::collections::HashMap<String, u32>,
-    Option<String>,
-    Option<String>,
-);
 
 /// Off-thread: ask GitHub for the latest release tag and classify it against the running
 /// version. Network failures map to `Failed` (silent; the loop won't record the throttle).
@@ -181,104 +137,6 @@ pub(super) fn spawn_update_check(
         let outcome =
             crate::update_check::check(&crate::upgrade::UreqClient, env!("CARGO_PKG_VERSION"));
         let _ = tx.send(outcome);
-    });
-    rx
-}
-
-pub(super) fn spawn_gist_fetch() -> std::sync::mpsc::Receiver<GistFetchResult> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let result = if crate::gh::check_gh_ready(&SystemRunner).is_ok() {
-            // Owned list, starred list, and current-user login are independent network
-            // legs — run them concurrently so large accounts don't pay three sequential
-            // round-trips on cold start (issue #223). Soft-fail each leg independently
-            // (`.ok()`), matching the previous sequential behaviour.
-            let (owned, starred_raw, user_login) = std::thread::scope(|s| {
-                let owned_h = s.spawn(|| crate::gh::fetch_gist_list_json(&SystemRunner).ok());
-                let starred_h =
-                    s.spawn(|| crate::gh::fetch_gist_starred_list_json(&SystemRunner).ok());
-                let user_h = s.spawn(|| crate::gh::fetch_current_user_login(&SystemRunner).ok());
-                (
-                    owned_h.join().unwrap_or(None),
-                    starred_h.join().unwrap_or(None),
-                    user_h.join().unwrap_or(None),
-                )
-            });
-            let (files, mut comment_counts) = owned
-                .as_ref()
-                .map(|raw| {
-                    (
-                        crate::gh::parse_gist_list_json(raw).unwrap_or_default(),
-                        crate::gh::parse_gist_comment_counts(raw).unwrap_or_default(),
-                    )
-                })
-                .unwrap_or_default();
-            if let Some(raw) = starred_raw.as_ref() {
-                if let Ok(starred_comments) = crate::gh::parse_gist_comment_counts(raw) {
-                    comment_counts.extend(starred_comments);
-                }
-            }
-            let starred = starred_raw
-                .as_ref()
-                .map(|raw| crate::gh::parse_gist_list_json(raw).unwrap_or_default())
-                .unwrap_or_default();
-            let starred_ids = starred_raw
-                .as_ref()
-                .and_then(|raw| crate::gh::parse_starred_gist_ids(raw).ok())
-                .unwrap_or_default();
-            (
-                files,
-                starred,
-                starred_ids,
-                user_login,
-                comment_counts,
-                owned,
-                starred_raw,
-            )
-        } else {
-            Default::default()
-        };
-        let _ = tx.send(result);
-    });
-    rx
-}
-
-pub(super) fn spawn_fork_count_fetch(
-    owned_raw: Option<String>,
-    starred_raw: Option<String>,
-    gist_ids: std::collections::HashSet<String>,
-) -> std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let counts = crate::gh::collect_gist_fork_counts(
-            &SystemRunner,
-            owned_raw.as_deref(),
-            starred_raw.as_deref(),
-            gist_ids,
-        );
-        let _ = tx.send(counts);
-    });
-    rx
-}
-
-pub(super) fn spawn_star_count_fetch(
-    node_ids: std::collections::HashMap<String, String>,
-) -> std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let counts = crate::gh::collect_gist_star_counts(&SystemRunner, node_ids);
-        let _ = tx.send(counts);
-    });
-    rx
-}
-
-pub(super) fn spawn_fork_metadata_fetch(
-    owned_ids: std::collections::HashSet<String>,
-) -> std::sync::mpsc::Receiver<ForkMetaResult> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let fork_of = crate::gh::collect_owned_fork_of_ids(&SystemRunner, owned_ids);
-        let _ = tx.send(fork_of);
     });
     rx
 }
@@ -1056,14 +914,10 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
 ///   spawn stamps `AppState::bg_task_generation`. Only matching generations apply;
 ///   cancel bumps the generation and drops the receiver (issue #221).
 /// - **Local scans** ([`Jobs::request_local_scan`]): stamp `AppState::local_scan_generation`.
-/// - **One-shot slots** (gist list, fork/star counts, update check, fork meta): a new
-///   spawn replaces the receiver; there is no multi-generation queue for these.
+/// - **Gist refreshes** own one generation across their base and enrichment jobs.
 pub(super) struct Jobs {
     update: Option<std::sync::mpsc::Receiver<crate::update_check::UpdateCheckOutcome>>,
-    gist: Option<std::sync::mpsc::Receiver<GistFetchResult>>,
-    fork: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>>,
-    star: Option<std::sync::mpsc::Receiver<std::collections::HashMap<String, u32>>>,
-    fork_meta: Option<std::sync::mpsc::Receiver<ForkMetaResult>>,
+    gist_refresh: super::gist_refresh::GistRefresh,
     local: LocalScanRx,
     /// Streams `UploadEditWatchEvent`s while a GUI editor has the upload-redact temp file
     /// open (see `spawn_upload_edit_watch`). Unlike one-shot slots, this channel can carry
@@ -1083,13 +937,11 @@ impl Jobs {
     pub(super) fn startup(
         update: Option<std::sync::mpsc::Receiver<crate::update_check::UpdateCheckOutcome>>,
         fetch_gists: bool,
+        catalog: &crate::domain::GistCatalog,
     ) -> Self {
         Self {
             update,
-            gist: fetch_gists.then(spawn_gist_fetch),
-            fork: None,
-            star: None,
-            fork_meta: None,
+            gist_refresh: super::gist_refresh::GistRefresh::new(catalog, fetch_gists),
             local: None,
             upload_edit_watch: None,
             action: None,
@@ -1193,27 +1045,20 @@ impl Jobs {
         self.absorb_inner(state, update_check_path)
     }
 
-    /// Poll each channel in turn and apply ready results to `state`.
-    ///
-    /// **Order matters**: the gist-list section spawns follow-up jobs (fork counts, fork
-    /// metadata, star counts) on success, and those sections poll the very channels it just
-    /// spawned in this same call — so `gist` must run before `fork`/`star`/`fork_meta`.
+    /// Poll each job module in turn and apply ready results to `state`.
     fn absorb_inner(
         &mut self,
         state: &mut AppState,
         update_check_path: &Option<std::path::PathBuf>,
     ) -> Result<LoopFlow> {
-        self.on_gist_list_ready(state);
-        self.on_fork_counts_ready(state);
-        self.on_star_counts_ready(state);
-        self.on_fork_meta_ready(state);
+        self.on_gist_refresh_ready(state);
         self.on_local_scan_ready(state);
         self.on_update_check_ready(state, update_check_path);
         self.on_upload_watch_events(state);
         let flow = self.on_action_outcome(state);
         if std::mem::take(&mut state.gist_list_stale) {
             state.loading = true;
-            self.gist = Some(spawn_gist_fetch());
+            self.gist_refresh.start(&state.gist_catalog);
         }
         if let Some(gist_id) = state.revisions_stale.take() {
             screens::revisions::request_revisions(self, state, gist_id);
@@ -1226,9 +1071,9 @@ impl Jobs {
 /// arrives. A disconnected sender is treated the same as an empty channel (no value yet):
 /// `slot` is left in place and the caller tries again next tick.
 ///
-/// Only covers channels that receive a single unstamped result (`gist`, `fork`, `star`,
-/// `fork_meta`, `update`). The generation-stamped channels (`local`, `action`) and the
-/// multi-message `upload_edit_watch` drain have different shapes and stay hand-rolled.
+/// Only covers channels that receive a single unstamped result (`update`). The
+/// generation-stamped refresh, local, and action channels and the multi-message
+/// `upload_edit_watch` drain have different shapes and stay hand-rolled.
 fn poll_channel<T>(slot: &mut Option<std::sync::mpsc::Receiver<T>>) -> Option<T> {
     let value = slot.as_ref()?.try_recv().ok()?;
     *slot = None;
@@ -1236,34 +1081,16 @@ fn poll_channel<T>(slot: &mut Option<std::sync::mpsc::Receiver<T>>) -> Option<T>
 }
 
 impl Jobs {
-    /// Absorb the background gist list once it arrives, and spawn the follow-up
-    /// fork-count/fork-meta/star-count jobs the freshly-loaded gist list needs.
-    fn on_gist_list_ready(&mut self, state: &mut AppState) {
-        if state.loading {
-            if let Some((
-                gists,
-                starred,
-                starred_ids,
-                user_login,
-                comment_counts,
-                owned_raw,
-                starred_raw,
-            )) = poll_channel(&mut self.gist)
-            {
-                persist_gist_cache_from_state_fields(
-                    &gists,
-                    &starred,
-                    &starred_ids,
-                    &user_login,
-                    &comment_counts,
-                    &state.gist_fork_counts,
-                    &state.gist_star_counts,
-                );
-                state.gists = gists;
-                state.starred_gists = starred;
-                state.starred_gist_ids = starred_ids;
-                state.current_user_login = user_login;
-                state.gist_comment_counts = comment_counts;
+    fn on_gist_refresh_ready(&mut self, state: &mut AppState) {
+        for update in self.gist_refresh.poll() {
+            state.gist_catalog = update.catalog;
+            if update.persist {
+                persist_gist_cache_from_state(state);
+            }
+            if let Some(status) = update.status {
+                state.set_status(status);
+            }
+            if update.base_ready {
                 state.loading = false;
                 if state.gist_index >= state.ranked_gists().len() {
                     state.gist_index = 0;
@@ -1272,52 +1099,6 @@ impl Jobs {
                 if let Some(gm) = state.gist_manager_mut() {
                     gm.cursor.clamp_len(count);
                 }
-                let gist_ids: std::collections::HashSet<String> = state
-                    .gists
-                    .iter()
-                    .chain(state.starred_gists.iter())
-                    .map(|g| g.gist_id.clone())
-                    .collect();
-                self.fork = Some(spawn_fork_count_fetch(
-                    owned_raw,
-                    starred_raw,
-                    gist_ids.clone(),
-                ));
-                self.fork_meta = Some(spawn_fork_metadata_fetch(
-                    state.gists.iter().map(|g| g.gist_id.clone()).collect(),
-                ));
-                let node_ids =
-                    crate::gh::merge_gist_node_id_maps(&state.gists, &state.starred_gists);
-                self.star = Some(spawn_star_count_fetch(node_ids));
-            }
-        }
-    }
-
-    /// Absorb background fork-count results.
-    fn on_fork_counts_ready(&mut self, state: &mut AppState) {
-        if let Some(fork_counts) = poll_channel(&mut self.fork) {
-            state.gist_fork_counts = fork_counts;
-            persist_gist_cache_from_state(state);
-        }
-    }
-
-    /// Absorb background star-count results.
-    fn on_star_counts_ready(&mut self, state: &mut AppState) {
-        if let Some(star_counts) = poll_channel(&mut self.star) {
-            state.gist_star_counts = star_counts;
-            persist_gist_cache_from_state(state);
-        }
-    }
-
-    /// Absorb background fork-metadata (owned-fork upstream ids) results.
-    fn on_fork_meta_ready(&mut self, state: &mut AppState) {
-        if let Some(result) = poll_channel(&mut self.fork_meta) {
-            match result {
-                Ok(fork_of) => {
-                    crate::gh::apply_fork_of_ids(&mut state.gists, &fork_of);
-                    persist_gist_cache_from_state(state);
-                }
-                Err(error) => state.set_status(format!("fork detection unavailable: {error}")),
             }
         }
     }
@@ -1425,6 +1206,8 @@ impl Jobs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::GistCatalog;
+    use crate::tui::gist_refresh::GistRefresh;
 
     use std::path::PathBuf;
     use std::sync::mpsc;
@@ -1469,114 +1252,11 @@ mod tests {
     fn empty_jobs() -> Jobs {
         Jobs {
             update: None,
-            gist: None,
-            fork: None,
-            star: None,
-            fork_meta: None,
+            gist_refresh: GistRefresh::new(&GistCatalog::default(), false),
             local: None,
             upload_edit_watch: None,
             action: None,
         }
-    }
-
-    // ---- on_gist_list_ready ---------------------------------------------
-
-    #[test]
-    fn on_gist_list_ready_noop_when_not_loading() {
-        let mut state = initial_state();
-        state.loading = false;
-        let (tx, rx) = mpsc::channel::<GistFetchResult>();
-        tx.send(Default::default()).unwrap();
-        let mut jobs = empty_jobs();
-        jobs.gist = Some(rx);
-
-        jobs.on_gist_list_ready(&mut state);
-
-        // Guarded entirely by `state.loading`: the channel is never polled.
-        assert!(jobs.gist.is_some());
-        assert!(state.gists.is_empty());
-    }
-
-    #[test]
-    fn on_gist_list_ready_noop_when_channel_empty() {
-        let mut state = initial_state();
-        state.loading = true;
-        let (_tx, rx) = mpsc::channel::<GistFetchResult>();
-        let mut jobs = empty_jobs();
-        jobs.gist = Some(rx);
-
-        jobs.on_gist_list_ready(&mut state);
-
-        assert!(jobs.gist.is_some());
-        assert!(state.loading);
-        assert!(state.gists.is_empty());
-    }
-
-    // ---- on_fork_counts_ready / on_star_counts_ready ---------------------
-    //
-    // The "value received" branch of both also persists the gist cache to the real
-    // per-OS cache directory (`persist_gist_cache_from_state` — see `bg.rs`), which has
-    // no test seam (unlike `update_check_path`, it isn't threaded through as a
-    // parameter). Exercising that branch here would write to the developer's real
-    // `~/.cache/gistui/gists.json` (or platform equivalent) as a side effect of running
-    // `cargo test`, which the project's "no live gh/network in tests" convention rules
-    // out in spirit. Only the empty-channel guard is covered directly.
-
-    #[test]
-    fn on_fork_counts_ready_noop_when_channel_empty() {
-        let mut state = initial_state();
-        let (_tx, rx) = mpsc::channel();
-        let mut jobs = empty_jobs();
-        jobs.fork = Some(rx);
-
-        jobs.on_fork_counts_ready(&mut state);
-
-        assert!(jobs.fork.is_some());
-        assert!(state.gist_fork_counts.is_empty());
-    }
-
-    #[test]
-    fn on_star_counts_ready_noop_when_channel_empty() {
-        let mut state = initial_state();
-        let (_tx, rx) = mpsc::channel();
-        let mut jobs = empty_jobs();
-        jobs.star = Some(rx);
-
-        jobs.on_star_counts_ready(&mut state);
-
-        assert!(jobs.star.is_some());
-        assert!(state.gist_star_counts.is_empty());
-    }
-
-    // ---- on_fork_meta_ready -----------------------------------------------
-
-    #[test]
-    fn on_fork_meta_ready_noop_when_channel_empty() {
-        let mut state = initial_state();
-        let (_tx, rx) = mpsc::channel();
-        let mut jobs = empty_jobs();
-        jobs.fork_meta = Some(rx);
-
-        jobs.on_fork_meta_ready(&mut state);
-
-        assert!(jobs.fork_meta.is_some());
-    }
-
-    #[test]
-    fn on_fork_meta_ready_sets_status_on_error() {
-        let mut state = initial_state();
-        let (tx, rx) = mpsc::channel();
-        tx.send(Err("boom".to_string())).unwrap();
-        let mut jobs = empty_jobs();
-        jobs.fork_meta = Some(rx);
-
-        jobs.on_fork_meta_ready(&mut state);
-
-        assert!(jobs.fork_meta.is_none());
-        assert_eq!(
-            state.status.as_deref(),
-            Some("fork detection unavailable: boom")
-        );
     }
 
     // ---- on_local_scan_ready ----------------------------------------------
@@ -1782,7 +1462,7 @@ mod tests {
         // Stale outcome dropped without applying — `bg_task_msg` untouched and no
         // follow-up gist fetch spawned.
         assert_eq!(state.bg_task_msg.as_deref(), Some("Deleting gist…"));
-        assert!(jobs.gist.is_none());
+        assert!(!state.gist_list_stale);
         assert!(state.status.is_none());
     }
 

@@ -136,10 +136,10 @@ pub(crate) fn on_gist_star_toggle(
 ) -> LoopFlow {
     apply(state, result, "star toggle", |state| {
         if starred {
-            state.starred_gist_ids.insert(gist_id.clone());
+            state.gist_catalog.starred_ids.insert(gist_id.clone());
             format!("starred {gist_id}")
         } else {
-            state.starred_gist_ids.remove(&gist_id);
+            state.gist_catalog.starred_ids.remove(&gist_id);
             format!("unstarred {gist_id}")
         }
     })
@@ -375,7 +375,7 @@ mod tests {
         on_gist_star_toggle(&mut state, Ok(()), "g1".into(), true);
 
         assert!(state.gist_list_stale);
-        assert!(state.starred_gist_ids.contains("g1"));
+        assert!(state.gist_catalog.starred_ids.contains("g1"));
         assert_eq!(state.status.as_deref(), Some("starred g1"));
     }
 

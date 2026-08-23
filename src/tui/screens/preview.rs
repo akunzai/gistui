@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn stage_preview_content_miss_falls_back_to_raw_url_and_returns_title() {
         let mut state = state_with_gists();
-        state.gists[0].raw_url = Some("https://example.test/a.txt".into());
+        state.gist_catalog.owned[0].raw_url = Some("https://example.test/a.txt".into());
 
         let (file, title) =
             stage_preview_content(&mut state, gist_file_ref("g1", "a.txt")).expect("spawn");
@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn stage_refresh_preview_drops_cache_and_returns_fetch_payload() {
         let mut state = state_with_gists();
-        state.gists[0].raw_url = Some("https://example.test/a.txt".into());
+        state.gist_catalog.owned[0].raw_url = Some("https://example.test/a.txt".into());
         let file = gist_file_ref("g1", "a.txt");
         state
             .gist_content_cache

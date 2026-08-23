@@ -195,7 +195,7 @@ pub fn collect_gist_fork_counts(
     owned_raw: Option<&str>,
     starred_raw: Option<&str>,
     gist_ids: impl IntoIterator<Item = String>,
-) -> HashMap<String, u32> {
+) -> crate::gh::CountCollection {
     let mut counts = owned_raw
         .and_then(|raw| parse_gist_fork_counts(raw).ok())
         .unwrap_or_default();
@@ -204,17 +204,20 @@ pub fn collect_gist_fork_counts(
             counts.extend(starred);
         }
     }
+    let mut incomplete = false;
     for id in gist_ids {
         if counts.get(&id).copied().unwrap_or(0) > 0 {
             continue;
         }
-        if let Ok(n) = fetch_gist_fork_count(runner, &id) {
-            if n > 0 {
+        match fetch_gist_fork_count(runner, &id) {
+            Ok(n) if n > 0 => {
                 counts.insert(id, n);
             }
+            Ok(_) => {}
+            Err(_) => incomplete = true,
         }
     }
-    counts
+    crate::gh::CountCollection { counts, incomplete }
 }
 
 #[cfg(test)]
@@ -327,9 +330,10 @@ mod tests {
             None,
             ["abc123".into(), "def456".into()],
         );
-        assert_eq!(counts.get("abc123").copied(), Some(2));
+        assert_eq!(counts.counts.get("abc123").copied(), Some(2));
         // Probe returned empty forks → count stays 0 (from list parse or absent).
-        assert_eq!(counts.get("def456").copied().unwrap_or(0), 0);
+        assert_eq!(counts.counts.get("def456").copied().unwrap_or(0), 0);
+        assert!(!counts.incomplete);
         let calls = runner.calls();
         assert_eq!(calls[0], gist_forks_plan("abc123"));
         assert_eq!(calls[1], gist_forks_plan("def456"));

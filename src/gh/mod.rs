@@ -141,3 +141,9 @@ pub use stars::{
     build_stargazer_graphql_query, collect_gist_star_counts, gist_stargazer_graphql_plan,
     parse_stargazer_counts_graphql,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CountCollection {
+    pub counts: std::collections::HashMap<String, u32>,
+    pub incomplete: bool,
+}

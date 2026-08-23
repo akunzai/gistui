@@ -181,12 +181,27 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
                     now,
                     gm.sort,
                     (
-                        state.gist_comment_counts.get(&g.id).copied().unwrap_or(0),
-                        state.gist_star_counts.get(&g.id).copied().unwrap_or(0),
-                        state.gist_fork_counts.get(&g.id).copied().unwrap_or(0),
+                        state
+                            .gist_catalog
+                            .comment_counts
+                            .get(&g.id)
+                            .copied()
+                            .unwrap_or(0),
+                        state
+                            .gist_catalog
+                            .star_counts
+                            .get(&g.id)
+                            .copied()
+                            .unwrap_or(0),
+                        state
+                            .gist_catalog
+                            .fork_counts
+                            .get(&g.id)
+                            .copied()
+                            .unwrap_or(0),
                     ),
                     state.gist_is_starred(&g.id),
-                    state.current_user_login.as_deref(),
+                    state.gist_catalog.user_login.as_deref(),
                 ),
             })
             .collect();
@@ -419,7 +434,7 @@ mod tests {
     fn gist_view_s_cycles_sort_updated_then_created() {
         let mut state = initial_state();
         state.screen = Screen::Gists(Box::default());
-        state.gists = vec![
+        state.gist_catalog.owned = vec![
             GistFile {
                 description: "x".into(),
                 updated_at: "2026-01-01T00:00:00Z".into(),
@@ -458,7 +473,7 @@ mod tests {
 
     fn gists_screen_state() -> AppState {
         let mut state = initial_state();
-        state.gists = vec![
+        state.gist_catalog.owned = vec![
             GistFile {
                 description: "alpha".into(),
                 updated_at: "2026-06-10T00:00:00Z".into(),
@@ -515,7 +530,7 @@ mod tests {
     fn gists_page_keys_jump_selection() {
         let mut state = initial_state();
         state.screen = Screen::Gists(Box::default());
-        state.gists = (0..12)
+        state.gist_catalog.owned = (0..12)
             .map(|i| GistFile {
                 description: format!("gist {i}"),
                 public: true,
@@ -533,8 +548,8 @@ mod tests {
     #[test]
     fn fork_key_ignored_on_list_and_gist_manager() {
         let mut state = initial_state();
-        state.current_user_login = Some("me".into());
-        state.starred_gists = vec![GistFile {
+        state.gist_catalog.user_login = Some("me".into());
+        state.gist_catalog.starred = vec![GistFile {
             description: "x".into(),
             public: true,
             updated_at: "x".into(),

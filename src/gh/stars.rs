@@ -61,20 +61,28 @@ pub fn parse_stargazer_counts_graphql(raw: &str) -> Result<HashMap<String, u32>>
 pub fn collect_gist_star_counts(
     runner: &dyn CommandRunner,
     node_ids: HashMap<String, String>,
-) -> HashMap<String, u32> {
+) -> crate::gh::CountCollection {
     let ids: Vec<String> = node_ids.into_values().collect();
     let mut out = HashMap::new();
+    let mut incomplete = false;
     for chunk in ids.chunks(STARGAZER_GRAPHQL_CHUNK) {
         let query = build_stargazer_graphql_query(chunk);
         let raw = match run_command(runner, &gist_stargazer_graphql_plan(&query)) {
             Ok(raw) => raw,
-            Err(_) => continue,
+            Err(_) => {
+                incomplete = true;
+                continue;
+            }
         };
-        if let Ok(batch) = parse_stargazer_counts_graphql(&raw) {
-            out.extend(batch);
+        match parse_stargazer_counts_graphql(&raw) {
+            Ok(batch) => out.extend(batch),
+            Err(_) => incomplete = true,
         }
     }
-    out
+    crate::gh::CountCollection {
+        counts: out,
+        incomplete,
+    }
 }
 
 #[cfg(test)]
