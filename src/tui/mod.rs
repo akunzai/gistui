@@ -827,11 +827,10 @@ pub struct AppState {
     gist_content_store: gist_content::GistContentStore,
     pub local_recursive: bool,
     pub skip_dirs: Vec<String>,
-    pub local_scanning: bool,
-    /// Generation token for the in-flight local scan. Bumped on each
-    /// [`Self::begin_local_scan`]; absorb ignores results with a mismatched id so a
-    /// slow older scan cannot clobber a newer one (issue #221).
-    pub local_scan_generation: u64,
+    /// Generation + in-flight lifecycle for local-candidate scans (issue #409). Private —
+    /// mutated only through `local_scan.rs`'s `begin_local_scan`/`apply_local_scan`/
+    /// `end_local_scan`; read through `local_scanning()`.
+    local_scan: local_scan::LocalScan,
 
     pub editing_description: bool,
     pub description_input: TextInput,
@@ -1224,40 +1223,6 @@ impl AppState {
     /// Whether `generation` is still the current background-task id.
     pub fn is_current_bg_generation(&self, generation: u64) -> bool {
         generation == self.bg_task_generation
-    }
-
-    /// Mark a new local scan as in-flight and return its generation id.
-    pub fn begin_local_scan(&mut self) -> u64 {
-        self.local_scan_generation = self.local_scan_generation.wrapping_add(1);
-        self.local_scan_generation
-    }
-
-    /// Whether `generation` is still the current local-scan id.
-    pub fn is_current_local_scan_generation(&self, generation: u64) -> bool {
-        generation == self.local_scan_generation
-    }
-
-    /// Apply a completed local scan when `generation` matches. Returns `false` (and leaves
-    /// state unchanged) for a stale/superseded result.
-    pub fn apply_local_scan_if_current(
-        &mut self,
-        generation: u64,
-        locals: Vec<LocalCandidate>,
-    ) -> bool {
-        if !self.is_current_local_scan_generation(generation) {
-            return false;
-        }
-        let selected = self.selected_local().map(|c| c.path.clone());
-        self.locals = locals;
-        self.local_index = selected
-            .and_then(|path| self.locals.iter().position(|c| c.path == path))
-            .unwrap_or(0)
-            .min(self.locals.len().saturating_sub(1));
-        if self.gist_index >= self.ranked_gists().len() {
-            self.gist_index = 0;
-        }
-        self.local_scanning = false;
-        true
     }
 
     /// Applies a background upload-edit-watch event (see `bg::UploadEditWatchEvent`) to
@@ -2006,8 +1971,7 @@ pub fn initial_state() -> AppState {
         gist_content_store: gist_content::GistContentStore::default(),
         local_recursive: false,
         skip_dirs: crate::config::AppConfig::default().skip_dirs,
-        local_scanning: false,
-        local_scan_generation: 0,
+        local_scan: local_scan::LocalScan::default(),
 
         editing_description: false,
         description_input: TextInput::default(),
@@ -2046,14 +2010,11 @@ pub fn load_startup_state(no_mouse: bool, no_update_check: bool) -> Result<AppSt
                 crate::update_check::is_newer(&seen, env!("CARGO_PKG_VERSION"));
         }
     }
-    state.locals = crate::local::discover_local_candidates(
-        &cwd,
-        &state.pinned,
-        false,
-        &state.skip_dirs,
-        state.settings.scan_depth(),
-    )?;
     state.cwd = cwd;
+    // Startup always scans flat (issue #409): the same `ScanRequest` contract as background
+    // scans and synchronous refreshes, but with no last-known-good to fall back to, so a
+    // discovery failure still propagates to the caller via `?`.
+    state.locals = state.local_scan_request(local_scan::ScanMode::Flat).run()?;
     // Start focused on the gist pane: the common flow is to pick a gist and pull it
     // into the cwd, and the gist list is shown even when no local file is selected.
     state.focus = FocusPane::Gist;
@@ -2115,6 +2076,7 @@ pub(crate) use list_cursor::ListCursor;
 mod scroll;
 pub(crate) use scroll::ScrollBody;
 mod list_ranking;
+mod local_scan;
 mod pin_sync;
 pub use pin_sync::PinSyncCacheEntry;
 mod run_loop;
@@ -2391,44 +2353,5 @@ mod tests {
             "cancelled gen must be stale"
         );
         assert!(state.is_current_bg_generation(2));
-    }
-
-    #[test]
-    fn local_scan_generation_ignores_stale_results() {
-        let mut state = crate::tui::initial_state();
-        state.locals = vec![LocalCandidate {
-            path: PathBuf::from("/tmp/old.txt"),
-            pinned: false,
-            modified: None,
-        }];
-        state.local_scanning = true;
-
-        let gen1 = state.begin_local_scan();
-        let gen2 = state.begin_local_scan();
-        assert_ne!(gen1, gen2);
-
-        // Stale gen1 must not replace the list.
-        assert!(!state.apply_local_scan_if_current(
-            gen1,
-            vec![LocalCandidate {
-                path: PathBuf::from("/tmp/stale.txt"),
-                pinned: false,
-                modified: None,
-            }]
-        ));
-        assert_eq!(state.locals[0].path, PathBuf::from("/tmp/old.txt"));
-        assert!(state.local_scanning);
-
-        // Current gen2 applies.
-        assert!(state.apply_local_scan_if_current(
-            gen2,
-            vec![LocalCandidate {
-                path: PathBuf::from("/tmp/fresh.txt"),
-                pinned: false,
-                modified: None,
-            }]
-        ));
-        assert_eq!(state.locals[0].path, PathBuf::from("/tmp/fresh.txt"));
-        assert!(!state.local_scanning);
     }
 }

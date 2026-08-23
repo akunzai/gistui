@@ -1,7 +1,7 @@
 //! `Screen::Diff` — key handling, view-model, paint, palette items, and apply handlers
 //! colocated in one file (issue #287, Phase 2; issue #383).
 
-use crate::tui::bg::{record_pin_sync, refresh_locals, LocalScanMode, LoopFlow};
+use crate::tui::bg::{record_pin_sync, refresh_locals, LoopFlow};
 use crate::tui::gist_content::{ContentLookup, FetchPolicy};
 use crate::tui::render::{diff_labels, preview_diff_text};
 use crate::tui::view_model::{ChromeVm, DiffVm};
@@ -417,7 +417,7 @@ pub(crate) fn on_download_selected(
                             &remote,
                             Some(crate::domain::SyncDirection::Download),
                         );
-                        refresh_locals(state, LocalScanMode::Active, Some(&target));
+                        refresh_locals(state, Some(&target));
                     }
                     Err(error) => state.set_status(format!("download failed: {error}")),
                 }
@@ -568,7 +568,6 @@ mod tests {
         let mut state = initial_state();
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("/tmp/config"),
-            pinned: false,
             modified: None,
         }];
         state.gist_catalog.owned = vec![GistFile {

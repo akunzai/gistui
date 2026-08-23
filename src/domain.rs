@@ -67,7 +67,6 @@ pub fn sync_status(local_ts: Option<u64>, remote_ts: Option<u64>) -> SyncStatus 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalCandidate {
     pub path: PathBuf,
-    pub pinned: bool,
     /// File mtime as Unix seconds, captured at discovery so the "recent" local
     /// sort stays a pure comparison (no filesystem access in `handle_key`).
     pub modified: Option<u64>,

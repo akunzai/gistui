@@ -219,12 +219,10 @@ mod tests {
         state.locals = vec![
             crate::domain::LocalCandidate {
                 path: state.cwd.join("notes.md"),
-                pinned: false,
                 modified: None,
             },
             crate::domain::LocalCandidate {
                 path: state.cwd.join("a.txt"),
-                pinned: false,
                 modified: None,
             },
         ];
@@ -260,7 +258,6 @@ mod tests {
         state.cwd = std::path::PathBuf::from("/cwd/some-org/some-project");
         state.locals = vec![crate::domain::LocalCandidate {
             path: state.cwd.join("notes.md"),
-            pinned: false,
             modified: None,
         }];
         state.anchor = FocusPane::Local;

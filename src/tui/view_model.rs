@@ -728,7 +728,6 @@ mod tests {
         state.cwd = PathBuf::from("/tmp/proj");
         state.locals = vec![LocalCandidate {
             path: PathBuf::from("notes.txt"),
-            pinned: true,
             modified: None,
         }];
         state.gist_catalog.owned = vec![GistFile {

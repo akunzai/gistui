@@ -51,13 +51,8 @@ pub fn discover_local_candidates(
     Ok(paths
         .into_iter()
         .map(|path| {
-            let pinned_match = pinned.iter().any(|m| m.local_path == path);
             let modified = file_mtime_secs(&path);
-            LocalCandidate {
-                path,
-                pinned: pinned_match,
-                modified,
-            }
+            LocalCandidate { path, modified }
         })
         .collect())
 }
@@ -154,7 +149,7 @@ mod tests {
     }
 
     #[test]
-    fn marks_pinned_cwd_files_without_pulling_outside_paths() {
+    fn discovers_cwd_files_ignoring_an_outside_pinned_path() {
         let dir = tempfile::tempdir().unwrap();
         let cwd_file = dir.path().join("settings.json");
         fs::write(&cwd_file, "{}").unwrap();
@@ -180,7 +175,6 @@ mod tests {
             discover_local_candidates(dir.path(), &pinned, false, &default_skip(), 10).unwrap();
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].path, cwd_file);
-        assert!(candidates[0].pinned);
     }
 
     #[test]
@@ -285,9 +279,6 @@ mod tests {
         assert!(!paths
             .iter()
             .any(|path| path.starts_with(dir.path().join(".ignored"))));
-        assert!(candidates
-            .iter()
-            .any(|candidate| candidate.path == pinned_file && candidate.pinned));
         assert!(flat_candidates
             .iter()
             .all(|candidate| paths.contains(&candidate.path)));

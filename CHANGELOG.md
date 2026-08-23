@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   visible above it.
 - Revision history now scrolls like every other list: moving the selection resets the horizontal
   scroll, and scrolling right stops at the selected row's own text instead of running unbounded.
+- A failed local file scan now keeps the last known list of files instead of clearing it, ends the
+  scanning spinner instead of leaving it running forever, and reports the failure in the status
+  line; a successful scan no longer erases a status message set by something else in the meantime.
+- Unpinning a file no longer forces a non-recursive rescan — the file list, and its title's
+  recursive/flat mode, stay consistent with whatever mode was actually active.
 
 ## [0.18.0] — 2026-08-21
 
