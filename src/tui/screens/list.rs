@@ -586,10 +586,11 @@ impl AppState {
     }
 }
 
-/// The ` ⚓` suffix for whichever pane drives the match ranking, empty for the other one.
+/// The ` ⚑` suffix for whichever pane drives the match ranking, empty for the other one.
+/// Single-width on purpose — see the mark vocabulary in `docs/design.md`.
 fn anchor_marker(state: &AppState, pane: FocusPane) -> &'static str {
     if state.anchor == pane {
-        " ⚓"
+        " ⚑"
     } else {
         ""
     }
@@ -612,13 +613,13 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
         } else if state.locals.is_empty() {
             (
                 ListPaneEmpty::NoItems,
-                Some("  📭 No local files found".into()),
+                Some("  No local files found".into()),
                 Vec::new(),
             )
         } else if visible_locals.is_empty() {
             (
                 ListPaneEmpty::NoFilterMatch,
-                Some("  🔍 No files match the filter".into()),
+                Some("  No files match the filter".into()),
                 Vec::new(),
             )
         } else {
@@ -672,10 +673,10 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
     } else if ranked.is_empty() {
         if !state.filter_query.is_empty() {
             gist_empty = ListPaneEmpty::NoFilterMatch;
-            gist_empty_message = Some("  🔍 No gists match the filter".into());
+            gist_empty_message = Some("  No gists match the filter".into());
         } else {
             gist_empty = ListPaneEmpty::NoItems;
-            gist_empty_message = Some("  📭 No gists found".into());
+            gist_empty_message = Some("  No gists found".into());
         }
         gist_rows = Vec::new();
     } else {
@@ -913,7 +914,7 @@ mod tests {
         assert_eq!(
             title.segments,
             vec![
-                "[1] Local (1/2) ⚓".to_string(),
+                "[1] Local (1/2) ⚑".to_string(),
                 "sort:match".to_string(),
                 "/md".to_string(),
             ]
@@ -938,8 +939,8 @@ mod tests {
         let after = build_list_vm(&state).local.title;
 
         assert_eq!(state.anchor, FocusPane::Local);
-        assert!(!before.segments[0].contains('⚓'), "{:?}", before.segments);
-        assert!(after.segments[0].contains('⚓'), "{:?}", after.segments);
+        assert!(!before.segments[0].contains('⚑'), "{:?}", before.segments);
+        assert!(after.segments[0].contains('⚑'), "{:?}", after.segments);
     }
 
     /// #338: the Gist pane title is built from the same ordered segments, with no context.
@@ -953,7 +954,7 @@ mod tests {
         assert_eq!(
             title.segments,
             vec![
-                "[2] Gists (1/2) ⚓".to_string(),
+                "[2] Gists (1/2) ⚑".to_string(),
                 "all".to_string(),
                 "match".to_string(),
                 "/a".to_string(),

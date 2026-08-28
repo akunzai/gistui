@@ -143,15 +143,31 @@ pub(crate) fn wrap_line_count(text: &str, width: u16) -> u16 {
     let width = width as usize;
     let mut lines: u16 = 1;
     let mut col = 0usize;
+    // A word wider than the line is broken across lines by ratatui's wrapper rather than
+    // clipped, so it has to cost the rows it really takes — a confirm's question can be one
+    // unbroken deep path with nowhere to break (issue: the modal was sized one row short).
+    let place = |lines: &mut u16, w: usize| {
+        if w > width {
+            *lines = lines.saturating_add(((w - 1) / width) as u16);
+            let rem = w % width;
+            if rem == 0 {
+                width
+            } else {
+                rem
+            }
+        } else {
+            w
+        }
+    };
     for word in text.split_whitespace() {
         let w = word.chars().count();
         if col == 0 {
-            col = w.min(width);
+            col = place(&mut lines, w);
         } else if col + 1 + w <= width {
             col += 1 + w;
         } else {
             lines = lines.saturating_add(1);
-            col = w.min(width);
+            col = place(&mut lines, w);
         }
     }
     lines
@@ -347,13 +363,189 @@ pub(crate) fn modal_block(
     border: Color,
     theme: &Theme,
 ) -> Block<'static> {
+    // The title is spaced off the corner so it reads as a label rather than as part of the
+    // border run; `fit_block_title` still clips it on a narrow frame.
     Block::default()
-        .title(fit_block_title(title, area_width))
+        .title(fit_block_title(&format!(" {title} "), area_width))
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(border))
         .style(theme.base_style())
         .padding(Padding::horizontal(1))
+}
+
+/// Horizontal and vertical padding inside a confirm modal: two columns each side so the text
+/// clears the border, and one blank row above and below so a decision does not read as a
+/// status sliver (`docs/design.md`).
+const CONFIRM_MODAL_PADDING: Padding = Padding {
+    left: 2,
+    right: 2,
+    top: 1,
+    bottom: 1,
+};
+
+/// Cells the confirm modal's padding and borders take from its width.
+const CONFIRM_MODAL_CHROME: u16 = 6;
+
+/// Lay the resolving keys out as aligned columns that fit `inner_width`.
+///
+/// Every cell is padded to the widest `key  label` in the modal, so a second row of toggles
+/// lines up under the first row's actions. When the keys cannot all fit on one line they are
+/// packed onto further lines rather than left to `Wrap` — word-wrapping a key row splits a
+/// key from its own verb (`e` on one line, `edit first` on the next) and costs the sizing
+/// pass a row it did not count.
+pub(crate) fn confirm_key_rows(
+    keys: &[crate::tui::view_model::ConfirmKeyVm],
+    options: &[crate::tui::view_model::ConfirmKeyVm],
+    inner_width: u16,
+    border: Color,
+) -> Vec<Line<'static>> {
+    let cell = keys
+        .iter()
+        .chain(options)
+        .map(|k| k.width())
+        .max()
+        .unwrap_or(0)
+        + 4;
+    // A run of `n` cells is `n * cell` wide less the trailing gutter the last one does not
+    // need. At least one key per line, however narrow the modal is.
+    let per_line = (1..)
+        .take_while(|n| n * cell <= inner_width as usize + 4)
+        .last()
+        .unwrap_or(1);
+    let line = |row_keys: &[crate::tui::view_model::ConfirmKeyVm]| {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        for (i, k) in row_keys.iter().enumerate() {
+            spans.push(Span::styled(
+                k.key.to_string(),
+                Style::default().fg(border).add_modifier(Modifier::BOLD),
+            ));
+            let pad = if i + 1 == row_keys.len() {
+                String::new()
+            } else {
+                " ".repeat(cell.saturating_sub(k.width()))
+            };
+            spans.push(Span::raw(format!("  {}{}", k.label, pad)));
+        }
+        Line::from(spans)
+    };
+    let mut rows = Vec::new();
+    for group in [keys, options] {
+        rows.extend(group.chunks(per_line).map(line));
+    }
+    rows
+}
+
+/// Body lines and the width they were laid out for, shared by sizing and painting so the
+/// modal can never be one row short of what it draws.
+fn confirm_modal_body(
+    prompt: &crate::tui::view_model::ConfirmPromptVm,
+    inner_width: u16,
+    border: Color,
+    theme: &Theme,
+) -> (Vec<Line<'static>>, u16) {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut rows = wrap_line_count(&prompt.question, inner_width);
+    lines.push(Line::from(prompt.question.clone()));
+    if let Some(detail) = &prompt.detail {
+        rows = rows.saturating_add(wrap_line_count(detail, inner_width));
+        lines.push(Line::from(Span::styled(
+            detail.clone(),
+            Style::default().fg(theme.dim),
+        )));
+    }
+    let key_rows = confirm_key_rows(&prompt.keys, &prompt.options, inner_width, border);
+    if !key_rows.is_empty() {
+        // One blank row separates the question from the answer.
+        lines.push(Line::from(String::new()));
+        rows = rows.saturating_add(1 + key_rows.len() as u16);
+        lines.extend(key_rows);
+    }
+    (lines, rows)
+}
+
+/// Centered modal rect for a confirm body of `body_rows` laid-out rows. Width follows
+/// [`centered_modal_rect`]'s 60% rule so every confirm is the same size regardless of how
+/// short its question is.
+fn centered_confirm_rect(area: Rect, body_rows: u16) -> Rect {
+    let width = confirm_modal_width(area);
+    let max_height = area.height.saturating_sub(2).max(1);
+    // Two borders plus the one blank row of padding above and below.
+    let height = body_rows
+        .saturating_add(4)
+        .clamp(max_height.min(3), max_height);
+    Rect {
+        x: area.width.saturating_sub(width) / 2,
+        y: area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    }
+}
+
+/// Every confirm is the same width — 60% of the frame — regardless of how short its question
+/// is, so the modal does not change size between the two steps of one action. Shared by the
+/// sizing pass and the wrap-width probe that feeds it.
+fn confirm_modal_width(area: Rect) -> u16 {
+    let max_width = area.width.saturating_sub(2).max(1);
+    ((area.width as u32 * 60 / 100) as u16).clamp(max_width.min(24), max_width)
+}
+
+/// The confirm modal: question, consequence, then the keys that resolve it.
+pub(crate) fn render_confirm_modal(
+    frame: &mut Frame,
+    title: &str,
+    prompt: &crate::tui::view_model::ConfirmPromptVm,
+    border: Color,
+    theme: &Theme,
+) -> Rect {
+    let area = frame.area();
+    let inner_width = confirm_modal_width(area).saturating_sub(CONFIRM_MODAL_CHROME);
+    let (lines, rows) = confirm_modal_body(prompt, inner_width, border, theme);
+    let rect = centered_confirm_rect(area, rows);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(theme.base_style())
+            .wrap(Wrap { trim: true })
+            .block(modal_block(title, rect.width, border, theme).padding(CONFIRM_MODAL_PADDING)),
+        rect,
+    );
+    rect
+}
+
+/// The create flow's description editor, laid out like [`render_confirm_modal`] so the two
+/// steps of one action do not change shape between keystrokes.
+pub(crate) fn render_confirm_input_modal(
+    frame: &mut Frame,
+    title: &str,
+    prefix: &str,
+    input: &TextInput,
+    keys: &[crate::tui::view_model::ConfirmKeyVm],
+    border: Color,
+    theme: &Theme,
+) -> Rect {
+    let area = frame.area();
+    let inner_width = confirm_modal_width(area).saturating_sub(CONFIRM_MODAL_CHROME);
+    // The modal grows downwards as the description outgrows one line, so the caret stays on
+    // screen; without wrapping, `Paragraph` would truncate and type blind past the border.
+    let mut lines = vec![input_line(prefix, input, "")];
+    let mut rows = wrap_line_count(&format!("{prefix}{input} "), inner_width);
+    let key_rows = confirm_key_rows(keys, &[], inner_width, border);
+    if !key_rows.is_empty() {
+        lines.push(Line::from(String::new()));
+        rows = rows.saturating_add(1 + key_rows.len() as u16);
+        lines.extend(key_rows);
+    }
+    let rect = centered_confirm_rect(area, rows);
+    frame.render_widget(Clear, rect);
+    frame.render_widget(
+        Paragraph::new(lines)
+            .style(theme.base_style())
+            .wrap(Wrap { trim: false })
+            .block(modal_block(title, rect.width, border, theme).padding(CONFIRM_MODAL_PADDING)),
+        rect,
+    );
+    rect
 }
 
 pub(crate) fn render_centered_modal(
@@ -401,8 +593,8 @@ pub(crate) fn render_centered_modal_input(
 }
 
 /// Frames for the in-progress spinner, advanced by `AppState::spinner_frame` (one step per
-/// event-loop tick, ~150ms). Braille dots are as widely supported as the emoji already used
-/// across the UI (📭/🔍/⏳), so no ASCII fallback is added here.
+/// event-loop tick, ~150ms). Braille dots are single-width and widely supported, so no ASCII
+/// fallback is added here.
 pub(crate) const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// The spinner glyph for the given tick. `frame` may be any value; it is reduced modulo the
@@ -624,6 +816,15 @@ mod tests {
         assert_eq!(wrap_line_count(text, 7), 2);
         assert_eq!(wrap_line_count(text, 3), 3);
         assert_eq!(wrap_line_count(text, 0), 1);
+    }
+
+    #[test]
+    fn wrap_line_count_breaks_a_word_wider_than_the_line() {
+        // ratatui hard-breaks an overlong word instead of clipping it, so the count has to
+        // follow — a confirm's question can be one unbroken deep path.
+        assert_eq!(wrap_line_count("aaaaaaaaaa", 5), 2);
+        assert_eq!(wrap_line_count("aaaaaaaaaaa", 5), 3);
+        assert_eq!(wrap_line_count("ab aaaaaaaaaa", 5), 3);
     }
 
     #[test]

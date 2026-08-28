@@ -72,7 +72,7 @@ mod tests {
         assert_eq!(text_len(""), 0);
         assert_eq!(text_len("ab"), 2);
         assert_eq!(text_len("★ f"), 3);
-        assert_eq!(text_len("📌 x"), 3);
+        assert_eq!(text_len("↔ x"), 3);
     }
 
     #[test]

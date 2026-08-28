@@ -363,13 +363,16 @@ pub(crate) fn build_revisions_vm(state: &AppState) -> RevisionsVm {
     let (empty, empty_message, rows, selected) = match &rev.entries {
         None => (
             ListPaneEmpty::Loading,
-            Some("  ⏳ Loading revisions…".into()),
+            Some(format!(
+                "  {} Loading revisions…",
+                crate::tui::render::spinner_glyph(state.spinner_frame)
+            )),
             Vec::new(),
             None,
         ),
         Some(entries) if entries.is_empty() => (
             ListPaneEmpty::NoItems,
-            Some("  📭 No revisions found".into()),
+            Some("  No revisions found".into()),
             Vec::new(),
             None,
         ),
