@@ -1,13 +1,16 @@
-# Developer toolchain for gistui, pinned so contributors and CI resolve the same
-# versions. Run `mise install` to provision everything, then `mise run check`
-# before committing. See https://mise.jdx.dev.
+# Developer toolchain for gistui. Run `mise install` to provision everything,
+# then `mise run check` before committing. See https://mise.jdx.dev.
+#
+# Both tools track a moving channel: `rust` follows the stable release, and
+# `tcut` follows its latest tag so the demo harness picks up upstream fixes
+# without a manual bump. `mise install` re-resolves both.
 #
 # Note: `gh` is intentionally not pinned here — the shipped app shells out to the
 # user's own `gh` at runtime, so it stays a user-provided dependency.
 
 [tools]
 rust = { version = "stable", components = "rustfmt,clippy" }
-"github:AmanVarshney01/tcut" = "1.0.0"
+"github:AmanVarshney01/tcut" = "latest"
 
 # Tasks mirror the AGENTS.md verification gate and demo harness so the same
 # commands run locally and in CI. List them with `mise tasks`.
@@ -39,4 +42,7 @@ run = "cargo run"
 
 [tasks.demo]
 description = "Regenerate all demo media (GIF + still PNGs)"
-run = "tcut scripts/demo.video.ts"
+run = [
+  "tcut scripts/demo.video.ts",
+  "tcut scripts/demo.stills.ts",
+]

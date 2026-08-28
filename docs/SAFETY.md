@@ -45,3 +45,13 @@ of `c` compact).
 - Clipboard copy (`y` URL, `Y` content) hands the text to the system clipboard via the OS
   tool, where other applications can read it. `Y` copies the full previewed file content, so
   treat it like any other paste of potentially sensitive data.
+
+## What leaves the machine
+
+- Every GitHub call goes through your own `gh`, so gistui sends nothing GitHub would not
+  already see from the CLI.
+- On startup gistui asks GitHub once a day whether a newer release exists and reports it in
+  `?` Help → About. That is the only request it makes on its own: no telemetry, silent when
+  offline, and off with `check_updates = false` or `--no-update-check`.
+- Syntax highlighting honours [`NO_COLOR`](https://no-color.org). The semantic diff `-`/`+`
+  colours stay, since the diff is unreadable without them.

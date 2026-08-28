@@ -4,3 +4,4 @@
 # Python bytecode from the demo harness (scripts/demo/)
 __pycache__/
 *.pyc
+.playwright-cli/

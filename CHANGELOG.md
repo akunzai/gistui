@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- The interface drops its emoji (GitHub's release-note categories keep theirs). Gist rows now read `3 files`, `1 comment`, and a trailing
+  age instead of picture glyphs, so their columns no longer drift out of alignment; the
+  anchor pane is marked `⚑`, a pinned pair `↔`, and empty lists and the update notice say
+  what they mean in words. `docs/design.md` records the marks the UI may use and why.
+- Confirm prompts now separate the question from the answer: the action and its consequence
+  on their own lines, then the keys that resolve it, each labelled with the verb it performs
+  (`y  delete`, `y  upload`) instead of a bare `(y/n)`. Destructive confirms lead with
+  `n  cancel` and say what cannot be undone.
+- The README is rebuilt around installing and completing one gist operation; the mouse and
+  configuration reference now live in `?` Help and `config.example.toml` rather than being
+  duplicated on the front page. The project page is rebuilt the same way, around the demo and
+  the actual keymap.
 - Deleting a Gist no longer leaves its files available through the preview cache, and a failed
   preview refresh keeps the last usable cached content for the next preview.
 - Settings now reliably remember the "Show full diff" choice alongside the other preferences.
