@@ -252,7 +252,7 @@ List screen
   T          toggle light/dark colour theme (global; saved to config)
   a          flip which pane drives match ranking (anchor); the other pane
              re-ranks against the anchor's selection (focus stays put)
-             (📌 = pinned pair · bold = same filename)
+             (↔ = pinned pair · bold = same filename)
 
 Actions (on the selected local file + gist)
   Enter      diff the local file against the gist; direction follows the focused
@@ -316,7 +316,8 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   H          open revision history (browse, diff, restore)
   q / Esc    back to the list
              (edit description, compact, delete: gist detail only, owned gists)
-  Rows show ☆ N (stargazers), ⑂ N (forks), 💬 N (comments) when non-zero;
+  Rows read: badge · description · #id · file count · ☆ stargazers · ⑂ forks ·
+  comments · age. Counts appear only when non-zero.
   ★ prefix = you starred it; ⑂ prefix = this gist is a fork.
 "#
         }
@@ -334,7 +335,7 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   o          open the gist in your web browser
   y          copy the gist's URL to the system clipboard
   q / Esc    back to the gist manager
-  Info line shows ☆ N (stargazers), ⑂ N (forks), 💬 N (comments) when non-zero
+  Info line shows ☆ stargazers, ⑂ forks, and the comment count when non-zero
   Owned gists only:
   e          edit the gist description (Enter apply, Esc cancel)
              ←/→/Home/End move the text cursor · Del deletes ahead

@@ -210,11 +210,10 @@ fn diff_view_highlighted(
     )
 }
 
-/// Label and trailing hint around the create flow's description input. Shared so
-/// `confirm_prompt` (in `view_model.rs`; plain text / tests) and `render_confirm` (the
-/// cursor-aware modal, here) can't drift apart.
+/// Label in front of the create flow's description input. The keys that resolve the editor
+/// are a `ConfirmKeyVm` row beneath it (`view_model::description_input_keys`), not a suffix
+/// glued onto this label.
 pub(crate) const CREATE_DESC_PREFIX: &str = "Description (optional): ";
-pub(crate) const CREATE_DESC_SUFFIX: &str = "   ·  Enter next  ·  Esc cancel";
 
 /// Render just the diff content pane (no footer) into `area` from a [`DiffVm`].
 pub(crate) fn render_diff_pane_vm(

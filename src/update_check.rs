@@ -90,8 +90,8 @@ pub fn update_hint(latest: &str, method: &InstallMethod) -> String {
             _ => None,
         });
     match cmd {
-        Some(cmd) => format!("⬆ v{latest} available — run {cmd}"),
-        None => format!("⬆ v{latest} available"),
+        Some(cmd) => format!("Update available: v{latest} — run {cmd}"),
+        None => format!("Update available: v{latest}"),
     }
 }
 
@@ -131,15 +131,15 @@ mod tests {
     fn update_hint_is_install_method_aware() {
         assert_eq!(
             update_hint("0.14.0", &InstallMethod::Homebrew),
-            "⬆ v0.14.0 available — run brew upgrade gistui"
+            "Update available: v0.14.0 — run brew upgrade gistui"
         );
         assert_eq!(
             update_hint("0.14.0", &InstallMethod::Standalone),
-            "⬆ v0.14.0 available — run gistui --upgrade"
+            "Update available: v0.14.0 — run gistui --upgrade"
         );
         assert_eq!(
             update_hint("0.14.0", &InstallMethod::Refuse { hint: "x".into() }),
-            "⬆ v0.14.0 available"
+            "Update available: v0.14.0"
         );
     }
 

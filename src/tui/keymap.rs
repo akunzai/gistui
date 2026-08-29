@@ -495,50 +495,64 @@ mod docs_tests {
         }
     }
 
-    /// Issue #346's direction: `README.md`'s key table promises keys the List screen must
-    /// actually bind. Scoped to that one table — the Configuration table below it mentions keys
-    /// inside prose sentences, which is not a promise about the keymap.
+    /// Issue #346's direction: `README.md` promises keys the app must actually bind. The full
+    /// Key/Action table has moved to `?` Help and the project page, so what the README now
+    /// promises is the Quick start prose: every single-token code span in it is a key claim.
     #[test]
     fn every_key_readme_promises_is_bound() {
         let readme = include_str!("../../README.md");
-        // Bounded by the table's own shape rather than by a blank line: `str::lines` normalises
-        // the `\r\n` a Windows checkout leaves behind, whereas a `"\n\n"` search does not, and
-        // an unbounded table would swallow the Configuration table further down the file.
-        let table: Vec<&str> = readme
+        let section: Vec<&str> = readme
             .lines()
-            .skip_while(|line| !line.starts_with("| Key | Action |"))
-            .skip(2)
-            .take_while(|line| line.starts_with("| "))
+            .skip_while(|line| !line.starts_with("## Quick start"))
+            .skip(1)
+            .take_while(|line| !line.starts_with("## "))
             .collect();
         assert!(
-            !table.is_empty(),
-            "README's Key/Action table moved or changed shape"
+            !section.is_empty(),
+            "README's Quick start section moved or changed shape"
         );
+
+        // The fenced block holds shell commands, not key promises.
+        let mut in_fence = false;
+        let prose: Vec<&str> = section
+            .iter()
+            .filter(|line| {
+                if line.starts_with("```") {
+                    in_fence = !in_fence;
+                    return false;
+                }
+                !in_fence
+            })
+            .copied()
+            .collect();
 
         let bound: Vec<&str> = LIST
             .iter()
             .flat_map(binding_keys)
             .chain(GISTS.iter().flat_map(binding_keys))
             .collect();
-        // Keys README documents that belong to another screen or to the global set, neither of
-        // which the List and Gists tables carry.
-        let elsewhere = ["C", "T", ";", "Ctrl+p", "?", "j", "k", "h", "l", "1", "2"];
+        // Keys the README documents that belong to another screen or to the global set, neither
+        // of which the List and Gists tables carry.
+        let elsewhere = [
+            "C", "T", ";", "Ctrl+p", "?", "j", "k", "h", "l", "q", "Esc", "1", "2",
+        ];
 
-        for row in table.iter().filter(|line| line.starts_with("| `")) {
-            let key_cell = row
-                .trim_start_matches("| ")
-                .split_once(" |")
-                .expect("a table row has a key cell and an action cell")
-                .0;
-            for key in key_cell.split('/').map(|k| k.trim().trim_matches('`')) {
-                if key.is_empty() || elsewhere.contains(&key) {
-                    continue;
-                }
-                assert!(
-                    bound.contains(&key),
-                    "README's key table promises `{key}`, which no List or Gists binding provides"
-                );
+        let joined = prose.join("\n");
+        let mut promised = 0;
+        for span in joined.split('`').skip(1).step_by(2) {
+            // A code span with a space in it is a command, not a key.
+            if span.is_empty() || span.contains(' ') || elsewhere.contains(&span) {
+                continue;
             }
+            promised += 1;
+            assert!(
+                bound.contains(&span),
+                "README's Quick start promises `{span}`, which no List or Gists binding provides"
+            );
         }
+        assert!(
+            promised > 0,
+            "README's Quick start no longer names any key the List or Gists screens bind"
+        );
     }
 }

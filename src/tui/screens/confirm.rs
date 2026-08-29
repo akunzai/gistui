@@ -155,12 +155,10 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
         ConfirmModalKind::DescriptionInput {
             prefix: crate::tui::render::CREATE_DESC_PREFIX,
             input: state.description_input.clone(),
-            suffix: crate::tui::render::CREATE_DESC_SUFFIX,
+            keys: crate::tui::view_model::description_input_keys(),
         }
     } else {
-        ConfirmModalKind::Prompt {
-            text: crate::tui::view_model::confirm_prompt(state),
-        }
+        ConfirmModalKind::Prompt(crate::tui::view_model::confirm_prompt(state))
     };
     let background = match state.pending_action() {
         Some(PendingAction::CompactGist { gist_id, .. }) => {
@@ -233,20 +231,20 @@ pub(crate) fn render_confirm_vm(
         ConfirmModalKind::DescriptionInput {
             prefix,
             input,
-            suffix,
-        } => crate::tui::render::render_centered_modal_input(
+            keys,
+        } => crate::tui::render::render_confirm_input_modal(
             frame,
             confirm.title,
             prefix,
             input,
-            suffix,
+            keys,
             confirm.border,
             &state.settings.theme(),
         ),
-        ConfirmModalKind::Prompt { text } => crate::tui::render::render_centered_modal(
+        ConfirmModalKind::Prompt(prompt) => crate::tui::render::render_confirm_modal(
             frame,
             confirm.title,
-            text,
+            prompt,
             confirm.border,
             &state.settings.theme(),
         ),
@@ -557,7 +555,10 @@ mod tests {
             confirm_modal_style(&state),
             ("Restore revision", Color::Yellow)
         );
-        assert!(confirm_prompt(&state).contains("Restore a.txt to revision oldsha (3d ago)"));
+        assert_eq!(
+            confirm_prompt(&state).question,
+            "Restore a.txt to revision oldsha (3d ago)?"
+        );
         assert_eq!(
             state.handle_key(KeyCode::Char('y')),
             KeyOutcome::ExecuteRestoreRevision

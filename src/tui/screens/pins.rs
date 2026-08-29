@@ -215,13 +215,13 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
     let (empty, empty_message, rows) = if state.pinned.is_empty() {
         (
             ListPaneEmpty::NoItems,
-            Some("  📌 No pinned mappings found (use p to pin a pair)".to_string()),
+            Some("  No pinned mappings yet — press p on a local/gist pair to add one".to_string()),
             Vec::new(),
         )
     } else if visible.is_empty() {
         (
             ListPaneEmpty::NoFilterMatch,
-            Some("  🔍 No pins match the filter".to_string()),
+            Some("  No pins match the filter".to_string()),
             Vec::new(),
         )
     } else {

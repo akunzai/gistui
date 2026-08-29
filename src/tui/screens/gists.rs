@@ -3,6 +3,7 @@
 
 use crate::tui::keys::{apply_list_cursor_nav, NavAction};
 use crate::tui::render::list_pane::render_list_pane;
+use crate::tui::render::{MARK_FORK, MARK_STARRED};
 use crate::tui::view_model::{
     ChromeVm, GistsVm, ListPaneEmpty, ListPaneVm, PaneTitleVm, RowEmphasis, RowVm,
 };
@@ -159,13 +160,13 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
         if total_groups == 0 {
             (
                 ListPaneEmpty::NoItems,
-                Some("  📭 No gists found".into()),
+                Some("  No gists found".into()),
                 Vec::new(),
             )
         } else {
             (
                 ListPaneEmpty::NoFilterMatch,
-                Some("  🔍 No gists match the filter".into()),
+                Some("  No gists match the filter".into()),
                 Vec::new(),
             )
         }
@@ -207,7 +208,7 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
     };
 
     let mut title = format!(
-        "Gists {}  ·  sort:{}  ·  type:{}  ·  ★ {}  ·  ⑂ {}",
+        "Gists {}  ·  sort:{}  ·  type:{}  ·  {MARK_STARRED} {}  ·  {MARK_FORK} {}",
         crate::tui::render::count_label(groups.len(), total_groups),
         gm.sort.label(),
         gm.type_filter.label(),

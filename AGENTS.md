@@ -13,6 +13,7 @@ Toolchains and task wrappers live in [`mise.toml`](mise.toml); run `mise install
 
 ## Pointers
 
+- Product design — voice, product language, row/column layout, the mark vocabulary, README scope: `@docs/design.md`
 - Architecture, state-machine, jobs, IO boundaries, safety seams, truncation, and GistFile constructors: `@docs/agents/architecture.md`
 - Agent-only contribution and release conventions: `@docs/agents/conventions.md`
 - Human contribution flow: `@CONTRIBUTING.md`

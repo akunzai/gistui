@@ -3,9 +3,7 @@
 //! The draw path builds a [`ViewModel`] once per frame and paints from it for every screen.
 //! Builders never touch the filesystem or network (issues #241 / #250).
 
-use super::render::{
-    gist_info_line, gist_row_label, spinner_glyph, unix_now, CREATE_DESC_PREFIX, CREATE_DESC_SUFFIX,
-};
+use super::render::{gist_info_line, gist_row_label, spinner_glyph, unix_now};
 use super::screens::lookup;
 use super::{
     AppState, DetailFocus, FocusPane, GistView, PaletteMode, PendingAction, Screen, TextInput,
@@ -328,15 +326,52 @@ pub enum ConfirmBackgroundVm {
     Empty,
 }
 
+/// One key that resolves a confirm modal, plus the verb it performs. The verb is the same
+/// word the footer hint and the resulting status use, so an action reads identically all the
+/// way through (`docs/design.md`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfirmKeyVm {
+    pub key: &'static str,
+    pub label: String,
+}
+
+impl ConfirmKeyVm {
+    pub(crate) fn new(key: &'static str, label: impl Into<String>) -> Self {
+        Self {
+            key,
+            label: label.into(),
+        }
+    }
+
+    /// Cells the key column plus its label occupy, before any gutter.
+    pub(crate) fn width(&self) -> usize {
+        self.key.chars().count() + 2 + self.label.chars().count()
+    }
+}
+
+/// The structured body of a confirm modal: the question, an optional second line of context
+/// or consequence, the keys that resolve it, and any secondary toggles.
+///
+/// A destructive action puts `n cancel` first in `keys` and states its consequence in
+/// `detail`, so the stakes survive without relying on the border colour alone.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ConfirmPromptVm {
+    pub question: String,
+    pub detail: Option<String>,
+    pub keys: Vec<ConfirmKeyVm>,
+    /// Toggles that change what the primary key would do, on their own row.
+    pub options: Vec<ConfirmKeyVm>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfirmModalKind {
     /// Static y/n (or multi-key) prompt body.
-    Prompt { text: String },
+    Prompt(ConfirmPromptVm),
     /// Create-flow description editor.
     DescriptionInput {
         prefix: &'static str,
         input: TextInput,
-        suffix: &'static str,
+        keys: Vec<ConfirmKeyVm>,
     },
 }
 
@@ -442,91 +477,129 @@ pub(crate) fn gist_row_display(g: &RankedGistFile, view: GistView, state: &AppSt
     }
 }
 
-/// The prompt shown inside the centered confirm modal — one line per pending action,
-/// listing the keys that resolve it. Pure so it can be unit-tested.
-pub(crate) fn confirm_prompt(state: &AppState) -> String {
+/// The structured body of the centered confirm modal — the question, its consequence or
+/// context, and the keys that resolve it. Pure so it can be unit-tested.
+///
+/// Destructive actions (delete, remove, compact, overwrite) lead with `n cancel` and spell
+/// out what cannot be undone; the rest lead with the action's own verb.
+pub(crate) fn confirm_prompt(state: &AppState) -> ConfirmPromptVm {
+    let cancel = || ConfirmKeyVm::new("n", "cancel");
     match state.pending_action() {
-        Some(PendingAction::Create { .. }) if state.editing_description => {
-            // `_` is the plain-text caret; the rendered modal draws a reverse-video
-            // cursor at its real position instead (see render_confirm).
-            format!(
-                "{CREATE_DESC_PREFIX}{}_{CREATE_DESC_SUFFIX}",
-                state.description_input
-            )
-        }
         Some(PendingAction::Create { local_path }) => {
             let desc = if state.description_input.is_empty() {
-                "no description".to_string()
+                "No description.".to_string()
             } else {
-                format!("desc: {}", state.description_input)
+                format!("Description: {}", state.description_input)
             };
-            format!(
-                "Create gist from {} ({desc})?  s secret  p public  Esc cancel",
-                crate::config::display_path(local_path)
-            )
+            ConfirmPromptVm {
+                question: format!(
+                    "Create a gist from {}?",
+                    crate::config::display_path(local_path)
+                ),
+                detail: Some(desc),
+                keys: vec![
+                    ConfirmKeyVm::new("s", "secret"),
+                    ConfirmKeyVm::new("p", "public"),
+                    ConfirmKeyVm::new("Esc", "cancel"),
+                ],
+                options: Vec::new(),
+            }
         }
         Some(PendingAction::Upload {
-            gist_id: _,
-            filename: _,
-            local_path: _,
-        }) if state.upload.watching => {
-            format!(
-                "{} watching for edits — close the editor to continue  ·  n cancel",
-                spinner_glyph(state.spinner_frame)
-            )
-        }
-        Some(PendingAction::Upload {
-            gist_id,
             filename,
             local_path,
+            gist_id,
         }) => {
-            let edited_status = if state.upload.edited_content.is_some() {
-                " [edited]"
-            } else {
-                ""
-            };
-            let mut opts = format!("y yes  n/Esc cancel  e edit{edited_status}");
-            if AppState::is_json_file(local_path) {
-                let pretty_status = if state.upload.json_pretty {
-                    " [on]"
-                } else {
-                    " [off]"
+            if state.upload.watching {
+                return ConfirmPromptVm {
+                    question: format!(
+                        "{} Waiting for the editor to close…",
+                        spinner_glyph(state.spinner_frame)
+                    ),
+                    detail: Some(format!("Editing {filename} before upload.")),
+                    keys: vec![cancel()],
+                    options: Vec::new(),
                 };
-                let sort_status = if state.upload.json_sort {
-                    " [on]"
-                } else {
-                    " [off]"
-                };
-                opts.push_str(&format!("  p pretty{pretty_status}  s sort{sort_status}"));
             }
-            format!("Upload {filename} to gist {gist_id}?  ·  {opts}")
+            let edit_label = if state.upload.edited_content.is_some() {
+                "edit first [edited]"
+            } else {
+                "edit first"
+            };
+            let options = if AppState::is_json_file(local_path) {
+                vec![
+                    ConfirmKeyVm::new("p", format!("pretty {}", on_off(state.upload.json_pretty))),
+                    ConfirmKeyVm::new("s", format!("sort {}", on_off(state.upload.json_sort))),
+                ]
+            } else {
+                Vec::new()
+            };
+            ConfirmPromptVm {
+                question: format!("Upload {filename} to gist {gist_id}?"),
+                detail: None,
+                keys: vec![
+                    ConfirmKeyVm::new("y", "upload"),
+                    cancel(),
+                    ConfirmKeyVm::new("e", edit_label),
+                ],
+                options,
+            }
         }
-        Some(PendingAction::Delete { gist_id, label }) => {
-            format!("Permanently delete \"{label}\" ({gist_id})? (y/n)")
-        }
+        Some(PendingAction::Delete { gist_id, label }) => ConfirmPromptVm {
+            question: format!("Permanently delete \"{label}\"?"),
+            detail: Some(format!("gist {gist_id} — every file in it goes with it.")),
+            keys: vec![cancel(), ConfirmKeyVm::new("y", "delete")],
+            options: Vec::new(),
+        },
         Some(PendingAction::RemoveFile {
             gist_id, filename, ..
-        }) => {
-            format!("Remove {filename} from gist {gist_id}? (y/n)")
-        }
-        Some(PendingAction::CompactGist { label, count, .. }) => {
-            format!(
-                "Compact {count} revisions of \"{label}\" into one? This force-pushes and cannot be undone. (y/n)"
-            )
-        }
+        }) => ConfirmPromptVm {
+            question: format!("Remove {filename} from this gist?"),
+            detail: Some(format!("gist {gist_id} — the file is deleted remotely.")),
+            keys: vec![cancel(), ConfirmKeyVm::new("y", "remove")],
+            options: Vec::new(),
+        },
+        Some(PendingAction::CompactGist { label, count, .. }) => ConfirmPromptVm {
+            question: format!("Compact {count} revisions of \"{label}\" into one?"),
+            detail: Some("This force-pushes and cannot be undone.".to_string()),
+            keys: vec![cancel(), ConfirmKeyVm::new("y", "compact")],
+            options: Vec::new(),
+        },
         Some(PendingAction::RestoreRevision {
             filename,
             version_label,
             ..
-        }) => {
-            format!(
-                "Restore {filename} to revision {version_label}? This uploads old content as a new revision. (y/n)"
-            )
-        }
-        _ => format!(
-            "Overwrite {}? (y/n)",
-            crate::config::display_path(&state.download_target())
-        ),
+        }) => ConfirmPromptVm {
+            question: format!("Restore {filename} to revision {version_label}?"),
+            detail: Some("The old content is uploaded as a new revision.".to_string()),
+            keys: vec![ConfirmKeyVm::new("y", "restore"), cancel()],
+            options: Vec::new(),
+        },
+        _ => ConfirmPromptVm {
+            question: format!(
+                "Overwrite {}?",
+                crate::config::display_path(&state.download_target())
+            ),
+            detail: Some("The local file is replaced with the gist's content.".to_string()),
+            keys: vec![cancel(), ConfirmKeyVm::new("y", "overwrite")],
+            options: Vec::new(),
+        },
+    }
+}
+
+/// The keys that resolve the create flow's description editor.
+pub(crate) fn description_input_keys() -> Vec<ConfirmKeyVm> {
+    vec![
+        ConfirmKeyVm::new("Enter", "next"),
+        ConfirmKeyVm::new("Esc", "cancel"),
+    ]
+}
+
+fn on_off(flag: bool) -> &'static str {
+    if flag {
+        "[on]"
+    } else {
+        "[off]"
     }
 }
 
@@ -638,8 +711,8 @@ mod tests {
             ScreenVm::Confirm(c) => {
                 assert_eq!(c.title, "Upload");
                 match c.kind {
-                    ConfirmModalKind::Prompt { text } => {
-                        assert!(text.contains("Upload notes.txt to gist g1"));
+                    ConfirmModalKind::Prompt(prompt) => {
+                        assert_eq!(prompt.question, "Upload notes.txt to gist g1?");
                     }
                     other => panic!("expected Prompt, got {other:?}"),
                 }
@@ -663,8 +736,8 @@ mod tests {
             ScreenVm::Confirm(c) => {
                 assert_eq!(c.title, "Overwrite");
                 match c.kind {
-                    ConfirmModalKind::Prompt { text } => {
-                        assert!(text.contains("Overwrite notes.txt"));
+                    ConfirmModalKind::Prompt(prompt) => {
+                        assert_eq!(prompt.question, "Overwrite notes.txt?");
                     }
                     other => panic!("expected Prompt, got {other:?}"),
                 }
@@ -773,7 +846,7 @@ mod tests {
                     .rows
                     .iter()
                     .chain(list.gist.rows.iter())
-                    .any(|r| matches!(r.emphasis, RowEmphasis::Strong) || r.label.contains('📌'));
+                    .any(|r| matches!(r.emphasis, RowEmphasis::Strong) || r.label.contains('↔'));
                 assert!(
                     marked,
                     "local={:?} gist={:?}",
@@ -882,7 +955,7 @@ mod tests {
                     "row: {}",
                     starred.label
                 );
-                assert!(starred.label.contains("💬") || starred.label.contains("g1"));
+                assert!(starred.label.contains("comment") || starred.label.contains("g1"));
             }
             other => panic!("expected Gists, got {other:?}"),
         }
@@ -1223,6 +1296,13 @@ mod tests {
     #[test]
     fn confirm_prompt_covers_each_pending_action() {
         let mut state = initial_state();
+        let keys = |state: &AppState| {
+            confirm_prompt(state)
+                .keys
+                .iter()
+                .map(|k| format!("{} {}", k.key, k.label))
+                .collect::<Vec<_>>()
+        };
 
         state.enter_diff(
             String::new(),
@@ -1231,7 +1311,12 @@ mod tests {
             PathBuf::from("notes.txt"),
         );
         state.enter_confirm_from_diff(PendingAction::Download);
-        assert_eq!(confirm_prompt(&state), "Overwrite notes.txt? (y/n)");
+        let prompt = confirm_prompt(&state);
+        assert_eq!(prompt.question, "Overwrite notes.txt?");
+        // Destructive: cancel leads, and the consequence is stated rather than left to the
+        // border colour (see `docs/design.md`).
+        assert_eq!(keys(&state), ["n cancel", "y overwrite"]);
+        assert!(prompt.detail.is_some());
         assert_eq!(confirm_modal_style(&state), ("Overwrite", Color::Red));
 
         set_pending(
@@ -1241,11 +1326,21 @@ mod tests {
                 label: "my config".into(),
             },
         );
-        assert_eq!(
-            confirm_prompt(&state),
-            "Permanently delete \"my config\" (abc)? (y/n)"
-        );
+        let prompt = confirm_prompt(&state);
+        assert_eq!(prompt.question, "Permanently delete \"my config\"?");
+        assert!(prompt.detail.unwrap().contains("abc"));
+        assert_eq!(keys(&state), ["n cancel", "y delete"]);
         assert_eq!(confirm_modal_style(&state), ("Delete", Color::Red));
+
+        set_pending(
+            &mut state,
+            PendingAction::RemoveFile {
+                gist_id: "abc".into(),
+                filename: "main.rs".into(),
+                label: "my config".into(),
+            },
+        );
+        assert_eq!(keys(&state), ["n cancel", "y remove"]);
 
         set_pending(
             &mut state,
@@ -1255,7 +1350,11 @@ mod tests {
                 local_path: PathBuf::from("main.rs"),
             },
         );
-        assert!(confirm_prompt(&state).starts_with("Upload main.rs to gist g1?"));
+        let prompt = confirm_prompt(&state);
+        assert_eq!(prompt.question, "Upload main.rs to gist g1?");
+        // Not destructive: the action's own verb leads, and a non-JSON file offers no toggles.
+        assert_eq!(keys(&state), ["y upload", "n cancel", "e edit first"]);
+        assert!(prompt.options.is_empty());
         assert_eq!(confirm_modal_style(&state), ("Upload", Color::Yellow));
 
         set_pending(
@@ -1266,14 +1365,40 @@ mod tests {
                 count: 4,
             },
         );
+        let prompt = confirm_prompt(&state);
         assert_eq!(
-                confirm_prompt(&state),
-                "Compact 4 revisions of \"my config\" into one? This force-pushes and cannot be undone. (y/n)"
-            );
+            prompt.question,
+            "Compact 4 revisions of \"my config\" into one?"
+        );
+        assert_eq!(
+            prompt.detail.as_deref(),
+            Some("This force-pushes and cannot be undone.")
+        );
+        assert_eq!(keys(&state), ["n cancel", "y compact"]);
         assert_eq!(
             confirm_modal_style(&state),
             ("Compact revisions", Color::Red)
         );
+    }
+
+    #[test]
+    fn upload_confirm_offers_json_toggles_only_for_json() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "g1".into(),
+                filename: "settings.json".into(),
+                local_path: PathBuf::from("settings.json"),
+            },
+        );
+        state.upload.json_pretty = true;
+        let options: Vec<String> = confirm_prompt(&state)
+            .options
+            .iter()
+            .map(|k| format!("{} {}", k.key, k.label))
+            .collect();
+        assert_eq!(options, ["p pretty [on]", "s sort [off]"]);
     }
 
     #[test]
@@ -1287,11 +1412,14 @@ mod tests {
         );
         state.editing_description = true;
         state.description_input = "hello".into();
-        assert_eq!(
-            confirm_prompt(&state),
-            "Description (optional): hello_   ·  Enter next  ·  Esc cancel"
-        );
+        // The editor itself is a `DescriptionInput` modal; `confirm_prompt` is not consulted
+        // for it, so what matters here is the title/border and the keys offered beneath it.
         assert_eq!(confirm_modal_style(&state), ("Description", Color::Cyan));
+        let keys: Vec<String> = description_input_keys()
+            .iter()
+            .map(|k| format!("{} {}", k.key, k.label))
+            .collect();
+        assert_eq!(keys, ["Enter next", "Esc cancel"]);
     }
 
     #[test]
@@ -1308,10 +1436,11 @@ mod tests {
         state.upload.watching = true;
 
         let prompt = confirm_prompt(&state);
-        assert!(prompt.contains("watching for edits"));
-        assert!(
-            !prompt.contains("y yes"),
-            "y/e hints should be hidden while watching"
+        assert!(prompt.question.contains("Waiting for the editor"));
+        assert_eq!(
+            prompt.keys.iter().map(|k| k.key).collect::<Vec<_>>(),
+            ["n"],
+            "upload and edit are unavailable while the editor is open"
         );
     }
 
@@ -1325,10 +1454,11 @@ mod tests {
                 local_path: home.join("notes.txt"),
             },
         );
-        assert!(
-            confirm_prompt(&state).starts_with("Create gist from ~/notes.txt"),
-            "got {}",
-            confirm_prompt(&state)
+        let prompt = confirm_prompt(&state);
+        assert_eq!(prompt.question, "Create a gist from ~/notes.txt?");
+        assert_eq!(
+            prompt.keys.iter().map(|k| k.key).collect::<Vec<_>>(),
+            ["s", "p", "Esc"]
         );
     }
 }

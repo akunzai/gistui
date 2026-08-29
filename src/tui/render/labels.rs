@@ -1,6 +1,39 @@
 //! Gist, row, and time labels.
+//!
+//! The marks below are the whole vocabulary the row labels may draw from — see
+//! [`docs/design.md`](../../../docs/design.md). Every one is single-width on purpose: a
+//! double-width glyph misaligns the columns beside it and forces width special-cases into
+//! `text_fit`. A meaning that would need an emoji gets a short word instead (`3 files`),
+//! never a picture.
 
 use super::*;
+
+/// You starred this gist.
+pub(crate) const MARK_STARRED: char = '★';
+/// Stargazer count that follows.
+pub(crate) const MARK_STARGAZERS: char = '☆';
+/// This gist is a fork, or the fork count that follows.
+pub(crate) const MARK_FORK: char = '⑂';
+/// This local file and gist file are a pinned pair.
+pub(crate) const MARK_PINNED: char = '↔';
+
+/// `N files` / `1 file` — a count the user reads, in place of a file glyph.
+pub(crate) fn file_count_label(count: usize) -> String {
+    if count == 1 {
+        "1 file".to_string()
+    } else {
+        format!("{count} files")
+    }
+}
+
+/// `N comments` / `1 comment`, for the rows and info lines that surface a non-zero count.
+pub(crate) fn comment_count_label(count: u32) -> String {
+    if count == 1 {
+        "1 comment".to_string()
+    } else {
+        format!("{count} comments")
+    }
+}
 
 /// A count suffix for a list title: `(N)` normally, or `(shown/total)` when a filter has
 /// narrowed the list (`shown < total`). Extends the existing `Files (N)` / `Comments (N)`
@@ -16,11 +49,11 @@ pub(crate) fn count_label(shown: usize, total: usize) -> String {
 pub(crate) fn gist_badge_prefix(starred: bool, forked: bool) -> String {
     let mut prefix = String::new();
     if starred {
-        prefix.push('★');
+        prefix.push(MARK_STARRED);
         prefix.push(' ');
     }
     if forked {
-        prefix.push('⑂');
+        prefix.push(MARK_FORK);
         prefix.push(' ');
     }
     prefix
@@ -31,8 +64,8 @@ pub(crate) fn gist_badge_prefix(starred: bool, forked: bool) -> String {
 /// whether or not a row carries a badge (issue #347). Distinct from [`gist_badge_prefix`],
 /// which the List screen's Gist pane uses and which stays variable-width there.
 pub(crate) fn gist_manager_badge_prefix(starred: bool, forked: bool) -> String {
-    let star = if starred { '★' } else { ' ' };
-    let fork = if forked { '⑂' } else { ' ' };
+    let star = if starred { MARK_STARRED } else { ' ' };
+    let fork = if forked { MARK_FORK } else { ' ' };
     format!("{star}{fork} ")
 }
 
@@ -73,9 +106,9 @@ pub(crate) fn gist_group_row_label(
         g.description.clone()
     };
     // Visibility is dropped from the row — it's surfaced by the `v` filter, the title's
-    // `type:` label, and the detail view. 📄 / 🕒 distinguish file count from the age.
-    // The 🕒 age tracks the active sort key (created vs updated) so the column the rows
-    // are ordered by is the one shown; it's a relative age (single largest unit).
+    // `type:` label, and the detail view. Age is the last column, so its position carries
+    // the meaning and it needs no label; it tracks the active sort key (created vs updated)
+    // so the column the rows are ordered by is the one shown, as a single largest unit.
     let timestamp = match sort {
         GistGroupSort::Updated => &g.updated_at,
         GistGroupSort::Created => &g.created_at,
@@ -83,32 +116,32 @@ pub(crate) fn gist_group_row_label(
     let age = crate::domain::parse_rfc3339_to_unix(timestamp)
         .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
         .unwrap_or_else(|| "?".into());
-    // Only surface markers when non-zero so the common quiet rows stay clean.
-    let comments_seg = if comments > 0 {
-        format!("  💬 {comments}")
-    } else {
-        String::new()
-    };
+    // Only surface metadata when it is non-zero, so the common quiet rows stay quiet.
     let stars_seg = if stars > 0 {
-        format!("  ☆ {stars}")
+        format!("  {MARK_STARGAZERS} {stars}")
     } else {
         String::new()
     };
     let forks_seg = if forks > 0 {
-        format!("  ⑂ {forks}")
+        format!("  {MARK_FORK} {forks}")
+    } else {
+        String::new()
+    };
+    let comments_seg = if comments > 0 {
+        format!("  {}", comment_count_label(comments))
     } else {
         String::new()
     };
     format!(
-        "{}{}{}  #{}  📄 {}{}{}{}  🕒 {}",
+        "{}{}{}  #{}  {}{}{}{}  {}",
         gist_manager_badge_prefix(starred, g.fork_of_id.is_some()),
         gist_owner_prefix(g, current_user),
         desc,
         short_gist_id(&g.id),
-        g.file_count,
-        comments_seg,
+        file_count_label(g.file_count),
         stars_seg,
         forks_seg,
+        comments_seg,
         age
     )
 }
@@ -116,13 +149,13 @@ pub(crate) fn gist_group_row_label(
 pub(crate) fn gist_info_counts_seg(comments: u32, stars: u32, forks: u32) -> String {
     let mut parts = Vec::new();
     if stars > 0 {
-        parts.push(format!("☆ {stars}"));
+        parts.push(format!("{MARK_STARGAZERS} {stars}"));
     }
     if forks > 0 {
-        parts.push(format!("⑂ {forks}"));
+        parts.push(format!("{MARK_FORK} {forks}"));
     }
     if comments > 0 {
-        parts.push(format!("💬 {comments}"));
+        parts.push(comment_count_label(comments));
     }
     if parts.is_empty() {
         String::new()
@@ -140,7 +173,11 @@ pub(crate) fn gist_info_line(
     counts: (u32, u32, u32),
 ) -> String {
     let (comments, stars, forks) = counts;
-    let star_seg = if starred { "★ starred · " } else { "" };
+    let star_seg = if starred {
+        format!("{MARK_STARRED} starred · ")
+    } else {
+        String::new()
+    };
     let vis = if group.public { "public" } else { "secret" };
     let owner_seg = gist_owner_prefix(group, current_user);
     let counts_seg = gist_info_counts_seg(comments, stars, forks);
@@ -223,7 +260,7 @@ pub(crate) fn file_rows(
 /// Compose the full list-row string (including pin mark) that paint and hscroll max must share.
 pub(crate) fn marked_row_text(base: String, mark: crate::ranking::MatchMark) -> String {
     match mark {
-        crate::ranking::MatchMark::Pinned => format!("📌 {base}"),
+        crate::ranking::MatchMark::Pinned => format!("{MARK_PINNED} {base}"),
         crate::ranking::MatchMark::ExactFilename | crate::ranking::MatchMark::None => base,
     }
 }
@@ -422,7 +459,7 @@ mod tests {
     #[test]
     fn marked_row_text_uses_match_mark_pin_prefix() {
         use crate::ranking::MatchMark;
-        assert_eq!(marked_row_text("x".into(), MatchMark::Pinned), "📌 x");
+        assert_eq!(marked_row_text("x".into(), MatchMark::Pinned), "↔ x");
         assert_eq!(marked_row_text("x".into(), MatchMark::ExactFilename), "x");
         assert_eq!(marked_row_text("x".into(), MatchMark::None), "x");
     }
@@ -456,17 +493,17 @@ mod tests {
         };
         let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
         // Sorting by updated shows the updated age (1 day ago); sorting by created shows the
-        // created age (10 days ago → "1w"), so the 🕒 column matches the ordering key.
+        // created age (10 days ago → "1w"), so the age column matches the ordering key.
         let updated =
             gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), false, None);
         let created =
             gist_group_row_label(&group, now, GistGroupSort::Created, (0, 0, 0), false, None);
-        assert!(updated.ends_with("🕒 1d"), "{updated}");
-        assert!(created.ends_with("🕒 1w"), "{created}");
+        assert!(updated.ends_with("  1d"), "{updated}");
+        assert!(created.ends_with("  1w"), "{created}");
     }
 
     #[test]
-    fn gist_group_row_shows_comment_marker_only_when_present() {
+    fn gist_group_row_shows_comment_count_only_when_present() {
         let group = GistGroup {
             id: "g1".into(),
             description: "demo".into(),
@@ -480,11 +517,11 @@ mod tests {
         let now = crate::domain::parse_rfc3339_to_unix("2026-06-11T00:00:00Z").unwrap();
         assert!(
             !gist_group_row_label(&group, now, GistGroupSort::Updated, (0, 0, 0), false, None)
-                .contains('💬')
+                .contains("comment")
         );
         assert!(
             gist_group_row_label(&group, now, GistGroupSort::Updated, (3, 0, 0), false, None)
-                .contains("💬 3")
+                .contains("3 comments")
         );
     }
 
@@ -641,9 +678,9 @@ mod tests {
         let long_row =
             gist_group_row_label(&long, now, GistGroupSort::Updated, (0, 0, 0), false, None);
         assert_eq!(
-            short_row.find('📄'),
-            long_row.find('📄'),
-            "the file-count marker must land at the same column regardless of id length: \
+            short_row.find("1 file"),
+            long_row.find("1 file"),
+            "the file count must land at the same column regardless of id length: \
          {short_row:?} vs {long_row:?}"
         );
     }
@@ -664,11 +701,11 @@ mod tests {
         let quiet = gist_info_line(&group, now, None, false, (0, 0, 0));
         assert!(!quiet.contains('☆'));
         assert!(!quiet.contains('⑂'));
-        assert!(!quiet.contains('💬'));
+        assert!(!quiet.contains("comment"));
 
         let rich = gist_info_line(&group, now, None, true, (2, 3, 1));
         assert!(rich.starts_with("★ starred · "));
-        assert!(rich.contains("☆ 3 · ⑂ 1 · 💬 2"));
+        assert!(rich.contains("☆ 3 · ⑂ 1 · 2 comments"));
         assert!(rich.contains(&group.id));
     }
 }

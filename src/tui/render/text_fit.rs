@@ -9,7 +9,8 @@ pub(crate) const TITLE_SEP: &str = " · ";
 pub(crate) const MIN_ELIDED_WIDTH: usize = 4;
 
 /// Width of `text` in terminal cells — the same measure ratatui truncates a title by, so a
-/// double-width glyph (`⚓`) is not silently clipped by the block after we let it through.
+/// double-width glyph (a CJK path component, say) is not silently clipped by the block after
+/// we let it through. The UI's own marks are all single-width by design (`docs/design.md`).
 pub(crate) fn cell_width(text: &str) -> usize {
     ratatui::text::Span::raw(text).width()
 }
@@ -398,8 +399,8 @@ mod tests {
 
     /// The Local pane title from the bug report, anchored and filtered.
     fn local_title() -> PaneTitleVm {
-        let mut title = PaneTitleVm::new("[1] Local (6/15) ⚓".into());
-        title.short_head = Some("[1] (6/15) ⚓".into());
+        let mut title = PaneTitleVm::new("[1] Local (6/15) ⚑".into());
+        title.short_head = Some("[1] (6/15) ⚑".into());
         title.push("sort:match");
         title.push_filter("md");
         title.context = Some("~/code/gistui".into());
@@ -555,29 +556,29 @@ mod tests {
 
     #[test]
     fn fit_title_drops_the_pane_name_to_keep_a_state_segment() {
-        // 26 cells: too narrow for `[1] Local (6/15) ⚓ · sort:match` (32), wide enough once
+        // 25 cells: too narrow for `[1] Local (6/15) ⚑ · sort:match` (31), wide enough once
         // the name goes.
-        assert_eq!(fit_title(&local_title(), 26), "[1] (6/15) ⚓ · sort:match");
-        assert_eq!(narrowest_width_showing(&local_title(), "sort:match"), 26);
+        assert_eq!(fit_title(&local_title(), 25), "[1] (6/15) ⚑ · sort:match");
+        assert_eq!(narrowest_width_showing(&local_title(), "sort:match"), 25);
     }
 
     #[test]
     fn fit_title_keeps_the_pane_name_when_dropping_it_buys_no_state() {
-        for width in 19..=25 {
+        for width in 18..=24 {
             let fitted = fit_title(&local_title(), width);
-            assert_eq!(fitted, "[1] Local (6/15) ⚓", "width {width}");
+            assert_eq!(fitted, "[1] Local (6/15) ⚑", "width {width}");
         }
         // Wide enough for everything: the name is back even though eliding it would leave
         // room for a longer path.
-        assert!(fit_title(&local_title(), 38).starts_with("[1] Local (6/15) ⚓"));
+        assert!(fit_title(&local_title(), 38).starts_with("[1] Local (6/15) ⚑"));
     }
 
     #[test]
     fn fit_title_prefers_a_whole_short_head_over_a_clipped_full_one() {
-        for width in 13..=18 {
+        for width in 12..=17 {
             assert_eq!(
                 fit_title(&local_title(), width),
-                "[1] (6/15) ⚓",
+                "[1] (6/15) ⚑",
                 "width {width}"
             );
         }
@@ -587,23 +588,25 @@ mod tests {
     fn fit_title_without_a_short_head_is_unchanged() {
         let mut title = local_title();
         title.short_head = None;
-        assert_eq!(fit_title(&title, 26), "[1] Local (6/15) ⚓ · …tui");
+        assert_eq!(fit_title(&title, 26), "[1] Local (6/15) ⚑ · …stui");
     }
 
     #[test]
     fn fit_title_joins_every_segment_when_it_fits() {
-        let full = "[1] Local (6/15) ⚓ · sort:match · /md · ~/code/gistui";
+        let full = "[1] Local (6/15) ⚑ · sort:match · /md · ~/code/gistui";
         assert_eq!(fit_title(&local_title(), 200), full);
-        // `⚓` is two cells wide, so the exact fit is one wider than the character count.
+        // Every mark the title draws is single-width, so cells and characters agree — the
+        // exact fit is the character count, with nothing to spare.
+        assert_eq!(cell_width(full), full.chars().count());
         assert_eq!(fit_title(&local_title(), cell_width(full)), full);
-        assert_ne!(fit_title(&local_title(), full.chars().count()), full);
+        assert_ne!(fit_title(&local_title(), full.chars().count() - 1), full);
     }
 
     #[test]
     fn fit_title_drops_the_cwd_before_the_state_segments() {
         assert_eq!(
             fit_title(&local_title(), 38),
-            "[1] Local (6/15) ⚓ · sort:match · /md"
+            "[1] Local (6/15) ⚑ · sort:match · /md"
         );
     }
 
@@ -660,9 +663,9 @@ mod tests {
         assert_eq!(fit_title(&local_title(), 0), "");
         // Narrower than the short head too, so there is nothing left but a clipped head.
         assert_eq!(fit_title(&local_title(), 9), "[1] Loca…");
-        // The anchor is two cells wide and will not split, but at 17 cells the short head
-        // fits whole — keeping the marker costs the pane name rather than the marker.
-        assert_eq!(fit_title(&local_title(), 17), "[1] (6/15) ⚓");
+        // At 17 cells the short head fits whole — keeping the marker costs the pane name
+        // rather than the marker.
+        assert_eq!(fit_title(&local_title(), 17), "[1] (6/15) ⚑");
     }
 
     #[test]
@@ -678,10 +681,10 @@ mod tests {
             let with = fit_title(&anchored, width);
             let without = fit_title(&plain, width);
             assert!(
-                with.contains('⚓'),
+                with.contains('⚑'),
                 "anchor dropped at width {width}: {with}"
             );
-            assert!(!without.contains('⚓'), "phantom anchor at width {width}");
+            assert!(!without.contains('⚑'), "phantom anchor at width {width}");
         }
     }
 }

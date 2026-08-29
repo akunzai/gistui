@@ -239,9 +239,8 @@ mod tests {
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
 
-        // A wide glyph owns two cells, so the anchor is followed by a filler cell in the dump.
         assert!(
-            text.contains("[1] Local (1/2) ⚓"),
+            text.contains("[1] Local (1/2) ⚑"),
             "local title missing the anchor: {text}"
         );
         assert!(
@@ -249,7 +248,7 @@ mod tests {
             "local title missing state segments: {text}"
         );
         // The cwd is what shortened: only its tail survived, behind an ellipsis.
-        assert!(text.contains("…some-project"), "cwd not elided: {text}");
+        assert!(text.contains("…/some-project"), "cwd not elided: {text}");
     }
 
     #[test]
@@ -262,7 +261,7 @@ mod tests {
         }];
         state.anchor = FocusPane::Local;
 
-        // 70 columns: the Local pane's 40% share cannot hold `[1] Local (1) ⚓ · sort:match`.
+        // 70 columns: the Local pane's 40% share cannot hold `[1] Local (1) ⚑ · sort:match`.
         let backend = TestBackend::new(70, 20);
         let mut terminal = Terminal::new(backend).unwrap();
         let vm = super::super::build_view_model(&state);
@@ -272,9 +271,8 @@ mod tests {
             .unwrap();
         let text = buffer_text(terminal.backend().buffer());
 
-        // A wide glyph owns two cells, so the anchor is followed by a filler cell in the dump.
         assert!(
-            text.contains("[1] (1) ⚓"),
+            text.contains("[1] (1) ⚑"),
             "narrow local title lost the anchor: {text}"
         );
         assert!(
@@ -465,7 +463,102 @@ mod tests {
         let mut state = initial_state();
         state.screen = Screen::Pins(Box::default());
         let text = render_state(&state);
-        assert!(text.contains("No pinned mappings found"));
+        assert!(text.contains("No pinned mappings yet"));
+    }
+
+    /// A key and the verb it performs must never end up on different lines: at 80 columns the
+    /// upload confirm's five keys do not fit one row, so they have to be packed onto further
+    /// rows rather than left to word-wrap (which split `e` from `edit first` and cost the
+    /// sizing pass a row it had not counted).
+    #[test]
+    fn render_screen_vm_confirm_packs_keys_that_cannot_share_one_row() {
+        let mut state = initial_state();
+        state.screen = Screen::Confirm(Box::default());
+        crate::tui::test_support::set_pending(
+            &mut state,
+            crate::tui::PendingAction::Upload {
+                gist_id: "g1".into(),
+                filename: "settings.json".into(),
+                local_path: std::path::PathBuf::from("settings.json"),
+            },
+        );
+        let rows = render_rows(&state, 80, 24);
+        for hint in [
+            "y  upload",
+            "n  cancel",
+            "e  edit first",
+            "p  pretty [off]",
+            "s  sort [off]",
+        ] {
+            assert!(
+                rows.iter().any(|r| r.contains(hint)),
+                "{hint:?} was split or clipped at 80 columns: {rows:#?}"
+            );
+        }
+    }
+
+    /// The description editor wraps and the modal grows with it, so the caret stays on screen
+    /// instead of typing past a truncated line.
+    #[test]
+    fn render_screen_vm_confirm_input_grows_with_a_long_description() {
+        let mut state = initial_state();
+        state.screen = Screen::Confirm(Box::default());
+        crate::tui::test_support::set_pending(
+            &mut state,
+            crate::tui::PendingAction::Create {
+                local_path: std::path::PathBuf::from("notes.txt"),
+            },
+        );
+        state.editing_description = true;
+        state.description_input =
+            "a deliberately long description that will not fit on a single line at all".into();
+        let rows = render_rows(&state, 80, 24);
+        assert!(
+            rows.iter().any(|r| r.contains("single line at all")),
+            "the tail of the description was truncated: {rows:#?}"
+        );
+        assert!(
+            rows.iter().any(|r| r.contains("Esc  cancel")),
+            "the key row was pushed out of the grown modal: {rows:#?}"
+        );
+    }
+
+    #[test]
+    fn render_screen_vm_confirm_separates_the_question_from_its_keys() {
+        let mut state = initial_state();
+        state.screen = Screen::Confirm(Box::default());
+        crate::tui::test_support::set_pending(
+            &mut state,
+            crate::tui::PendingAction::Delete {
+                gist_id: "abc".into(),
+                label: "my config".into(),
+            },
+        );
+        let rows = render_rows(&state, 100, 40);
+        let body: Vec<&str> = rows
+            .iter()
+            .map(|r| r.trim_end())
+            .skip_while(|r| !r.contains("╭ Delete "))
+            .take_while(|r| !r.contains('╯'))
+            .collect();
+        // Every row carries the backdrop's own border columns, so "blank" means "nothing but
+        // borders and spaces".
+        let blank = |row: &str| row.chars().all(|c| c == '│' || c == ' ');
+        // Title row, blank padding, question, consequence, blank separator, key row.
+        assert!(body[0].contains(" Delete "), "spaced title: {body:?}");
+        assert!(blank(body[1]), "top padding: {body:?}");
+        assert!(
+            body[2].contains("Permanently delete"),
+            "question row: {body:?}"
+        );
+        assert!(body[3].contains("abc"), "consequence row: {body:?}");
+        assert!(blank(body[4]), "blank separator: {body:?}");
+        // Destructive: cancel is offered before the key that goes through with it.
+        let keys = body[5];
+        assert!(
+            keys.find("cancel") < keys.find("delete"),
+            "cancel must lead a destructive confirm: {keys:?}"
+        );
     }
 
     #[test]
