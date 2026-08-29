@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] — 2026-08-29
+
 - The interface drops its emoji (GitHub's release-note categories keep theirs). Gist rows now read `3 files`, `1 comment`, and a trailing
   age instead of picture glyphs, so their columns no longer drift out of alignment; the
   anchor pane is marked `⚑`, a pinned pair `↔`, and empty lists and the update notice say
@@ -18,10 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on their own lines, then the keys that resolve it, each labelled with the verb it performs
   (`y  delete`, `y  upload`) instead of a bare `(y/n)`. Destructive confirms lead with
   `n  cancel` and say what cannot be undone.
-- The README is rebuilt around installing and completing one gist operation; the mouse and
-  configuration reference now live in `?` Help and `config.example.toml` rather than being
-  duplicated on the front page. The project page is rebuilt the same way, around the demo and
-  the actual keymap.
+- The README is rebuilt around installing and completing one gist operation, and is now a
+  tagline, one paragraph on why the tool exists, the demo, one install path, one quick start
+  and a list of links. The keymap, the mouse table and the configuration reference live in
+  `?` Help, the project page and `config.example.toml` rather than being duplicated on the
+  front page; `NO_COLOR` and what the update check does and does not send moved to
+  `docs/SAFETY.md`.
+- The project page is rebuilt around the demo, then why the tool exists, then the keys. Its
+  two screenshots were unreadable — two full-width terminal stills squeezed side by side into
+  the text column and cropped past their own footer — and are now one frame switched by the
+  key that opens each screen in the app, wide enough to read and pannable on a phone.
 - Deleting a Gist no longer leaves its files available through the preview cache, and a failed
   preview refresh keeps the last usable cached content for the next preview.
 - Settings now reliably remember the "Show full diff" choice alongside the other preferences.
@@ -243,7 +251,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.18.0...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/akunzai/gistui/releases/tag/v0.19.0
 [0.18.0]: https://github.com/akunzai/gistui/releases/tag/v0.18.0
 [0.17.1]: https://github.com/akunzai/gistui/releases/tag/v0.17.1
 [0.17.0]: https://github.com/akunzai/gistui/releases/tag/v0.17.0
