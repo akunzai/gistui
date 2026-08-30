@@ -1,5 +1,5 @@
 use crate::config::{save_config, AppConfig};
-use crate::domain::{GistFile, PinnedMapping, SyncDirection};
+use crate::domain::{GistFile, SyncDirection};
 use anyhow::{anyhow, bail, Context, Result};
 use std::fs;
 use std::path::Path;
@@ -559,6 +559,9 @@ pub fn execute_download(local_path: &Path, content: &str, mode: DownloadMode) ->
     fs::write(local_path, content).with_context(|| format!("write {}", local_path.display()))
 }
 
+/// Pins `local_path` to `target`, or updates the pin already there. Siblings — the same
+/// local file pinned to a *different* gist file — are left alone; see `crate::pins` for
+/// why that is the invariant.
 pub fn pin_mapping(
     config_path: &Path,
     mut config: AppConfig,
@@ -567,16 +570,12 @@ pub fn pin_mapping(
     direction: Option<SyncDirection>,
     last_seen_hash: Option<String>,
 ) -> Result<AppConfig> {
-    config
-        .pinned
-        .retain(|mapping| mapping.local_path != local_path);
-    config.pinned.push(PinnedMapping {
-        local_path: local_path.to_path_buf(),
-        gist_id: target.gist_id.clone(),
-        gist_filename: target.filename.clone(),
+    crate::pins::upsert(
+        &mut config.pinned,
+        crate::pins::PinKey::new(local_path, &target.gist_id, &target.filename),
         direction,
         last_seen_hash,
-    });
+    );
     save_config(config_path, &config)?;
     Ok(config)
 }
@@ -594,9 +593,10 @@ pub fn record_sync(
     hash: &str,
     direction: Option<SyncDirection>,
 ) -> Result<AppConfig> {
-    if let Some(mapping) = config.pinned.iter_mut().find(|m| {
-        m.local_path == local_path && m.gist_id == gist_id && m.gist_filename == gist_filename
-    }) {
+    // Deliberately not `pins::upsert`: that would *create* a pin for an unpinned pair, and
+    // confirming a sync must never be what pins something. Only an existing pin is updated.
+    let key = crate::pins::PinKey::new(local_path, gist_id, gist_filename);
+    if let Some(mapping) = crate::pins::find_mut(&mut config.pinned, key) {
         mapping.last_seen_hash = Some(hash.to_string());
         if let Some(direction) = direction {
             mapping.direction = Some(direction);
@@ -606,37 +606,19 @@ pub fn record_sync(
     Ok(config)
 }
 
+/// Removes the one pin named by `key`, leaving its siblings on the same local path in
+/// place. Persists only when something was actually removed, and reports which happened so
+/// the caller does not tell the user a pin was removed when none matched.
 pub fn unpin_mapping(
     config_path: &Path,
     mut config: AppConfig,
-    local_path: &Path,
-) -> Result<AppConfig> {
-    config
-        .pinned
-        .retain(|mapping| mapping.local_path != local_path);
-    save_config(config_path, &config)?;
-    Ok(config)
-}
-
-/// Removes exactly the first entry whose `local_path` and `gist_id` both match.
-/// Used by the pins view to unpin a single row without affecting sibling entries.
-pub fn unpin_mapping_exact(
-    config_path: &Path,
-    mut config: AppConfig,
-    local_path: &Path,
-    gist_id: &str,
-) -> Result<AppConfig> {
-    let mut removed = false;
-    config.pinned.retain(|m| {
-        if !removed && m.local_path == local_path && m.gist_id == gist_id {
-            removed = true;
-            false
-        } else {
-            true
-        }
-    });
-    save_config(config_path, &config)?;
-    Ok(config)
+    key: crate::pins::PinKey<'_>,
+) -> Result<(AppConfig, bool)> {
+    let removed = crate::pins::remove(&mut config.pinned, key);
+    if removed {
+        save_config(config_path, &config)?;
+    }
+    Ok((config, removed))
 }
 
 #[cfg(test)]
@@ -644,6 +626,7 @@ mod tests {
     use super::test_support::SeqRunner;
     use super::*;
     use crate::config::{load_config, AppConfig};
+    use crate::domain::PinnedMapping;
     use std::path::PathBuf;
 
     fn gist_file() -> GistFile {
@@ -1039,8 +1022,10 @@ mod tests {
         assert!(matches!(DownloadMode::CreateNew, DownloadMode::CreateNew));
     }
 
+    /// Sibling selection and no-match behaviour are `crate::pins`' tests; this one only
+    /// checks that a successful unpin reaches `config.toml`.
     #[test]
-    fn unpin_mapping_removes_mapping_for_local_path() {
+    fn unpin_mapping_persists_the_removal() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         let local_path = dir.path().join("settings.json");
@@ -1057,55 +1042,16 @@ mod tests {
         .unwrap();
         assert_eq!(config.pinned.len(), 1);
 
-        let config = unpin_mapping(&config_path, config, &local_path).unwrap();
+        let (config, removed) = unpin_mapping(
+            &config_path,
+            config,
+            crate::pins::PinKey::new(&local_path, &target.gist_id, &target.filename),
+        )
+        .unwrap();
+
+        assert!(removed);
         assert!(config.pinned.is_empty());
-        let loaded = load_config(&config_path).unwrap();
-        assert!(loaded.pinned.is_empty());
-    }
-
-    #[test]
-    fn unpin_mapping_exact_removes_only_matching_local_and_gist() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("config.toml");
-        let mut config = AppConfig::default();
-        // Same local path pinned to two different gists — exact unpin must remove only the
-        // named gist and leave the other pin intact.
-        for gid in ["g1", "g2"] {
-            config.pinned.push(PinnedMapping {
-                local_path: PathBuf::from("/tmp/a.txt"),
-                gist_id: gid.into(),
-                gist_filename: "a.txt".into(),
-                direction: None,
-                last_seen_hash: None,
-            });
-        }
-
-        let config =
-            unpin_mapping_exact(&config_path, config, Path::new("/tmp/a.txt"), "g1").unwrap();
-        assert_eq!(config.pinned.len(), 1);
-        assert_eq!(config.pinned[0].gist_id, "g2");
-        let loaded = load_config(&config_path).unwrap();
-        assert_eq!(loaded.pinned.len(), 1);
-        assert_eq!(loaded.pinned[0].gist_id, "g2");
-    }
-
-    #[test]
-    fn unpin_mapping_exact_no_match_leaves_pins_unchanged() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("config.toml");
-        let mut config = AppConfig::default();
-        config.pinned.push(PinnedMapping {
-            local_path: PathBuf::from("/tmp/a.txt"),
-            gist_id: "g1".into(),
-            gist_filename: "a.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-        });
-
-        let config =
-            unpin_mapping_exact(&config_path, config, Path::new("/tmp/a.txt"), "nope").unwrap();
-        assert_eq!(config.pinned.len(), 1);
-        assert_eq!(config.pinned[0].gist_id, "g1");
+        assert!(load_config(&config_path).unwrap().pinned.is_empty());
     }
 
     #[test]
@@ -1176,7 +1122,7 @@ mod tests {
     }
 
     #[test]
-    fn pin_mapping_replaces_existing_local_mapping() {
+    fn pin_mapping_persists_the_pin_it_was_given() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         let local_path = dir.path().join("settings.json");
@@ -1196,6 +1142,41 @@ mod tests {
         let loaded = load_config(&config_path).unwrap();
         assert_eq!(loaded.pinned[0].local_path, local_path);
         assert_eq!(loaded.pinned[0].gist_id, "abc123");
+        assert_eq!(loaded.pinned[0].last_seen_hash.as_deref(), Some("hash"));
+    }
+
+    /// The bug #424 fixes: pinning one local file to a second gist file used to `retain`
+    /// on `local_path` alone and silently drop the first pin.
+    #[test]
+    fn pin_mapping_keeps_a_sibling_pin_on_the_same_local_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let local_path = dir.path().join("settings.json");
+
+        let config = pin_mapping(
+            &config_path,
+            AppConfig::default(),
+            &local_path,
+            &GistFile::fixture("abc123", "a.txt"),
+            None,
+            None,
+        )
+        .unwrap();
+        let config = pin_mapping(
+            &config_path,
+            config,
+            &local_path,
+            &GistFile::fixture("abc123", "b.txt"),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(config.pinned.len(), 2);
+        let loaded = load_config(&config_path).unwrap();
+        assert_eq!(loaded.pinned.len(), 2);
+        assert_eq!(loaded.pinned[0].gist_filename, "a.txt");
+        assert_eq!(loaded.pinned[1].gist_filename, "b.txt");
     }
 
     #[test]

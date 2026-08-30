@@ -780,6 +780,17 @@ pub(super) fn sync_mouse_capture(
     Ok(())
 }
 
+/// One rendering of a pinned pair for the status line, so pin and unpin cannot drift apart
+/// in how they name the same thing (issue #424). `display_path` abbreviates `$HOME`; the raw
+/// `Display` would make the pin message disagree with the unpin message about one path.
+fn pin_pair_label(local_path: &std::path::Path, filename: &str) -> String {
+    format!(
+        "{} <-> {}",
+        crate::config::display_path(local_path),
+        filename
+    )
+}
+
 pub(super) fn pin_paths(
     state: &mut AppState,
     local_path: &std::path::Path,
@@ -796,26 +807,46 @@ pub(super) fn pin_paths(
             state.pinned = config.pinned;
             state.skip_dirs = config.skip_dirs;
             state.mark_pin_sync_cache_dirty();
-            state.set_status(format!("Pinned {} <-> {}", local_path.display(), filename));
+            state.set_status(format!("Pinned {}", pin_pair_label(local_path, filename)));
         }
         Err(error) => state.set_status(format!("pin failed: {error}")),
     }
 }
 
-pub(super) fn unpin_path(state: &mut AppState, local_path: &std::path::Path) {
+pub(super) fn unpin_path(
+    state: &mut AppState,
+    local_path: &std::path::Path,
+    gist_id: &str,
+    filename: &str,
+) {
     let result = crate::config::config_path().and_then(|path| {
         let config = crate::config::load_config(&path)?;
-        crate::actions::unpin_mapping(&path, config, local_path)
+        crate::actions::unpin_mapping(
+            &path,
+            config,
+            crate::pins::PinKey::new(local_path, gist_id, filename),
+        )
     });
+    apply_unpin(state, result, pin_pair_label(local_path, filename));
+}
+
+/// Absorb an unpin result. `removed == false` means the stored config no longer held that
+/// pair, so the status must not claim one was removed (issue #424).
+fn apply_unpin(
+    state: &mut AppState,
+    result: anyhow::Result<(crate::config::AppConfig, bool)>,
+    label: String,
+) {
     match result {
-        Ok(config) => {
+        Ok((config, removed)) => {
             state.pinned = config.pinned;
             state.skip_dirs = config.skip_dirs;
             state.mark_pin_sync_cache_dirty();
-            state.set_status(format!(
-                "Unpinned {}",
-                crate::config::display_path(local_path)
-            ));
+            state.set_status(if removed {
+                format!("Unpinned {label}")
+            } else {
+                format!("{label} is not pinned")
+            });
         }
         Err(error) => state.set_status(format!("unpin failed: {error}")),
     }
@@ -826,26 +857,21 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
         return;
     }
     let mapping = state.pinned[idx].clone();
-    let label = crate::config::display_path(&mapping.local_path);
+    let label = pin_pair_label(&mapping.local_path, &mapping.gist_filename);
     let result = crate::config::config_path().and_then(|path| {
         let config = crate::config::load_config(&path)?;
-        crate::actions::unpin_mapping_exact(&path, config, &mapping.local_path, &mapping.gist_id)
+        crate::actions::unpin_mapping(&path, config, mapping.key())
     });
-    match result {
-        Ok(config) => {
-            state.pinned = config.pinned;
-            state.skip_dirs = config.skip_dirs;
-            state.mark_pin_sync_cache_dirty();
-            let len = state.visible_pin_indices().len();
-            if let Some(pins) = state.pins_mut() {
-                pins.cursor.clamp_len(len);
-            }
-            // No filesystem rescan: unpin never touches the filesystem, and ranking reads
-            // `PinnedMapping` directly — a forced-flat rescan here used to make the local
-            // list drift back to cwd-only even while recursive mode was active (issue #409).
-            state.set_status(format!("Unpinned {label}"));
+    let ok = result.is_ok();
+    apply_unpin(state, result, label);
+    if ok {
+        let len = state.visible_pin_indices().len();
+        if let Some(pins) = state.pins_mut() {
+            pins.cursor.clamp_len(len);
         }
-        Err(error) => state.set_status(format!("unpin failed: {error}")),
+        // No filesystem rescan: unpin never touches the filesystem, and ranking reads
+        // `PinnedMapping` directly — a forced-flat rescan here used to make the local
+        // list drift back to cwd-only even while recursive mode was active (issue #409).
     }
 }
 
@@ -1205,6 +1231,54 @@ mod tests {
     fn returns_none_when_slot_already_empty() {
         let mut slot: Option<mpsc::Receiver<i32>> = None;
         assert_eq!(poll_channel(&mut slot), None);
+    }
+
+    // ---- unpin absorb ---------------------------------------------------
+
+    #[test]
+    fn apply_unpin_reports_the_pair_it_removed() {
+        let mut state = crate::tui::initial_state();
+        let config = crate::config::AppConfig::default();
+
+        apply_unpin(&mut state, Ok((config, true)), "~/a.txt <-> a.txt".into());
+
+        assert_eq!(state.status.as_deref(), Some("Unpinned ~/a.txt <-> a.txt"));
+    }
+
+    /// The key is exact now, so a stored config that no longer holds the pair is reachable.
+    /// Saying "Unpinned" there would be a lie (issue #424).
+    #[test]
+    fn apply_unpin_does_not_claim_a_removal_that_did_not_happen() {
+        let mut state = crate::tui::initial_state();
+        let config = crate::config::AppConfig::default();
+
+        apply_unpin(&mut state, Ok((config, false)), "~/a.txt <-> a.txt".into());
+
+        assert_eq!(
+            state.status.as_deref(),
+            Some("~/a.txt <-> a.txt is not pinned")
+        );
+    }
+
+    #[test]
+    fn apply_unpin_surfaces_a_failure_without_touching_the_pins() {
+        let mut state = crate::tui::initial_state();
+        state.pinned = vec![crate::domain::PinnedMapping {
+            local_path: PathBuf::from("/a.txt"),
+            gist_id: "g1".into(),
+            gist_filename: "a.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+
+        apply_unpin(
+            &mut state,
+            Err(anyhow::anyhow!("boom")),
+            "~/a.txt <-> a.txt".into(),
+        );
+
+        assert_eq!(state.status.as_deref(), Some("unpin failed: boom"));
+        assert_eq!(state.pinned.len(), 1);
     }
 
     // ---- test helpers ---------------------------------------------------

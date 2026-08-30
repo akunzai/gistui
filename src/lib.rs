@@ -6,6 +6,7 @@ pub mod domain;
 pub mod gh;
 pub mod local;
 pub(crate) mod lru;
+pub mod pins;
 pub mod ranking;
 pub mod temp_dir;
 pub mod tui;
