@@ -47,10 +47,21 @@ pub struct CommandOutput {
     pub stderr: String,
 }
 
-/// The injectable boundary for every external command (`gh`) the app shells out
+/// The injectable boundary for every external command (`gh`, `git`) the app shells out
 /// to. Production uses [`SystemRunner`]; tests supply a fake so integration tests
 /// exercise command planning, success/failure handling, and output parsing
 /// without touching the network or requiring `gh`.
+///
+/// The seam expresses one shape only: spawn a program with arguments, wait, capture
+/// stdout/stderr. Three paths need more than that and so call `std::process::Command`
+/// directly. They are the whole set — anything else belongs behind this trait:
+///
+/// - **Piped stdin** — [`copy_via`] writes the payload to the child's stdin and closes
+///   the pipe so the clipboard tool sees EOF.
+/// - **TTY handoff** — `tui::bg`'s editor launches leave the alternate screen, hand the
+///   terminal to the child, and restore raw mode after it exits.
+/// - **A long-lived watched child** — `tui::bg`'s upload-edit watch spawns the editor and
+///   keeps polling it, rather than waiting for a single result.
 pub trait CommandRunner {
     fn run(&self, plan: &CommandPlan) -> Result<CommandOutput>;
 }
