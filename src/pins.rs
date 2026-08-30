@@ -11,7 +11,7 @@
 //!
 //! Exactly-duplicate triples are degenerate input — `config.toml` is user-editable and
 //! `crate::config::load_config` deliberately stays a parser rather than a silent rewriter.
-//! [`find`], [`find_mut`], and [`remove`] all act on the first match.
+//! [`find_mut`] and [`remove`] both act on the first match.
 
 use crate::domain::{PinnedMapping, SyncDirection};
 use std::path::Path;
@@ -34,7 +34,9 @@ impl<'a> PinKey<'a> {
         }
     }
 
-    fn matches(&self, mapping: &PinnedMapping) -> bool {
+    /// Whether `mapping` is the pin this key names. Use it instead of spelling the three
+    /// comparisons out at a call site — that is how they drifted apart before #424.
+    pub fn matches(&self, mapping: &PinnedMapping) -> bool {
         mapping.local_path == self.local_path
             && mapping.gist_id == self.gist_id
             && mapping.gist_filename == self.gist_filename
@@ -53,8 +55,11 @@ impl PinnedMapping {
     }
 }
 
-pub fn find<'a>(pinned: &'a [PinnedMapping], key: PinKey<'_>) -> Option<&'a PinnedMapping> {
-    pinned.iter().find(|m| key.matches(m))
+/// Whether the pair named by `key` is pinned. The presentation layer asks this a lot —
+/// row marks, the List `p` toggle — and each caller used to spell the three comparisons
+/// out for itself.
+pub fn is_pinned(pinned: &[PinnedMapping], key: PinKey<'_>) -> bool {
+    pinned.iter().any(|m| key.matches(m))
 }
 
 pub fn find_mut<'a>(
@@ -128,14 +133,14 @@ mod tests {
     #[test]
     fn a_mappings_key_round_trips_to_itself() {
         let m = mapping("/a.txt", "g1", "a.txt");
-        assert!(find(std::slice::from_ref(&m), m.key()).is_some());
+        assert!(m.key().matches(&m));
     }
 
     #[test]
     fn differing_in_the_gist_filename_alone_is_a_different_pin() {
-        let pinned = vec![mapping("/a.txt", "g1", "a.txt")];
+        let mut pinned = vec![mapping("/a.txt", "g1", "a.txt")];
         let other = key(Path::new("/a.txt"), "g1", "b.txt");
-        assert!(find(&pinned, other).is_none());
+        assert!(find_mut(&mut pinned, other).is_none());
     }
 
     // ---- upsert ---------------------------------------------------------
@@ -206,6 +211,18 @@ mod tests {
 
         assert_eq!(pinned[0].direction, Some(SyncDirection::Download));
         assert_eq!(pinned[0].last_seen_hash.as_deref(), Some("new"));
+    }
+
+    // ---- is_pinned ------------------------------------------------------
+
+    #[test]
+    fn is_pinned_needs_all_three_components_to_agree() {
+        let pinned = vec![mapping("/a.txt", "g1", "a.txt")];
+
+        assert!(is_pinned(&pinned, key(Path::new("/a.txt"), "g1", "a.txt")));
+        assert!(!is_pinned(&pinned, key(Path::new("/b.txt"), "g1", "a.txt")));
+        assert!(!is_pinned(&pinned, key(Path::new("/a.txt"), "g2", "a.txt")));
+        assert!(!is_pinned(&pinned, key(Path::new("/a.txt"), "g1", "b.txt")));
     }
 
     // ---- remove ---------------------------------------------------------

@@ -43,9 +43,10 @@ fn match_mark(
     gist_filename: &str,
     pinned: &[PinnedMapping],
 ) -> MatchMark {
-    if pinned.iter().any(|m| {
-        m.local_path == local_path && m.gist_id == gist_id && m.gist_filename == gist_filename
-    }) {
+    if crate::pins::is_pinned(
+        pinned,
+        crate::pins::PinKey::new(local_path, gist_id, gist_filename),
+    ) {
         MatchMark::Pinned
     } else if local_filename == gist_filename {
         MatchMark::ExactFilename

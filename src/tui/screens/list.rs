@@ -89,11 +89,14 @@ pub(crate) fn list_guard(state: &AppState, code: KeyCode) -> bool {
         .get(state.local_cursor.index)
         .zip(gist)
         .is_some_and(|(local, gist)| {
-            state.pinned.iter().any(|m| {
-                m.local_path == local.candidate.path
-                    && m.gist_id == gist.file.gist_id
-                    && m.gist_filename == gist.file.filename
-            })
+            crate::pins::is_pinned(
+                &state.pinned,
+                crate::pins::PinKey::new(
+                    &local.candidate.path,
+                    &gist.file.gist_id,
+                    &gist.file.filename,
+                ),
+            )
         });
     match code {
         KeyCode::Enter => gist_file.as_ref().is_some_and(|f| {
@@ -393,9 +396,10 @@ impl AppState {
         let local_path = local.path.clone();
         let gist_id = gist.file.gist_id.clone();
         let filename = gist.file.filename.clone();
-        let already = self.pinned.iter().any(|m| {
-            m.local_path == local_path && m.gist_id == gist_id && m.gist_filename == filename
-        });
+        let already = crate::pins::is_pinned(
+            &self.pinned,
+            crate::pins::PinKey::new(&local_path, &gist_id, &filename),
+        );
         if already {
             KeyOutcome::Unpin {
                 local_path,
