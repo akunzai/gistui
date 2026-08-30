@@ -58,11 +58,16 @@ Fields stay `pub`. No `#[serde(default)]` on the struct.
 ## Key path (pure intent → impure dispatch)
 
 ```
-handle_key (pure) → KeyOutcome → run_loop / dispatch_outcome (IO)
+handle_key (pure) → KeyOutcome → run_loop / dispatch_outcome (IO) → route_outcome
 ```
 
+**On the `KeyOutcome` path, only `dispatch_outcome` touches the `Terminal`** (issue #421) —
+`run_loop` still owns it for setup and `draw`. `dispatch_outcome` holds the arms that need one
+(`EditUpload`, `EditLocal`, `PersistSettings`'s mouse-capture effect) and delegates every other
+outcome to `route_outcome`, which takes `&mut AppState` and `&mut Jobs` and nothing else.
+
 Before a fetch/action is spawned, its owning screen's `stage_*` function performs any
-branching state work and returns the values dispatch needs. `dispatch_outcome` then only
+branching state work and returns the values dispatch needs. `route_outcome` then only
 routes that payload to `Jobs`; it does not restage labels, return paths, caches, or loading flags.
 
 - New key logic → `AppState::handle_key` (testable).
@@ -97,7 +102,7 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
 - Call sites start work via `Jobs` methods (`spawn_action`, `request_local_scan`, …) or `screens::revisions::request_revisions` — do not own ad-hoc channel fields on `AppState`.
 - `run_loop` only **polls** `jobs.absorb`.
 - **Action jobs carry their apply** (issue #375, ADR-0002's async-response half): `spawn_action(run, apply)` runs `run` off-thread and boxes `apply(value)` for the event-loop tick. There is no `BgTaskOutcome` enum. `ActionApply` is `FnOnce(&mut AppState) -> LoopFlow`. `on_action_outcome` is a generation-guard shell that calls the closure. `KeyOutcome` / `dispatch_outcome` stay plain data (ADR-0002).
-- **`on_*` is the apply seam** (#298, #375, #383): named handlers are the apply bodies and the unit-test surface. They do not live on `Jobs`. `dispatch_outcome` needs a `Terminal`, so it is not one. A new action is a spawn site plus an `on_*` when the apply is worth testing.
+- **`on_*` is the apply seam** (#298, #375, #383): named handlers are the apply bodies and the unit-test surface. They do not live on `Jobs`. `dispatch_outcome` / `route_outcome` sit on the spawn side, not the apply side, so neither is one. A new action is a spawn site plus an `on_*` when the apply is worth testing.
 - **Shared spawn payload** (#375): a value both `run` and `apply` need is part of `run`'s return, unpacked by `apply`. That is how identity (`gist_id`, `fetch_id`, labels) crosses the thread boundary without a second clone.
 
 ## Pin-sync presentation (`@src/tui/pin_sync.rs`)
