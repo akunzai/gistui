@@ -383,7 +383,10 @@ pub(super) fn dispatch_outcome(
             jobs.spawn_action(
                 state,
                 "Compacting revisions…",
-                move || crate::actions::execute_compact_gist(&gist_id).map_err(|e| e.to_string()),
+                move || {
+                    crate::actions::execute_compact_gist(&SystemRunner, &gist_id)
+                        .map_err(|e| e.to_string())
+                },
                 move |result, state| gist_mutation::on_compact_gist(state, result, label, count),
             );
         }
