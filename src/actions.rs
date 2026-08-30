@@ -1,5 +1,5 @@
 use crate::config::{save_config, AppConfig};
-use crate::domain::{GistFile, PinnedMapping, SyncDirection};
+use crate::domain::{GistFile, SyncDirection};
 use anyhow::{anyhow, bail, Context, Result};
 use std::fs;
 use std::path::Path;
@@ -559,6 +559,9 @@ pub fn execute_download(local_path: &Path, content: &str, mode: DownloadMode) ->
     fs::write(local_path, content).with_context(|| format!("write {}", local_path.display()))
 }
 
+/// Pins `local_path` to `target`, or updates the pin already there. Siblings — the same
+/// local file pinned to a *different* gist file — are left alone; see `crate::pins` for
+/// why that is the invariant.
 pub fn pin_mapping(
     config_path: &Path,
     mut config: AppConfig,
@@ -567,16 +570,12 @@ pub fn pin_mapping(
     direction: Option<SyncDirection>,
     last_seen_hash: Option<String>,
 ) -> Result<AppConfig> {
-    config
-        .pinned
-        .retain(|mapping| mapping.local_path != local_path);
-    config.pinned.push(PinnedMapping {
-        local_path: local_path.to_path_buf(),
-        gist_id: target.gist_id.clone(),
-        gist_filename: target.filename.clone(),
+    crate::pins::upsert(
+        &mut config.pinned,
+        crate::pins::PinKey::new(local_path, &target.gist_id, &target.filename),
         direction,
         last_seen_hash,
-    });
+    );
     save_config(config_path, &config)?;
     Ok(config)
 }
@@ -644,6 +643,7 @@ mod tests {
     use super::test_support::SeqRunner;
     use super::*;
     use crate::config::{load_config, AppConfig};
+    use crate::domain::PinnedMapping;
     use std::path::PathBuf;
 
     fn gist_file() -> GistFile {
@@ -1176,7 +1176,7 @@ mod tests {
     }
 
     #[test]
-    fn pin_mapping_replaces_existing_local_mapping() {
+    fn pin_mapping_persists_the_pin_it_was_given() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         let local_path = dir.path().join("settings.json");
@@ -1196,6 +1196,41 @@ mod tests {
         let loaded = load_config(&config_path).unwrap();
         assert_eq!(loaded.pinned[0].local_path, local_path);
         assert_eq!(loaded.pinned[0].gist_id, "abc123");
+        assert_eq!(loaded.pinned[0].last_seen_hash.as_deref(), Some("hash"));
+    }
+
+    /// The bug #424 fixes: pinning one local file to a second gist file used to `retain`
+    /// on `local_path` alone and silently drop the first pin.
+    #[test]
+    fn pin_mapping_keeps_a_sibling_pin_on_the_same_local_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let local_path = dir.path().join("settings.json");
+
+        let config = pin_mapping(
+            &config_path,
+            AppConfig::default(),
+            &local_path,
+            &GistFile::fixture("abc123", "a.txt"),
+            None,
+            None,
+        )
+        .unwrap();
+        let config = pin_mapping(
+            &config_path,
+            config,
+            &local_path,
+            &GistFile::fixture("abc123", "b.txt"),
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(config.pinned.len(), 2);
+        let loaded = load_config(&config_path).unwrap();
+        assert_eq!(loaded.pinned.len(), 2);
+        assert_eq!(loaded.pinned[0].gist_filename, "a.txt");
+        assert_eq!(loaded.pinned[1].gist_filename, "b.txt");
     }
 
     #[test]
