@@ -396,7 +396,7 @@ pub fn git_current_branch_command(dir: &Path) -> CommandPlan {
 
 /// The ordered git steps that collapse a cloned gist working copy into a single root commit
 /// and force-push it back over `branch`. Pure so the plan is unit-testable; the branch name is
-/// resolved separately (see [`compact_gist_repo`]). A committer identity is forced via `-c` so
+/// resolved separately (see [`compact_in_dir`]). A committer identity is forced via `-c` so
 /// the commit succeeds regardless of the user's global git config.
 pub fn compact_git_plans(dir: &Path, branch: &str) -> Vec<CommandPlan> {
     vec![
@@ -420,14 +420,16 @@ pub fn compact_git_plans(dir: &Path, branch: &str) -> Vec<CommandPlan> {
 }
 
 /// Clone `gist_id` into a fresh temp dir, collapse its history to a single commit, force-push,
-/// and remove the temp dir. The temp dir is always cleaned up, even on error. This is a thin IO
-/// boundary (real `gh`/`git`); the command planning it drives is what carries the unit tests.
-pub fn execute_compact_gist(gist_id: &str) -> Result<()> {
+/// and remove the temp dir. A thin shell that owns only the two things its body actually does —
+/// the scratch dir lifetime and the auth-hint mapping — and is not unit-tested. The command
+/// sequence it drives lives in [`compact_in_dir`], behind the [`CommandRunner`] seam.
+pub fn execute_compact_gist(runner: &dyn CommandRunner, gist_id: &str) -> Result<()> {
     // `with_temp_scratch_dir` owns create + cleanup, including on clone/compact failure (issue #275).
     // The dir is created empty; `git clone` accepts an empty existing destination.
     let safe: String = gist_id.chars().filter(|c| c.is_alphanumeric()).collect();
     let kind = format!("compact-{safe}");
-    let result = crate::temp_dir::with_temp_scratch_dir(&kind, |dir| compact_in_dir(gist_id, dir));
+    let result =
+        crate::temp_dir::with_temp_scratch_dir(&kind, |dir| compact_in_dir(runner, gist_id, dir));
     // A raw git HTTPS auth failure (no gist.github.com credential helper) is confusing; map it
     // to an actionable hint. Unrelated errors surface verbatim, and the happy path is untouched.
     result.map_err(|e| match compact_auth_hint(&e.to_string()) {
@@ -453,16 +455,19 @@ pub fn compact_auth_hint(stderr: &str) -> Option<String> {
     })
 }
 
-fn compact_in_dir(gist_id: &str, dir: &Path) -> Result<()> {
-    run_command(&SystemRunner, &gist_clone_command(gist_id, dir))?;
-    let branch = run_command(&SystemRunner, &git_current_branch_command(dir))?
+/// Clone, resolve the checked-out branch, then run [`compact_git_plans`] against it, stopping at
+/// the first failure. Takes `runner` so the ordering — and the trim that feeds the branch name
+/// back into the plans — is unit-tested without a real `git`.
+fn compact_in_dir(runner: &dyn CommandRunner, gist_id: &str, dir: &Path) -> Result<()> {
+    run_command(runner, &gist_clone_command(gist_id, dir))?;
+    let branch = run_command(runner, &git_current_branch_command(dir))?
         .trim()
         .to_string();
     if branch.is_empty() {
         bail!("could not determine the gist's default branch");
     }
     for plan in compact_git_plans(dir, &branch) {
-        run_command(&SystemRunner, &plan)?;
+        run_command(runner, &plan)?;
     }
     Ok(())
 }
@@ -625,6 +630,7 @@ pub fn unpin_mapping_exact(
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::SeqRunner;
     use super::*;
     use crate::config::{load_config, AppConfig};
     use std::path::PathBuf;
@@ -816,6 +822,77 @@ mod tests {
         );
         // The commit forces an identity so it never falls back to (possibly absent) global config.
         assert!(plans[2].args.contains(&"user.name=gistui".to_string()));
+    }
+
+    fn compact_ok(stdout: &str) -> CommandOutput {
+        CommandOutput {
+            success: true,
+            stdout: stdout.into(),
+            stderr: String::new(),
+        }
+    }
+
+    #[test]
+    fn compact_in_dir_clones_resolves_the_branch_then_runs_the_plans() {
+        let dir = Path::new("/tmp/x");
+        let runner = SeqRunner::new(vec![
+            compact_ok(""),       // clone
+            compact_ok("main\n"), // rev-parse --abbrev-ref HEAD
+            compact_ok(""),       // the five compact plans
+            compact_ok(""),
+            compact_ok(""),
+            compact_ok(""),
+            compact_ok(""),
+        ]);
+
+        compact_in_dir(&runner, "abc123", dir).expect("compaction should succeed");
+
+        let calls = runner.calls();
+        let mut expected = vec![
+            gist_clone_command("abc123", dir),
+            git_current_branch_command(dir),
+        ];
+        // The branch arrives as `main\n`; the trim is what makes the plans push a real ref.
+        expected.extend(compact_git_plans(dir, "main"));
+        assert_eq!(calls, expected);
+        assert_eq!(
+            calls.last().unwrap().args,
+            vec!["-C", "/tmp/x", "push", "--force", "origin", "main"]
+        );
+    }
+
+    #[test]
+    fn compact_in_dir_bails_before_touching_history_when_the_branch_is_blank() {
+        let runner = SeqRunner::new(vec![compact_ok(""), compact_ok("  \n")]);
+
+        let err = compact_in_dir(&runner, "abc123", Path::new("/tmp/x"))
+            .expect_err("a blank branch should abort");
+
+        assert!(err.to_string().contains("default branch"));
+        // Nothing after the probe ran: no orphan checkout, no force-push.
+        assert_eq!(runner.calls().len(), 2);
+    }
+
+    #[test]
+    fn compact_in_dir_stops_at_the_first_failing_plan() {
+        let runner = SeqRunner::new(vec![
+            compact_ok(""),
+            compact_ok("main\n"),
+            compact_ok(""), // checkout --orphan
+            compact_ok(""), // add -A
+            CommandOutput {
+                success: false,
+                stdout: String::new(),
+                stderr: "nothing to commit".into(),
+            },
+        ]);
+
+        let err = compact_in_dir(&runner, "abc123", Path::new("/tmp/x"))
+            .expect_err("a failed plan should abort");
+
+        assert!(err.to_string().contains("nothing to commit"));
+        // `branch -M` and the force-push never ran.
+        assert_eq!(runner.calls().len(), 5);
     }
 
     #[test]
