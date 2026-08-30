@@ -1035,8 +1035,10 @@ impl Jobs {
             }
             if update.base_ready {
                 state.loading = false;
-                if state.gist_index >= state.ranked_gists().len() {
-                    state.gist_index = 0;
+                if state.gist_cursor.index >= state.ranked_gists().len() {
+                    // Snapping to the top is a selection change, so the offset the old
+                    // row was scrolled to goes with it (issue #415).
+                    state.gist_cursor.reset();
                 }
                 let count = state.visible_gist_groups().len();
                 if let Some(gm) = state.gist_manager_mut() {

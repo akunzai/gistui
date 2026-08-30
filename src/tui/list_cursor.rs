@@ -1,11 +1,19 @@
-//! Shared list selection + horizontal scroll for Pins, Gists manager, and Revisions.
+//! Shared list selection + horizontal scroll for every selectable list: the two List
+//! panes, Pins, the Gists manager, and Revisions (issue #415).
 //!
 //! Bounds (`len`, `hmax`, page `step`) are computed by the caller with `&AppState`
 //! *before* taking `&mut` on the payload, so navigation never fights the borrow
-//! checker (issue #274).
+//! checker (issue #274). On the List screen that borrow is taken through
+//! `AppState::focused_cursor_mut`, which is where `focus` picks a pane.
+//!
+//! Policy the module owns, and screens must not restate: a vertical move clears the
+//! horizontal offset, because the offset belongs to the row it was scrolled on.
+//! Anything a screen does *around* a cursor move — the List screen re-ranking its other
+//! pane, or the local scan re-resolving a selection to the same file path — stays on
+//! that screen; this module knows nothing about ranking, panes, or paths.
 
 /// Index + horizontal scroll for a single-column list that resets hscroll when the
-/// selection moves vertically (Pins / Gists / Revisions policy).
+/// selection moves vertically.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ListCursor {
     pub index: usize,

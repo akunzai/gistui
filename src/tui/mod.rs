@@ -780,10 +780,11 @@ pub struct AppState {
     /// shows natural order; the other pane is always ranked against the anchor's selection.
     /// `focus` only moves the cursor/highlight and does not affect ranking.
     pub anchor: FocusPane,
-    pub local_index: usize,
-    pub gist_index: usize,
-    pub local_hscroll: u16,
-    pub gist_hscroll: u16,
+    /// Selection + horizontal scroll for the two List panes. Both go through
+    /// [`ListCursor`], the same module Pins, the Gists manager and Revisions use, so the
+    /// "vertical move clears hscroll" policy has one home (issue #415).
+    pub local_cursor: ListCursor,
+    pub gist_cursor: ListCursor,
     /// Share of the List screen's width given to the local pane (issue #395). Session-only:
     /// dragging the divider moves it, and every launch starts back at
     /// [`screens::list::DEFAULT_SPLIT_PERCENT`].
@@ -1811,46 +1812,41 @@ impl AppState {
         let (visible_locals, ranked) = self.list_pane_snapshots();
         let text = match self.focus {
             FocusPane::Local => visible_locals
-                .get(self.local_index)
+                .get(self.local_cursor.index)
                 .map(|r| marked_row_text(local_row_label(&r.candidate.path, &self.cwd), r.mark)),
             FocusPane::Gist => ranked
-                .get(self.gist_index)
+                .get(self.gist_cursor.index)
                 .map(|g| marked_row_text(gist_row_display(g, self.gist_view, self), g.mark)),
         };
         text.map(|t| hscroll_max_for_text(&t)).unwrap_or(0)
     }
 
-    fn scroll_focused_right(&mut self) {
-        let max = self.focused_hscroll_max();
-        let scroll = match self.focus {
-            FocusPane::Local => &mut self.local_hscroll,
-            FocusPane::Gist => &mut self.gist_hscroll,
-        };
-        if *scroll < max {
-            *scroll += 1;
+    /// The [`ListCursor`] for the focused List pane — the one place `focus` picks a pane,
+    /// so a navigation operation is added once rather than once per pane (issue #415).
+    ///
+    /// Bounds (`len`, `hmax`) must be computed *before* this borrow, mirroring the rule
+    /// [`ListCursor`] documents for Pins/Gists/Revisions (issue #274).
+    pub(crate) fn focused_cursor_mut(&mut self) -> &mut ListCursor {
+        match self.focus {
+            FocusPane::Local => &mut self.local_cursor,
+            FocusPane::Gist => &mut self.gist_cursor,
         }
     }
 
-    fn scroll_focused_left(&mut self) {
-        let scroll = match self.focus {
-            FocusPane::Local => &mut self.local_hscroll,
-            FocusPane::Gist => &mut self.gist_hscroll,
-        };
-        *scroll = scroll.saturating_sub(1);
+    /// Read-only twin of [`AppState::focused_cursor_mut`].
+    pub(crate) fn focused_cursor(&self) -> &ListCursor {
+        match self.focus {
+            FocusPane::Local => &self.local_cursor,
+            FocusPane::Gist => &self.gist_cursor,
+        }
     }
 
     /// Reset the non-anchor ("ranked") pane to its top match: the pane that re-ranks
     /// whenever the anchor pane's selection changes.
     fn reset_ranked_pane(&mut self) {
         match self.anchor {
-            FocusPane::Local => {
-                self.gist_index = 0;
-                self.gist_hscroll = 0;
-            }
-            FocusPane::Gist => {
-                self.local_index = 0;
-                self.local_hscroll = 0;
-            }
+            FocusPane::Local => self.gist_cursor.reset(),
+            FocusPane::Gist => self.local_cursor.reset(),
         }
     }
 
@@ -1943,10 +1939,8 @@ pub fn initial_state() -> AppState {
         pinned: Vec::new(),
         focus: FocusPane::Local,
         anchor: FocusPane::Local,
-        local_index: 0,
-        gist_index: 0,
-        local_hscroll: 0,
-        gist_hscroll: 0,
+        local_cursor: ListCursor::default(),
+        gist_cursor: ListCursor::default(),
         list_split_percent: screens::list::DEFAULT_SPLIT_PERCENT,
         mouse_session: MouseSession::default(),
         screen: Screen::List,

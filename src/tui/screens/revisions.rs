@@ -927,7 +927,7 @@ mod tests {
     fn capital_h_from_list_opens_revisions_for_selected_gist_file() {
         let mut state = list_state_with_matches();
         state.focus = FocusPane::Gist;
-        state.gist_index = 0;
+        state.gist_cursor.index = 0;
         let outcome = state.handle_key(KeyCode::Char('H'));
         assert!(matches!(outcome, KeyOutcome::FetchRevisions { .. }));
         assert!(state.screen.is_revisions());
