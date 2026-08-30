@@ -163,8 +163,8 @@ pub(super) fn list_state_with_matches() -> AppState {
             ..GistFile::fixture("b", "zzz.txt")
         },
     ];
-    state.local_index = 0;
-    state.gist_index = 0;
+    state.local_cursor.index = 0;
+    state.gist_cursor.index = 0;
     state
 }
 

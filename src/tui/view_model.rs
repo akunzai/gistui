@@ -817,8 +817,8 @@ mod tests {
         }];
         state.focus = FocusPane::Local;
         state.anchor = FocusPane::Local;
-        state.local_index = 0;
-        state.gist_index = 0;
+        state.local_cursor.index = 0;
+        state.gist_cursor.index = 0;
 
         let vm = build_view_model(&state);
         match vm.screen {

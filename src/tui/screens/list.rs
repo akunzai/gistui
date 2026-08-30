@@ -76,30 +76,29 @@ fn percent_for_col(area: Rect, col: u16) -> u16 {
 /// can never silently drift (issue #288).
 pub(crate) fn list_guard(state: &AppState, code: KeyCode) -> bool {
     let (visible_locals, ranked) = state.list_pane_snapshots();
-    let has_gist = ranked.get(state.gist_index).is_some();
-    let has_local = visible_locals.get(state.local_index).is_some();
-    let gist = ranked.get(state.gist_index);
+    let has_gist = ranked.get(state.gist_cursor.index).is_some();
+    let has_local = visible_locals.get(state.local_cursor.index).is_some();
+    let gist = ranked.get(state.gist_cursor.index);
     let gist_id = gist.map(|g| g.file.gist_id.clone());
     let owned = gist_id
         .as_deref()
         .map(|id| state.gist_is_owned(id))
         .unwrap_or(false);
     let gist_file = gist.map(|g| g.file.clone());
-    let pinned_pair =
-        visible_locals
-            .get(state.local_index)
-            .zip(gist)
-            .is_some_and(|(local, gist)| {
-                state.pinned.iter().any(|m| {
-                    m.local_path == local.candidate.path
-                        && m.gist_id == gist.file.gist_id
-                        && m.gist_filename == gist.file.filename
-                })
-            });
+    let pinned_pair = visible_locals
+        .get(state.local_cursor.index)
+        .zip(gist)
+        .is_some_and(|(local, gist)| {
+            state.pinned.iter().any(|m| {
+                m.local_path == local.candidate.path
+                    && m.gist_id == gist.file.gist_id
+                    && m.gist_filename == gist.file.filename
+            })
+        });
     match code {
         KeyCode::Enter => gist_file.as_ref().is_some_and(|f| {
             let local_path = visible_locals
-                .get(state.local_index)
+                .get(state.local_cursor.index)
                 .map(|r| r.candidate.path.as_path());
             diff_pair_previewable(state, &f.gist_id, &f.filename, local_path)
         }),
@@ -217,8 +216,7 @@ impl AppState {
             }
             KeyCode::Char('v') => {
                 self.gist_type_filter = self.gist_type_filter.next();
-                self.gist_index = 0;
-                self.gist_hscroll = 0;
+                self.gist_cursor.reset();
             }
             // Not gated through `list_guard`: `star_toggle_intent` already has its own
             // complete "select a gist first" message for the no-selection case.
@@ -226,8 +224,7 @@ impl AppState {
             KeyCode::Char('s') => self.cycle_focused_sort(),
             KeyCode::Char('r') => {
                 self.local_recursive = !self.local_recursive;
-                self.local_index = 0;
-                self.local_hscroll = 0;
+                self.local_cursor.reset();
                 return KeyOutcome::RefreshLocals;
             }
             KeyCode::Char('/') => self.filtering = true,
@@ -268,7 +265,7 @@ impl AppState {
             }
             KeyCode::Char('e') if list_guard(self, code) => {
                 let (locals, _) = self.list_pane_snapshots();
-                if let Some(local) = locals.get(self.local_index) {
+                if let Some(local) = locals.get(self.local_cursor.index) {
                     return KeyOutcome::EditLocal {
                         path: local.candidate.path.clone(),
                     };
@@ -279,7 +276,7 @@ impl AppState {
             }
             KeyCode::Char(' ') if list_guard(self, code) => {
                 let (_, ranked) = self.list_pane_snapshots();
-                let Some(gist) = ranked.get(self.gist_index) else {
+                let Some(gist) = ranked.get(self.gist_cursor.index) else {
                     return KeyOutcome::None;
                 };
                 return KeyOutcome::PreviewContent {
@@ -296,7 +293,7 @@ impl AppState {
             // "cannot preview: …" message instead of a silent no-op.
             KeyCode::Char(' ') => {
                 let (_, ranked) = self.list_pane_snapshots();
-                if let Some(gist) = ranked.get(self.gist_index) {
+                if let Some(gist) = ranked.get(self.gist_cursor.index) {
                     self.block_if_non_previewable_gist_file(
                         &gist.file.gist_id,
                         &gist.file.filename,
@@ -305,7 +302,7 @@ impl AppState {
             }
             KeyCode::Char('d') if list_guard(self, code) => {
                 let (_, ranked) = self.list_pane_snapshots();
-                if let Some(gist) = ranked.get(self.gist_index) {
+                if let Some(gist) = ranked.get(self.gist_cursor.index) {
                     let filename = gist.file.filename.clone();
                     return KeyOutcome::DownloadGist {
                         entry: self.defer_entry(),
@@ -323,11 +320,11 @@ impl AppState {
             // ranked lists once (issue #224 / #154 shape #1).
             KeyCode::Enter if list_guard(self, code) => {
                 let (locals, ranked) = self.list_pane_snapshots();
-                let Some(gist) = ranked.get(self.gist_index) else {
+                let Some(gist) = ranked.get(self.gist_cursor.index) else {
                     return KeyOutcome::None;
                 };
                 let local_path = locals
-                    .get(self.local_index)
+                    .get(self.local_cursor.index)
                     .map(|r| r.candidate.path.clone());
                 let filename = gist.file.filename.clone();
                 let target = local_path
@@ -352,9 +349,9 @@ impl AppState {
             // message instead of a silent no-op.
             KeyCode::Enter => {
                 let (locals, ranked) = self.list_pane_snapshots();
-                if let Some(gist) = ranked.get(self.gist_index) {
+                if let Some(gist) = ranked.get(self.gist_cursor.index) {
                     let local_path = locals
-                        .get(self.local_index)
+                        .get(self.local_cursor.index)
                         .map(|r| r.candidate.path.clone());
                     self.block_if_non_previewable_diff(
                         &gist.file.gist_id,
@@ -378,16 +375,7 @@ impl AppState {
     /// Reset the focused pane's selection index and horizontal scroll (used when a
     /// filter edit changes the visible rows).
     fn reset_focused_filter_scroll(&mut self) {
-        match self.focus {
-            FocusPane::Local => {
-                self.local_index = 0;
-                self.local_hscroll = 0;
-            }
-            FocusPane::Gist => {
-                self.gist_index = 0;
-                self.gist_hscroll = 0;
-            }
-        }
+        self.focused_cursor_mut().reset();
     }
 
     /// Pin/unpin the selected local↔gist pair: returns [`KeyOutcome::Unpin`] when the exact
@@ -396,8 +384,8 @@ impl AppState {
     fn pin_toggle_intent(&mut self) -> KeyOutcome {
         let (locals, ranked) = self.list_pane_snapshots();
         let (Some(local), Some(gist)) = (
-            locals.get(self.local_index).map(|r| &r.candidate),
-            ranked.get(self.gist_index),
+            locals.get(self.local_cursor.index).map(|r| &r.candidate),
+            ranked.get(self.gist_cursor.index),
         ) else {
             self.status = Some("select a local file and a gist to pin".into());
             return KeyOutcome::None;
@@ -491,8 +479,13 @@ impl AppState {
             NavAction::Up => self.list_move_focused(false),
             NavAction::PageDown => self.list_page_focused(true),
             NavAction::PageUp => self.list_page_focused(false),
-            NavAction::Left => self.scroll_focused_left(),
-            NavAction::Right => self.scroll_focused_right(),
+            NavAction::Left => self.focused_cursor_mut().left(),
+            NavAction::Right => {
+                // Bound computed before the cursor borrow (issue #274); it is the painted
+                // width of the *selected* row only (issue #341).
+                let hmax = self.focused_hscroll_max();
+                self.focused_cursor_mut().right(hmax);
+            }
         }
         true
     }
@@ -562,8 +555,7 @@ impl AppState {
                 let Some(idx) = index else {
                     return false;
                 };
-                self.local_index = idx;
-                self.local_hscroll = 0;
+                self.local_cursor.select(idx);
                 if self.anchor == FocusPane::Local {
                     self.reset_ranked_pane();
                 }
@@ -574,8 +566,7 @@ impl AppState {
                 let Some(idx) = index else {
                     return false;
                 };
-                self.gist_index = idx;
-                self.gist_hscroll = 0;
+                self.gist_cursor.select(idx);
                 if self.anchor == FocusPane::Gist {
                     self.reset_ranked_pane();
                 }
@@ -732,21 +723,21 @@ pub(crate) fn build_list_vm(state: &AppState) -> ListVm {
         local: ListPaneVm {
             title: local_title,
             focused: state.focus == FocusPane::Local,
-            selected: (local_empty == ListPaneEmpty::HasRows).then_some(state.local_index),
+            selected: (local_empty == ListPaneEmpty::HasRows).then_some(state.local_cursor.index),
             empty: local_empty,
             empty_message: local_empty_message,
             rows: local_rows,
-            hscroll: state.local_hscroll,
+            hscroll: state.local_cursor.hscroll,
             scrollbar: true,
         },
         gist: ListPaneVm {
             title: gist_title,
             focused: state.focus == FocusPane::Gist,
-            selected: (gist_empty == ListPaneEmpty::HasRows).then_some(state.gist_index),
+            selected: (gist_empty == ListPaneEmpty::HasRows).then_some(state.gist_cursor.index),
             empty: gist_empty,
             empty_message: gist_empty_message,
             rows: gist_rows,
-            hscroll: state.gist_hscroll,
+            hscroll: state.gist_cursor.hscroll,
             scrollbar: true,
         },
         footer,
@@ -1171,7 +1162,7 @@ mod tests {
     fn lowercase_h_does_not_open_revision_history() {
         let mut state = list_state_with_matches();
         state.focus = FocusPane::Gist;
-        state.gist_index = 0;
+        state.gist_cursor.index = 0;
         assert_eq!(state.handle_key(KeyCode::Char('h')), KeyOutcome::None);
         assert_eq!(state.screen, Screen::List);
     }
@@ -1181,10 +1172,10 @@ mod tests {
         let mut state = state_with_local_paths(&["a.rs", "b.rs", "c.rs"]);
         state.screen = Screen::List;
         state.focus = FocusPane::Local;
-        state.local_index = 0;
+        state.local_cursor.index = 0;
         let out = state.handle_mouse(MouseInput::ScrollDown, &MouseFrame::default());
         assert_eq!(out, KeyOutcome::None);
-        assert_eq!(state.local_index, 1);
+        assert_eq!(state.local_cursor.index, 1);
     }
 
     #[test]
@@ -1192,10 +1183,10 @@ mod tests {
         let mut state = state_with_local_paths(&["a.rs", "b.rs", "c.rs"]);
         state.screen = Screen::List;
         state.focus = FocusPane::Local;
-        state.local_index = 2;
+        state.local_cursor.index = 2;
         let out = state.handle_mouse(MouseInput::ScrollUp, &MouseFrame::default());
         assert_eq!(out, KeyOutcome::None);
-        assert_eq!(state.local_index, 1);
+        assert_eq!(state.local_cursor.index, 1);
     }
 
     #[test]
@@ -1203,7 +1194,7 @@ mod tests {
         let mut state = state_with_gists();
         state.screen = Screen::List;
         state.focus = FocusPane::Local;
-        state.gist_hscroll = 5;
+        state.gist_cursor.hscroll = 5;
         let hit = PaneHit {
             rect: Rect::new(20, 0, 20, 10),
             offset: 0,
@@ -1214,8 +1205,13 @@ mod tests {
         let out = state.handle_mouse(MouseInput::Click { col: 25, row: 2 }, &layout);
         assert_eq!(out, KeyOutcome::None);
         assert_eq!(state.focus, FocusPane::Gist);
-        assert_eq!(state.gist_index, 1);
-        assert_eq!(state.gist_hscroll, 0);
+        assert_eq!(
+            state.gist_cursor,
+            ListCursor {
+                index: 1,
+                hscroll: 0
+            }
+        );
     }
 
     #[test]
@@ -1224,7 +1220,7 @@ mod tests {
         state.gist_catalog.owned = vec![];
         state.screen = Screen::List;
         state.focus = FocusPane::Gist;
-        state.local_hscroll = 5;
+        state.local_cursor.hscroll = 5;
         let hit = PaneHit {
             rect: Rect::new(0, 0, 20, 10),
             offset: 0,
@@ -1235,8 +1231,8 @@ mod tests {
         let out = state.handle_mouse(MouseInput::Click { col: 5, row: 1 }, &layout);
         assert_eq!(out, KeyOutcome::None);
         assert_eq!(state.focus, FocusPane::Local);
-        assert_eq!(state.local_index, 0);
-        assert_eq!(state.local_hscroll, 0);
+        // A click is a selection: it clears the offset that belonged to the old row.
+        assert_eq!(state.local_cursor, ListCursor::default());
     }
 
     #[test]
@@ -1252,7 +1248,7 @@ mod tests {
         // row 1 -> idx 0 (first gist)
         let out = state.handle_mouse(MouseInput::DoubleClick { col: 25, row: 1 }, &layout);
         assert_eq!(state.focus, FocusPane::Gist);
-        assert_eq!(state.gist_index, 0);
+        assert_eq!(state.gist_cursor.index, 0);
         assert!(matches!(out, KeyOutcome::PreviewDiff { .. }));
     }
 
@@ -1261,7 +1257,7 @@ mod tests {
         let mut state = state_with_gists();
         state.screen = Screen::List;
         state.focus = FocusPane::Local;
-        state.gist_index = 0;
+        state.gist_cursor.index = 0;
         let hit = PaneHit {
             rect: Rect::new(20, 0, 20, 4),
             offset: 0,
@@ -1273,7 +1269,7 @@ mod tests {
         let out = state.handle_mouse(MouseInput::Click { col: 25, row: 0 }, &layout);
         assert_eq!(out, KeyOutcome::None);
         assert_eq!(state.focus, FocusPane::Gist);
-        assert_eq!(state.gist_index, 0);
+        assert_eq!(state.gist_cursor.index, 0);
     }
 
     #[test]
@@ -1282,9 +1278,9 @@ mod tests {
         let mut state = state_with_local_paths(&["a.rs"]);
         state.screen = Screen::List;
         state.focus = FocusPane::Local;
-        state.local_index = 0;
+        state.local_cursor.index = 0;
         state.handle_mouse(MouseInput::ScrollDown, &MouseFrame::default());
-        assert_eq!(state.local_index, 0);
+        assert_eq!(state.local_cursor.index, 0);
     }
 
     #[test]
@@ -1384,7 +1380,7 @@ mod tests {
         state.local_filter_query = "json".into(); // only 1 match
 
         state.handle_key(KeyCode::Down); // would move to index 1 if clamped on raw len
-        assert_eq!(state.local_index, 0); // clamped: only one visible row
+        assert_eq!(state.local_cursor.index, 0); // clamped: only one visible row
     }
 
     #[test]
@@ -1396,25 +1392,23 @@ mod tests {
     fn a_key_toggles_anchor_and_resets_ranked_pane() {
         let mut state = list_state_with_matches();
         assert_eq!(state.anchor, FocusPane::Local);
-        state.local_index = 1;
-        state.local_hscroll = 3;
+        state.local_cursor.index = 1;
+        state.local_cursor.hscroll = 3;
         state.handle_key(KeyCode::Char('a'));
         assert_eq!(state.anchor, FocusPane::Gist);
         // anchor now Gist → local is the newly-ranked (non-driver) pane → reset to top.
-        assert_eq!(state.local_index, 0);
-        assert_eq!(state.local_hscroll, 0);
+        assert_eq!(state.local_cursor, ListCursor::default());
     }
 
     #[test]
     fn a_key_toggle_reverse_direction_resets_gist() {
         let mut state = list_state_with_matches();
         state.anchor = FocusPane::Gist;
-        state.gist_index = 1;
-        state.gist_hscroll = 4;
+        state.gist_cursor.index = 1;
+        state.gist_cursor.hscroll = 4;
         state.handle_key(KeyCode::Char('a'));
         assert_eq!(state.anchor, FocusPane::Local);
-        assert_eq!(state.gist_index, 0);
-        assert_eq!(state.gist_hscroll, 0);
+        assert_eq!(state.gist_cursor, ListCursor::default());
     }
 
     #[test]
@@ -1422,22 +1416,22 @@ mod tests {
         let mut state = list_state_with_matches();
         state.anchor = FocusPane::Local;
         state.focus = FocusPane::Local;
-        state.local_index = 1; // >0 so Up fires
-        state.gist_index = 1;
+        state.local_cursor.index = 1; // >0 so Up fires
+        state.gist_cursor.index = 1;
         state.handle_key(KeyCode::Up);
-        assert_eq!(state.local_index, 0);
-        assert_eq!(state.gist_index, 0);
+        assert_eq!(state.local_cursor.index, 0);
+        assert_eq!(state.gist_cursor.index, 0);
     }
 
     #[test]
     fn moving_ranked_pane_does_not_reset_driver() {
         let mut state = list_state_with_matches();
         state.anchor = FocusPane::Local; // Local drives
-        state.local_index = 0;
+        state.local_cursor.index = 0;
         state.focus = FocusPane::Gist; // picking in the ranked gist pane
         state.handle_key(KeyCode::Down);
-        assert_eq!(state.gist_index, 1);
-        assert_eq!(state.local_index, 0); // driver NOT reset
+        assert_eq!(state.gist_cursor.index, 1);
+        assert_eq!(state.local_cursor.index, 0); // driver NOT reset
     }
 
     #[test]
@@ -1445,10 +1439,10 @@ mod tests {
         let mut state = list_state_with_matches();
         state.anchor = FocusPane::Local;
         state.focus = FocusPane::Local; // moving the driver
-        state.gist_index = 1;
+        state.gist_cursor.index = 1;
         state.handle_key(KeyCode::Down);
-        assert_eq!(state.local_index, 1);
-        assert_eq!(state.gist_index, 0); // ranked pane reset to top
+        assert_eq!(state.local_cursor.index, 1);
+        assert_eq!(state.gist_cursor.index, 0); // ranked pane reset to top
     }
 
     #[test]
@@ -1624,14 +1618,14 @@ mod tests {
             ..GistFile::fixture("a", "f.json")
         }];
         state.focus = FocusPane::Gist;
-        assert_eq!(state.gist_hscroll, 0);
+        assert_eq!(state.gist_cursor.hscroll, 0);
         state.handle_key(KeyCode::Left); // saturates at 0
-        assert_eq!(state.gist_hscroll, 0);
+        assert_eq!(state.gist_cursor.hscroll, 0);
         state.handle_key(KeyCode::Right);
         state.handle_key(KeyCode::Right);
-        assert_eq!(state.gist_hscroll, 2);
+        assert_eq!(state.gist_cursor.hscroll, 2);
         state.handle_key(KeyCode::Left);
-        assert_eq!(state.gist_hscroll, 1);
+        assert_eq!(state.gist_cursor.hscroll, 1);
     }
 
     #[test]
@@ -1655,7 +1649,7 @@ mod tests {
         for _ in 0..200 {
             state.handle_key(KeyCode::Right);
         }
-        assert_eq!(state.gist_hscroll, max);
+        assert_eq!(state.gist_cursor.hscroll, max);
     }
 
     #[test]
@@ -1694,20 +1688,20 @@ mod tests {
             state.handle_key(KeyCode::Right);
         }
         assert_eq!(
-            state.gist_hscroll, short_max,
+            state.gist_cursor.hscroll, short_max,
             "Right must stop at the selected row, not the longest row in the pane"
         );
         state.handle_key(KeyCode::Down);
         for _ in 0..200 {
             state.handle_key(KeyCode::Right);
         }
-        assert_eq!(state.gist_hscroll, long_max);
+        assert_eq!(state.gist_cursor.hscroll, long_max);
         state.handle_key(KeyCode::Up);
-        assert_eq!(state.gist_index, 0);
+        assert_eq!(state.gist_cursor.index, 0);
         assert!(
-            state.gist_hscroll <= short_max,
+            state.gist_cursor.hscroll <= short_max,
             "selected row must not stay scrolled past its own content (hscroll {}, max {})",
-            state.gist_hscroll,
+            state.gist_cursor.hscroll,
             short_max
         );
     }
@@ -1719,7 +1713,7 @@ mod tests {
             "/cwd/a-fairly-long-filename-for-scrolling.md",
         ]);
         state.focus = FocusPane::Local;
-        state.local_index = 0;
+        state.local_cursor.index = 0;
         let locals = state.visible_locals();
         let short_row = marked_row_text(
             local_row_label(&locals[0].candidate.path, &state.cwd),
@@ -1739,7 +1733,7 @@ mod tests {
             state.handle_key(KeyCode::Right);
         }
         assert_eq!(
-            state.local_hscroll, short_max,
+            state.local_cursor.hscroll, short_max,
             "Right must stop at the selected local row, not the longest row in the pane"
         );
     }
@@ -1779,7 +1773,7 @@ mod tests {
             state.handle_key(KeyCode::Right);
         }
         assert_eq!(
-            state.gist_hscroll, max,
+            state.gist_cursor.hscroll, max,
             "Right must reach the display-string max, not the star-less label max"
         );
     }
@@ -1803,9 +1797,22 @@ mod tests {
         ];
         state.focus = FocusPane::Gist;
         state.handle_key(KeyCode::Right);
-        assert_eq!(state.gist_hscroll, 1);
+        assert_eq!(
+            state.gist_cursor,
+            ListCursor {
+                index: 0,
+                hscroll: 1
+            }
+        );
         state.handle_key(KeyCode::Down);
-        assert_eq!(state.gist_hscroll, 0);
+        // The vertical move clears the offset in the same step it moves the selection.
+        assert_eq!(
+            state.gist_cursor,
+            ListCursor {
+                index: 1,
+                hscroll: 0
+            }
+        );
     }
 
     #[test]
@@ -1838,9 +1845,9 @@ mod tests {
                 modified: None,
             },
         ];
-        state.gist_index = 2;
+        state.gist_cursor.index = 2;
         state.handle_key(KeyCode::Down); // move local selection down
-        assert_eq!(state.gist_index, 0);
+        assert_eq!(state.gist_cursor.index, 0);
     }
 
     #[test]
@@ -2112,10 +2119,10 @@ mod tests {
         state.filtering = true;
 
         state.handle_key(KeyCode::Down);
-        assert_eq!(state.local_index, 1);
+        assert_eq!(state.local_cursor.index, 1);
         assert!(state.filtering); // still in filter input
         state.handle_key(KeyCode::Up);
-        assert_eq!(state.local_index, 0);
+        assert_eq!(state.local_cursor.index, 0);
     }
 
     #[test]
@@ -2162,10 +2169,10 @@ mod tests {
         let mut state = state_with_local_paths(&["/cwd/a.txt", "/cwd/ab.txt", "/cwd/abc.txt"]);
         state.focus = FocusPane::Local;
         state.filtering = true;
-        state.local_index = 2; // cursor not at top
+        state.local_cursor.index = 2; // cursor not at top
 
         state.handle_key(KeyCode::Char('a')); // edit -> reset to top
-        assert_eq!(state.local_index, 0);
+        assert_eq!(state.local_cursor.index, 0);
     }
 
     #[test]
@@ -2184,20 +2191,20 @@ mod tests {
     fn vim_j_k_move_list_selection() {
         let mut state = list_state_with_matches();
         state.focus = FocusPane::Gist;
-        state.gist_index = 0;
+        state.gist_cursor.index = 0;
         state.handle_key(KeyCode::Char('j'));
-        assert_eq!(state.gist_index, 1);
+        assert_eq!(state.gist_cursor.index, 1);
         state.handle_key(KeyCode::Char('k'));
-        assert_eq!(state.gist_index, 0);
+        assert_eq!(state.gist_cursor.index, 0);
     }
 
     #[test]
     fn vim_h_scrolls_focused_row_left() {
         let mut state = list_state_with_matches();
         state.focus = FocusPane::Gist;
-        state.gist_hscroll = 2;
+        state.gist_cursor.hscroll = 2;
         state.handle_key(KeyCode::Char('h'));
-        assert_eq!(state.gist_hscroll, 1);
+        assert_eq!(state.gist_cursor.hscroll, 1);
     }
 
     #[test]
@@ -2207,11 +2214,11 @@ mod tests {
         let mut state = state_with_local_paths(&path_refs);
         state.focus = FocusPane::Local;
         state.handle_key(KeyCode::PageDown);
-        assert_eq!(state.local_index, 10);
+        assert_eq!(state.local_cursor.index, 10);
         state.handle_key(KeyCode::PageDown);
-        assert_eq!(state.local_index, 14);
+        assert_eq!(state.local_cursor.index, 14);
         state.handle_key(KeyCode::PageUp);
-        assert_eq!(state.local_index, 4);
+        assert_eq!(state.local_cursor.index, 4);
     }
 
     #[test]
@@ -2224,7 +2231,7 @@ mod tests {
         state.filtering = true;
         state.local_filter_query.set("f");
         state.handle_key_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
-        assert_eq!(state.local_index, 10);
+        assert_eq!(state.local_cursor.index, 10);
         assert_eq!(state.local_filter_query, "f");
     }
 
@@ -2244,8 +2251,8 @@ mod tests {
             owner_login: "other".into(),
             ..GistFile::fixture("foreign", "a.txt")
         }];
-        state.local_index = 0;
-        state.gist_index = 0;
+        state.local_cursor.index = 0;
+        state.gist_cursor.index = 0;
         assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::None);
         assert!(state.status.as_ref().unwrap().contains("cannot pin"));
     }
@@ -2260,7 +2267,7 @@ mod tests {
             created_at: "x".into(),
             ..GistFile::fixture("g1", "a.txt")
         }];
-        state.gist_index = 0;
+        state.gist_cursor.index = 0;
         assert!(matches!(
             state.handle_key(KeyCode::Char('*')),
             KeyOutcome::ToggleGistStar { .. }
@@ -2364,7 +2371,7 @@ mod tests {
         let mut state = state_with_local_paths(&["a.rs", "b.rs"]);
         state.screen = Screen::List;
         state.focus = FocusPane::Gist;
-        state.local_index = 1;
+        state.local_cursor.index = 1;
         let mut layout = split_layout();
         // The local pane reaches the divider, so without the grab check this would focus it.
         layout.register_pane(
@@ -2379,7 +2386,7 @@ mod tests {
         state.handle_mouse(MouseInput::Click { col: 39, row: 5 }, &layout);
         assert!(state.mouse_session.is_dragging());
         assert_eq!(state.focus, FocusPane::Gist);
-        assert_eq!(state.local_index, 1);
+        assert_eq!(state.local_cursor.index, 1);
     }
 
     #[test]

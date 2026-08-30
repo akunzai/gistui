@@ -434,8 +434,8 @@ mod tests {
             "/cwd/CHANGELOG.md",
         ]);
         state.focus = FocusPane::Local;
-        state.local_index = 1;
-        state.local_hscroll = 6;
+        state.local_cursor.index = 1;
+        state.local_cursor.hscroll = 6;
         let text = render_state(&state);
         assert!(
             text.contains("AGENTS.md"),

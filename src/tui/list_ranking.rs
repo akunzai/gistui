@@ -78,7 +78,7 @@ impl AppState {
         // would recurse: selected_local → visible_locals → selected_gist → ranked_gists).
         let local_path = if self.anchor == FocusPane::Local {
             self.rank_local_files_for(None)
-                .get(self.local_index)
+                .get(self.local_cursor.index)
                 .map(|r| r.candidate.path.clone())
         } else {
             None
@@ -93,7 +93,7 @@ impl AppState {
         let gist = if self.anchor == FocusPane::Gist {
             self.rank_gist_files_for(None)
                 .into_iter()
-                .nth(self.gist_index)
+                .nth(self.gist_cursor.index)
                 .map(|r| r.file)
         } else {
             None
@@ -112,14 +112,14 @@ impl AppState {
             FocusPane::Local => {
                 let locals = self.rank_local_files_for(None);
                 let path = locals
-                    .get(self.local_index)
+                    .get(self.local_cursor.index)
                     .map(|r| r.candidate.path.as_path());
                 let gists = self.rank_gist_files_for(path);
                 (locals, gists)
             }
             FocusPane::Gist => {
                 let gists = self.rank_gist_files_for(None);
-                let gist = gists.get(self.gist_index).map(|r| &r.file);
+                let gist = gists.get(self.gist_cursor.index).map(|r| &r.file);
                 let locals = self.rank_local_files_for(gist);
                 (locals, gists)
             }
@@ -129,12 +129,12 @@ impl AppState {
     pub fn selected_local(&self) -> Option<LocalCandidate> {
         self.visible_locals()
             .into_iter()
-            .nth(self.local_index)
+            .nth(self.local_cursor.index)
             .map(|r| r.candidate)
     }
 
     pub fn selected_gist(&self) -> Option<RankedGistFile> {
-        self.ranked_gists().into_iter().nth(self.gist_index)
+        self.ranked_gists().into_iter().nth(self.gist_cursor.index)
     }
 
     /// Both selections from one dual-pane build. Prefer over calling
@@ -143,9 +143,9 @@ impl AppState {
         let (locals, gists) = self.list_pane_snapshots();
         let local = locals
             .into_iter()
-            .nth(self.local_index)
+            .nth(self.local_cursor.index)
             .map(|r| r.candidate);
-        let gist = gists.into_iter().nth(self.gist_index);
+        let gist = gists.into_iter().nth(self.gist_cursor.index);
         (local, gist)
     }
 }
@@ -161,7 +161,7 @@ mod tests {
     fn gist_ranking_follows_anchor_not_focus() {
         let mut state = list_state_with_matches();
         state.anchor = FocusPane::Local;
-        state.local_index = 0; // settings.json
+        state.local_cursor.index = 0; // settings.json
         state.focus = FocusPane::Gist; // focus moved away, but anchor still Local
         let ranked = state.ranked_gists();
         assert_eq!(ranked[0].file.filename, "settings.json");
@@ -186,7 +186,7 @@ mod tests {
                 modified: None,
             },
         ];
-        // The local pane reverse-ranks against the selected gist (gist_index 0).
+        // The local pane reverse-ranks against the selected gist (gist cursor index 0).
         let visible = state.visible_locals();
         assert_eq!(visible[0].candidate.path, PathBuf::from("settings.json"));
         assert_ne!(visible[0].mark, crate::ranking::MatchMark::None);
@@ -432,7 +432,7 @@ mod tests {
             state
                 .ranked_gists()
                 .into_iter()
-                .nth(state.gist_index)
+                .nth(state.gist_cursor.index)
                 .map(|g| g.file.filename),
         );
         assert_eq!(
@@ -440,7 +440,7 @@ mod tests {
             state
                 .visible_locals()
                 .into_iter()
-                .nth(state.local_index)
+                .nth(state.local_cursor.index)
                 .map(|r| r.candidate.path),
         );
         assert_eq!(state.ranked_gists()[0].file.filename, "settings.json");
@@ -454,7 +454,7 @@ mod tests {
             state
                 .ranked_gists()
                 .into_iter()
-                .nth(state.gist_index)
+                .nth(state.gist_cursor.index)
                 .map(|g| g.file.filename),
         );
         assert_eq!(
@@ -462,7 +462,7 @@ mod tests {
             state
                 .visible_locals()
                 .into_iter()
-                .nth(state.local_index)
+                .nth(state.local_cursor.index)
                 .map(|r| r.candidate.path),
         );
     }

@@ -382,7 +382,7 @@ mod tests {
         let mut state = state_with_two_gists();
         // Select the second gist's row in the main (file) list, then jump to the
         // gist-level view; it should land on that same gist.
-        state.gist_index = 1;
+        state.gist_cursor.index = 1;
         assert_eq!(state.handle_key(KeyCode::Char('g')), KeyOutcome::None);
         assert!(state.screen.is_gists());
         assert_eq!(gists_ref(&state).cursor.index, 1);
@@ -563,7 +563,7 @@ mod tests {
             ..GistFile::fixture("foreign", "a.txt")
         }];
         state.gist_type_filter = GistTypeFilter::Starred;
-        state.gist_index = 0;
+        state.gist_cursor.index = 0;
         assert_eq!(state.handle_key(KeyCode::Char('F')), KeyOutcome::None);
 
         state.screen = Screen::Gists(Box::default());

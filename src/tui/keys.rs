@@ -421,88 +421,50 @@ impl AppState {
     pub(crate) fn list_page_focused(&mut self, forward: bool) {
         let step = PAGE_SCROLL as usize;
         // One snapshot for the focused pane length (issue #224) — selection-index
-        // changes do not alter list length, so this is safe.
-        let (locals, ranked) = self.list_pane_snapshots();
-        match self.focus {
-            FocusPane::Local => {
-                let len = locals.len();
-                if len == 0 {
-                    return;
-                }
-                let max = len - 1;
-                self.local_index = if forward {
-                    (self.local_index + step).min(max)
-                } else {
-                    self.local_index.saturating_sub(step)
-                };
-                self.local_hscroll = 0;
-                if self.anchor == FocusPane::Local {
-                    self.reset_ranked_pane();
-                }
-            }
-            FocusPane::Gist => {
-                let len = ranked.len();
-                if len == 0 {
-                    return;
-                }
-                let max = len - 1;
-                self.gist_index = if forward {
-                    (self.gist_index + step).min(max)
-                } else {
-                    self.gist_index.saturating_sub(step)
-                };
-                self.gist_hscroll = 0;
-                if self.anchor == FocusPane::Gist {
-                    self.reset_ranked_pane();
-                }
-            }
+        // changes do not alter list length, so this is safe. Taken before the cursor
+        // borrow, per [`ListCursor`]'s bounds rule (issue #274).
+        let len = self.focused_pane_len();
+        if len == 0 {
+            return;
+        }
+        let cursor = self.focused_cursor_mut();
+        if forward {
+            cursor.page_down(len, step);
+        } else {
+            cursor.page_up(step);
+        }
+        // Paging re-ranks whether or not the index actually moved, unlike a single step.
+        if self.anchor == self.focus {
+            self.reset_ranked_pane();
         }
     }
 
     /// Move the selection in the focused list pane. `forward` advances toward the end of the
     /// list; otherwise it moves toward the top. Both directions clamp at the pane's bounds,
     /// reset the horizontal scroll, and re-rank the opposite pane when the focused pane is the
-    /// ranking anchor.
+    /// ranking anchor. A move that hits a bound changes nothing, and re-ranks nothing.
     pub(crate) fn list_move_focused(&mut self, forward: bool) {
-        // Length-only snapshot once per move (issue #224).
+        // Length-only snapshot once per move (issue #224), before the cursor borrow.
+        let len = self.focused_pane_len();
+        let cursor = self.focused_cursor_mut();
+        let before = cursor.index;
+        if forward {
+            cursor.down(len);
+        } else {
+            cursor.up();
+        }
+        let moved = self.focused_cursor().index != before;
+        if moved && self.anchor == self.focus {
+            self.reset_ranked_pane();
+        }
+    }
+
+    /// Row count of the focused List pane, taken from one `list_pane_snapshots` call.
+    fn focused_pane_len(&self) -> usize {
         let (locals, ranked) = self.list_pane_snapshots();
         match self.focus {
-            FocusPane::Local => {
-                let len = locals.len();
-                if forward {
-                    if self.local_index + 1 >= len {
-                        return;
-                    }
-                    self.local_index += 1;
-                } else {
-                    if self.local_index == 0 {
-                        return;
-                    }
-                    self.local_index -= 1;
-                }
-                self.local_hscroll = 0;
-                if self.anchor == FocusPane::Local {
-                    self.reset_ranked_pane();
-                }
-            }
-            FocusPane::Gist => {
-                let len = ranked.len();
-                if forward {
-                    if self.gist_index + 1 >= len {
-                        return;
-                    }
-                    self.gist_index += 1;
-                } else {
-                    if self.gist_index == 0 {
-                        return;
-                    }
-                    self.gist_index -= 1;
-                }
-                self.gist_hscroll = 0;
-                if self.anchor == FocusPane::Gist {
-                    self.reset_ranked_pane();
-                }
-            }
+            FocusPane::Local => locals.len(),
+            FocusPane::Gist => ranked.len(),
         }
     }
 
@@ -510,17 +472,10 @@ impl AppState {
     /// pane's selection and horizontal scroll.
     pub(crate) fn cycle_focused_sort(&mut self) {
         match self.focus {
-            FocusPane::Gist => {
-                self.gist_sort = self.gist_sort.next();
-                self.gist_index = 0;
-                self.gist_hscroll = 0;
-            }
-            FocusPane::Local => {
-                self.local_sort = self.local_sort.next();
-                self.local_index = 0;
-                self.local_hscroll = 0;
-            }
+            FocusPane::Gist => self.gist_sort = self.gist_sort.next(),
+            FocusPane::Local => self.local_sort = self.local_sort.next(),
         }
+        self.focused_cursor_mut().reset();
     }
 
     /// Open the gist-level manager (`Screen::Gists`), landing on the gist that owns the

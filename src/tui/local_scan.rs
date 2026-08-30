@@ -143,15 +143,17 @@ impl AppState {
         let resolved = want
             .as_deref()
             .and_then(|path| self.locals.iter().position(|c| c.path == path));
-        self.local_index = resolved
-            .unwrap_or(0)
-            .min(self.locals.len().saturating_sub(1));
-        if resolved.is_none() || want != previous {
-            self.local_hscroll = 0;
+        match resolved {
+            // The row selected before the rescan survived it: only the list moved under the
+            // cursor, so the offset still belongs to the row it is applied to — keep it.
+            Some(index) if want == previous => self.local_cursor.index = index,
+            // Landing on a different row (an explicit target, or a fallback to the top) is a
+            // selection: `ListCursor::select` clears the offset that belonged to the old row.
+            Some(index) => self.local_cursor.select(index),
+            None => self.local_cursor.select(0),
         }
-        if self.gist_index >= self.ranked_gists().len() {
-            self.gist_index = 0;
-            self.gist_hscroll = 0;
+        if self.gist_cursor.index >= self.ranked_gists().len() {
+            self.gist_cursor.reset();
         }
         true
     }
@@ -167,7 +169,7 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::initial_state;
+    use crate::tui::{initial_state, ListCursor};
 
     fn candidate(path: &str) -> LocalCandidate {
         LocalCandidate {
@@ -197,8 +199,8 @@ mod tests {
     fn apply_local_scan_preserves_selection_and_hscroll_when_the_path_survives() {
         let mut state = initial_state();
         state.locals = vec![candidate("a.txt"), candidate("b.txt")];
-        state.local_index = 1;
-        state.local_hscroll = 5;
+        state.local_cursor.index = 1;
+        state.local_cursor.hscroll = 5;
         let generation = state.begin_local_scan();
 
         assert!(state.apply_local_scan(
@@ -207,24 +209,30 @@ mod tests {
             None,
         ));
 
-        assert_eq!(state.locals[state.local_index].path, PathBuf::from("b.txt"));
-        assert_eq!(state.local_hscroll, 5, "same path survives, hscroll kept");
+        assert_eq!(
+            state.locals[state.local_cursor.index].path,
+            PathBuf::from("b.txt")
+        );
+        assert_eq!(
+            state.local_cursor.hscroll, 5,
+            "same path survives, hscroll kept"
+        );
     }
 
     #[test]
     fn apply_local_scan_clears_hscroll_when_selection_falls_back() {
         let mut state = initial_state();
         state.locals = vec![candidate("gone.txt")];
-        state.local_index = 0;
-        state.local_hscroll = 5;
+        state.local_cursor.index = 0;
+        state.local_cursor.hscroll = 5;
         let generation = state.begin_local_scan();
 
         assert!(state.apply_local_scan(generation, vec![candidate("other.txt")], None));
 
-        assert_eq!(state.local_index, 0);
         assert_eq!(
-            state.local_hscroll, 0,
-            "selection fell back, hscroll cleared"
+            state.local_cursor,
+            ListCursor::default(),
+            "selection fell back: index and hscroll reset together"
         );
     }
 
@@ -232,8 +240,8 @@ mod tests {
     fn apply_local_scan_clears_hscroll_when_an_explicit_target_changes_selection() {
         let mut state = initial_state();
         state.locals = vec![candidate("a.txt"), candidate("b.txt")];
-        state.local_index = 0;
-        state.local_hscroll = 5;
+        state.local_cursor.index = 0;
+        state.local_cursor.hscroll = 5;
         let generation = state.begin_local_scan();
 
         assert!(state.apply_local_scan(
@@ -242,9 +250,12 @@ mod tests {
             Some(Path::new("b.txt")),
         ));
 
-        assert_eq!(state.locals[state.local_index].path, PathBuf::from("b.txt"));
         assert_eq!(
-            state.local_hscroll, 0,
+            state.locals[state.local_cursor.index].path,
+            PathBuf::from("b.txt")
+        );
+        assert_eq!(
+            state.local_cursor.hscroll, 0,
             "target moved selection, hscroll cleared"
         );
     }
