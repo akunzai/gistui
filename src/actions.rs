@@ -593,9 +593,8 @@ pub fn record_sync(
     hash: &str,
     direction: Option<SyncDirection>,
 ) -> Result<AppConfig> {
-    if let Some(mapping) = config.pinned.iter_mut().find(|m| {
-        m.local_path == local_path && m.gist_id == gist_id && m.gist_filename == gist_filename
-    }) {
+    let key = crate::pins::PinKey::new(local_path, gist_id, gist_filename);
+    if let Some(mapping) = crate::pins::find_mut(&mut config.pinned, key) {
         mapping.last_seen_hash = Some(hash.to_string());
         if let Some(direction) = direction {
             mapping.direction = Some(direction);

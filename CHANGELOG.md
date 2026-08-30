@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Pinning one local file to a second gist file no longer deletes the first pin, and unpinning
+  now removes only the pair you selected instead of every pin sharing that local path. A pin is
+  identified by the local path *and* the gist file it points at, so one local file can be pinned
+  to several gist files at once. The status line says which pair it unpinned.
+
 ## [0.19.0] — 2026-08-29
 
 - The interface drops its emoji (GitHub's release-note categories keep theirs). Gist rows now read `3 files`, `1 comment`, and a trailing
