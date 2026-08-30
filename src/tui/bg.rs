@@ -802,10 +802,19 @@ pub(super) fn pin_paths(
     }
 }
 
-pub(super) fn unpin_path(state: &mut AppState, local_path: &std::path::Path) {
+pub(super) fn unpin_path(
+    state: &mut AppState,
+    local_path: &std::path::Path,
+    gist_id: &str,
+    filename: &str,
+) {
     let result = crate::config::config_path().and_then(|path| {
         let config = crate::config::load_config(&path)?;
-        crate::actions::unpin_mapping(&path, config, local_path)
+        crate::actions::unpin_mapping(
+            &path,
+            config,
+            crate::pins::PinKey::new(local_path, gist_id, filename),
+        )
     });
     match result {
         Ok(config) => {
@@ -813,8 +822,9 @@ pub(super) fn unpin_path(state: &mut AppState, local_path: &std::path::Path) {
             state.skip_dirs = config.skip_dirs;
             state.mark_pin_sync_cache_dirty();
             state.set_status(format!(
-                "Unpinned {}",
-                crate::config::display_path(local_path)
+                "Unpinned {} <-> {}",
+                crate::config::display_path(local_path),
+                filename
             ));
         }
         Err(error) => state.set_status(format!("unpin failed: {error}")),
@@ -829,7 +839,7 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
     let label = crate::config::display_path(&mapping.local_path);
     let result = crate::config::config_path().and_then(|path| {
         let config = crate::config::load_config(&path)?;
-        crate::actions::unpin_mapping_exact(&path, config, &mapping.local_path, &mapping.gist_id)
+        crate::actions::unpin_mapping(&path, config, mapping.key())
     });
     match result {
         Ok(config) => {
@@ -843,7 +853,7 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
             // No filesystem rescan: unpin never touches the filesystem, and ranking reads
             // `PinnedMapping` directly — a forced-flat rescan here used to make the local
             // list drift back to cwd-only even while recursive mode was active (issue #409).
-            state.set_status(format!("Unpinned {label}"));
+            state.set_status(format!("Unpinned {label} <-> {}", mapping.gist_filename));
         }
         Err(error) => state.set_status(format!("unpin failed: {error}")),
     }

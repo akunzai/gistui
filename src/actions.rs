@@ -605,36 +605,16 @@ pub fn record_sync(
     Ok(config)
 }
 
+/// Removes the one pin named by `key`, leaving its siblings on the same local path in
+/// place. Persists only when something was actually removed.
 pub fn unpin_mapping(
     config_path: &Path,
     mut config: AppConfig,
-    local_path: &Path,
+    key: crate::pins::PinKey<'_>,
 ) -> Result<AppConfig> {
-    config
-        .pinned
-        .retain(|mapping| mapping.local_path != local_path);
-    save_config(config_path, &config)?;
-    Ok(config)
-}
-
-/// Removes exactly the first entry whose `local_path` and `gist_id` both match.
-/// Used by the pins view to unpin a single row without affecting sibling entries.
-pub fn unpin_mapping_exact(
-    config_path: &Path,
-    mut config: AppConfig,
-    local_path: &Path,
-    gist_id: &str,
-) -> Result<AppConfig> {
-    let mut removed = false;
-    config.pinned.retain(|m| {
-        if !removed && m.local_path == local_path && m.gist_id == gist_id {
-            removed = true;
-            false
-        } else {
-            true
-        }
-    });
-    save_config(config_path, &config)?;
+    if crate::pins::remove(&mut config.pinned, key) {
+        save_config(config_path, &config)?;
+    }
     Ok(config)
 }
 
@@ -1039,8 +1019,10 @@ mod tests {
         assert!(matches!(DownloadMode::CreateNew, DownloadMode::CreateNew));
     }
 
+    /// Sibling selection and no-match behaviour are `crate::pins`' tests; this one only
+    /// checks that a successful unpin reaches `config.toml`.
     #[test]
-    fn unpin_mapping_removes_mapping_for_local_path() {
+    fn unpin_mapping_persists_the_removal() {
         let dir = tempfile::tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
         let local_path = dir.path().join("settings.json");
@@ -1057,55 +1039,15 @@ mod tests {
         .unwrap();
         assert_eq!(config.pinned.len(), 1);
 
-        let config = unpin_mapping(&config_path, config, &local_path).unwrap();
+        let config = unpin_mapping(
+            &config_path,
+            config,
+            crate::pins::PinKey::new(&local_path, &target.gist_id, &target.filename),
+        )
+        .unwrap();
+
         assert!(config.pinned.is_empty());
-        let loaded = load_config(&config_path).unwrap();
-        assert!(loaded.pinned.is_empty());
-    }
-
-    #[test]
-    fn unpin_mapping_exact_removes_only_matching_local_and_gist() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("config.toml");
-        let mut config = AppConfig::default();
-        // Same local path pinned to two different gists — exact unpin must remove only the
-        // named gist and leave the other pin intact.
-        for gid in ["g1", "g2"] {
-            config.pinned.push(PinnedMapping {
-                local_path: PathBuf::from("/tmp/a.txt"),
-                gist_id: gid.into(),
-                gist_filename: "a.txt".into(),
-                direction: None,
-                last_seen_hash: None,
-            });
-        }
-
-        let config =
-            unpin_mapping_exact(&config_path, config, Path::new("/tmp/a.txt"), "g1").unwrap();
-        assert_eq!(config.pinned.len(), 1);
-        assert_eq!(config.pinned[0].gist_id, "g2");
-        let loaded = load_config(&config_path).unwrap();
-        assert_eq!(loaded.pinned.len(), 1);
-        assert_eq!(loaded.pinned[0].gist_id, "g2");
-    }
-
-    #[test]
-    fn unpin_mapping_exact_no_match_leaves_pins_unchanged() {
-        let dir = tempfile::tempdir().unwrap();
-        let config_path = dir.path().join("config.toml");
-        let mut config = AppConfig::default();
-        config.pinned.push(PinnedMapping {
-            local_path: PathBuf::from("/tmp/a.txt"),
-            gist_id: "g1".into(),
-            gist_filename: "a.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-        });
-
-        let config =
-            unpin_mapping_exact(&config_path, config, Path::new("/tmp/a.txt"), "nope").unwrap();
-        assert_eq!(config.pinned.len(), 1);
-        assert_eq!(config.pinned[0].gist_id, "g1");
+        assert!(load_config(&config_path).unwrap().pinned.is_empty());
     }
 
     #[test]

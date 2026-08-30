@@ -188,9 +188,9 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
         } => pin_paths(state, &local_path, &gist_id, &filename),
         KeyOutcome::Unpin {
             local_path,
-            gist_id: _,
-            filename: _,
-        } => unpin_path(state, &local_path),
+            gist_id,
+            filename,
+        } => unpin_path(state, &local_path, &gist_id, &filename),
         KeyOutcome::UploadAdd {
             local_path,
             gist_id,
