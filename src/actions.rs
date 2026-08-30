@@ -593,6 +593,8 @@ pub fn record_sync(
     hash: &str,
     direction: Option<SyncDirection>,
 ) -> Result<AppConfig> {
+    // Deliberately not `pins::upsert`: that would *create* a pin for an unpinned pair, and
+    // confirming a sync must never be what pins something. Only an existing pin is updated.
     let key = crate::pins::PinKey::new(local_path, gist_id, gist_filename);
     if let Some(mapping) = crate::pins::find_mut(&mut config.pinned, key) {
         mapping.last_seen_hash = Some(hash.to_string());
@@ -605,16 +607,18 @@ pub fn record_sync(
 }
 
 /// Removes the one pin named by `key`, leaving its siblings on the same local path in
-/// place. Persists only when something was actually removed.
+/// place. Persists only when something was actually removed, and reports which happened so
+/// the caller does not tell the user a pin was removed when none matched.
 pub fn unpin_mapping(
     config_path: &Path,
     mut config: AppConfig,
     key: crate::pins::PinKey<'_>,
-) -> Result<AppConfig> {
-    if crate::pins::remove(&mut config.pinned, key) {
+) -> Result<(AppConfig, bool)> {
+    let removed = crate::pins::remove(&mut config.pinned, key);
+    if removed {
         save_config(config_path, &config)?;
     }
-    Ok(config)
+    Ok((config, removed))
 }
 
 #[cfg(test)]
@@ -1038,13 +1042,14 @@ mod tests {
         .unwrap();
         assert_eq!(config.pinned.len(), 1);
 
-        let config = unpin_mapping(
+        let (config, removed) = unpin_mapping(
             &config_path,
             config,
             crate::pins::PinKey::new(&local_path, &target.gist_id, &target.filename),
         )
         .unwrap();
 
+        assert!(removed);
         assert!(config.pinned.is_empty());
         assert!(load_config(&config_path).unwrap().pinned.is_empty());
     }
