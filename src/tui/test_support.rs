@@ -228,3 +228,12 @@ pub(super) fn pins_state_with_long_home_path() -> AppState {
     pins_mut(&mut state).cursor.index = 0;
     state
 }
+
+/// An idle [`Jobs`] for tests that call into `dispatch`'s routing layer (issue #421).
+///
+/// `Jobs::startup`'s `fetch_gists` flag is what keeps `GistRefresh::new` from calling
+/// `start` — pass `false` and no thread is spawned, so a test can hand a real `Jobs` to
+/// `route_outcome` and still assert that an arm returned early without starting work.
+pub(super) fn idle_jobs() -> super::bg::Jobs {
+    super::bg::Jobs::startup(None, false, &crate::domain::GistCatalog::default())
+}

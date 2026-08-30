@@ -693,3 +693,140 @@ fn apply_sync_status(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{GistFile, LocalCandidate, PinnedMapping};
+    use crate::tui::test_support::idle_jobs;
+    use std::path::PathBuf;
+
+    /// A pinned `/cwd/a.txt` ↔ `g1:a.txt` pair. `local_mtime` and `remote_updated_at`
+    /// are the only inputs `compute_pin_sync_status` reads for a hash-less mapping, so
+    /// varying them alone walks `apply_sync_status` through its non-spawning arms.
+    fn state_with_one_pin(
+        cwd: PathBuf,
+        local_mtime: Option<u64>,
+        remote_updated_at: Option<&str>,
+    ) -> AppState {
+        let mut state = initial_state();
+        state.cwd = cwd;
+        state.pinned = vec![PinnedMapping {
+            local_path: PathBuf::from("a.txt"),
+            gist_id: "g1".into(),
+            gist_filename: "a.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+        if let Some(modified) = local_mtime {
+            state.locals = vec![LocalCandidate {
+                path: PathBuf::from("a.txt"),
+                modified: Some(modified),
+            }];
+        }
+        if let Some(updated_at) = remote_updated_at {
+            state.gist_catalog.owned = vec![GistFile {
+                updated_at: updated_at.into(),
+                ..GistFile::fixture("g1", "a.txt")
+            }];
+        }
+        state
+    }
+
+    fn route(state: &mut AppState, outcome: KeyOutcome) -> LoopFlow {
+        route_outcome(outcome, state, &mut idle_jobs())
+    }
+
+    // ---- apply_sync_status's non-spawning arms ---------------------------
+
+    #[test]
+    fn sync_pin_auto_reports_in_sync_when_both_sides_share_an_mtime() {
+        let updated_at = "2026-06-10T00:00:00Z";
+        let ts = crate::domain::parse_rfc3339_to_unix(updated_at).unwrap();
+        let mut state = state_with_one_pin(PathBuf::from("/cwd"), Some(ts), Some(updated_at));
+        let entry = state.defer_entry();
+
+        route(&mut state, KeyOutcome::SyncPinAuto { entry, index: 0 });
+
+        assert_eq!(state.status.as_deref(), Some("already in sync"));
+        assert!(state.bg_task_msg.is_none(), "InSync must not spawn");
+    }
+
+    #[test]
+    fn sync_pin_auto_reports_a_missing_local_file() {
+        // `pin_mtimes` falls back to stat-ing the path when `locals` has no match, so the
+        // cwd must really be empty rather than merely improbable — hence a temp dir.
+        let cwd = tempfile::tempdir().unwrap();
+        let mut state =
+            state_with_one_pin(cwd.path().to_path_buf(), None, Some("2026-06-10T00:00:00Z"));
+        let entry = state.defer_entry();
+
+        route(&mut state, KeyOutcome::SyncPinAuto { entry, index: 0 });
+
+        assert_eq!(
+            state.status.as_deref(),
+            Some("local file is missing — use d to pull it back")
+        );
+        assert!(state.bg_task_msg.is_none(), "Missing must not spawn");
+    }
+
+    #[test]
+    fn sync_pin_auto_reports_unknown_when_the_gist_side_is_absent() {
+        let mut state = state_with_one_pin(PathBuf::from("/cwd"), Some(1_780_000_000), None);
+        let entry = state.defer_entry();
+
+        route(&mut state, KeyOutcome::SyncPinAuto { entry, index: 0 });
+
+        assert_eq!(
+            state.status.as_deref(),
+            Some("can't tell which side is newer — use u to push or d to pull")
+        );
+        assert!(state.bg_task_msg.is_none(), "Unknown must not spawn");
+    }
+
+    // ---- early returns ----------------------------------------------------
+
+    #[test]
+    fn fork_gist_on_an_owned_gist_returns_before_spawning() {
+        let mut state = test_support::state_with_gists();
+
+        route(
+            &mut state,
+            KeyOutcome::ForkGist {
+                gist_id: "g1".into(),
+            },
+        );
+
+        assert_eq!(
+            state.status.as_deref(),
+            Some("already yours — no fork needed")
+        );
+        assert!(
+            state.bg_task_msg.is_none(),
+            "an owned gist must not be forked"
+        );
+    }
+
+    /// The listed-not-wildcarded arm guards new variants; this guards the other
+    /// direction, where an arm is dropped from `dispatch_outcome` and would otherwise
+    /// become a silent no-op.
+    #[test]
+    #[should_panic(expected = "must keep its arm")]
+    fn a_terminal_bearing_outcome_reaching_route_outcome_trips_the_assert() {
+        let mut state = initial_state();
+        route(&mut state, KeyOutcome::EditUpload);
+    }
+
+    #[test]
+    fn execute_delete_without_a_pending_action_spawns_nothing() {
+        let mut state = test_support::state_with_gists();
+
+        route(&mut state, KeyOutcome::ExecuteDelete);
+
+        assert!(state.pending_action().is_none());
+        assert!(
+            state.bg_task_msg.is_none(),
+            "a delete with nothing pending must not reach gh"
+        );
+    }
+}
