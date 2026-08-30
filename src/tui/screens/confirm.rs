@@ -3,10 +3,12 @@
 
 use crate::tui::bg::LoopFlow;
 use crate::tui::gist_content::{ContentLookup, FetchPolicy};
-use crate::tui::view_model::{ConfirmBackgroundVm, ConfirmModalKind, ConfirmVm};
+use crate::tui::view_model::{
+    ConfirmBackgroundVm, ConfirmKeyVm, ConfirmModalKind, ConfirmPromptVm, ConfirmVm,
+};
 use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PendingAction, Screen};
 use crossterm::event::KeyCode;
-use ratatui::{style::Color, Frame};
+use ratatui::Frame;
 use std::path::PathBuf;
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::List;
@@ -137,7 +139,11 @@ impl AppState {
                 }
                 _ => {}
             },
-            _ => {
+            // Exhaustive over `PendingAction` (issue #417): a new variant that forgets its
+            // arm fails to compile rather than silently landing here with no `y` binding.
+            // `None` means "not on the Confirm screen", which `screens::lookup` never routes
+            // here — handled defensively, not as an eighth kind of confirmation.
+            None => {
                 if matches!(code, KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('q')) {
                     self.cancel_confirm();
                 }
@@ -147,52 +153,205 @@ impl AppState {
     }
 }
 
+/// Everything the confirm modal shows, as one exhaustive match on the pending action:
+/// each row carries that action's title, border colour, body, and background together
+/// (issue #417).
+///
+/// There is deliberately no wildcard arm. A new [`PendingAction`] that forgets its row
+/// fails to compile, so it can never silently inherit another action's prompt — the
+/// failure this replaced, where an unhandled action rendered the overwrite gate's
+/// "Overwrite …? The local file is replaced" in destructive red.
+///
+/// Destructive actions (delete, remove, compact, overwrite) wear `del_color`, lead their
+/// keys with `n cancel`, and spell out what cannot be undone; the rest lead with their own
+/// verb on the neutral `notice_color`.
 pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
-    let (title, border) = confirm_modal_style(state);
-    let kind = if matches!(state.pending_action(), Some(PendingAction::Create { .. }))
-        && state.editing_description
-    {
-        ConfirmModalKind::DescriptionInput {
-            prefix: crate::tui::render::CREATE_DESC_PREFIX,
-            input: state.description_input.clone(),
-            keys: crate::tui::view_model::description_input_keys(),
-        }
-    } else {
-        ConfirmModalKind::Prompt(crate::tui::view_model::confirm_prompt(state))
+    let theme = state.settings.theme();
+    let cancel = || ConfirmKeyVm::new("n", "cancel");
+    let Some(action) = state.pending_action() else {
+        // Unreachable through `screens::lookup`, which routes here only for
+        // `Screen::Confirm`, and `ConfirmState::action` is not optional. Paint an empty
+        // modal rather than panic in the render path.
+        return ConfirmVm {
+            title: "Confirm",
+            border: theme.notice_color,
+            kind: ConfirmModalKind::Prompt(ConfirmPromptVm::default()),
+            background: ConfirmBackgroundVm::Empty,
+        };
     };
-    let background = match state.pending_action() {
-        Some(PendingAction::CompactGist { gist_id, .. }) => {
-            match crate::tui::view_model::build_compact_gist_bg_vm(state, gist_id) {
+    match action {
+        PendingAction::Download => ConfirmVm {
+            title: "Overwrite",
+            border: theme.del_color,
+            kind: ConfirmModalKind::Prompt(ConfirmPromptVm {
+                question: format!(
+                    "Overwrite {}?",
+                    crate::config::display_path(&state.download_target())
+                ),
+                detail: Some("The local file is replaced with the gist's content.".to_string()),
+                keys: vec![cancel(), ConfirmKeyVm::new("y", "overwrite")],
+                options: Vec::new(),
+            }),
+            background: diff_background(state),
+        },
+        PendingAction::Upload {
+            gist_id,
+            filename,
+            local_path,
+        } => ConfirmVm {
+            title: "Upload",
+            border: theme.notice_color,
+            kind: ConfirmModalKind::Prompt(upload_prompt(state, gist_id, filename, local_path)),
+            background: diff_background(state),
+        },
+        // Two steps, one row: the description editor first, then the visibility choice.
+        PendingAction::Create { .. } if state.editing_description => ConfirmVm {
+            title: "Description",
+            border: theme.accent,
+            kind: ConfirmModalKind::DescriptionInput {
+                prefix: crate::tui::render::CREATE_DESC_PREFIX,
+                input: state.description_input.clone(),
+                keys: crate::tui::view_model::description_input_keys(),
+            },
+            background: diff_background(state),
+        },
+        PendingAction::Create { local_path } => ConfirmVm {
+            title: "Create gist",
+            border: theme.notice_color,
+            kind: ConfirmModalKind::Prompt(ConfirmPromptVm {
+                question: format!(
+                    "Create a gist from {}?",
+                    crate::config::display_path(local_path)
+                ),
+                detail: Some(if state.description_input.is_empty() {
+                    "No description.".to_string()
+                } else {
+                    format!("Description: {}", state.description_input)
+                }),
+                keys: vec![
+                    ConfirmKeyVm::new("s", "secret"),
+                    ConfirmKeyVm::new("p", "public"),
+                    ConfirmKeyVm::new("Esc", "cancel"),
+                ],
+                options: Vec::new(),
+            }),
+            background: diff_background(state),
+        },
+        PendingAction::Delete { gist_id, label } => ConfirmVm {
+            title: "Delete",
+            border: theme.del_color,
+            kind: ConfirmModalKind::Prompt(ConfirmPromptVm {
+                question: format!("Permanently delete \"{label}\"?"),
+                detail: Some(format!("gist {gist_id} — every file in it goes with it.")),
+                keys: vec![cancel(), ConfirmKeyVm::new("y", "delete")],
+                options: Vec::new(),
+            }),
+            background: diff_background(state),
+        },
+        PendingAction::RemoveFile {
+            gist_id, filename, ..
+        } => ConfirmVm {
+            title: "Remove file",
+            border: theme.del_color,
+            kind: ConfirmModalKind::Prompt(ConfirmPromptVm {
+                question: format!("Remove {filename} from this gist?"),
+                detail: Some(format!("gist {gist_id} — the file is deleted remotely.")),
+                keys: vec![cancel(), ConfirmKeyVm::new("y", "remove")],
+                options: Vec::new(),
+            }),
+            background: diff_background(state),
+        },
+        PendingAction::CompactGist {
+            gist_id,
+            label,
+            count,
+        } => ConfirmVm {
+            title: "Compact revisions",
+            border: theme.del_color,
+            kind: ConfirmModalKind::Prompt(ConfirmPromptVm {
+                question: format!("Compact {count} revisions of \"{label}\" into one?"),
+                detail: Some("This force-pushes and cannot be undone.".to_string()),
+                keys: vec![cancel(), ConfirmKeyVm::new("y", "compact")],
+                options: Vec::new(),
+            }),
+            // The only action with its own backdrop: the revisions about to collapse.
+            background: match crate::tui::view_model::build_compact_gist_bg_vm(state, gist_id) {
                 Some(bg) => ConfirmBackgroundVm::CompactGist(bg),
                 None => ConfirmBackgroundVm::Empty,
-            }
-        }
-        _ => ConfirmBackgroundVm::Diff(crate::tui::screens::diff::build_diff_vm(state)),
-    };
-    ConfirmVm {
-        title,
-        border,
-        kind,
-        background,
+            },
+        },
+        PendingAction::RestoreRevision {
+            filename,
+            version_label,
+            ..
+        } => ConfirmVm {
+            title: "Restore revision",
+            border: theme.notice_color,
+            kind: ConfirmModalKind::Prompt(ConfirmPromptVm {
+                question: format!("Restore {filename} to revision {version_label}?"),
+                detail: Some("The old content is uploaded as a new revision.".to_string()),
+                keys: vec![ConfirmKeyVm::new("y", "restore"), cancel()],
+                options: Vec::new(),
+            }),
+            background: diff_background(state),
+        },
     }
 }
 
-/// Title and border colour for the confirm modal. Destructive actions are tinted with the
-/// theme's `del_color` so the stakes read at a glance; non-destructive writes use the neutral
-/// `notice_color` prompt.
-pub(crate) fn confirm_modal_style(state: &AppState) -> (&'static str, Color) {
-    let theme = &state.settings.theme();
-    match state.pending_action() {
-        Some(PendingAction::Create { .. }) if state.editing_description => {
-            ("Description", theme.accent)
-        }
-        Some(PendingAction::Create { .. }) => ("Create gist", theme.notice_color),
-        Some(PendingAction::Upload { .. }) => ("Upload", theme.notice_color),
-        Some(PendingAction::Delete { .. }) => ("Delete", theme.del_color),
-        Some(PendingAction::RemoveFile { .. }) => ("Remove file", theme.del_color),
-        Some(PendingAction::CompactGist { .. }) => ("Compact revisions", theme.del_color),
-        Some(PendingAction::RestoreRevision { .. }) => ("Restore revision", theme.notice_color),
-        _ => ("Overwrite", theme.del_color),
+/// The upload question: a spinner while the external editor is still open, otherwise the
+/// upload prompt plus the JSON toggles the keys actually honour.
+fn upload_prompt(
+    state: &AppState,
+    gist_id: &str,
+    filename: &str,
+    local_path: &std::path::Path,
+) -> ConfirmPromptVm {
+    if state.upload.watching {
+        return ConfirmPromptVm {
+            question: format!(
+                "{} Waiting for the editor to close…",
+                crate::tui::render::spinner_glyph(state.spinner_frame)
+            ),
+            detail: Some(format!("Editing {filename} before upload.")),
+            keys: vec![ConfirmKeyVm::new("n", "cancel")],
+            options: Vec::new(),
+        };
+    }
+    let edit_label = if state.upload.edited_content.is_some() {
+        "edit first [edited]"
+    } else {
+        "edit first"
+    };
+    // Offered only for JSON, because `p` / `s` are guarded on the same predicate.
+    let options = if AppState::is_json_file(local_path) {
+        vec![
+            ConfirmKeyVm::new("p", format!("pretty {}", on_off(state.upload.json_pretty))),
+            ConfirmKeyVm::new("s", format!("sort {}", on_off(state.upload.json_sort))),
+        ]
+    } else {
+        Vec::new()
+    };
+    ConfirmPromptVm {
+        question: format!("Upload {filename} to gist {gist_id}?"),
+        detail: None,
+        keys: vec![
+            ConfirmKeyVm::new("y", "upload"),
+            ConfirmKeyVm::new("n", "cancel"),
+            ConfirmKeyVm::new("e", edit_label),
+        ],
+        options,
+    }
+}
+
+fn diff_background(state: &AppState) -> ConfirmBackgroundVm {
+    ConfirmBackgroundVm::Diff(crate::tui::screens::diff::build_diff_vm(state))
+}
+
+fn on_off(flag: bool) -> &'static str {
+    if flag {
+        "[on]"
+    } else {
+        "[off]"
     }
 }
 
@@ -395,10 +554,282 @@ mod tests {
         detail_mut, gist_file_ref, gists_mut, pins_mut, set_diff_body, set_pending,
         state_ready_to_create, state_with_gists,
     };
-    use crate::tui::view_model::confirm_prompt;
+    use crate::tui::view_model::description_input_keys;
     use crate::tui::*;
     use crossterm::event::KeyCode;
+    use ratatui::style::Color;
     use std::path::PathBuf;
+
+    // Every confirm assertion below enters through `build_confirm_vm`, the screen's
+    // view-model column in `screens::lookup` (issue #417). The title, border, body and
+    // background it returns are the modal's whole presentation, so nothing needs to reach
+    // past it into how that presentation is assembled.
+    fn confirm_vm(state: &AppState) -> ConfirmVm {
+        build_confirm_vm(state)
+    }
+
+    fn style(state: &AppState) -> (&'static str, Color) {
+        let vm = confirm_vm(state);
+        (vm.title, vm.border)
+    }
+
+    fn prompt_vm(state: &AppState) -> ConfirmPromptVm {
+        match confirm_vm(state).kind {
+            ConfirmModalKind::Prompt(prompt) => prompt,
+            other => panic!("expected a prompt body, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn confirm_vm_covers_each_pending_action() {
+        let mut state = initial_state();
+        let keys = |state: &AppState| {
+            prompt_vm(state)
+                .keys
+                .iter()
+                .map(|k| format!("{} {}", k.key, k.label))
+                .collect::<Vec<_>>()
+        };
+
+        state.enter_diff(
+            String::new(),
+            String::new(),
+            PathBuf::new(),
+            PathBuf::from("notes.txt"),
+        );
+        state.enter_confirm_from_diff(PendingAction::Download);
+        let prompt = prompt_vm(&state);
+        assert_eq!(prompt.question, "Overwrite notes.txt?");
+        // Destructive: cancel leads, and the consequence is stated rather than left to the
+        // border colour (see `docs/design.md`).
+        assert_eq!(keys(&state), ["n cancel", "y overwrite"]);
+        assert!(prompt.detail.is_some());
+        assert_eq!(style(&state), ("Overwrite", Color::Red));
+
+        set_pending(
+            &mut state,
+            PendingAction::Delete {
+                gist_id: "abc".into(),
+                label: "my config".into(),
+            },
+        );
+        let prompt = prompt_vm(&state);
+        assert_eq!(prompt.question, "Permanently delete \"my config\"?");
+        assert!(prompt.detail.unwrap().contains("abc"));
+        assert_eq!(keys(&state), ["n cancel", "y delete"]);
+        assert_eq!(style(&state), ("Delete", Color::Red));
+
+        set_pending(
+            &mut state,
+            PendingAction::RemoveFile {
+                gist_id: "abc".into(),
+                filename: "main.rs".into(),
+                label: "my config".into(),
+            },
+        );
+        assert_eq!(keys(&state), ["n cancel", "y remove"]);
+
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "g1".into(),
+                filename: "main.rs".into(),
+                local_path: PathBuf::from("main.rs"),
+            },
+        );
+        let prompt = prompt_vm(&state);
+        assert_eq!(prompt.question, "Upload main.rs to gist g1?");
+        // Not destructive: the action's own verb leads, and a non-JSON file offers no toggles.
+        assert_eq!(keys(&state), ["y upload", "n cancel", "e edit first"]);
+        assert!(prompt.options.is_empty());
+        assert_eq!(style(&state), ("Upload", Color::Yellow));
+
+        set_pending(
+            &mut state,
+            PendingAction::CompactGist {
+                gist_id: "abc".into(),
+                label: "my config".into(),
+                count: 4,
+            },
+        );
+        let prompt = prompt_vm(&state);
+        assert_eq!(
+            prompt.question,
+            "Compact 4 revisions of \"my config\" into one?"
+        );
+        assert_eq!(
+            prompt.detail.as_deref(),
+            Some("This force-pushes and cannot be undone.")
+        );
+        assert_eq!(keys(&state), ["n cancel", "y compact"]);
+        assert_eq!(style(&state), ("Compact revisions", Color::Red));
+    }
+
+    /// The exhaustive match in `build_confirm_vm` guarantees every pending action has a
+    /// row; it cannot guarantee the row was filled in, and an empty question compiles fine.
+    /// This walks all of them, including the create flow's description step (issue #417).
+    #[test]
+    fn every_pending_action_has_a_question_and_a_resolving_key() {
+        let mut state = initial_state();
+        state.screen = Screen::Confirm(Box::default());
+        let actions = [
+            ("Download", PendingAction::Download),
+            (
+                "Upload",
+                PendingAction::Upload {
+                    gist_id: "g1".into(),
+                    filename: "a.txt".into(),
+                    local_path: PathBuf::from("a.txt"),
+                },
+            ),
+            (
+                "Create",
+                PendingAction::Create {
+                    local_path: PathBuf::from("a.txt"),
+                },
+            ),
+            (
+                "Delete",
+                PendingAction::Delete {
+                    gist_id: "g1".into(),
+                    label: "my config".into(),
+                },
+            ),
+            (
+                "RemoveFile",
+                PendingAction::RemoveFile {
+                    gist_id: "g1".into(),
+                    filename: "a.txt".into(),
+                    label: "my config".into(),
+                },
+            ),
+            (
+                "CompactGist",
+                PendingAction::CompactGist {
+                    gist_id: "g1".into(),
+                    label: "my config".into(),
+                    count: 4,
+                },
+            ),
+            (
+                "RestoreRevision",
+                PendingAction::RestoreRevision {
+                    gist_id: "g1".into(),
+                    filename: "a.txt".into(),
+                    version: "oldsha".into(),
+                    version_label: "oldsha (3d ago)".into(),
+                    content: "old\n".into(),
+                },
+            ),
+        ];
+
+        for editing_description in [false, true] {
+            state.editing_description = editing_description;
+            for (name, action) in actions.clone() {
+                set_pending(&mut state, action);
+                let vm = confirm_vm(&state);
+                assert!(
+                    !vm.title.is_empty(),
+                    "{name} (editing={editing_description}): no title"
+                );
+                let keys = match &vm.kind {
+                    ConfirmModalKind::Prompt(prompt) => {
+                        assert!(
+                            !prompt.question.trim().is_empty(),
+                            "{name} (editing={editing_description}): empty question"
+                        );
+                        &prompt.keys
+                    }
+                    ConfirmModalKind::DescriptionInput { keys, .. } => keys,
+                };
+                assert!(
+                    !keys.is_empty(),
+                    "{name} (editing={editing_description}): no key resolves the modal"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn upload_confirm_offers_json_toggles_only_for_json() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "g1".into(),
+                filename: "settings.json".into(),
+                local_path: PathBuf::from("settings.json"),
+            },
+        );
+        state.upload.json_pretty = true;
+        let options: Vec<String> = prompt_vm(&state)
+            .options
+            .iter()
+            .map(|k| format!("{} {}", k.key, k.label))
+            .collect();
+        assert_eq!(options, ["p pretty [on]", "s sort [off]"]);
+    }
+
+    #[test]
+    fn confirm_vm_shows_description_editor_for_create() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Create {
+                local_path: PathBuf::from("notes.txt"),
+            },
+        );
+        state.editing_description = true;
+        state.description_input = "hello".into();
+        // The editor itself is a `DescriptionInput` body, so what matters here is the
+        // title/border and the keys offered beneath it.
+        assert_eq!(style(&state), ("Description", Color::Cyan));
+        let keys: Vec<String> = description_input_keys()
+            .iter()
+            .map(|k| format!("{} {}", k.key, k.label))
+            .collect();
+        assert_eq!(keys, ["Enter next", "Esc cancel"]);
+    }
+
+    #[test]
+    fn confirm_vm_shows_watching_indicator_for_upload() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "a".into(),
+                filename: "notes.txt".into(),
+                local_path: PathBuf::from("/tmp/notes.txt"),
+            },
+        );
+        state.upload.watching = true;
+
+        let prompt = prompt_vm(&state);
+        assert!(prompt.question.contains("Waiting for the editor"));
+        assert_eq!(
+            prompt.keys.iter().map(|k| k.key).collect::<Vec<_>>(),
+            ["n"],
+            "upload and edit are unavailable while the editor is open"
+        );
+    }
+
+    #[test]
+    fn create_confirm_prompt_shortens_home_path() {
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Create {
+                local_path: home.join("notes.txt"),
+            },
+        );
+        let prompt = prompt_vm(&state);
+        assert_eq!(prompt.question, "Create a gist from ~/notes.txt?");
+        assert_eq!(
+            prompt.keys.iter().map(|k| k.key).collect::<Vec<_>>(),
+            ["s", "p", "Esc"]
+        );
+    }
 
     #[test]
     fn stage_upload_preview_falls_back_to_list_raw_url() {
@@ -551,12 +982,9 @@ mod tests {
                 content: "old\n".into(),
             },
         );
+        assert_eq!(style(&state), ("Restore revision", Color::Yellow));
         assert_eq!(
-            confirm_modal_style(&state),
-            ("Restore revision", Color::Yellow)
-        );
-        assert_eq!(
-            confirm_prompt(&state).question,
+            prompt_vm(&state).question,
             "Restore a.txt to revision oldsha (3d ago)?"
         );
         assert_eq!(
