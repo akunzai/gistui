@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Upload failures now appear on the Diff screen instead of being hidden behind its normal key
+  hints, so permission errors from GitHub remain visible and actionable.
 - Pinning one local file to a second gist file no longer deletes the first pin, and unpinning
   now removes only the pair you selected instead of every pin sharing that local path. A pin is
   identified by the local path *and* the gist file it points at, so one local file can be pinned

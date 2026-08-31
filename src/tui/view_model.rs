@@ -86,6 +86,7 @@ pub struct DiffVm {
     /// Diff body after optional context collapse.
     pub body: String,
     pub footer: String,
+    pub footer_colored: bool,
     pub wrap: bool,
     pub scroll: u16,
     pub hscroll: u16,
