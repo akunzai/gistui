@@ -165,9 +165,6 @@ pub(crate) fn diff_title(state: &AppState) -> String {
 
 /// The `Screen::Diff` preview: the diff pane plus a scroll/commands footer.
 ///
-/// #72 audit: this footer intentionally does not surface `state.status`. Diff actions (`d`/`u`)
-/// transition to `Screen::Confirm` or to the IO that lands back on `List`; their results surface
-/// on those destination screens (which read `state.status`), so no status is set while on Diff.
 /// Footer hints for `Screen::Diff` (pure for tests).
 pub(crate) fn diff_footer(state: &AppState) -> String {
     let context = if state.settings.diff_show_full() {
@@ -217,10 +214,13 @@ pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
         .or_else(|| preview_local.file_name())
         .and_then(|n| n.to_str())
         .and_then(crate::tui::view_model::file_ext);
+    let (footer, footer_colored) =
+        crate::tui::footer_with_status(state.status.as_deref(), &diff_footer(state));
     DiffVm {
         title: diff_title(state),
         body,
-        footer: diff_footer(state),
+        footer,
+        footer_colored,
         wrap: state.diff_wrap,
         scroll,
         hscroll,
@@ -258,7 +258,7 @@ pub(crate) fn render_diff_vm(
         chunks[1],
         "",
         &diff.footer,
-        true,
+        diff.footer_colored,
         crate::tui::keymap::for_screen(&state.screen),
         &state.settings.theme(),
     );
@@ -525,6 +525,21 @@ mod tests {
         assert!(footer.contains("w wrap [on]"));
         // The horizontal-scroll arrows are dropped from the hint when wrapping.
         assert!(!footer.contains("←→"));
+    }
+
+    #[test]
+    fn diff_vm_surfaces_upload_error_in_footer() {
+        let mut state = initial_state();
+        state.screen = Screen::Diff(Box::default());
+        state.set_status("upload failed: HTTP 403: Resource not accessible by token");
+
+        let vm = build_diff_vm(&state);
+
+        assert_eq!(
+            vm.footer,
+            "upload failed: HTTP 403: Resource not accessible by token"
+        );
+        assert!(!vm.footer_colored);
     }
 
     #[test]
