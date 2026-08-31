@@ -37,9 +37,10 @@ pub(super) fn dispatch_outcome(
 /// above keeps the ones that do and delegates the rest here, so this layer is reachable
 /// from a unit test with nothing but an `AppState` and a `Jobs`.
 ///
-/// The seam stops at the spawn call. `Jobs::spawn_action` starts its thread inline
-/// (`@src/tui/bg.rs`), so the arms that spawn still cannot be asserted on from a test —
-/// only the ones that resolve entirely in `AppState`. Tracked as issue #422.
+/// Each spawn arm reifies its semantic kind, progress label, and non-content identity in an
+/// `ActionJobSpec`; `Jobs` hands that spec and the opaque closure to its action-spawner adapter
+/// (`@src/tui/bg.rs`, issue #422). Tests use the recording adapter, so spawn arms are
+/// observable here without executing their closures.
 fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> LoopFlow {
     match outcome {
         KeyOutcome::Quit => return LoopFlow::Quit,
@@ -121,7 +122,13 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             };
             jobs.spawn_action(
                 state,
-                "Loading comments…",
+                ActionJobSpec::new(
+                    ActionJobKind::FetchComments {
+                        gist_id: fetch_id.clone(),
+                        page: None,
+                    },
+                    "Loading comments…",
+                ),
                 move || {
                     let result = load_initial_comments(&fetch_id);
                     (result, fetch_id)
@@ -138,7 +145,13 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             };
             jobs.spawn_action(
                 state,
-                "Loading older comments…",
+                ActionJobSpec::new(
+                    ActionJobKind::FetchComments {
+                        gist_id: fetch_id.clone(),
+                        page: Some(page),
+                    },
+                    "Loading older comments…",
+                ),
                 move || {
                     let result = crate::gh::fetch_gist_comments_page(
                         &SystemRunner,
@@ -164,7 +177,12 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
         } => {
             jobs.spawn_action(
                 state,
-                "Checking revisions…",
+                ActionJobSpec::new(
+                    ActionJobKind::AnalyzeCompact {
+                        gist_id: gist_id.clone(),
+                    },
+                    "Checking revisions…",
+                ),
                 move || {
                     let result = crate::actions::execute_command(
                         &crate::actions::gist_revision_count_command(&gist_id),
@@ -282,7 +300,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             state.leave();
             jobs.spawn_action(
                 state,
-                "Uploading…",
+                ActionJobSpec::new(ActionJobKind::Upload { file: file.clone() }, "Uploading…"),
                 move || {
                     let result = crate::actions::execute_command(&plan)
                         .map(|_| ())
@@ -302,7 +320,13 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
 
             jobs.spawn_action(
                 state,
-                "Creating gist…",
+                ActionJobSpec::new(
+                    ActionJobKind::Create {
+                        local_path: local_path.clone(),
+                        public,
+                    },
+                    "Creating gist…",
+                ),
                 move || {
                     crate::actions::execute_command(&plan)
                         .map(|_| ())
@@ -360,7 +384,12 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
 
             jobs.spawn_action(
                 state,
-                "Deleting gist…",
+                ActionJobSpec::new(
+                    ActionJobKind::DeleteGist {
+                        gist_id: gist_id.clone(),
+                    },
+                    "Deleting gist…",
+                ),
                 move || {
                     crate::actions::execute_command(&plan)
                         .map(|_| ())
@@ -381,7 +410,15 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
 
             jobs.spawn_action(
                 state,
-                "Removing file…",
+                ActionJobSpec::new(
+                    ActionJobKind::RemoveFile {
+                        file: crate::domain::GistFileRef::id_name(
+                            gist_id.clone(),
+                            filename.clone(),
+                        ),
+                    },
+                    "Removing file…",
+                ),
                 move || {
                     crate::actions::execute_command(&plan)
                         .map(|_| ())
@@ -405,7 +442,12 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
 
             jobs.spawn_action(
                 state,
-                "Compacting revisions…",
+                ActionJobSpec::new(
+                    ActionJobKind::CompactGist {
+                        gist_id: gist_id.clone(),
+                    },
+                    "Compacting revisions…",
+                ),
                 move || {
                     crate::actions::execute_compact_gist(&SystemRunner, &gist_id)
                         .map_err(|e| e.to_string())
@@ -423,7 +465,12 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
 
             jobs.spawn_action(
                 state,
-                "Updating description…",
+                ActionJobSpec::new(
+                    ActionJobKind::UpdateDescription {
+                        gist_id: gist_id.clone(),
+                    },
+                    "Updating description…",
+                ),
                 move || {
                     crate::actions::execute_command(&plan)
                         .map(|_| ())
@@ -493,7 +540,17 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
         } => {
             jobs.spawn_action(
                 state,
-                "Loading diff…",
+                ActionJobSpec::new(
+                    ActionJobKind::RevisionDiffIncremental {
+                        file: crate::domain::GistFileRef::id_name(
+                            gist_id.clone(),
+                            filename.clone(),
+                        ),
+                        child_version: child_version.clone(),
+                        parent_version: parent_version.clone(),
+                    },
+                    "Loading diff…",
+                ),
                 move || {
                     fetch_revision_incremental_pair(
                         &gist_id,
@@ -520,7 +577,16 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
         } => {
             jobs.spawn_action(
                 state,
-                "Loading diff…",
+                ActionJobSpec::new(
+                    ActionJobKind::RevisionDiff {
+                        file: crate::domain::GistFileRef::id_name(
+                            gist_id.clone(),
+                            filename.clone(),
+                        ),
+                        version: version.clone(),
+                    },
+                    "Loading diff…",
+                ),
                 move || {
                     let result = fetch_revision_pair(
                         &gist_id,
@@ -549,7 +615,16 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
         } => {
             jobs.spawn_action(
                 state,
-                "Loading revision…",
+                ActionJobSpec::new(
+                    ActionJobKind::RestoreRevisionPreview {
+                        file: crate::domain::GistFileRef::id_name(
+                            gist_id.clone(),
+                            filename.clone(),
+                        ),
+                        version: version.clone(),
+                    },
+                    "Loading revision…",
+                ),
                 move || {
                     let result = fetch_revision_pair_for_restore(
                         &gist_id,
@@ -599,7 +674,15 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             let plan = crate::actions::restore_revision_command(&gist_id, &json_path);
             jobs.spawn_action(
                 state,
-                "Restoring revision…",
+                ActionJobSpec::new(
+                    ActionJobKind::RestoreRevision {
+                        file: crate::domain::GistFileRef::id_name(
+                            gist_id.clone(),
+                            filename.clone(),
+                        ),
+                    },
+                    "Restoring revision…",
+                ),
                 move || {
                     let result = crate::actions::execute_command(&plan)
                         .map(|_| ())
@@ -625,7 +708,13 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             };
             jobs.spawn_action(
                 state,
-                msg,
+                ActionJobSpec::new(
+                    ActionJobKind::ToggleGistStar {
+                        gist_id: gist_id.clone(),
+                        starring,
+                    },
+                    msg,
+                ),
                 move || {
                     crate::actions::execute_command(&plan)
                         .map(|_| ())
@@ -644,7 +733,12 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             let plan = crate::actions::fork_gist_command(&gist_id);
             jobs.spawn_action(
                 state,
-                "Forking…",
+                ActionJobSpec::new(
+                    ActionJobKind::ForkGist {
+                        gist_id: gist_id.clone(),
+                    },
+                    "Forking…",
+                ),
                 move || {
                     crate::actions::execute_command(&plan)
                         .map(|_| ())
@@ -698,7 +792,7 @@ fn apply_sync_status(
 mod tests {
     use super::*;
     use crate::domain::{GistFile, LocalCandidate, PinnedMapping};
-    use crate::tui::test_support::idle_jobs;
+    use crate::tui::test_support::{idle_jobs, recording_jobs};
     use std::path::PathBuf;
 
     /// A pinned `/cwd/a.txt` ↔ `g1:a.txt` pair. `local_mtime` and `remote_updated_at`
@@ -735,6 +829,56 @@ mod tests {
 
     fn route(state: &mut AppState, outcome: KeyOutcome) -> LoopFlow {
         route_outcome(outcome, state, &mut idle_jobs())
+    }
+
+    #[test]
+    fn preview_content_routes_the_staged_gist_fetch_without_running_it() {
+        let mut state = test_support::state_with_gists();
+        let entry = state.defer_entry();
+        let file = crate::domain::GistFileRef::new(
+            "g1",
+            "a.txt",
+            Some("https://example.test/g1/a.txt".into()),
+        );
+        let (mut jobs, started) = recording_jobs();
+
+        route_outcome(
+            KeyOutcome::PreviewContent {
+                entry,
+                file: file.clone(),
+            },
+            &mut state,
+            &mut jobs,
+        );
+
+        assert_eq!(
+            started.take(),
+            vec![ActionJobSpec::gist_fetch("Loading preview…", file)]
+        );
+    }
+
+    #[test]
+    fn fork_gist_routes_an_action_job_without_running_it() {
+        let mut state = initial_state();
+        let (mut jobs, started) = recording_jobs();
+
+        route_outcome(
+            KeyOutcome::ForkGist {
+                gist_id: "not-owned".into(),
+            },
+            &mut state,
+            &mut jobs,
+        );
+
+        assert_eq!(
+            started.take(),
+            vec![ActionJobSpec::new(
+                ActionJobKind::ForkGist {
+                    gist_id: "not-owned".into(),
+                },
+                "Forking…",
+            )]
+        );
     }
 
     // ---- apply_sync_status's non-spawning arms ---------------------------

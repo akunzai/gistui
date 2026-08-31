@@ -169,6 +169,137 @@ type ActionApply = Box<dyn FnOnce(&mut AppState) -> LoopFlow + Send>;
 /// Background per-action apply, stamped with the generation active at spawn time.
 type ActionRx = Option<std::sync::mpsc::Receiver<(u64, ActionApply)>>;
 
+/// Observable facts about one action job, separated from the closure that executes it
+/// (issue #422). Dispatch tests can inspect this value without running `gh`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct ActionJobSpec {
+    pub(super) kind: ActionJobKind,
+    pub(super) progress: String,
+}
+
+impl ActionJobSpec {
+    pub(super) fn new(kind: ActionJobKind, progress: impl Into<String>) -> Self {
+        Self {
+            kind,
+            progress: progress.into(),
+        }
+    }
+
+    pub(super) fn gist_fetch(
+        progress: impl Into<String>,
+        file: crate::domain::GistFileRef,
+    ) -> Self {
+        Self::new(ActionJobKind::GistFetch(file), progress)
+    }
+}
+
+/// Semantic action identity and the non-content payload dispatch wiring needs to expose.
+/// Worker closures stay opaque; content and descriptions are deliberately not duplicated.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum ActionJobKind {
+    GistFetch(crate::domain::GistFileRef),
+    FetchComments {
+        gist_id: String,
+        page: Option<u32>,
+    },
+    AnalyzeCompact {
+        gist_id: String,
+    },
+    Upload {
+        file: crate::domain::GistFileRef,
+    },
+    Create {
+        local_path: PathBuf,
+        public: bool,
+    },
+    DeleteGist {
+        gist_id: String,
+    },
+    RemoveFile {
+        file: crate::domain::GistFileRef,
+    },
+    CompactGist {
+        gist_id: String,
+    },
+    UpdateDescription {
+        gist_id: String,
+    },
+    FetchRevisions {
+        gist_id: String,
+    },
+    RevisionDiffIncremental {
+        file: crate::domain::GistFileRef,
+        child_version: String,
+        parent_version: Option<String>,
+    },
+    RevisionDiff {
+        file: crate::domain::GistFileRef,
+        version: String,
+    },
+    RestoreRevisionPreview {
+        file: crate::domain::GistFileRef,
+        version: String,
+    },
+    RestoreRevision {
+        file: crate::domain::GistFileRef,
+    },
+    ToggleGistStar {
+        gist_id: String,
+        starring: bool,
+    },
+    ForkGist {
+        gist_id: String,
+    },
+}
+
+struct ActionJob {
+    generation: u64,
+    run: Box<dyn FnOnce() -> ActionApply + Send>,
+}
+
+/// Internal seam between deciding which action job to start and executing its closure.
+trait ActionSpawner {
+    fn spawn(&mut self, spec: ActionJobSpec, job: ActionJob) -> ActionRx;
+}
+
+struct ThreadActionSpawner;
+
+impl ActionSpawner for ThreadActionSpawner {
+    fn spawn(&mut self, _spec: ActionJobSpec, job: ActionJob) -> ActionRx {
+        let ActionJob { generation, run } = job;
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let apply = run();
+            let _ = tx.send((generation, apply));
+        });
+        Some(rx)
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Default)]
+pub(super) struct RecordedActionJobs(std::rc::Rc<std::cell::RefCell<Vec<ActionJobSpec>>>);
+
+#[cfg(test)]
+impl RecordedActionJobs {
+    pub(super) fn take(&self) -> Vec<ActionJobSpec> {
+        std::mem::take(&mut *self.0.borrow_mut())
+    }
+}
+
+#[cfg(test)]
+struct RecordingActionSpawner {
+    started: RecordedActionJobs,
+}
+
+#[cfg(test)]
+impl ActionSpawner for RecordingActionSpawner {
+    fn spawn(&mut self, spec: ActionJobSpec, _job: ActionJob) -> ActionRx {
+        self.started.0.borrow_mut().push(spec);
+        None
+    }
+}
+
 /// Initial newest-first comment load: probe the total, then fetch the newest page.
 /// Thin IO boundary (network) — not unit-tested.
 pub(super) fn load_initial_comments(gist_id: &str) -> Result<crate::tui::InitialComments, String> {
@@ -899,6 +1030,7 @@ pub(super) struct Jobs {
     /// multiple `ContentChanged` events before its terminal `EditorClosed`/`ReadError`.
     upload_edit_watch: Option<std::sync::mpsc::Receiver<UploadEditWatchEvent>>,
     action: ActionRx,
+    action_spawner: Box<dyn ActionSpawner>,
 }
 
 pub(super) enum LoopFlow {
@@ -914,13 +1046,37 @@ impl Jobs {
         fetch_gists: bool,
         catalog: &crate::domain::GistCatalog,
     ) -> Self {
+        Self::with_action_spawner(update, fetch_gists, catalog, Box::new(ThreadActionSpawner))
+    }
+
+    fn with_action_spawner(
+        update: Option<std::sync::mpsc::Receiver<crate::update_check::UpdateCheckOutcome>>,
+        fetch_gists: bool,
+        catalog: &crate::domain::GistCatalog,
+        action_spawner: Box<dyn ActionSpawner>,
+    ) -> Self {
         Self {
             update,
             gist_refresh: super::gist_refresh::GistRefresh::new(catalog, fetch_gists),
             local: None,
             upload_edit_watch: None,
             action: None,
+            action_spawner,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn recording(catalog: &crate::domain::GistCatalog) -> (Self, RecordedActionJobs) {
+        let started = RecordedActionJobs::default();
+        let jobs = Self::with_action_spawner(
+            None,
+            false,
+            catalog,
+            Box::new(RecordingActionSpawner {
+                started: started.clone(),
+            }),
+        );
+        (jobs, started)
     }
 
     /// Run `run` on a background thread; apply `apply(value)` on the event-loop tick.
@@ -930,7 +1086,7 @@ impl Jobs {
     pub(super) fn spawn_action<T, R, A>(
         &mut self,
         state: &mut AppState,
-        msg: impl Into<String>,
+        spec: ActionJobSpec,
         run: R,
         apply: A,
     ) where
@@ -938,15 +1094,25 @@ impl Jobs {
         R: FnOnce() -> T + Send + 'static,
         A: FnOnce(T, &mut AppState) -> LoopFlow + Send + 'static,
     {
+        self.start_action(state, spec, run, apply);
+    }
+
+    fn start_action<T, R, A>(&mut self, state: &mut AppState, spec: ActionJobSpec, run: R, apply: A)
+    where
+        T: Send + 'static,
+        R: FnOnce() -> T + Send + 'static,
+        A: FnOnce(T, &mut AppState) -> LoopFlow + Send + 'static,
+    {
         let generation = state.begin_bg_task();
-        state.bg_task_msg = Some(msg.into());
-        let (tx, rx) = std::sync::mpsc::channel();
-        self.action = Some(rx);
-        std::thread::spawn(move || {
+        state.bg_task_msg = Some(spec.progress.clone());
+        let run = Box::new(move || {
             let value = run();
-            let boxed: ActionApply = Box::new(move |state| apply(value, state));
-            let _ = tx.send((generation, boxed));
+            let boxed: ActionApply = Box::new(move |state: &mut AppState| apply(value, state));
+            boxed
         });
+        self.action = self
+            .action_spawner
+            .spawn(spec, ActionJob { generation, run });
     }
 
     /// Spawn a background job that fetches a gist file's content, then hands the result
@@ -969,9 +1135,10 @@ impl Jobs {
             + Send
             + 'static,
     {
-        self.spawn_action(
+        let spec = ActionJobSpec::gist_fetch(msg, file.clone());
+        self.start_action(
             state,
-            msg,
+            spec,
             move || {
                 let result =
                     fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
@@ -1291,6 +1458,7 @@ mod tests {
             local: None,
             upload_edit_watch: None,
             action: None,
+            action_spawner: Box::new(ThreadActionSpawner),
         }
     }
 

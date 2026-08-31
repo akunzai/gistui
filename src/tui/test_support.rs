@@ -237,3 +237,9 @@ pub(super) fn pins_state_with_long_home_path() -> AppState {
 pub(super) fn idle_jobs() -> super::bg::Jobs {
     super::bg::Jobs::startup(None, false, &crate::domain::GistCatalog::default())
 }
+
+/// A [`Jobs`] registry whose action adapter records job specs and drops their closures.
+/// This reaches dispatch's spawn arms without starting threads or invoking `gh` (#422).
+pub(super) fn recording_jobs() -> (super::bg::Jobs, super::bg::RecordedActionJobs) {
+    super::bg::Jobs::recording(&crate::domain::GistCatalog::default())
+}
