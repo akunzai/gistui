@@ -2,7 +2,7 @@
 //! colocated in one file (issue #287, Phase 2; issue #383).
 
 use crate::actions::SystemRunner;
-use crate::tui::bg::{revision_version_label, Jobs, LoopFlow};
+use crate::tui::bg::{revision_version_label, ActionJobKind, ActionJobSpec, Jobs, LoopFlow};
 use crate::tui::keys::{apply_list_cursor_nav, NavAction};
 use crate::tui::render::list_pane::render_list_pane;
 use crate::tui::text::hscroll_max_for_text;
@@ -496,7 +496,12 @@ pub(crate) fn on_revisions_fetched(
 pub(crate) fn request_revisions(jobs: &mut Jobs, state: &mut AppState, gist_id: String) {
     jobs.spawn_action(
         state,
-        "Loading revisions…",
+        ActionJobSpec::new(
+            ActionJobKind::FetchRevisions {
+                gist_id: gist_id.clone(),
+            },
+            "Loading revisions…",
+        ),
         move || {
             let result = crate::gh::fetch_gist_commits_json(&SystemRunner, &gist_id)
                 .map_err(|e| e.to_string())
