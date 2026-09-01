@@ -17,6 +17,7 @@ use std::path::PathBuf;
 
 mod gist_content;
 mod gist_refresh;
+mod gist_revision;
 mod mouse;
 pub use mouse::{
     point_in, HitTarget, MouseFrame, MouseSession, PaneHit, PaneTarget, PressKind, RowTarget,
@@ -546,39 +547,10 @@ pub enum KeyOutcome {
         effect: Option<SettingsEffect>,
         success_message: String,
     },
-    FetchRevisions {
-        gist_id: String,
-    },
-    RevisionDiffIncremental {
-        entry: DeferredEntry,
-        gist_id: String,
-        filename: String,
-        child_version: String,
-        parent_version: Option<String>,
-        old_label: String,
-        new_label: String,
-        owner_login: String,
-    },
-    RevisionDiff {
-        entry: DeferredEntry,
-        gist_id: String,
-        filename: String,
-        version: String,
-        old_label: String,
-        new_label: String,
-        raw_url: Option<String>,
-        owner_login: String,
-    },
-    RestoreRevisionPreview {
-        entry: DeferredEntry,
-        gist_id: String,
-        filename: String,
-        version: String,
-        version_label: String,
-        raw_url: Option<String>,
-        owner_login: String,
-    },
-    ExecuteRestoreRevision,
+    /// Every Gist revision intent — history, either comparison, restore preview, and
+    /// restore execution — as one plain-data request (issue #430). The workflow module
+    /// (`@src/tui/gist_revision.rs`) is the only thing that reads it.
+    Revision(gist_revision::RevisionRequest),
     ToggleGistStar {
         gist_id: String,
         /// True when the next action should star (currently unstarred).

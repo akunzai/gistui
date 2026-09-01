@@ -129,8 +129,24 @@ impl AppState {
                 }
                 _ => {}
             },
-            Some(PendingAction::RestoreRevision { .. }) => match code {
-                KeyCode::Char('y') => return KeyOutcome::ExecuteRestoreRevision,
+            Some(PendingAction::RestoreRevision {
+                gist_id,
+                filename,
+                content,
+                ..
+            }) => match code {
+                KeyCode::Char('y') => {
+                    let owner_login = self.gist_owner_login(&gist_id);
+                    return KeyOutcome::Revision(
+                        crate::tui::gist_revision::RevisionRequest::ExecuteRestore {
+                            target: crate::tui::gist_revision::RevisionTarget::new(
+                                crate::domain::GistFileRef::id_name(gist_id, filename),
+                                owner_login,
+                            ),
+                            content,
+                        },
+                    );
+                }
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     self.cancel_confirm();
                     if !self.screen.is_revisions() {
@@ -989,7 +1005,14 @@ mod tests {
         );
         assert_eq!(
             state.handle_key(KeyCode::Char('y')),
-            KeyOutcome::ExecuteRestoreRevision
+            KeyOutcome::Revision(crate::tui::gist_revision::RevisionRequest::ExecuteRestore {
+                target: crate::tui::gist_revision::RevisionTarget::new(
+                    crate::domain::GistFileRef::id_name("g1", "a.txt"),
+                    String::new(),
+                ),
+                content: "old\n".into(),
+            }),
+            "the confirmed content is what gets restored, snapshotted at intent time"
         );
     }
 

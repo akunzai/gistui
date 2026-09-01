@@ -7,7 +7,7 @@ Index: [`AGENTS.md`](../../AGENTS.md). Source of truth for types lives in the mo
 | Kind | Modules | Testing |
 | --- | --- | --- |
 | **Pure** (unit-tested) | `domain`, `config`, `ranking`, `local`, `diff`, `pins`, actions **plan/guard**, `tui::view_model`, `tui::list_ranking`, `tui::settings`, `tui::gist_content`, `tui::local_scan` | In-crate unit tests |
-| **Impure** (thin IO) | `gh`, actions **execute**, `tui::run_loop` / `tui::bg` / `tui::gist_refresh` / `tui::pin_sync` | No live `gh`. Spawn/absorb is thin IO; action-job `on_*` apply handlers (screen modules / `gist_mutation.rs`) are unit-tested (#298, #383) |
+| **Impure** (thin IO) | `gh`, actions **execute**, `tui::run_loop` / `tui::bg` / `tui::gist_refresh` / `tui::gist_revision` / `tui::pin_sync` | No live `gh`. Spawn/absorb is thin IO; action-job `on_*` apply handlers (screen modules / `gist_mutation.rs`) are unit-tested (#298, #383) |
 
 `build_view_model` (`@src/tui/view_model.rs`): `AppState` + pin-sync cache → presentation facts. Paint helpers apply theme/layout only — no business rules, FS, or network.
 
@@ -95,7 +95,7 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
 
 ## Background jobs
 
-- **`Jobs`** is the single registry: spawn / absorb / cancel (`@src/tui/bg.rs`, issue #243). It keeps seven methods: `startup`, `spawn_action`, `spawn_gist_fetch_action`, `cancel_action`, `request_local_scan`, `set_upload_edit_watch`, `absorb`.
+- **`Jobs`** is the single registry: spawn / absorb / cancel (`@src/tui/bg.rs`, issue #243). It keeps eight methods: `startup`, `spawn_action`, `spawn_gist_fetch_action`, `cancel_action`, `request_local_scan`, `set_upload_edit_watch`, `absorb`, and `command_runner` (the injected `CommandRunner`, see the Gist revision workflow below).
 - **`GistRefresh` owns the whole-list pipeline** (`@src/tui/gist_refresh.rs`): it publishes the base `GistCatalog` as soon as owned/starred/login finish, then publishes fork counts, star counts, and fork metadata as coherent stages. Every result carries a refresh generation; only the latest generation may publish. A failed leg retains that field's last-known-good value, and the pipeline emits one aggregate status after the generation finishes.
 - **`GistCatalog` is the publish/cache unit** (`@src/domain.rs`). Cache writes serialize one complete catalog stage from one generation; do not cache or publish the refresh module's individual legs.
 - **Apply only marks; only the registry spawns** (issue #383). `on_*` handlers are free functions (`fn on_x(state: &mut AppState, ...) -> LoopFlow`) on the screen module that owns the payload they mutate, or on `@src/tui/gist_mutation.rs` when the outcome belongs to no single screen. They set `gist_list_stale` / `revisions_stale`; `Jobs::absorb` consumes those flags immediately after `on_action_outcome` and spawns. Do not spawn from apply. **Revisit** when a third kind of stale need appears: replace the flags with a described follow-up value rather than adding a third field.
@@ -105,15 +105,75 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
   example `ForkGist { gist_id }`, `FetchComments { gist_id, page }`, or `GistFetch(file)`)
   plus its progress label, then passes the opaque worker closure to an action-spawner adapter.
   Production uses `ThreadActionSpawner`; dispatch tests use the recording adapter and can
-  assert the staged request without starting a thread or invoking `gh`. Keep that adapter
-  private to `Jobs`; call sites still use only `spawn_action` / `spawn_gist_fetch_action`.
+  assert the staged request without starting a thread or invoking `gh`; the Gist revision
+  workflow's tests use `InlineActionSpawner`, which runs the real worker on the calling
+  thread and queues its completion for a normal `absorb`. Each adapter has exactly one role —
+  production concurrency, semantic routing observation, complete in-process execution — and
+  all three stay private to `Jobs`; call sites still use only `spawn_action` /
+  `spawn_gist_fetch_action`. Every revision job reifies as one `ActionJobKind::Revision(…)`
+  whose payload the workflow owns.
 - **Local-scan orchestration lives in `@src/tui/local_scan.rs`** (issue #409), separate from filesystem walking (`crate::local`) and thread/channel IO (`Jobs`, `@src/tui/bg.rs`). `ScanRequest` (cwd, pinned mappings, `ScanMode::{Flat,Recursive}`, skip dirs, max depth) is the one snapshot startup, `Jobs::request_local_scan`, and `bg::refresh_locals` all build via `AppState::local_scan_request` — `ScanMode` is a snapshot of `local_recursive`, not a live read, so an in-flight scan keeps the mode it started with. A private `LocalScan` (generation + in-flight) on `AppState` is mutated only through `begin_local_scan` / `apply_local_scan` / `end_local_scan`; a stale generation can end no in-flight state and apply no candidates. `apply_local_scan` is the one candidate-application operation background and synchronous paths share: it preserves the selected path (an explicit target — e.g. a just-downloaded file — beats whatever is selected at apply time), clears local hscroll unless that exact path survives, and re-clamps the gist cursor (index *and* hscroll) if reranking invalidated it. A current failure or channel disconnect ends in-flight state and reports it (`"local scan failed: …"` for the interactive scan, `"local refresh failed: …"` appended onto whatever status the caller already set for the synchronous post-download refresh) without touching last-known-good candidates; only success clears its own `SCANNING_STATUS` placeholder, never a newer status a later action wrote. Pin/unpin never rescans — it does not touch the filesystem, and ranking reads `PinnedMapping` directly — so `LocalCandidate.pinned` does not exist; recursive alias dedup (`crate::local::path_priority`) still prefers a pinned path by reading `PinnedMapping` itself.
-- Call sites start work via `Jobs` methods (`spawn_action`, `request_local_scan`, …) or `screens::revisions::request_revisions` — do not own ad-hoc channel fields on `AppState`.
+- Call sites start work via `Jobs` methods (`spawn_action`, `request_local_scan`, …) or `gist_revision::dispatch` — do not own ad-hoc channel fields on `AppState`.
 - `run_loop` only **polls** `jobs.absorb`.
 - **Action jobs carry their apply** (issue #375, ADR-0002's async-response half): `spawn_action(spec, run, apply)` runs `run` off-thread and boxes `apply(value)` for the event-loop tick. There is no `BgTaskOutcome` enum. `ActionApply` is `FnOnce(&mut AppState) -> LoopFlow`. `on_action_outcome` is a generation-guard shell that calls the closure. `KeyOutcome` / `dispatch_outcome` stay plain data (ADR-0002).
 - **`on_*` is the apply seam** (#298, #375, #383): named handlers are the apply bodies and the unit-test surface. They do not live on `Jobs`. `dispatch_outcome` / `route_outcome` sit on the spawn side, not the apply side, so neither is one. A new action is a spawn site plus an `on_*` when the apply is worth testing.
 - **A pin's key is three-part** (issue #424): `(local_path, gist_id, gist_filename)`, owned by `@src/pins.rs` (`PinKey`, `PinKey::matches`, `PinnedMapping::key()`, `is_pinned` / `find_mut` / `upsert` / `remove`). One local file pinned to several gist files is a legitimate state, not corruption — `docs/design.md` defines a pin as a local-file to gist-*file* mapping, and `gist_id` alone cannot name a file inside a gist. `crate::actions`' `pin_mapping` / `unpin_mapping` / `record_sync` are thin wrappers that add persistence; never re-derive the key at a call site, and pass `PinnedMapping::key()` when you already hold the mapping. `upsert` reads `None` as "leave the stored value alone"; `record_sync` deliberately uses `find_mut` rather than `upsert`, because confirming a sync must never create a pin. **The one deliberate exception** is a call site that must resolve a possibly-relative stored `local_path` first (`@src/tui/bg.rs`'s `record_sync` caller, `@src/tui/dispatch.rs`'s `SyncSelectedPair`): those compare the *absolutised* path plus the two gist fields, so they still use all three components but cannot take a `PinKey` as-is. Exactly-duplicate triples are degenerate input from a hand-edited `config.toml`: the operations take the first match, and `crate::config::load_config` stays a parser, not a silent rewriter.
 - **Shared spawn payload** (#375): a value both `run` and `apply` need is part of `run`'s return, unpacked by `apply`. That is how identity (`gist_id`, `fetch_id`, labels) crosses the thread boundary without a second clone.
+
+## Gist revision workflow (`@src/tui/gist_revision.rs`, issue #430)
+
+One interface owns every Gist revision flow. Callers submit one plain-data `RevisionRequest`
+(ADR-0002: comparable, pattern-matchable, never a closure or a job handle) to
+`gist_revision::dispatch`, which stages the action job, does the remote work through the
+injected `CommandRunner`, and hands a **request-specific typed result** to the screen-owned
+apply handler the job already carries. There is no umbrella revision-completion enum and no
+result router.
+
+Five flat request kinds: `FetchHistory`, `DiffAdjacent`, `DiffAgainstCurrent`,
+`PreviewRestore`, `ExecuteRestore`. The four that act on a *file* share one `RevisionTarget`
+— the `GistFileRef` plus owner login; `FetchHistory` is per-Gist and carries only a
+`gist_id`. Versions, labels, the `DeferredEntry`, and restore content stay request-specific.
+`RevisionTarget` carries a raw URL only for the requests that also fetch current content
+(`history_and_current_target` vs. `history_target` on the Revisions screen).
+
+**The split.** Screen intent (`screens::revisions`, `screens::confirm`) owns eligibility
+guards, selection and parent lookup, ownership/previewability checks, return-entry capture,
+raw-URL and owner snapshots, and intent-time labels; screen `on_*` handlers own every piece
+of observable state application — navigation, status, Diff/Confirm entry, cache
+invalidation, cursor and history reset, and the stale markers. The workflow owns job
+staging, semantic job identity, exact progress labels, command execution, parsing, fallback
+ordering, absent-file semantics, the per-buffer size gate, restore JSON and scratch
+lifetime, and restore follow-up policy. **It never re-reads mutable UI state after receiving
+a request** — that is what keeps a label the user pressed a key on from drifting with how
+long the fetch took (`revision_version_label` takes `now` as an input, at intent time).
+
+Invariants worth keeping:
+
+- **Adjacent ordering** — selected child first, then its parent. A missing parent version
+  *is* the initial revision and compares against empty content; on either optional side an
+  absent historical file also reads as empty content.
+- **Selected-versus-current ordering** — the historical side first and **required** (its
+  absence stays an error), then current content with its command-to-raw-URL fallback. The
+  historical side keeps its own entry-raw-URL / owner-aware-canonical fallback sequence.
+- **The size gate applies to every fetched buffer independently.** Diff identical detection
+  and the ignore-trailing-newline setting stay at screen apply time.
+- **Restore never rewrites history**: it patches the historical content as a new Gist
+  revision. Its scratch directory and JSON are prepared synchronously *before* the spawn, so
+  a preparation failure keeps its own wording and neither starts nor supersedes a job; on
+  success the `ScratchDir` moves into the worker, whose RAII drop runs after success,
+  failure, and a completion the generation guard later ignores.
+- **Restore follow-up is described, not re-derived.** Success returns `RestoreApplied` —
+  the affected file plus the `RestoreRefresh` values the new Gist revision made stale, in
+  the order `Jobs::absorb` consumes them. `on_restore_revision_done` walks that list and
+  sets the markers; only `Jobs::absorb` consumes them and starts the work.
+
+**Testing.** The seam is the complete path — request → workflow → `Jobs` → command-runner
+adapter → `absorb` → apply handler — driven by `Jobs::inline` plus a scripted `SeqRunner`
+(`Mutex`-guarded so an `Arc` of it can be shared with worker closures; it records exact
+command order and, for `--input` plans, the payload body that only exists while the command
+runs). The real `ScratchDir` is used, not a filesystem seam. Do not layer duplicate
+implementation-detail assertions beneath this seam: parser and command-plan tests stay in
+`gh` / `actions`, screen intent and presentation tests stay on their screens.
 
 ## Pin-sync presentation (`@src/tui/pin_sync.rs`)
 
