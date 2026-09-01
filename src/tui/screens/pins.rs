@@ -2,10 +2,11 @@
 //! file (issue #287, Phase 2).
 
 use crate::tui::keys::{apply_list_cursor_nav, NavAction};
-use crate::tui::render::list_pane::render_list_pane;
-use crate::tui::view_model::{
-    ChromeVm, ListPaneEmpty, ListPaneVm, PaneTitleVm, PinsVm, RowEmphasis, RowVm,
+use crate::tui::render::list_pane::{
+    render_list_pane, ListPaneEmpty, ListPaneVm, RowEmphasis, RowVm,
 };
+use crate::tui::render::text_fit::PaneTitleVm;
+use crate::tui::view_model::ChromeVm;
 use crate::tui::{
     AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneTarget, RowTarget, Screen,
 };
@@ -14,6 +15,16 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     Frame,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PinsVm {
+    pub pane: ListPaneVm,
+    pub filtering: bool,
+    pub filter_query: crate::tui::text_input::TextInput,
+    pub footer_title: String,
+    pub footer: String,
+    pub footer_colored: bool,
+}
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::Pins;
 const PINS_STATUS_LEGEND: &str =
@@ -361,6 +372,7 @@ pub(crate) fn render_pins_vm(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::SyncStatus;
     use crate::tui::test_support::{
         pins_mut, pins_ref, pins_state_with_long_home_path, set_pending,
     };
@@ -751,5 +763,71 @@ mod tests {
         state.handle_key(KeyCode::Char('P'));
         assert!(state.screen.is_pins());
         assert_eq!(pins_ref(&state).cursor.hscroll, 0);
+    }
+
+    #[test]
+    fn pins_vm_reads_cache_not_requiring_disk_for_status() {
+        let mut state = initial_state();
+        state.screen = Screen::Pins(Box::default());
+        state.pinned = vec![PinnedMapping {
+            local_path: PathBuf::from("notes.txt"),
+            gist_id: "g1".into(),
+            gist_filename: "notes.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+        // Hand-populate cache — builder must not need a real file.
+        state.pin_sync_cache = vec![crate::tui::PinSyncCacheEntry {
+            status: SyncStatus::InSync,
+            local_ts: Some(100),
+            remote_ts: Some(100),
+        }];
+        state.pin_sync_cache_dirty = false;
+
+        let pins = build_pins_vm(&state);
+        assert_eq!(pins.pane.empty, ListPaneEmpty::HasRows);
+        assert_eq!(pins.pane.rows.len(), 1);
+        assert_eq!(pins.pane.rows[0].emphasis, RowEmphasis::None);
+        assert!(pins.pane.rows[0].label.contains('✓'));
+        assert!(pins.pane.rows[0].label.contains("notes.txt"));
+    }
+
+    #[test]
+    fn pins_vm_unknown_when_cache_missing() {
+        let mut state = initial_state();
+        state.screen = Screen::Pins(Box::default());
+        state.pinned = vec![PinnedMapping {
+            local_path: PathBuf::from("a.txt"),
+            gist_id: "g1".into(),
+            gist_filename: "a.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+        state.pin_sync_cache.clear();
+        let pins = build_pins_vm(&state);
+        assert_eq!(pins.pane.rows[0].emphasis, RowEmphasis::None);
+        assert!(pins.pane.rows[0].label.starts_with('?'));
+    }
+
+    #[test]
+    fn pins_vm_empty_states() {
+        let mut state = initial_state();
+        state.screen = Screen::Pins(Box::default());
+        let pins = build_pins_vm(&state);
+        assert_eq!(pins.pane.empty, ListPaneEmpty::NoItems);
+
+        state.pinned = vec![PinnedMapping {
+            local_path: PathBuf::from("a.txt"),
+            gist_id: "g1".into(),
+            gist_filename: "a.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+        if let Some(p) = state.pins_mut() {
+            p.filter_query = crate::tui::TextInput::from("zzz-no-match");
+        }
+        state.pin_sync_cache = vec![crate::tui::PinSyncCacheEntry::default()];
+        let pins = build_pins_vm(&state);
+        assert_eq!(pins.pane.empty, ListPaneEmpty::NoFilterMatch);
     }
 }

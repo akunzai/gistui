@@ -1,7 +1,44 @@
 //! Width-aware text fitting helpers.
 
-use super::*;
+/// A pane title split into the parts that must survive and the one part that may shrink,
+/// joined to the pane width at paint time by `render::fit_title` (#338).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PaneTitleVm {
+    /// Joined with ` · `, most- to least-important. A segment that does not fit is dropped
+    /// whole — never half-shown — together with everything after it.
+    pub segments: Vec<String>,
+    /// Trailing re-derivable context (the Local pane's working directory). The only part that
+    /// may be shortened behind a `…`, and the first to give way when the title is too narrow.
+    pub context: Option<String>,
+    /// Abbreviated `head`, used only when spending the difference buys back a state segment
+    /// the full head would have dropped. Drop the pane's *name*, never its number, count, or
+    /// markers — the head still has to identify the pane it labels.
+    pub short_head: Option<String>,
+}
 
+impl PaneTitleVm {
+    /// A title whose first segment — pane label, count, and the markers that must never be
+    /// clipped — is `head`.
+    pub(crate) fn new(head: String) -> Self {
+        Self {
+            segments: vec![head],
+            context: None,
+            short_head: None,
+        }
+    }
+
+    /// Append one more segment, less important than everything already pushed.
+    pub(crate) fn push(&mut self, segment: impl Into<String>) {
+        self.segments.push(segment.into());
+    }
+
+    /// Append the active filter as `/query`; a blank query adds nothing.
+    pub(crate) fn push_filter(&mut self, query: &str) {
+        if !query.is_empty() {
+            self.push(format!("/{query}"));
+        }
+    }
+}
 /// Separator between the segments of a pane title.
 pub(crate) const TITLE_SEP: &str = " · ";
 
@@ -396,6 +433,7 @@ pub(crate) fn fit_top_bar(width: u16) -> FittedTopBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::HelpTopic;
 
     /// The Local pane title from the bug report, anchored and filtered.
     fn local_title() -> PaneTitleVm {

@@ -2,11 +2,12 @@
 //! file (issue #287, Phase 2).
 
 use crate::tui::keys::{apply_list_cursor_nav, NavAction};
-use crate::tui::render::list_pane::render_list_pane;
-use crate::tui::render::{MARK_FORK, MARK_STARRED};
-use crate::tui::view_model::{
-    ChromeVm, GistsVm, ListPaneEmpty, ListPaneVm, PaneTitleVm, RowEmphasis, RowVm,
+use crate::tui::render::list_pane::{
+    render_list_pane, ListPaneEmpty, ListPaneVm, RowEmphasis, RowVm,
 };
+use crate::tui::render::text_fit::PaneTitleVm;
+use crate::tui::render::{MARK_FORK, MARK_STARRED};
+use crate::tui::view_model::ChromeVm;
 use crate::tui::{
     AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneTarget, RowTarget, Screen,
 };
@@ -15,6 +16,17 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     Frame,
 };
+
+/// Gist-manager list presentation (#250).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GistsVm {
+    pub pane: ListPaneVm,
+    pub filtering: bool,
+    pub filter_query: crate::tui::text_input::TextInput,
+    pub footer_title: String,
+    pub footer: String,
+    pub footer_colored: bool,
+}
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::GistManager;
 
@@ -307,6 +319,8 @@ pub(crate) fn render_gists_vm(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::tui::render::list_pane::ListPaneEmpty;
     use crate::tui::test_support::{
         gists_mut, set_pending, state_with_gists, state_with_two_gists,
     };
@@ -618,5 +632,72 @@ mod tests {
         state.screen = Screen::Gists(Box::default());
         state.handle_key(KeyCode::Char('q'));
         assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn gists_vm_empty_and_rows() {
+        use crate::domain::GistFile;
+
+        let mut state = initial_state();
+        state.screen = Screen::Gists(Box::default());
+        let g = build_gists_vm(&state);
+        assert_eq!(g.pane.empty, ListPaneEmpty::NoItems);
+        assert!(g
+            .pane
+            .empty_message
+            .as_deref()
+            .unwrap_or("")
+            .contains("No gists found"));
+        assert!(g.pane.title.segments[0].contains("Gists"));
+
+        state.gist_catalog.owned = vec![
+            GistFile {
+                description: "alpha".into(),
+                ..GistFile::fixture("g1", "a.txt")
+            },
+            GistFile {
+                description: "beta".into(),
+                ..GistFile::fixture("g2", "b.txt")
+            },
+        ];
+        state.gist_catalog.starred_ids.insert("g1".into());
+        state.gist_catalog.comment_counts.insert("g1".into(), 2);
+        let g = build_gists_vm(&state);
+        assert_eq!(g.pane.empty, ListPaneEmpty::HasRows);
+        assert_eq!(g.pane.rows.len(), 2);
+        let starred = g
+            .pane
+            .rows
+            .iter()
+            .find(|r| r.label.contains("alpha"))
+            .expect("g1's row");
+        assert!(
+            starred.label.contains('★') || starred.label.contains("g1"),
+            "row: {}",
+            starred.label
+        );
+        assert!(starred.label.contains("comment") || starred.label.contains("g1"));
+    }
+
+    #[test]
+    fn gists_vm_filter_miss_and_status_footer() {
+        use crate::domain::GistFile;
+
+        let mut state = initial_state();
+        state.screen = Screen::Gists(Box::default());
+        state.gist_catalog.owned = vec![GistFile::fixture("g1", "a.txt")];
+        if let Some(gm) = state.gist_manager_mut() {
+            gm.filter_query = crate::tui::TextInput::from("zzz-nope");
+        }
+        let g = build_gists_vm(&state);
+        assert_eq!(g.pane.empty, ListPaneEmpty::NoFilterMatch);
+
+        if let Some(gm) = state.gist_manager_mut() {
+            gm.filter_query = crate::tui::TextInput::default();
+        }
+        state.status = Some("Compacted g1".into());
+        let g = build_gists_vm(&state);
+        assert!(!g.footer_colored);
+        assert!(g.footer.contains("Compacted"));
     }
 }

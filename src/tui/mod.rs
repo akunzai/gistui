@@ -2024,7 +2024,7 @@ mod highlight;
 mod palette;
 #[cfg(test)]
 use palette::PaletteItem;
-use palette::{PaletteMode, PaletteState};
+use palette::PaletteState;
 
 mod render;
 use render::*;
@@ -2054,7 +2054,7 @@ pub use settings::{ConfigField, RuntimeSettings, SettingsEffect};
 mod theme;
 pub use theme::Theme;
 mod view_model;
-pub(crate) use view_model::{build_view_model, gist_row_display, ScreenVm};
+pub(crate) use crate::tui::view_model::build_view_model;
 #[cfg(test)]
 mod test_support;
 

@@ -3,15 +3,42 @@
 
 use crate::ranking::MatchMark;
 use crate::tui::keys::{apply_filter_edit, diff_pair_previewable, FilterKey, NavAction};
-use crate::tui::render::list_pane::{highlight_pane_divider, render_list_pane, MIN_PANE_CELLS};
-use crate::tui::view_model::{
-    ChromeVm, ListFooterVm, ListPaneEmpty, ListPaneVm, ListVm, PaneTitleVm, RowEmphasis, RowVm,
+use crate::tui::render::list_pane::{
+    highlight_pane_divider, render_list_pane, ListPaneEmpty, ListPaneVm, RowEmphasis, RowVm,
+    MIN_PANE_CELLS,
 };
+use crate::tui::render::text_fit::PaneTitleVm;
+use crate::tui::view_model::ChromeVm;
 use crate::tui::{
     AppState, FocusPane, GistView, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneTarget,
     PendingAction, RowTarget, Screen, SplitHit,
 };
 use crossterm::event::KeyCode;
+
+/// Main dual-pane List screen presentation (#250).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ListVm {
+    pub local: ListPaneVm,
+    pub gist: ListPaneVm,
+    pub footer: ListFooterVm,
+    /// Share of the width the local pane gets; paint turns it into cells (issue #395).
+    pub split_percent: u16,
+    /// The divider is being dragged, so paint highlights it.
+    pub split_dragging: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ListFooterVm {
+    /// Idle command hints (colourised keys).
+    Hints { text: String },
+    /// One-shot status message (plain).
+    Status { text: String },
+    /// Inline filter on the focused pane; carries live query text and focus.
+    Filtering {
+        focus: FocusPane,
+        query: crate::tui::text_input::TextInput,
+    },
+}
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::List;
 
@@ -882,6 +909,7 @@ pub(crate) fn render_list_vm(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::screens::ScreenVm;
     use crate::tui::test_support::{
         list_state_with_matches, set_pending, state_ready_to_create, state_with_gists,
         state_with_local_paths, state_with_selection, state_with_two_gists,
@@ -2542,5 +2570,105 @@ mod tests {
         let hit = layout.split().expect("divider hit recorded");
         assert_eq!(hit.divider_x, 39);
         assert_eq!(hit.area.width, 100);
+    }
+
+    #[test]
+    fn list_vm_empty_local_and_gist_messages() {
+        let state = initial_state();
+        let list = build_list_vm(&state);
+        assert_eq!(list.local.empty, ListPaneEmpty::NoItems);
+        assert!(list
+            .local
+            .empty_message
+            .as_deref()
+            .unwrap_or("")
+            .contains("No local files"));
+        assert_eq!(list.gist.empty, ListPaneEmpty::NoItems);
+        assert!(list
+            .gist
+            .empty_message
+            .as_deref()
+            .unwrap_or("")
+            .contains("No gists found"));
+        assert!(matches!(list.footer, ListFooterVm::Hints { .. }));
+    }
+
+    #[test]
+    fn list_vm_rows_include_pin_mark_and_star() {
+        use crate::domain::{GistFile, LocalCandidate, PinnedMapping};
+
+        let mut state = initial_state();
+        state.cwd = PathBuf::from("/tmp/proj");
+        state.locals = vec![LocalCandidate {
+            path: PathBuf::from("notes.txt"),
+            modified: None,
+        }];
+        state.gist_catalog.owned = vec![GistFile {
+            description: "demo notes".into(),
+            ..GistFile::fixture("g1", "notes.txt")
+        }];
+        state.gist_catalog.starred_ids.insert("g1".into());
+        state.pinned = vec![PinnedMapping {
+            local_path: PathBuf::from("notes.txt"),
+            gist_id: "g1".into(),
+            gist_filename: "notes.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+        }];
+        state.focus = FocusPane::Local;
+        state.anchor = FocusPane::Local;
+        state.local_cursor.index = 0;
+        state.gist_cursor.index = 0;
+
+        let list = build_list_vm(&state);
+        assert_eq!(list.local.empty, ListPaneEmpty::HasRows);
+        assert_eq!(list.gist.empty, ListPaneEmpty::HasRows);
+        assert!(!list.local.rows.is_empty());
+        assert!(!list.gist.rows.is_empty());
+        assert!(
+            list.gist.rows[0].label.contains('★'),
+            "starred gist row: {}",
+            list.gist.rows[0].label
+        );
+        assert!(
+            list.local
+                .rows
+                .iter()
+                .any(|r| r.label.contains("notes.txt")),
+            "local rows: {:?}",
+            list.local.rows
+        );
+        // Pin or exact-filename mark when both sides share the pair.
+        let marked = list
+            .local
+            .rows
+            .iter()
+            .chain(list.gist.rows.iter())
+            .any(|r| matches!(r.emphasis, RowEmphasis::Strong) || r.label.contains('↔'));
+        assert!(
+            marked,
+            "local={:?} gist={:?}",
+            list.local.rows, list.gist.rows
+        );
+    }
+
+    #[test]
+    fn list_vm_status_footer_and_filter_mode() {
+        let mut state = initial_state();
+        state.status = Some("Downloaded a.txt".into());
+        let list = build_list_vm(&state);
+        match list.footer {
+            ListFooterVm::Status { text } => assert!(text.contains("Downloaded")),
+            other => panic!("expected Status footer, got {other:?}"),
+        }
+
+        state.status = None;
+        state.filtering = true;
+        state.focus = FocusPane::Gist;
+        let list = build_list_vm(&state);
+        match list.footer {
+            ListFooterVm::Filtering { focus, .. } => assert_eq!(focus, FocusPane::Gist),
+            other => panic!("expected Filtering footer, got {other:?}"),
+        }
     }
 }

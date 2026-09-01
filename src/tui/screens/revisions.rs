@@ -4,11 +4,12 @@
 use crate::tui::bg::LoopFlow;
 use crate::tui::gist_revision::{RestoreApplied, RestoreRefresh, RevisionRequest, RevisionTarget};
 use crate::tui::keys::{apply_list_cursor_nav, NavAction};
-use crate::tui::render::list_pane::render_list_pane;
-use crate::tui::text::hscroll_max_for_text;
-use crate::tui::view_model::{
-    ChromeVm, ListPaneEmpty, ListPaneVm, PaneTitleVm, RevisionsVm, RowEmphasis, RowVm,
+use crate::tui::render::list_pane::{
+    render_list_pane, ListPaneEmpty, ListPaneVm, RowEmphasis, RowVm,
 };
+use crate::tui::render::text_fit::PaneTitleVm;
+use crate::tui::text::hscroll_max_for_text;
+use crate::tui::view_model::ChromeVm;
 use crate::tui::{
     AppState, HelpTopic, HitTarget, KeyOutcome, ListCursor, MouseFrame, PaneTarget, RowTarget,
     Screen,
@@ -18,6 +19,14 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     Frame,
 };
+
+/// Revision history list (#250).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RevisionsVm {
+    pub pane: ListPaneVm,
+    pub footer: String,
+    pub footer_colored: bool,
+}
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::Revisions;
 
@@ -913,5 +922,46 @@ mod tests {
         assert_eq!(revision_ref(&state).target_file, "b.txt");
         assert!(state.nav_stack.last().is_some_and(Screen::is_gist_detail));
         assert!(revision_ref(&state).entries.is_none());
+    }
+
+    #[test]
+    fn revisions_vm_loading_and_rows() {
+        use crate::domain::{GistFile, GistRevision};
+
+        let mut state = initial_state();
+        state.screen = Screen::Revisions(Box::default());
+        if let Some(r) = state.revision_mut() {
+            r.gist_id = Some("g1".into());
+        }
+        state.gist_catalog.owned = vec![GistFile {
+            description: "hist".into(),
+            ..GistFile::fixture("g1", "a.txt")
+        }];
+        let r = build_revisions_vm(&state);
+        assert_eq!(r.pane.empty, ListPaneEmpty::Loading);
+        assert!(r.footer.contains("Loading"));
+        assert!(
+            r.pane.title.segments[0].contains("hist") || r.pane.title.segments[0].contains("g1")
+        );
+
+        if let Some(r) = state.revision_mut() {
+            r.entries = Some(vec![GistRevision {
+                version: "abc1234deadbeef".into(),
+                committed_at: "2020-01-01T00:00:00Z".into(),
+                user: "alice".into(),
+                change_status: crate::domain::GistRevisionChangeStatus {
+                    total: 1,
+                    additions: 1,
+                    deletions: 0,
+                },
+            }]);
+            r.cursor.index = 0;
+        }
+        let r = build_revisions_vm(&state);
+        assert_eq!(r.pane.empty, ListPaneEmpty::HasRows);
+        assert_eq!(r.pane.rows.len(), 1);
+        let row = &r.pane.rows[0].label;
+        assert!(row.contains("alice") || row.contains("abc"));
+        assert_eq!(r.pane.selected, Some(0));
     }
 }

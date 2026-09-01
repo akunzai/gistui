@@ -10,10 +10,10 @@
 //! highlight symbol, a bottom title, untruncated rows) and two callers would not justify the
 //! seam.
 
+use super::text_fit::PaneTitleVm;
 use super::{cell_width, fit_title, truncate_end, ELLIPSIS};
 use crate::tui::text::hscroll_str;
 use crate::tui::theme::Theme;
-use crate::tui::view_model::{ListPaneEmpty, ListPaneVm, RowEmphasis};
 use crate::tui::{MouseFrame, PaneHit, PaneTarget};
 use ratatui::layout::{Margin, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -22,6 +22,52 @@ use ratatui::widgets::{
     ScrollbarOrientation, ScrollbarState,
 };
 use ratatui::Frame;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ListPaneVm {
+    pub title: PaneTitleVm,
+    /// Accent border plus a solid highlight bar. `false` paints a dim border and bolds the
+    /// selected row instead; screens with a single pane are always focused.
+    pub focused: bool,
+    pub selected: Option<usize>,
+    pub empty: ListPaneEmpty,
+    /// Prebuilt empty/loading/filter-miss message when [`Self::empty`] is not [`HasRows`].
+    pub empty_message: Option<String>,
+    pub rows: Vec<RowVm>,
+    /// Horizontal offset, applied to the selected row only (#341).
+    pub hscroll: u16,
+    /// Paint a scrollbar when the rows overflow the viewport.
+    pub scrollbar: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ListPaneEmpty {
+    HasRows,
+    /// Local scan or gist fetch in progress with no rows yet.
+    Loading,
+    NoItems,
+    NoFilterMatch,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RowVm {
+    /// Full row text including any mark prefix, before horizontal scroll.
+    pub label: String,
+    pub emphasis: RowEmphasis,
+}
+
+/// How one row stands out from its neighbours. Resolved by the view-model builder so the paint
+/// side only looks it up — the domain reasons behind it (an exact filename match, a pinned
+/// mapping with a missing side) stay on this side of the seam.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum RowEmphasis {
+    #[default]
+    None,
+    /// Bolded row — List's exact-filename match.
+    Strong,
+    /// Painted in the delete colour — a pinned mapping whose local side is missing.
+    Danger,
+}
 
 /// Highlight prefix every row list paints (`▶` plus a space). Kept in one place so the
 /// truncation budget and the widget's `highlight_symbol` cannot drift. Public only because
@@ -197,7 +243,6 @@ mod tests {
     use super::*;
     use crate::config::ThemeChoice;
     use crate::tui::render::tests::{buffer_text, render_state, render_state_size};
-    use crate::tui::view_model::{PaneTitleVm, RowVm};
     use crate::tui::FocusPane;
     use ratatui::{backend::TestBackend, buffer::Buffer, Terminal};
 

@@ -9,9 +9,19 @@
 //! them here would cycle `screens` ↔ `keymap`).
 
 use super::keys::NavAction;
-use super::view_model::ScreenVm;
 use super::{AppState, HelpTopic, KeyOutcome, RowTarget, Screen};
+use config::ConfigVm;
+use confirm::ConfirmVm;
 use crossterm::event::{KeyCode, KeyModifiers};
+use detail::GistDetailVm;
+use diff::DiffVm;
+use gists::GistsVm;
+use help::HelpVm;
+use list::ListVm;
+use palette::PaletteVm;
+use pins::PinsVm;
+use preview::PreviewVm;
+use revisions::RevisionsVm;
 
 pub(crate) mod config;
 pub(crate) mod confirm;
@@ -182,6 +192,22 @@ pub(crate) fn lookup(screen: &Screen) -> ScreenLookup {
             click_select: no_click,
         },
     }
+}
+
+/// Per-screen body presentation contract (#250).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum ScreenVm {
+    List(ListVm),
+    Gists(GistsVm),
+    GistDetail(GistDetailVm),
+    Revisions(RevisionsVm),
+    Config(ConfigVm),
+    Diff(DiffVm),
+    Preview(PreviewVm),
+    Pins(PinsVm),
+    Confirm(ConfirmVm),
+    Help(HelpVm),
+    Palette(PaletteVm),
 }
 
 #[cfg(test)]

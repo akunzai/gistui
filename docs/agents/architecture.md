@@ -11,6 +11,12 @@ Index: [`AGENTS.md`](../../AGENTS.md). Source of truth for types lives in the mo
 
 `build_view_model` (`@src/tui/view_model.rs`): `AppState` + pin-sync cache → presentation facts. Paint helpers apply theme/layout only — no business rules, FS, or network.
 
+**A view-model type lives with whoever owns it** (issue #434). Ask: *can one screen claim this type?* If yes it belongs to that screen module, beside its builder, its paint function, and its tests. If no — several screens use it as equals to describe themselves — it belongs to the shared renderer it is the contract for. `view_model.rs` keeps only `ViewModel`, `ChromeVm`, and the two functions that build them; `ScreenVm` lives with `screens::lookup`, whose `build_vm` column constructs its variants, so the screen list exists once rather than twice.
+
+Caller count is only a proxy for that rule. `DiffVm` is where the proxy fails: `build_diff_vm` and `render_diff_pane_vm` each have two screen callers, but `DiffVm` *is* the Diff screen (it is what `ScreenVm::Diff` carries) and Confirm is a named borrower calling Diff's own public builder for a background — so it belongs to `@src/tui/screens/diff.rs`. By contrast no screen owns `ListPaneVm`, so that family lives in `@src/tui/render/list_pane.rs`. `PaneTitleVm` goes one step further, to `@src/tui/render/text_fit.rs`: `ListPaneVm` merely holds one and hands it on, while `fit_title` is the only code that splits it into segments and decides which one gives way.
+
+No **new** facade re-export was added for the moved types, and `src/tui/mod.rs`'s old `pub(crate) use view_model::{gist_row_display, ScreenVm}` is gone: call sites now name the real module. An import line naming that module is the point — a facade would make "where does this type live" unreadable again, and the next type would be added to the facade instead of to its module. (`render/mod.rs`'s pre-existing `pub(crate) use labels::*` / `text_fit::*` globs predate this and are how the render façade has always worked; the moved types are still imported by their real path everywhere.)
+
 ## Runtime settings (`@src/tui/settings.rs`, issue #404)
 
 - `RuntimeSettings` is the only runtime owner of the seven Settings-screen preferences and the `--no-mouse` / `--no-update-check` session overrides. Effective mouse and update-check values are derived; `Theme` is derived from `ThemeChoice`.
@@ -243,7 +249,7 @@ hashing sync content, saving, and describing what changed. The `pin_mapping` /
 
 ## List panes (`@src/tui/render/list_pane.rs`)
 
-`render_list_pane` paints **every** bordered list of selectable rows (issue #367): both List panes, Gist manager, Pinned Mappings, Revisions. Callers describe the pane with a `ListPaneVm` and never assemble the widget — clipping, horizontal scroll, empty state, title fit, the scrollbar, and the `PaneHit` all live behind that one call.
+`render_list_pane` paints **every** bordered list of selectable rows (issue #367): both List panes, Gist manager, Pinned Mappings, Revisions. Callers describe the pane with a `ListPaneVm` and never assemble the widget — clipping, horizontal scroll, empty state, title fit, the scrollbar, and the `PaneHit` all live behind that one call. `ListPaneVm`, `ListPaneEmpty`, `RowVm`, and `RowEmphasis` are declared here, with the renderer they are the contract for (issue #434).
 
 - **Row geometry is module-private** (`row_hscroll`, `visible_list_row`, `LIST_CHROME_CELLS`). Only `LIST_HIGHLIGHT_SYMBOL` stays visible, for Help's ad-hoc topic index.
 - **Settings and Help's index are deliberately out**: different highlight symbol, bottom title, untruncated rows. Two callers would not justify the seam — do not fold them in without a third.
@@ -290,7 +296,7 @@ Two ellipsis operations — different jobs, do not merge:
 - **`truncate_end`** (issue #340) — keep the head, append `…`. List rows (`visible_list_row`), pane/overlay titles (`fit_block_title`), and a `fit_title` head that itself cannot fit.
 - **`elide_start`** (issue #338) — keep the tail, leading `…`. Only `fit_title`'s trailing context (the Local pane cwd).
 
-Titles reaching `render_list_pane` are always `PaneTitleVm`; a single-segment title is equivalent to `fit_block_title` (both end in `truncate_end` at width − 2).
+Titles reaching `render_list_pane` are always `PaneTitleVm` — declared here rather than in `list_pane.rs`, because `fit_title` is the only code that looks inside one (issue #434). A single-segment title is equivalent to `fit_block_title` (both end in `truncate_end` at width − 2).
 
 Narrow-terminal reflow (issue #342), also in `@src/tui/render/text_fit.rs` — different jobs from ellipsis, do not merge:
 

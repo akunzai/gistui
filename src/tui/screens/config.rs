@@ -2,7 +2,7 @@
 //! colocated in one file (issue #287, Phase 2).
 
 use crate::tui::keys::NavAction;
-use crate::tui::view_model::{ChromeVm, ConfigVm};
+use crate::tui::view_model::ChromeVm;
 use crate::tui::{
     AppState, ConfigField, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneHit, PaneTarget,
     RowTarget, Screen,
@@ -15,6 +15,14 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, List, ListItem, ListState, Paragraph},
     Frame,
 };
+
+/// Settings screen (#250).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConfigVm {
+    pub rows: Vec<String>,
+    pub selected: usize,
+    pub status: Option<String>,
+}
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::Config;
 
@@ -216,6 +224,7 @@ pub(crate) fn render_config_vm(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::tui::*;
     use crossterm::event::KeyCode;
 
@@ -265,5 +274,20 @@ mod tests {
             })
         );
         assert!(state.settings.diff_show_full());
+    }
+
+    #[test]
+    fn config_vm_rows_and_status() {
+        let mut state = initial_state();
+        state.screen = Screen::Config(Box::new(ConfigState { index: 1 }));
+        state.status = Some("Theme saved".into());
+        let c = build_config_vm(&state);
+        assert!(!c.rows.is_empty());
+        assert_eq!(c.selected, 1);
+        assert_eq!(c.status.as_deref(), Some("Theme saved"));
+        assert!(c
+            .rows
+            .iter()
+            .any(|r| r.contains("Theme") || r.contains("Mouse")));
     }
 }

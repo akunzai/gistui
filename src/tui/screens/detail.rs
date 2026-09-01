@@ -5,13 +5,61 @@ use crate::domain::GistComment;
 use crate::tui::bg::LoopFlow;
 use crate::tui::keys::NavAction;
 use crate::tui::text::comment_lines_count;
-use crate::tui::view_model::{
-    ChromeVm, CommentLineVm, CommentsAffordance, CommentsPaneVm, GistDetailVm,
-};
+use crate::tui::view_model::ChromeVm;
+use crate::tui::TextInput;
 use crate::tui::{
     AppState, DetailFocus, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneHit, PaneTarget,
     RowTarget,
 };
+
+/// Single-gist detail presentation (#250). Layout geometry still filled during paint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct GistDetailVm {
+    /// No `detail.gist_id` or group missing from state.
+    pub missing: bool,
+    pub block_title: String,
+    pub info_line: String,
+    pub focus: DetailFocus,
+    pub files: Vec<String>,
+    pub files_title: String,
+    pub file_cursor: usize,
+    pub comments_count: u32,
+    pub comments: CommentsPaneVm,
+    pub footer: String,
+    pub footer_colored: bool,
+    pub description_input: Option<TextInput>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CommentsPaneVm {
+    Loading,
+    /// Not loaded yet — prompt to open the tab.
+    PromptLoad,
+    Error {
+        message: String,
+    },
+    Empty,
+    Thread {
+        title: String,
+        affordance: CommentsAffordance,
+        lines: Vec<CommentLineVm>,
+        scroll: u16,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommentsAffordance {
+    LoadingMore,
+    LoadOlder,
+    StartOfThread,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CommentLineVm {
+    Author { text: String },
+    Body { text: String },
+    Blank,
+}
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::GistDetail;
 
@@ -1498,7 +1546,7 @@ mod tests {
         use crate::domain::GistComment;
         use crate::tui::screens::detail::build_gist_detail_vm;
         use crate::tui::text::comment_lines_count;
-        use crate::tui::view_model::{CommentLineVm, CommentsPaneVm};
+
         let comments = vec![
             GistComment {
                 author: "alice".into(),
@@ -1726,5 +1774,91 @@ mod tests {
 
         let detail = state.detail().expect("expected Screen::GistDetail");
         assert!(!detail.comments_loading_more);
+    }
+
+    #[test]
+    fn gist_detail_vm_missing_without_id() {
+        let mut state = initial_state();
+        state.screen = Screen::GistDetail(Box::default());
+        let d = build_gist_detail_vm(&state);
+        assert!(d.missing);
+        assert!(matches!(d.comments, CommentsPaneVm::PromptLoad));
+    }
+
+    #[test]
+    fn gist_detail_vm_files_and_comments_states() {
+        use crate::domain::{GistComment, GistFile};
+
+        let mut state = initial_state();
+        state.screen = Screen::GistDetail(Box::default());
+        state.gist_catalog.owned = vec![
+            GistFile {
+                description: "demo".into(),
+                content_type: Some("text/plain".into()),
+                size: 1_536,
+                ..GistFile::fixture("g1", "a.txt")
+            },
+            GistFile::fixture("g1", "b.txt"),
+        ];
+        if let Some(d) = state.detail_mut() {
+            d.gist_id = Some("g1".into());
+            d.focus = DetailFocus::Files;
+            d.file_cursor = 1;
+        }
+        state.gist_catalog.comment_counts.insert("g1".into(), 3);
+
+        let d = build_gist_detail_vm(&state);
+        assert!(!d.missing);
+        assert!(d.block_title.contains("demo") || d.block_title.contains("g1"));
+        assert!(
+            d.info_line.contains("g1")
+                || d.info_line.contains("secret")
+                || d.info_line.contains("public")
+        );
+        assert_eq!(d.files.len(), 2);
+        assert_eq!(d.files[0], "a.txt · 1.5 KiB · text/plain");
+        assert_eq!(d.files_title, "Files (2): 1.5 KiB total");
+        assert_eq!(d.comments_count, 3);
+        assert_eq!(d.file_cursor, 1);
+        assert_eq!(d.focus, DetailFocus::Files);
+        assert!(matches!(d.comments, CommentsPaneVm::PromptLoad));
+
+        if let Some(d) = state.detail_mut() {
+            d.focus = DetailFocus::Comments;
+            d.comments = Some(vec![GistComment {
+                author: "alice".into(),
+                body: "hello\nworld".into(),
+                created_at: "2020-01-01T00:00:00Z".into(),
+            }]);
+            d.comments_total = Some(1);
+            d.comments_loaded_oldest_page = 1;
+        }
+        let d = build_gist_detail_vm(&state);
+        match d.comments {
+            CommentsPaneVm::Thread {
+                title,
+                affordance,
+                lines,
+                ..
+            } => {
+                assert!(title.contains("Comments"));
+                assert_eq!(affordance, CommentsAffordance::StartOfThread);
+                assert!(lines.iter().any(|l| matches!(
+                    l,
+                    CommentLineVm::Author { text } if text.contains("alice")
+                )));
+                assert!(lines.iter().any(|l| matches!(
+                    l,
+                    CommentLineVm::Body { text } if text.contains("hello")
+                )));
+            }
+            other => panic!("expected Thread, got {other:?}"),
+        }
+
+        if let Some(d) = state.detail_mut() {
+            d.comments = Some(vec![]);
+        }
+        let d = build_gist_detail_vm(&state);
+        assert!(matches!(d.comments, CommentsPaneVm::Empty));
     }
 }
