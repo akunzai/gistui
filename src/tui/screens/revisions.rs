@@ -1,8 +1,8 @@
 //! `Screen::Revisions` — key handling, view-model, paint, palette items, and apply handlers
 //! colocated in one file (issue #287, Phase 2; issue #383).
 
-use crate::actions::SystemRunner;
-use crate::tui::bg::{revision_version_label, ActionJobKind, ActionJobSpec, Jobs, LoopFlow};
+use crate::tui::bg::LoopFlow;
+use crate::tui::gist_revision::{RestoreApplied, RestoreRefresh, RevisionRequest, RevisionTarget};
 use crate::tui::keys::{apply_list_cursor_nav, NavAction};
 use crate::tui::render::list_pane::render_list_pane;
 use crate::tui::text::hscroll_max_for_text;
@@ -156,27 +156,24 @@ impl AppState {
         if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
             return KeyOutcome::None;
         }
+        let now = crate::tui::render::unix_now();
         let child_version = child.version.clone();
-        let child_label = revision_version_label(&child);
+        let new_label = format!("revision {}", revision_version_label(&child, now));
         let (parent_version, old_label) = match parent {
-            Some(parent) => {
-                let label = revision_version_label(&parent);
-                (Some(parent.version), format!("revision {label}"))
-            }
+            Some(parent) => (
+                Some(parent.version.clone()),
+                format!("revision {}", revision_version_label(&parent, now)),
+            ),
             None => (None, "(initial)".into()),
         };
-        let new_label = format!("revision {child_label}");
-        let owner_login = self.gist_owner_login(&gist_id);
-        KeyOutcome::RevisionDiffIncremental {
+        KeyOutcome::Revision(RevisionRequest::DiffAdjacent {
             entry: self.defer_entry(),
-            gist_id,
-            filename,
+            target: self.history_target(&gist_id, filename),
             child_version,
             parent_version,
             old_label,
             new_label,
-            owner_login,
-        }
+        })
     }
 
     fn revision_diff_intent(&mut self) -> KeyOutcome {
@@ -193,22 +190,16 @@ impl AppState {
         if self.block_if_non_previewable_gist_file(&gist_id, &filename) {
             return KeyOutcome::None;
         }
-        let version = revision.version.clone();
-        let version_label = revision_version_label(&revision);
-        let old_label = format!("revision {version_label}");
+        let now = crate::tui::render::unix_now();
+        let old_label = format!("revision {}", revision_version_label(&revision, now));
         let new_label = format!("current {filename}");
-        let raw_url = self.gist_file_raw_url(&gist_id, &filename);
-        let owner_login = self.gist_owner_login(&gist_id);
-        KeyOutcome::RevisionDiff {
+        KeyOutcome::Revision(RevisionRequest::DiffAgainstCurrent {
             entry: self.defer_entry(),
-            gist_id,
-            filename,
-            version,
+            target: self.history_and_current_target(&gist_id, filename),
+            version: revision.version,
             old_label,
             new_label,
-            raw_url,
-            owner_login,
-        }
+        })
     }
 
     fn restore_revision_preview_intent(&mut self) -> KeyOutcome {
@@ -225,19 +216,32 @@ impl AppState {
         let Some(revision) = self.selected_revision().cloned() else {
             return KeyOutcome::None;
         };
-        let version = revision.version.clone();
-        let version_label = revision_version_label(&revision);
-        let raw_url = self.gist_file_raw_url(&gist_id, &filename);
-        let owner_login = self.gist_owner_login(&gist_id);
-        KeyOutcome::RestoreRevisionPreview {
+        let version_label = revision_version_label(&revision, crate::tui::render::unix_now());
+        KeyOutcome::Revision(RevisionRequest::PreviewRestore {
             entry: self.defer_entry(),
-            gist_id,
-            filename,
-            version,
+            target: self.history_and_current_target(&gist_id, filename),
+            version: revision.version,
             version_label,
-            raw_url,
-            owner_login,
-        }
+        })
+    }
+
+    /// Intent-time snapshot for a request that reads **only** history. No raw URL: with
+    /// no current side, there is nothing for the gist-view-to-raw-URL fallback to serve.
+    fn history_target(&self, gist_id: &str, filename: String) -> RevisionTarget {
+        RevisionTarget::new(
+            crate::domain::GistFileRef::new(gist_id, filename, None),
+            self.gist_owner_login(gist_id),
+        )
+    }
+
+    /// Intent-time snapshot for a request that also fetches *current* content, carrying
+    /// the raw URL that fetch falls back to.
+    fn history_and_current_target(&self, gist_id: &str, filename: String) -> RevisionTarget {
+        let raw_url = self.gist_file_raw_url(gist_id, &filename);
+        RevisionTarget::new(
+            crate::domain::GistFileRef::new(gist_id, filename, raw_url),
+            self.gist_owner_login(gist_id),
+        )
     }
 
     /// Footer label for the revision-history target file, including `(n/total)` when multi-file.
@@ -309,6 +313,18 @@ impl AppState {
             .map(|label| hscroll_max_for_text(&label))
             .unwrap_or(0)
     }
+}
+
+/// `{short-sha} ({age} ago)` for one revision, as the user sees it named in a diff header
+/// or a restore prompt. Built at intent time (issue #430): the label a user pressed a key
+/// on must not drift with however long the background fetch takes, so `now` is an explicit
+/// input rather than a wall-clock read inside the worker.
+fn revision_version_label(revision: &crate::domain::GistRevision, now: u64) -> String {
+    let sha = crate::domain::short_sha(&revision.version);
+    let age = crate::domain::parse_rfc3339_to_unix(&revision.committed_at)
+        .map(|t| crate::domain::humanize_age(now as i64 - t as i64))
+        .unwrap_or_else(|| "?".into());
+    format!("{sha} ({age} ago)")
 }
 
 /// Builds a single Revisions-screen row. Pure so the age/delta formatting is unit-testable
@@ -491,45 +507,18 @@ pub(crate) fn on_revisions_fetched(
     LoopFlow::Proceed
 }
 
-/// Re-fetch revision history for `gist_id`. Shared by `KeyOutcome::FetchRevisions` and
-/// `Jobs::absorb` when apply set `revisions_stale` (issue #383).
-pub(crate) fn request_revisions(jobs: &mut Jobs, state: &mut AppState, gist_id: String) {
-    jobs.spawn_action(
-        state,
-        ActionJobSpec::new(
-            ActionJobKind::FetchRevisions {
-                gist_id: gist_id.clone(),
-            },
-            "Loading revisions…",
-        ),
-        move || {
-            let result = crate::gh::fetch_gist_commits_json(&SystemRunner, &gist_id)
-                .map_err(|e| e.to_string())
-                .and_then(|raw| {
-                    crate::gh::parse_gist_commits_json(&raw).map_err(|e| e.to_string())
-                });
-            (result, gist_id)
-        },
-        move |(result, gist_id), state| on_revisions_fetched(state, gist_id, result),
-    );
-}
-
-/// `RestoreRevisionDone` outcome: return to the Revisions screen and re-fetch both the
-/// gist list and the revision history for the restored gist.
+/// Apply a completed restore. The workflow decided *what* changed and *what* must be
+/// refreshed ([`RestoreApplied`]); this handler only performs the observable state
+/// application — content invalidation, status, navigation back to Revisions, its row and
+/// cursor reset, and the two refresh markers `Jobs::absorb` consumes.
 pub(crate) fn on_restore_revision_done(
     state: &mut AppState,
-    result: std::result::Result<(), String>,
-    gist_id: String,
-    filename: String,
+    result: std::result::Result<RestoreApplied, String>,
 ) -> LoopFlow {
     match result {
-        Ok(()) => {
-            state
-                .gist_content_store
-                .invalidate_file(&crate::domain::GistFileRef::id_name(
-                    gist_id.clone(),
-                    filename.clone(),
-                ));
+        Ok(applied) => {
+            let filename = applied.file.filename.clone();
+            state.gist_content_store.invalidate_file(&applied.file);
             state.set_status(format!(
                 "Restored {filename} from old revision (new revision created)"
             ));
@@ -545,8 +534,12 @@ pub(crate) fn on_restore_revision_done(
                 rev.fetch_error = None;
                 rev.gist_id.clone()
             });
-            state.gist_list_stale = true;
-            state.revisions_stale = gist_id;
+            for refresh in applied.refresh {
+                match refresh {
+                    RestoreRefresh::GistCatalog => state.gist_list_stale = true,
+                    RestoreRefresh::RevisionHistory => state.revisions_stale = gist_id.clone(),
+                }
+            }
         }
         Err(error) => {
             state.set_status(format!("restore failed: {error}"));
@@ -596,6 +589,34 @@ mod tests {
         );
     }
 
+    /// Labels are a snapshot taken when the key is pressed, so they cannot drift with
+    /// however long the background fetch takes — `now` is an input, not a wall-clock read
+    /// (issue #430).
+    #[test]
+    fn revision_version_label_is_built_from_an_explicit_now() {
+        let revision = GistRevision {
+            version: "abc123def456".into(),
+            committed_at: "2026-06-01T00:00:00Z".into(),
+            user: "alice".into(),
+            change_status: crate::domain::GistRevisionChangeStatus {
+                total: 1,
+                additions: 1,
+                deletions: 0,
+            },
+        };
+        let committed = crate::domain::parse_rfc3339_to_unix(&revision.committed_at).unwrap();
+
+        assert_eq!(
+            revision_version_label(&revision, committed + 3 * 86_400),
+            "abc123d (3d ago)"
+        );
+        assert_eq!(
+            revision_version_label(&revision, committed + 60 * 86_400),
+            "abc123d (2mo ago)",
+            "the same revision reads differently only because `now` moved"
+        );
+    }
+
     #[test]
     fn revisions_capital_d_on_current_shows_status() {
         let mut state = state_with_gists();
@@ -630,7 +651,7 @@ mod tests {
         revision_mut(&mut state).cursor.index = 1;
         assert!(matches!(
             state.handle_key(KeyCode::Char('D')),
-            KeyOutcome::RevisionDiff { .. }
+            KeyOutcome::Revision(RevisionRequest::DiffAgainstCurrent { .. })
         ));
     }
 
@@ -665,12 +686,12 @@ mod tests {
         ]);
         assert!(matches!(
             state.handle_key(KeyCode::Enter),
-            KeyOutcome::RevisionDiffIncremental { .. }
+            KeyOutcome::Revision(RevisionRequest::DiffAdjacent { .. })
         ));
         revision_mut(&mut state).cursor.index = 1;
         assert!(matches!(
             state.handle_key(KeyCode::Enter),
-            KeyOutcome::RevisionDiffIncremental { .. }
+            KeyOutcome::Revision(RevisionRequest::DiffAdjacent { .. })
         ));
     }
 
@@ -761,7 +782,7 @@ mod tests {
         assert_eq!(by_mouse, key_out);
         assert!(matches!(
             by_mouse,
-            KeyOutcome::RevisionDiffIncremental { .. }
+            KeyOutcome::Revision(RevisionRequest::DiffAdjacent { .. })
         ));
     }
 
@@ -860,81 +881,16 @@ mod tests {
         assert_eq!(revision_ref(&state).cursor.hscroll, 0);
     }
 
-    /// A shrinking revision list clamps an out-of-range cursor and clears its stale
-    /// horizontal scroll; a cursor that stays in range keeps its horizontal scroll
-    /// (issue #408).
-    #[test]
-    fn on_revisions_fetched_clamps_an_out_of_range_cursor() {
-        let mut state = initial_state();
-        state.screen = Screen::Revisions(Box::new(RevisionState {
-            gist_id: Some("g1".into()),
-            cursor: ListCursor {
-                index: 3,
-                hscroll: 7,
-            },
-            ..Default::default()
-        }));
-        let entry = GistRevision {
-            version: "abc123".into(),
-            committed_at: "2026-01-01T00:00:00Z".into(),
-            user: "alice".into(),
-            change_status: crate::domain::GistRevisionChangeStatus {
-                total: 1,
-                additions: 1,
-                deletions: 0,
-            },
-        };
-
-        on_revisions_fetched(&mut state, "g1".into(), Ok(vec![entry.clone(), entry]));
-
-        assert_eq!(revision_ref(&state).cursor.index, 1, "clamped into range");
-        assert_eq!(
-            revision_ref(&state).cursor.hscroll,
-            0,
-            "stale hscroll cleared"
-        );
-    }
-
-    /// An in-range cursor is left untouched by a fetch (issue #408).
-    #[test]
-    fn on_revisions_fetched_preserves_an_in_range_cursor() {
-        let mut state = initial_state();
-        state.screen = Screen::Revisions(Box::new(RevisionState {
-            gist_id: Some("g1".into()),
-            cursor: ListCursor {
-                index: 1,
-                hscroll: 4,
-            },
-            ..Default::default()
-        }));
-        let entry = GistRevision {
-            version: "abc123".into(),
-            committed_at: "2026-01-01T00:00:00Z".into(),
-            user: "alice".into(),
-            change_status: crate::domain::GistRevisionChangeStatus {
-                total: 1,
-                additions: 1,
-                deletions: 0,
-            },
-        };
-
-        on_revisions_fetched(
-            &mut state,
-            "g1".into(),
-            Ok(vec![entry.clone(), entry.clone(), entry]),
-        );
-
-        assert_eq!(revision_ref(&state).cursor.index, 1);
-        assert_eq!(revision_ref(&state).cursor.hscroll, 4);
-    }
-
     #[test]
     fn capital_h_from_list_opens_revisions_for_selected_gist_file() {
         let mut state = list_state_with_matches();
         state.focus = FocusPane::Gist;
         state.gist_cursor.index = 0;
         let outcome = state.handle_key(KeyCode::Char('H'));
-        assert!(matches!(outcome, KeyOutcome::FetchRevisions { .. }));
+        assert!(matches!(
+            outcome,
+            KeyOutcome::Revision(RevisionRequest::FetchHistory { .. })
+        ));
         assert!(state.screen.is_revisions());
         assert_eq!(revision_ref(&state).gist_id.as_deref(), Some("a"));
         assert_eq!(revision_ref(&state).target_file, "settings.json");
@@ -948,125 +904,14 @@ mod tests {
         detail_mut(&mut state).gist_id = Some("g1".into());
         detail_mut(&mut state).file_cursor = 1;
         let outcome = state.handle_key(KeyCode::Char('H'));
-        assert!(matches!(outcome, KeyOutcome::FetchRevisions { .. }));
+        assert!(matches!(
+            outcome,
+            KeyOutcome::Revision(RevisionRequest::FetchHistory { .. })
+        ));
         assert!(state.screen.is_revisions());
         assert_eq!(revision_ref(&state).gist_id.as_deref(), Some("g1"));
         assert_eq!(revision_ref(&state).target_file, "b.txt");
         assert!(state.nav_stack.last().is_some_and(Screen::is_gist_detail));
         assert!(revision_ref(&state).entries.is_none());
-    }
-
-    #[test]
-    fn on_revisions_fetched_returns_skip_iteration_on_gist_mismatch() {
-        let mut state = initial_state();
-        state.screen = Screen::Revisions(Box::new(RevisionState {
-            gist_id: Some("g1".into()),
-            ..Default::default()
-        }));
-
-        let flow = on_revisions_fetched(&mut state, "other-gist".into(), Ok(Vec::new()));
-
-        assert!(matches!(flow, LoopFlow::SkipIteration));
-        // Not applied — still no entries.
-        assert!(state.revision().unwrap().entries.is_none());
-    }
-
-    #[test]
-    fn on_revisions_fetched_ok_sets_entries() {
-        let mut state = initial_state();
-        state.screen = Screen::Revisions(Box::new(RevisionState {
-            gist_id: Some("g1".into()),
-            ..Default::default()
-        }));
-        let entry = GistRevision {
-            version: "abc123".into(),
-            committed_at: "2026-01-01T00:00:00Z".into(),
-            user: "alice".into(),
-            change_status: crate::domain::GistRevisionChangeStatus {
-                total: 1,
-                additions: 1,
-                deletions: 0,
-            },
-        };
-
-        let flow = on_revisions_fetched(&mut state, "g1".into(), Ok(vec![entry.clone(), entry]));
-
-        assert!(matches!(flow, LoopFlow::Proceed));
-        assert_eq!(state.revision().unwrap().entries.as_ref().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn on_revisions_fetched_err_sets_fetch_error() {
-        let mut state = initial_state();
-        state.screen = Screen::Revisions(Box::new(RevisionState {
-            gist_id: Some("g1".into()),
-            ..Default::default()
-        }));
-
-        on_revisions_fetched(&mut state, "g1".into(), Err("boom".into()));
-
-        let rev = state.revision().unwrap();
-        assert_eq!(rev.fetch_error.as_deref(), Some("boom"));
-        assert_eq!(rev.entries, Some(Vec::new()));
-    }
-
-    #[test]
-    fn on_restore_revision_done_err_sets_status() {
-        let mut state = initial_state();
-
-        on_restore_revision_done(&mut state, Err("boom".into()), "g1".into(), "a.txt".into());
-
-        assert_eq!(state.status.as_deref(), Some("restore failed: boom"));
-        assert!(!state.gist_list_stale);
-        assert!(state.revisions_stale.is_none());
-    }
-
-    #[test]
-    fn on_restore_revision_done_ok_returns_to_revisions_and_marks_stale() {
-        let mut state = initial_state();
-        state.screen = Screen::Revisions(Box::new(RevisionState {
-            gist_id: Some("g1".into()),
-            cursor: ListCursor {
-                index: 3,
-                ..Default::default()
-            },
-            entries: Some(Vec::new()),
-            fetch_error: Some("old".into()),
-            ..Default::default()
-        }));
-        state.enter_confirm(
-            PendingAction::RestoreRevision {
-                gist_id: "g1".into(),
-                filename: "a.txt".into(),
-                version: "abc".into(),
-                version_label: "abc (1d ago)".into(),
-                content: "old".into(),
-            },
-            String::new(),
-        );
-        let file = crate::domain::GistFileRef::id_name("g1", "a.txt");
-        state.gist_content_store.insert(&file, "stale".into());
-
-        on_restore_revision_done(&mut state, Ok(()), "g1".into(), "a.txt".into());
-
-        assert!(state.gist_list_stale);
-        assert_eq!(state.revisions_stale.as_deref(), Some("g1"));
-        assert!(state.screen.is_revisions());
-        let rev = state.revision().unwrap();
-        assert_eq!(rev.cursor.index, 0);
-        assert!(rev.entries.is_none());
-        assert!(rev.fetch_error.is_none());
-        assert_eq!(
-            state.status.as_deref(),
-            Some("Restored a.txt from old revision (new revision created)")
-        );
-        assert!(matches!(
-            state.gist_content_store.lookup(
-                &state.gist_catalog,
-                file,
-                crate::tui::gist_content::FetchPolicy::PreferCache
-            ),
-            crate::tui::gist_content::ContentLookup::Miss(_)
-        ));
     }
 }

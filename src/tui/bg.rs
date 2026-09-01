@@ -31,70 +31,6 @@ pub(super) enum UploadEditWatchEvent {
     },
 }
 
-pub(super) fn revision_version_label(revision: &crate::domain::GistRevision) -> String {
-    let sha = crate::domain::short_sha(&revision.version);
-    let age = crate::domain::parse_rfc3339_to_unix(&revision.committed_at)
-        .map(|t| {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            crate::domain::humanize_age(now as i64 - t as i64)
-        })
-        .unwrap_or_else(|| "?".into());
-    format!("{sha} ({age} ago)")
-}
-
-pub(super) fn fetch_revision_incremental_pair(
-    gist_id: &str,
-    child_version: &str,
-    parent_version: Option<&str>,
-    filename: &str,
-    owner_login: &str,
-) -> std::result::Result<(String, String), String> {
-    let new_content = ensure_fetched_text(
-        crate::gh::fetch_revision_file_text_optional(
-            &SystemRunner,
-            gist_id,
-            child_version,
-            filename,
-            owner_login,
-        )
-        .map_err(|e| e.to_string())?,
-    )?;
-    let old_content = match parent_version {
-        Some(parent) => ensure_fetched_text(
-            crate::gh::fetch_revision_file_text_optional(
-                &SystemRunner,
-                gist_id,
-                parent,
-                filename,
-                owner_login,
-            )
-            .map_err(|e| e.to_string())?,
-        )?,
-        None => String::new(),
-    };
-    Ok((old_content, new_content))
-}
-
-pub(super) fn fetch_revision_pair(
-    gist_id: &str,
-    version: &str,
-    filename: &str,
-    raw_url: Option<&str>,
-    owner_login: &str,
-    _old_label: &str,
-    _new_label: &str,
-) -> std::result::Result<(String, String), String> {
-    let old_content = ensure_fetched_text(
-        crate::gh::fetch_revision_file_text(&SystemRunner, gist_id, version, filename, owner_login)
-            .map_err(|e| e.to_string())?,
-    )?;
-    let new_content = fetch_gist_content(gist_id, filename, raw_url)?;
-    Ok((old_content, new_content))
-}
-
 pub(super) fn fetch_gist_content(
     gist_id: &str,
     filename: &str,
@@ -104,22 +40,6 @@ pub(super) fn fetch_gist_content(
         .map_err(|e| e.to_string())?;
     crate::domain::ensure_text_size(content.len() as u64)?;
     Ok(content)
-}
-
-/// Cap revision-file text the same way as live gist content (issue #222).
-pub(super) fn ensure_fetched_text(content: String) -> std::result::Result<String, String> {
-    crate::domain::ensure_text_size(content.len() as u64)?;
-    Ok(content)
-}
-
-pub(super) fn fetch_revision_pair_for_restore(
-    gist_id: &str,
-    version: &str,
-    filename: &str,
-    raw_url: Option<&str>,
-    owner_login: &str,
-) -> std::result::Result<(String, String), String> {
-    fetch_revision_pair(gist_id, version, filename, raw_url, owner_login, "", "")
 }
 
 pub(super) fn persist_gist_cache_from_state(state: &AppState) {
@@ -224,25 +144,9 @@ pub(super) enum ActionJobKind {
     UpdateDescription {
         gist_id: String,
     },
-    FetchRevisions {
-        gist_id: String,
-    },
-    RevisionDiffIncremental {
-        file: crate::domain::GistFileRef,
-        child_version: String,
-        parent_version: Option<String>,
-    },
-    RevisionDiff {
-        file: crate::domain::GistFileRef,
-        version: String,
-    },
-    RestoreRevisionPreview {
-        file: crate::domain::GistFileRef,
-        version: String,
-    },
-    RestoreRevision {
-        file: crate::domain::GistFileRef,
-    },
+    /// Every Gist revision job. Its semantic identity is owned by the workflow module
+    /// (`@src/tui/gist_revision.rs`, issue #430), not spelled out again here.
+    Revision(super::gist_revision::RevisionJobKind),
     ToggleGistStar {
         gist_id: String,
         starring: bool,
@@ -297,6 +201,22 @@ impl ActionSpawner for RecordingActionSpawner {
     fn spawn(&mut self, spec: ActionJobSpec, _job: ActionJob) -> ActionRx {
         self.started.0.borrow_mut().push(spec);
         None
+    }
+}
+
+/// Runs the real worker closure on the calling thread and queues its completion for the
+/// normal [`Jobs::absorb`] path (issue #430). Lets a test drive a complete workflow —
+/// stage, execute, absorb, apply — with the generation guard intact and no thread.
+#[cfg(test)]
+struct InlineActionSpawner;
+
+#[cfg(test)]
+impl ActionSpawner for InlineActionSpawner {
+    fn spawn(&mut self, _spec: ActionJobSpec, job: ActionJob) -> ActionRx {
+        let ActionJob { generation, run } = job;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = tx.send((generation, run()));
+        Some(rx)
     }
 }
 
@@ -1031,7 +951,15 @@ pub(super) struct Jobs {
     upload_edit_watch: Option<std::sync::mpsc::Receiver<UploadEditWatchEvent>>,
     action: ActionRx,
     action_spawner: Box<dyn ActionSpawner>,
+    /// External-command boundary handed to worker closures that need one. Production
+    /// injects [`SystemRunner`]; tests inject a scripted runner (issue #430). Currently
+    /// consumed only by the Gist revision workflow — other action jobs still reach
+    /// `crate::actions::execute_command` directly.
+    runner: SharedRunner,
 }
+
+/// A [`crate::actions::CommandRunner`] that can be shared with a background worker.
+pub(super) type SharedRunner = std::sync::Arc<dyn crate::actions::CommandRunner + Send + Sync>;
 
 pub(super) enum LoopFlow {
     Proceed,
@@ -1046,7 +974,13 @@ impl Jobs {
         fetch_gists: bool,
         catalog: &crate::domain::GistCatalog,
     ) -> Self {
-        Self::with_action_spawner(update, fetch_gists, catalog, Box::new(ThreadActionSpawner))
+        Self::with_action_spawner(
+            update,
+            fetch_gists,
+            catalog,
+            Box::new(ThreadActionSpawner),
+            std::sync::Arc::new(SystemRunner),
+        )
     }
 
     fn with_action_spawner(
@@ -1054,6 +988,7 @@ impl Jobs {
         fetch_gists: bool,
         catalog: &crate::domain::GistCatalog,
         action_spawner: Box<dyn ActionSpawner>,
+        runner: SharedRunner,
     ) -> Self {
         Self {
             update,
@@ -1062,7 +997,13 @@ impl Jobs {
             upload_edit_watch: None,
             action: None,
             action_spawner,
+            runner,
         }
+    }
+
+    /// The shared external-command boundary, cloned into a worker closure.
+    pub(super) fn command_runner(&self) -> SharedRunner {
+        self.runner.clone()
     }
 
     #[cfg(test)]
@@ -1075,8 +1016,16 @@ impl Jobs {
             Box::new(RecordingActionSpawner {
                 started: started.clone(),
             }),
+            std::sync::Arc::new(SystemRunner),
         );
         (jobs, started)
+    }
+
+    /// A registry that executes worker closures inline against `runner`, so a test can
+    /// drive a complete workflow through spawn, absorb, and apply (issue #430).
+    #[cfg(test)]
+    pub(super) fn inline(catalog: &crate::domain::GistCatalog, runner: SharedRunner) -> Self {
+        Self::with_action_spawner(None, false, catalog, Box::new(InlineActionSpawner), runner)
     }
 
     /// Run `run` on a background thread; apply `apply(value)` on the event-loop tick.
@@ -1197,7 +1146,11 @@ impl Jobs {
             self.gist_refresh.start(&state.gist_catalog);
         }
         if let Some(gist_id) = state.revisions_stale.take() {
-            screens::revisions::request_revisions(self, state, gist_id);
+            super::gist_revision::dispatch(
+                self,
+                state,
+                super::gist_revision::RevisionRequest::FetchHistory { gist_id },
+            );
         }
         Ok(flow)
     }
@@ -1448,6 +1401,56 @@ mod tests {
         assert_eq!(state.pinned.len(), 1);
     }
 
+    // ---- write_scratch_file ---------------------------------------------
+
+    /// The shared scratch preparation both upload and restore-revision depend on. A write
+    /// failure keeps its own wording, cleans the directory up, and — because the caller
+    /// early-returns on `None` — never reaches a spawn, so an unrelated in-flight job is
+    /// neither started nor superseded (issue #430).
+    #[test]
+    fn write_scratch_file_reports_a_write_failure_and_leaves_nothing_behind() {
+        let mut state = initial_state();
+        let before = state.begin_bg_task();
+
+        // A nested name cannot be written: the scratch directory has no subdirectories.
+        let prepared = write_scratch_file(
+            &mut state,
+            "restore",
+            "sub/restore.json",
+            "restore payload",
+            b"{}",
+        );
+
+        assert!(prepared.is_none());
+        assert!(state
+            .status
+            .as_deref()
+            .is_some_and(|s| s.starts_with("failed to write restore payload: ")));
+        assert!(
+            state.is_current_bg_generation(before),
+            "a failed preparation must not supersede an in-flight job"
+        );
+    }
+
+    #[test]
+    fn write_scratch_file_hands_back_a_path_inside_a_live_scratch_dir() {
+        let mut state = initial_state();
+
+        let (scratch, path) = write_scratch_file(
+            &mut state,
+            "restore",
+            "restore.json",
+            "restore payload",
+            b"{}",
+        )
+        .expect("prepared");
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{}");
+        assert_eq!(path.parent(), Some(scratch.path()));
+        drop(scratch);
+        assert!(!path.exists(), "the owner's drop cleans it up");
+    }
+
     // ---- test helpers ---------------------------------------------------
 
     /// Empty `Jobs` registry — every slot `None`. Tests populate only the slot under test.
@@ -1459,6 +1462,7 @@ mod tests {
             upload_edit_watch: None,
             action: None,
             action_spawner: Box::new(ThreadActionSpawner),
+            runner: std::sync::Arc::new(SystemRunner),
         }
     }
 

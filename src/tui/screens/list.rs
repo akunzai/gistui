@@ -259,7 +259,9 @@ impl AppState {
             KeyCode::Char('H') if list_guard(self, code) => {
                 if self.open_revisions() {
                     if let Some(gist_id) = self.revision().and_then(|r| r.gist_id.clone()) {
-                        return KeyOutcome::FetchRevisions { gist_id };
+                        return KeyOutcome::Revision(
+                            crate::tui::gist_revision::RevisionRequest::FetchHistory { gist_id },
+                        );
                     }
                 }
             }

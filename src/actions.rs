@@ -101,35 +101,89 @@ pub fn run_command(runner: &dyn CommandRunner, plan: &CommandPlan) -> Result<Str
 pub mod test_support {
     use super::{CommandOutput, CommandPlan, CommandRunner};
     use anyhow::{anyhow, Result};
-    use std::cell::RefCell;
+    use std::sync::Mutex;
 
+    /// One recorded call: the plan, plus the body of any `--input <path>` file, read at
+    /// call time. The restore-revision payload lives in a scratch directory the worker
+    /// deletes when it finishes, so that file is only observable while the command runs
+    /// (issue #430).
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    pub struct RecordedCall {
+        pub plan: CommandPlan,
+        pub input_body: Option<String>,
+    }
+
+    #[derive(Default)]
+    struct SeqState {
+        outputs: Vec<CommandOutput>,
+        calls: Vec<RecordedCall>,
+        next: usize,
+    }
+
+    /// Scripted runner. Guarded by a `Mutex` rather than a `RefCell` so an `Arc<SeqRunner>`
+    /// can be injected into [`crate::tui`]'s job registry and shared with the worker
+    /// closures that run off the event-loop thread (issue #430).
     pub struct SeqRunner {
-        outputs: RefCell<Vec<CommandOutput>>,
-        calls: RefCell<Vec<CommandPlan>>,
-        next: RefCell<usize>,
+        state: Mutex<SeqState>,
     }
 
     impl SeqRunner {
         pub fn new(outputs: Vec<CommandOutput>) -> Self {
             Self {
-                outputs: RefCell::new(outputs),
-                calls: RefCell::new(Vec::new()),
-                next: RefCell::new(0),
+                state: Mutex::new(SeqState {
+                    outputs,
+                    ..SeqState::default()
+                }),
             }
         }
 
         pub fn calls(&self) -> Vec<CommandPlan> {
-            self.calls.borrow().clone()
+            self.recorded().into_iter().map(|c| c.plan).collect()
+        }
+
+        pub fn recorded(&self) -> Vec<RecordedCall> {
+            self.state.lock().expect("SeqRunner poisoned").calls.clone()
+        }
+    }
+
+    /// The path following `--input`, if the plan has one.
+    pub fn input_path(plan: &CommandPlan) -> Option<&String> {
+        let i = plan.args.iter().position(|a| a == "--input")?;
+        plan.args.get(i + 1)
+    }
+
+    impl CommandOutput {
+        /// Scripted success — the common case, where only stdout matters.
+        pub fn ok(stdout: impl Into<String>) -> Self {
+            Self {
+                success: true,
+                stdout: stdout.into(),
+                stderr: String::new(),
+            }
+        }
+
+        /// Scripted failure; `stderr` becomes the error `run_command` reports.
+        pub fn err(stderr: impl Into<String>) -> Self {
+            Self {
+                success: false,
+                stdout: String::new(),
+                stderr: stderr.into(),
+            }
         }
     }
 
     impl CommandRunner for SeqRunner {
         fn run(&self, plan: &CommandPlan) -> Result<CommandOutput> {
-            self.calls.borrow_mut().push(plan.clone());
-            let i = *self.next.borrow();
-            *self.next.borrow_mut() = i + 1;
-            self.outputs
-                .borrow()
+            let input_body = input_path(plan).and_then(|p| std::fs::read_to_string(p).ok());
+            let mut state = self.state.lock().expect("SeqRunner poisoned");
+            state.calls.push(RecordedCall {
+                plan: plan.clone(),
+                input_body,
+            });
+            let i = state.next;
+            state.next = i + 1;
+            state
+                .outputs
                 .get(i)
                 .cloned()
                 .ok_or_else(|| anyhow!("no output for call {i}"))
