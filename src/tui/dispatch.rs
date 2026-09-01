@@ -490,11 +490,11 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             filename,
         } => {
             let local_abs = state.cwd.join(&local_path);
-            let idx = state.pinned.iter().position(|m| {
-                pin_local_abs(state, m) == local_abs
-                    && m.gist_id == gist_id
-                    && m.gist_filename == filename
-            });
+            let idx = crate::pins::find_by_resolved_path(
+                &state.pinned,
+                &state.cwd,
+                crate::pins::PinKey::new(&local_abs, &gist_id, &filename),
+            );
             let Some(idx) = idx else {
                 state.set_status("pair is not pinned — press p to pin first");
                 return LoopFlow::Proceed;

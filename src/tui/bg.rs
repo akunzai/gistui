@@ -249,15 +249,6 @@ pub(super) fn load_initial_comments(gist_id: &str) -> Result<crate::tui::Initial
     })
 }
 
-/// Resolve a pin's absolute local path against cwd.
-pub(super) fn pin_local_abs(state: &AppState, m: &crate::domain::PinnedMapping) -> PathBuf {
-    if m.local_path.is_absolute() {
-        m.local_path.clone()
-    } else {
-        state.cwd.join(&m.local_path)
-    }
-}
-
 /// Spawn the push (upload local → gist) flow for a pin: lands in the existing
 /// upload `Screen::Confirm` diff.
 pub(super) fn spawn_pin_push(
@@ -266,7 +257,7 @@ pub(super) fn spawn_pin_push(
     m: &crate::domain::PinnedMapping,
     entry: crate::tui::DeferredEntry,
 ) {
-    let local_path = pin_local_abs(state, m);
+    let local_path = m.resolve_against(&state.cwd);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
     // Upload Confirm returns to the screen captured by `entry`.
@@ -299,7 +290,7 @@ pub(super) fn spawn_pin_pull(
     m: &crate::domain::PinnedMapping,
     entry: crate::tui::DeferredEntry,
 ) {
-    let target = pin_local_abs(state, m);
+    let target = m.resolve_against(&state.cwd);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
     let file = crate::domain::GistFileRef::id_name(gist_id, filename);
@@ -325,7 +316,7 @@ pub(super) fn spawn_pin_diff(
     m: &crate::domain::PinnedMapping,
     entry: crate::tui::DeferredEntry,
 ) {
-    let local_abs = pin_local_abs(state, m);
+    let local_abs = m.resolve_against(&state.cwd);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
     let file = crate::domain::GistFileRef::id_name(gist_id, filename);
@@ -355,8 +346,11 @@ pub(super) fn spawn_pin_diff(
     );
 }
 
-/// If `(local_abs, gist_id, filename)` is a pinned pair, record the sync result
-/// (hash of `content` + `direction`) to config and update `state.pinned`.
+/// If `pair` is a pinned pair, record the sync result and project it onto `AppState`.
+///
+/// The in-memory check comes **first and gates the file access entirely**: a download of a
+/// file nobody pinned must not read the config, and so cannot report a config problem the
+/// user did not provoke. Only a pair this session believes is pinned is worth the IO.
 pub(super) fn record_pin_sync(
     state: &mut AppState,
     local_abs: &std::path::Path,
@@ -365,32 +359,42 @@ pub(super) fn record_pin_sync(
     content: &str,
     direction: Option<crate::domain::SyncDirection>,
 ) {
-    // Find the pin using its STORED (possibly relative) local_path form.
-    let stored_local = state.pinned.iter().find_map(|m| {
-        let mabs = pin_local_abs(state, m);
-        (mabs == local_abs && m.gist_id == gist_id && m.gist_filename == filename)
-            .then(|| m.local_path.clone())
-    });
-    let Some(stored_local) = stored_local else {
+    let pair = crate::pins::PinKey::new(local_abs, gist_id, filename);
+    if crate::pins::find_by_resolved_path(&state.pinned, &state.cwd, pair).is_none() {
         return;
-    };
-    let hash = crate::domain::sha256_hex(content.as_bytes());
-    if let Ok(path) = crate::config::config_path() {
-        if let Ok(config) = crate::config::load_config(&path) {
-            if let Ok(updated) = crate::actions::record_sync(
-                &path,
-                config,
-                &stored_local,
-                gist_id,
-                filename,
-                &hash,
-                direction,
-            ) {
-                state.pinned = updated.pinned;
-                state.mark_pin_sync_cache_dirty();
-            }
-        }
     }
+    let result = crate::pin_store::PinStore::in_default_location()
+        .and_then(|store| store.record_sync(&state.cwd, pair, content, direction));
+    apply_pin_sync(state, result);
+}
+
+/// Absorb a `record_sync` result.
+///
+/// A failure is **appended** to whatever status the surrounding action already set — the
+/// caller has usually just reported "Downloaded a.txt", and that matters more than this
+/// does (issue #432; same rule as `refresh_locals`). Before #432 all three failure modes
+/// were discarded and the user kept a silently stale sync badge.
+///
+/// `NotPinned` here means the stored config disagrees with what this session believes
+/// (a hand edit between the two). Nothing was persisted, so nothing is projected and
+/// nothing is said.
+fn apply_pin_sync(
+    state: &mut AppState,
+    result: anyhow::Result<(crate::pin_store::PinChange, crate::pin_store::SyncRecord)>,
+) {
+    match result {
+        Ok((change, crate::pin_store::SyncRecord::Recorded)) => apply_pin_change(state, change),
+        Ok((_, crate::pin_store::SyncRecord::NotPinned)) => {}
+        Err(error) => append_status(state, format!("pin sync not recorded: {error}")),
+    }
+}
+
+/// Project a completed persistence operation onto `AppState`. Both fields travel together
+/// because "what was just read" is the correct value for both, even after a hand edit.
+fn apply_pin_change(state: &mut AppState, change: crate::pin_store::PinChange) {
+    state.pinned = change.pinned;
+    state.skip_dirs = change.skip_dirs;
+    state.mark_pin_sync_cache_dirty();
 }
 
 /// Builds the `--- local` / `+++ gist` diff header labels showing each side's filename and
@@ -848,16 +852,11 @@ pub(super) fn pin_paths(
     gist_id: &str,
     filename: &str,
 ) {
-    let gist = GistFile::for_sync(gist_id.to_string(), filename.to_string(), None);
-    let result = crate::config::config_path().and_then(|path| {
-        let config = crate::config::load_config(&path)?;
-        crate::actions::pin_mapping(&path, config, local_path, &gist, None, None)
-    });
+    let result = crate::pin_store::PinStore::in_default_location()
+        .and_then(|store| store.pin(crate::pins::PinKey::new(local_path, gist_id, filename)));
     match result {
-        Ok(config) => {
-            state.pinned = config.pinned;
-            state.skip_dirs = config.skip_dirs;
-            state.mark_pin_sync_cache_dirty();
+        Ok(change) => {
+            apply_pin_change(state, change);
             state.set_status(format!("Pinned {}", pin_pair_label(local_path, filename)));
         }
         Err(error) => state.set_status(format!("pin failed: {error}")),
@@ -870,33 +869,24 @@ pub(super) fn unpin_path(
     gist_id: &str,
     filename: &str,
 ) {
-    let result = crate::config::config_path().and_then(|path| {
-        let config = crate::config::load_config(&path)?;
-        crate::actions::unpin_mapping(
-            &path,
-            config,
-            crate::pins::PinKey::new(local_path, gist_id, filename),
-        )
-    });
+    let result = crate::pin_store::PinStore::in_default_location()
+        .and_then(|store| store.unpin(crate::pins::PinKey::new(local_path, gist_id, filename)));
     apply_unpin(state, result, pin_pair_label(local_path, filename));
 }
 
-/// Absorb an unpin result. `removed == false` means the stored config no longer held that
-/// pair, so the status must not claim one was removed (issue #424).
+/// Absorb an unpin result. [`Unpinned::NotFound`] means the stored config no longer held
+/// that pair, so the status must not claim one was removed (issue #424).
 fn apply_unpin(
     state: &mut AppState,
-    result: anyhow::Result<(crate::config::AppConfig, bool)>,
+    result: anyhow::Result<(crate::pin_store::PinChange, crate::pin_store::Unpinned)>,
     label: String,
 ) {
     match result {
-        Ok((config, removed)) => {
-            state.pinned = config.pinned;
-            state.skip_dirs = config.skip_dirs;
-            state.mark_pin_sync_cache_dirty();
-            state.set_status(if removed {
-                format!("Unpinned {label}")
-            } else {
-                format!("{label} is not pinned")
+        Ok((change, outcome)) => {
+            apply_pin_change(state, change);
+            state.set_status(match outcome {
+                crate::pin_store::Unpinned::Removed => format!("Unpinned {label}"),
+                crate::pin_store::Unpinned::NotFound => format!("{label} is not pinned"),
             });
         }
         Err(error) => state.set_status(format!("unpin failed: {error}")),
@@ -907,12 +897,12 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
     if idx >= state.pinned.len() {
         return;
     }
+    // A row index is a filtered-view concept: resolve it into a `PinKey` here, so the
+    // persistence interface never sees one (issue #432).
     let mapping = state.pinned[idx].clone();
     let label = pin_pair_label(&mapping.local_path, &mapping.gist_filename);
-    let result = crate::config::config_path().and_then(|path| {
-        let config = crate::config::load_config(&path)?;
-        crate::actions::unpin_mapping(&path, config, mapping.key())
-    });
+    let result = crate::pin_store::PinStore::in_default_location()
+        .and_then(|store| store.unpin(mapping.key()));
     let ok = result.is_ok();
     apply_unpin(state, result, label);
     if ok {
@@ -1355,14 +1345,50 @@ mod tests {
 
     // ---- unpin absorb ---------------------------------------------------
 
+    fn change(pinned: Vec<crate::domain::PinnedMapping>) -> crate::pin_store::PinChange {
+        crate::pin_store::PinChange {
+            pinned,
+            skip_dirs: vec!["node_modules".into()],
+        }
+    }
+
     #[test]
     fn apply_unpin_reports_the_pair_it_removed() {
         let mut state = crate::tui::initial_state();
-        let config = crate::config::AppConfig::default();
 
-        apply_unpin(&mut state, Ok((config, true)), "~/a.txt <-> a.txt".into());
+        apply_unpin(
+            &mut state,
+            Ok((change(Vec::new()), crate::pin_store::Unpinned::Removed)),
+            "~/a.txt <-> a.txt".into(),
+        );
 
         assert_eq!(state.status.as_deref(), Some("Unpinned ~/a.txt <-> a.txt"));
+    }
+
+    /// Both projected fields land, so a hand edit picked up by the load is not dropped
+    /// on the floor (issue #432).
+    #[test]
+    fn apply_unpin_projects_both_config_fields() {
+        let mut state = crate::tui::initial_state();
+        let mapping = crate::domain::PinnedMapping {
+            local_path: PathBuf::from("/b.txt"),
+            gist_id: "g2".into(),
+            gist_filename: "b.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+        };
+
+        apply_unpin(
+            &mut state,
+            Ok((
+                change(vec![mapping.clone()]),
+                crate::pin_store::Unpinned::Removed,
+            )),
+            "~/a.txt <-> a.txt".into(),
+        );
+
+        assert_eq!(state.pinned, vec![mapping]);
+        assert_eq!(state.skip_dirs, vec!["node_modules".to_string()]);
     }
 
     /// The key is exact now, so a stored config that no longer holds the pair is reachable.
@@ -1370,9 +1396,12 @@ mod tests {
     #[test]
     fn apply_unpin_does_not_claim_a_removal_that_did_not_happen() {
         let mut state = crate::tui::initial_state();
-        let config = crate::config::AppConfig::default();
 
-        apply_unpin(&mut state, Ok((config, false)), "~/a.txt <-> a.txt".into());
+        apply_unpin(
+            &mut state,
+            Ok((change(Vec::new()), crate::pin_store::Unpinned::NotFound)),
+            "~/a.txt <-> a.txt".into(),
+        );
 
         assert_eq!(
             state.status.as_deref(),
@@ -1399,6 +1428,91 @@ mod tests {
 
         assert_eq!(state.status.as_deref(), Some("unpin failed: boom"));
         assert_eq!(state.pinned.len(), 1);
+    }
+
+    /// A persistence failure must not erase the feedback the surrounding action already
+    /// set. Before #432 all three failure modes were discarded entirely.
+    #[test]
+    fn apply_pin_sync_appends_a_failure_to_the_existing_status() {
+        let mut state = crate::tui::initial_state();
+        state.set_status("Downloaded a.txt");
+
+        apply_pin_sync(&mut state, Err(anyhow::anyhow!("permission denied")));
+
+        assert_eq!(
+            state.status.as_deref(),
+            Some("Downloaded a.txt; pin sync not recorded: permission denied")
+        );
+    }
+
+    #[test]
+    fn apply_pin_sync_reports_a_failure_on_its_own_when_nothing_was_said() {
+        let mut state = crate::tui::initial_state();
+
+        apply_pin_sync(&mut state, Err(anyhow::anyhow!("boom")));
+
+        assert_eq!(state.status.as_deref(), Some("pin sync not recorded: boom"));
+    }
+
+    /// `NotPinned` persisted nothing, so it must project nothing and say nothing.
+    #[test]
+    fn apply_pin_sync_applies_nothing_when_the_pair_was_not_pinned() {
+        let mut state = crate::tui::initial_state();
+        state.set_status("Downloaded a.txt");
+        let before = state.skip_dirs.clone();
+
+        apply_pin_sync(
+            &mut state,
+            Ok((
+                change(vec![crate::domain::PinnedMapping {
+                    local_path: PathBuf::from("/ignored.txt"),
+                    gist_id: "g9".into(),
+                    gist_filename: "ignored.txt".into(),
+                    direction: None,
+                    last_seen_hash: None,
+                }]),
+                crate::pin_store::SyncRecord::NotPinned,
+            )),
+        );
+
+        assert_eq!(state.status.as_deref(), Some("Downloaded a.txt"));
+        assert!(state.pinned.is_empty(), "nothing was persisted to project");
+        assert_eq!(state.skip_dirs, before);
+    }
+
+    /// A pair this session does not believe is pinned must not reach the filesystem at
+    /// all — otherwise a routine download of an unpinned file could report a config
+    /// problem the user never provoked.
+    #[test]
+    fn record_pin_sync_on_an_unpinned_pair_touches_nothing() {
+        let mut state = crate::tui::initial_state();
+        state.cwd = PathBuf::from("/cwd");
+        state.set_status("Downloaded a.txt");
+
+        record_pin_sync(
+            &mut state,
+            std::path::Path::new("/cwd/a.txt"),
+            "g1",
+            "a.txt",
+            "body",
+            Some(crate::domain::SyncDirection::Download),
+        );
+
+        assert_eq!(state.status.as_deref(), Some("Downloaded a.txt"));
+        assert!(state.pinned.is_empty());
+    }
+
+    /// `record_sync` used to project only `pinned`, unlike the pin and unpin paths.
+    #[test]
+    fn apply_pin_sync_projects_both_config_fields() {
+        let mut state = crate::tui::initial_state();
+
+        apply_pin_sync(
+            &mut state,
+            Ok((change(Vec::new()), crate::pin_store::SyncRecord::Recorded)),
+        );
+
+        assert_eq!(state.skip_dirs, vec!["node_modules".to_string()]);
     }
 
     // ---- write_scratch_file ---------------------------------------------

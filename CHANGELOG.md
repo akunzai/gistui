@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A pin sync that cannot be written to `config.toml` now says so on the status line
+  (appended to the action's own message, e.g. `Downloaded a.txt; pin sync not recorded: …`)
+  instead of failing silently and leaving a stale sync badge on the Pins screen.
 - Upload failures now appear on the Diff screen instead of being hidden behind its normal key
   hints, so permission errors from GitHub remain visible and actionable.
 - Pinning one local file to a second gist file no longer deletes the first pin, and unpinning

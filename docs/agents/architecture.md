@@ -6,7 +6,7 @@ Index: [`AGENTS.md`](../../AGENTS.md). Source of truth for types lives in the mo
 
 | Kind | Modules | Testing |
 | --- | --- | --- |
-| **Pure** (unit-tested) | `domain`, `config`, `ranking`, `local`, `diff`, `pins`, actions **plan/guard**, `tui::view_model`, `tui::list_ranking`, `tui::settings`, `tui::gist_content`, `tui::local_scan` | In-crate unit tests |
+| **Pure** (unit-tested) | `domain`, `config`, `ranking`, `local`, `diff`, `pins`, actions **plan/guard**, `tui::view_model`, `tui::list_ranking`, `tui::settings`, `tui::gist_content`, `tui::local_scan`, `pin_store` (file IO, but fully unit-tested over `tempfile` — same as `config`) | In-crate unit tests |
 | **Impure** (thin IO) | `gh`, actions **execute**, `tui::run_loop` / `tui::bg` / `tui::gist_refresh` / `tui::gist_revision` / `tui::pin_sync` | No live `gh`. Spawn/absorb is thin IO; action-job `on_*` apply handlers (screen modules / `gist_mutation.rs`) are unit-tested (#298, #383) |
 
 `build_view_model` (`@src/tui/view_model.rs`): `AppState` + pin-sync cache → presentation facts. Paint helpers apply theme/layout only — no business rules, FS, or network.
@@ -117,7 +117,7 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
 - `run_loop` only **polls** `jobs.absorb`.
 - **Action jobs carry their apply** (issue #375, ADR-0002's async-response half): `spawn_action(spec, run, apply)` runs `run` off-thread and boxes `apply(value)` for the event-loop tick. There is no `BgTaskOutcome` enum. `ActionApply` is `FnOnce(&mut AppState) -> LoopFlow`. `on_action_outcome` is a generation-guard shell that calls the closure. `KeyOutcome` / `dispatch_outcome` stay plain data (ADR-0002).
 - **`on_*` is the apply seam** (#298, #375, #383): named handlers are the apply bodies and the unit-test surface. They do not live on `Jobs`. `dispatch_outcome` / `route_outcome` sit on the spawn side, not the apply side, so neither is one. A new action is a spawn site plus an `on_*` when the apply is worth testing.
-- **A pin's key is three-part** (issue #424): `(local_path, gist_id, gist_filename)`, owned by `@src/pins.rs` (`PinKey`, `PinKey::matches`, `PinnedMapping::key()`, `is_pinned` / `find_mut` / `upsert` / `remove`). One local file pinned to several gist files is a legitimate state, not corruption — `docs/design.md` defines a pin as a local-file to gist-*file* mapping, and `gist_id` alone cannot name a file inside a gist. `crate::actions`' `pin_mapping` / `unpin_mapping` / `record_sync` are thin wrappers that add persistence; never re-derive the key at a call site, and pass `PinnedMapping::key()` when you already hold the mapping. `upsert` reads `None` as "leave the stored value alone"; `record_sync` deliberately uses `find_mut` rather than `upsert`, because confirming a sync must never create a pin. **The one deliberate exception** is a call site that must resolve a possibly-relative stored `local_path` first (`@src/tui/bg.rs`'s `record_sync` caller, `@src/tui/dispatch.rs`'s `SyncSelectedPair`): those compare the *absolutised* path plus the two gist fields, so they still use all three components but cannot take a `PinKey` as-is. Exactly-duplicate triples are degenerate input from a hand-edited `config.toml`: the operations take the first match, and `crate::config::load_config` stays a parser, not a silent rewriter.
+- **A pin's key is three-part** (issue #424): `(local_path, gist_id, gist_filename)`, owned by `@src/pins.rs` (`PinKey`, `PinKey::matches`, `PinnedMapping::key()`, `is_pinned` / `upsert` / `remove` / `resolve_against` / `find_by_resolved_path`). One local file pinned to several gist files is a legitimate state, not corruption — `docs/design.md` defines a pin as a local-file to gist-*file* mapping, and `gist_id` alone cannot name a file inside a gist. Never re-derive the key at a call site, and pass `PinnedMapping::key()` when you already hold the mapping. `upsert` never modifies an existing pin; `PinStore::record_sync` deliberately does not use it, because confirming a sync must never create a pin. Exactly-duplicate triples are degenerate input from a hand-edited `config.toml`: the operations take the first match, and `crate::config::load_config` stays a parser, not a silent rewriter.
 - **Shared spawn payload** (#375): a value both `run` and `apply` need is part of `run`'s return, unpacked by `apply`. That is how identity (`gist_id`, `fetch_id`, labels) crosses the thread boundary without a second clone.
 
 ## Gist revision workflow (`@src/tui/gist_revision.rs`, issue #430)
@@ -174,6 +174,65 @@ command order and, for `--input` plans, the payload body that only exists while 
 runs). The real `ScratchDir` is used, not a filesystem seam. Do not layer duplicate
 implementation-detail assertions beneath this seam: parser and command-plan tests stay in
 `gh` / `actions`, screen intent and presentation tests stay on their screens.
+
+## Pinned mapping persistence (`@src/pin_store.rs`, issue #432)
+
+`PinStore` is the one interface that writes pins to `config.toml`. `@src/pins.rs` stays
+**pure** — it defines what a pin *is* and the list operations; `PinStore` owns everything
+around that: resolving the config path, loading, applying the stored-versus-absolute rule,
+hashing sync content, saving, and describing what changed. The `pin_mapping` /
+`unpin_mapping` / `record_sync` wrappers in `@src/actions.rs` are gone.
+
+- **Three operations, named not enumerated**: `pin`, `unpin` (by `PinKey`), `record_sync`.
+  This path is synchronous — no job, no generation, no apply closure — so a plain-data
+  request enum would be built and destructured on the spot. `KeyOutcome::Pin` / `Unpin` /
+  `UnpinAtPin` / `SyncSelectedPair` keep their shapes; ADR-0002 is untouched.
+- **Every operation is a full load → mutate → save.** `PinStore` holds no `AppConfig`:
+  `config.toml` is hand-editable, and writing from a cached copy would clobber an edit made
+  between two pin operations. Same shape as `persist_settings`.
+- **Two constructors, no filesystem seam**: `PinStore::at(path)` for tests (a `tempfile`
+  directory) and `in_default_location()` for production.
+- **Results are narrow.** Each operation returns the shared projection
+  `PinChange { pinned, skip_dirs }` plus its *own* outcome — `Unpinned::{Removed, NotFound}`,
+  `SyncRecord::{Recorded, NotPinned}`. There is deliberately no shared outcome enum: `pin`
+  would then have arms it can never produce. Errors stay `anyhow`; no caller branches on a
+  failure kind.
+- **Both projected fields travel on every path.** After a load, "what was just read" is the
+  correct value for `pinned` *and* `skip_dirs`, even when only one could have changed;
+  `record_sync` used to project only `pinned`.
+- **`resolve_against` is the one definition of the stored-versus-absolute rule**
+  (`@src/pins.rs`, pure). A stored `local_path` may be relative — a portable config is a
+  legitimate thing to hand-write — so a pin is *found* by its resolved form and *written*
+  by its stored form; writing back the resolved form would duplicate the entry. It replaced
+  three copies (`bg.rs`, `pin_sync.rs`, and an inline comparison in `dispatch.rs`).
+  `find_by_resolved_path` takes a `PinKey` whose `local_path` is already absolute and
+  returns an **index**: both callers reach back into the list they searched — one to mutate
+  that entry in place (keeping its stored path form), the other to feed the Pins screen's
+  index-keyed sync-status lookup. It is the one lookup that cannot use `PinKey::matches`.
+- **Nothing is normalised on write.** Store exactly what the caller supplied. In production
+  a candidate path is already absolute (`discover_local_candidates` builds it from an
+  absolute cwd), so a relative entry can only come from a hand edit — and rewriting it would
+  break the same "parser, not a silent rewriter" rule reads already honour.
+- **The TUI keeps presentation**: status wording (`pin_pair_label`'s `display_path`
+  abbreviation), the Pins cursor clamp, `mark_pin_sync_cache_dirty`, and resolving a
+  Pins-screen row index into a `PinKey` before calling `unpin`. A row index is a
+  filtered-view concept and never reaches `PinStore`. `apply_pin_change` / `apply_unpin` /
+  `apply_pin_sync` (`@src/tui/bg.rs`) are that projection, and the unit-test surface for it.
+  Projecting `skip_dirs` does **not** trigger a rescan — pin/unpin never touch the
+  filesystem (issue #409), so a hand edit to `skip_dirs` picked up by one of these loads
+  only reaches the local list at the next scan.
+- **`record_pin_sync` checks `AppState::pinned` before it opens anything.** That in-memory
+  gate is what keeps a download of a never-pinned file from reading `config.toml` at all,
+  and therefore from reporting a config problem the user did not provoke. A `NotPinned`
+  answer from `PinStore` means the stored file disagrees with this session (a hand edit in
+  between): nothing was persisted, so nothing is projected and nothing is said.
+- **`upsert` leaves an existing pin completely alone** and takes no direction or hash.
+  Recording a sync is `PinStore::record_sync`'s job; pinning must never be what writes one.
+- **A `record_sync` failure appends, never substitutes** (`Downloaded a.txt; pin sync not
+  recorded: …`), reusing `refresh_locals`' rule. Before #432 all three of its failure modes
+  — config-path resolution, load, and write — vanished into nested `if let Ok(...)` arms
+  with no `else`, and `record_pin_sync` returned `()` so no caller could observe them.
+  `SyncRecord::NotPinned` stays silent: there was nothing to record.
 
 ## Pin-sync presentation (`@src/tui/pin_sync.rs`)
 

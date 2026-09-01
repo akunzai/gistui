@@ -4,7 +4,6 @@
 //! presentation" section for the refresh-timing invariant.
 
 use crate::tui::AppState;
-use std::path::PathBuf;
 
 /// One pin's presentation-derived sync facts, computed off the draw path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,15 +24,6 @@ impl Default for PinSyncCacheEntry {
 }
 
 impl AppState {
-    /// Resolve a pin's absolute local path against `cwd`.
-    fn pin_local_abs(&self, m: &crate::domain::PinnedMapping) -> PathBuf {
-        if m.local_path.is_absolute() {
-            m.local_path.clone()
-        } else {
-            self.cwd.join(&m.local_path)
-        }
-    }
-
     /// `(local_ts, remote_ts)` Unix-seconds for `pinned[index]`. The remote side comes
     /// from the matching gist's in-memory `updated_at`; the local side prefers the
     /// discovered candidate's mtime and falls back to stat-ing the path on disk.
@@ -41,11 +31,13 @@ impl AppState {
         let Some(m) = self.pinned.get(index) else {
             return (None, None);
         };
-        let local_abs = self.pin_local_abs(m);
+        let local_abs = m.resolve_against(&self.cwd);
         let local_ts = self
             .locals
             .iter()
             .find_map(|c| {
+                // A `LocalCandidate` is not a pin, so this deliberately does not borrow
+                // `crate::pins`' resolution rule.
                 let cabs = if c.path.is_absolute() {
                     c.path.clone()
                 } else {
@@ -84,7 +76,7 @@ impl AppState {
         let Some(baseline) = m.last_seen_hash.as_deref() else {
             return status;
         };
-        let local_abs = self.pin_local_abs(m);
+        let local_abs = m.resolve_against(&self.cwd);
         match std::fs::read(&local_abs) {
             Ok(bytes) if crate::domain::sha256_hex(&bytes) == baseline => {
                 crate::domain::SyncStatus::InSync
