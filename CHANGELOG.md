@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] — 2026-09-02
+
 - A pin sync that cannot be written to `config.toml` now says so on the status line
   (appended to the action's own message, e.g. `Downloaded a.txt; pin sync not recorded: …`)
   instead of failing silently and leaving a stale sync badge on the Pins screen.
@@ -261,7 +263,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.19.0...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/akunzai/gistui/releases/tag/v0.20.0
 [0.19.0]: https://github.com/akunzai/gistui/releases/tag/v0.19.0
 [0.18.0]: https://github.com/akunzai/gistui/releases/tag/v0.18.0
 [0.17.1]: https://github.com/akunzai/gistui/releases/tag/v0.17.1
