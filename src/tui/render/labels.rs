@@ -8,6 +8,24 @@
 
 use super::*;
 
+pub(crate) fn file_ext(name: &str) -> Option<String> {
+    std::path::Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+}
+
+/// Full gist file-list row as painted — [`gist_row_label`] plus `★ ` when the gist is starred.
+/// Hscroll max must measure this string (or [`marked_row_text`] of it), not the star-less label.
+pub(crate) fn gist_row_display(g: &RankedGistFile, view: GistView, state: &AppState) -> String {
+    let label = gist_row_label(g, view);
+    if state.gist_is_starred(&g.file.gist_id) {
+        format!("★ {label}")
+    } else {
+        label
+    }
+}
+
 /// You starred this gist.
 pub(crate) const MARK_STARRED: char = '★';
 /// Stargazer count that follows.

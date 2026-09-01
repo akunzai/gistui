@@ -1,7 +1,6 @@
 //! Rendering façade: canvas setup, `ScreenVm` dispatch, and shared rendering helpers.
 
 use super::keymap::{category_for_footer_key, Binding, Category};
-use super::view_model::PaneTitleVm;
 use super::{
     screens::{
         config::render_config_vm as render_config, confirm::render_confirm_vm as render_confirm,
@@ -14,6 +13,7 @@ use super::{
     theme::Theme,
     *,
 };
+use crate::tui::screens::ScreenVm;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
@@ -60,8 +60,8 @@ pub(super) fn render(
 pub(crate) fn render_screen_vm_with_feedback(
     frame: &mut Frame,
     state: &AppState,
-    screen: &super::ScreenVm,
-    chrome: &super::view_model::ChromeVm,
+    screen: &ScreenVm,
+    chrome: &crate::tui::view_model::ChromeVm,
     layout: &mut MouseFrame,
     feedback: &mut RenderFeedback,
 ) {
@@ -88,8 +88,8 @@ pub(crate) fn render_screen_vm_with_feedback(
 pub(crate) fn render_screen_vm(
     frame: &mut Frame,
     state: &AppState,
-    screen: &super::ScreenVm,
-    chrome: &super::view_model::ChromeVm,
+    screen: &ScreenVm,
+    chrome: &crate::tui::view_model::ChromeVm,
     layout: &mut MouseFrame,
 ) {
     render_screen_vm_with_feedback(
@@ -104,9 +104,9 @@ pub(crate) fn render_screen_vm(
 
 mod chrome;
 mod diff_view;
-mod labels;
+pub(crate) mod labels;
 pub(crate) mod list_pane;
-mod text_fit;
+pub(crate) mod text_fit;
 
 pub(crate) use chrome::*;
 pub(crate) use diff_view::*;

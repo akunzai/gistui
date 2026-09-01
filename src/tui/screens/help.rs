@@ -2,7 +2,7 @@
 //! file (issue #287, Phase 2).
 
 use crate::tui::keys::{NavAction, PAGE_SCROLL};
-use crate::tui::view_model::{ChromeVm, HelpIndexItemVm, HelpModeVm, HelpVm};
+use crate::tui::view_model::ChromeVm;
 use crate::tui::{
     AppState, HelpState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneHit, PaneTarget,
     RowTarget, Screen,
@@ -15,6 +15,33 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, List, ListItem, ListState, Padding, Paragraph},
     Frame,
 };
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HelpVm {
+    pub mode: HelpModeVm,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum HelpModeVm {
+    Index {
+        items: Vec<HelpIndexItemVm>,
+        selected: usize,
+    },
+    Topic {
+        title: String,
+        /// Plain lines for the topic body (About is pre-formatted without ratatui spans).
+        lines: Vec<String>,
+        scroll: u16,
+        /// Repo-link row index in About body lines, when this is the About topic.
+        about_repo_line: Option<usize>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct HelpIndexItemVm {
+    pub key: String,
+    pub title: String,
+}
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::List;
 const HELP_INDEX_TITLE: &str = "Help — pick a topic (1-9,g,0 / ↑↓ Enter · Esc back)";
@@ -825,5 +852,23 @@ mod tests {
         state.handle_key(KeyCode::Char('?'));
         assert!(state.screen.is_pins());
         assert!(state.help().is_none());
+    }
+
+    #[test]
+    fn help_vm_index_lists_topics() {
+        let mut state = initial_state();
+        state.screen = Screen::Help(Box::new(HelpState {
+            index_open: true,
+            ..HelpState::default()
+        }));
+        let h = build_help_vm(&state);
+        match h.mode {
+            HelpModeVm::Index { items, selected } => {
+                assert!(!items.is_empty());
+                assert_eq!(selected, 0);
+                assert!(items.iter().any(|i| i.title.contains("List")));
+            }
+            other => panic!("expected Index, got {other:?}"),
+        }
     }
 }

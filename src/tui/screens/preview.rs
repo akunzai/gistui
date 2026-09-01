@@ -3,7 +3,7 @@
 
 use crate::tui::bg::LoopFlow;
 use crate::tui::gist_content::{ContentLookup, FetchPolicy};
-use crate::tui::view_model::{ChromeVm, PreviewVm};
+use crate::tui::view_model::ChromeVm;
 use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame};
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -12,6 +12,21 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Padding, Paragraph, Wrap},
     Frame,
 };
+
+/// Full-screen file preview (#250).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PreviewVm {
+    pub title: String,
+    /// Raw file content (one logical source; paint may highlight/wrap).
+    pub body: String,
+    pub footer: String,
+    pub footer_colored: bool,
+    pub wrap: bool,
+    pub scroll: u16,
+    pub hscroll: u16,
+    pub syntax_highlight: bool,
+    pub ext: Option<String>,
+}
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::List;
 
@@ -116,7 +131,7 @@ pub(crate) fn build_preview_vm(state: &AppState) -> PreviewVm {
     let ext = p
         .gist_file
         .as_ref()
-        .and_then(|file| crate::tui::view_model::file_ext(&file.filename));
+        .and_then(|file| crate::tui::render::labels::file_ext(&file.filename));
     PreviewVm {
         title: p.title,
         body: p.body.text,
@@ -493,5 +508,22 @@ mod tests {
         );
 
         assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
+    }
+
+    #[test]
+    fn preview_vm_title_and_status_footer() {
+        let mut state = initial_state();
+        state.enter_preview(
+            "gist: notes.txt".into(),
+            "hello preview\n".into(),
+            Some(crate::domain::GistFileRef::id_name("g1", "notes.rs")),
+        );
+        state.status = Some("refresh failed".into());
+        let p = build_preview_vm(&state);
+        assert_eq!(p.title, "gist: notes.txt");
+        assert!(p.body.contains("hello preview"));
+        assert!(!p.footer_colored);
+        assert!(p.footer.contains("refresh failed"));
+        assert_eq!(p.ext.as_deref(), Some("rs"));
     }
 }

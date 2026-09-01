@@ -3,13 +3,127 @@
 
 use crate::tui::bg::LoopFlow;
 use crate::tui::gist_content::{ContentLookup, FetchPolicy};
-use crate::tui::view_model::{
-    ConfirmBackgroundVm, ConfirmKeyVm, ConfirmModalKind, ConfirmPromptVm, ConfirmVm,
+use crate::tui::render::{gist_info_line, unix_now};
+use crate::tui::screens::diff::DiffVm;
+use crate::tui::{
+    AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PendingAction, Screen, TextInput,
 };
-use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PendingAction, Screen};
 use crossterm::event::KeyCode;
+use ratatui::style::Color;
 use ratatui::Frame;
 use std::path::PathBuf;
+
+/// Compact-gist confirm background (info + file list).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CompactGistBgVm {
+    pub block_title: String,
+    pub info_line: String,
+    pub files: Vec<String>,
+    pub file_cursor: usize,
+}
+
+/// Confirm modal + which background to paint under it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ConfirmVm {
+    pub title: &'static str,
+    pub border: Color,
+    pub kind: ConfirmModalKind,
+    pub background: ConfirmBackgroundVm,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConfirmBackgroundVm {
+    /// Standard overwrite/upload/create backdrop: pre-built diff view model.
+    Diff(DiffVm),
+    /// Compaction confirm: gist info + file list.
+    CompactGist(CompactGistBgVm),
+    /// Missing group or nothing to show.
+    Empty,
+}
+
+/// One key that resolves a confirm modal, plus the verb it performs. The verb is the same
+/// word the footer hint and the resulting status use, so an action reads identically all the
+/// way through (`docs/design.md`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConfirmKeyVm {
+    pub key: &'static str,
+    pub label: String,
+}
+
+impl ConfirmKeyVm {
+    pub(crate) fn new(key: &'static str, label: impl Into<String>) -> Self {
+        Self {
+            key,
+            label: label.into(),
+        }
+    }
+
+    /// Cells the key column plus its label occupy, before any gutter.
+    pub(crate) fn width(&self) -> usize {
+        self.key.chars().count() + 2 + self.label.chars().count()
+    }
+}
+
+/// The structured body of a confirm modal: the question, an optional second line of context
+/// or consequence, the keys that resolve it, and any secondary toggles.
+///
+/// A destructive action puts `n cancel` first in `keys` and states its consequence in
+/// `detail`, so the stakes survive without relying on the border colour alone.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct ConfirmPromptVm {
+    pub question: String,
+    pub detail: Option<String>,
+    pub keys: Vec<ConfirmKeyVm>,
+    /// Toggles that change what the primary key would do, on their own row.
+    pub options: Vec<ConfirmKeyVm>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ConfirmModalKind {
+    /// Static y/n (or multi-key) prompt body.
+    Prompt(ConfirmPromptVm),
+    /// Create-flow description editor.
+    DescriptionInput {
+        prefix: &'static str,
+        input: TextInput,
+        keys: Vec<ConfirmKeyVm>,
+    },
+}
+
+pub(crate) fn build_compact_gist_bg_vm(state: &AppState, gist_id: &str) -> Option<CompactGistBgVm> {
+    let group = state.group_by_id(gist_id)?;
+    let block_title = if group.description.trim().is_empty() {
+        format!("Gist {}", group.id)
+    } else {
+        format!("Gist: {}", group.description)
+    };
+    let files = state.gist_file_display_names(gist_id);
+    let file_cursor = state
+        .detail()
+        .map(|d| d.file_cursor)
+        .unwrap_or(0)
+        .min(files.len().saturating_sub(1));
+    Some(CompactGistBgVm {
+        block_title,
+        info_line: gist_info_line(
+            &group,
+            unix_now(),
+            state.gist_catalog.user_login.as_deref(),
+            state.gist_is_starred(gist_id),
+            state.gist_counts(gist_id),
+        ),
+        files,
+        file_cursor,
+    })
+}
+
+/// The keys that resolve the create flow's description editor.
+pub(crate) fn description_input_keys() -> Vec<ConfirmKeyVm> {
+    vec![
+        ConfirmKeyVm::new("Enter", "next"),
+        ConfirmKeyVm::new("Esc", "cancel"),
+    ]
+}
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::List;
 
@@ -227,7 +341,7 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
             kind: ConfirmModalKind::DescriptionInput {
                 prefix: crate::tui::render::CREATE_DESC_PREFIX,
                 input: state.description_input.clone(),
-                keys: crate::tui::view_model::description_input_keys(),
+                keys: description_input_keys(),
             },
             background: diff_background(state),
         },
@@ -291,7 +405,7 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
                 options: Vec::new(),
             }),
             // The only action with its own backdrop: the revisions about to collapse.
-            background: match crate::tui::view_model::build_compact_gist_bg_vm(state, gist_id) {
+            background: match build_compact_gist_bg_vm(state, gist_id) {
                 Some(bg) => ConfirmBackgroundVm::CompactGist(bg),
                 None => ConfirmBackgroundVm::Empty,
             },
@@ -570,7 +684,6 @@ mod tests {
         detail_mut, gist_file_ref, gists_mut, pins_mut, set_diff_body, set_pending,
         state_ready_to_create, state_with_gists,
     };
-    use crate::tui::view_model::description_input_keys;
     use crate::tui::*;
     use crossterm::event::KeyCode;
     use ratatui::style::Color;
@@ -1489,5 +1602,73 @@ mod tests {
         );
 
         assert_eq!(state.status.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn confirm_vm_prompt_identity() {
+        let mut state = initial_state();
+        state.enter_confirm(
+            PendingAction::Upload {
+                gist_id: "g1".into(),
+                filename: "notes.txt".into(),
+                local_path: PathBuf::from("notes.txt"),
+            },
+            String::new(),
+        );
+        let c = build_confirm_vm(&state);
+        assert_eq!(c.title, "Upload");
+        match c.kind {
+            ConfirmModalKind::Prompt(prompt) => {
+                assert_eq!(prompt.question, "Upload notes.txt to gist g1?");
+            }
+            other => panic!("expected Prompt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn confirm_vm_overwrite_download() {
+        let mut state = initial_state();
+        state.enter_diff(
+            String::new(),
+            String::new(),
+            PathBuf::new(),
+            PathBuf::from("notes.txt"),
+        );
+        state.enter_confirm_from_diff(PendingAction::Download);
+        let c = build_confirm_vm(&state);
+        assert_eq!(c.title, "Overwrite");
+        match c.kind {
+            ConfirmModalKind::Prompt(prompt) => {
+                assert_eq!(prompt.question, "Overwrite notes.txt?");
+            }
+            other => panic!("expected Prompt, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn confirm_vm_compact_background() {
+        use crate::domain::GistFile;
+
+        let mut state = initial_state();
+        state.gist_catalog.owned = vec![GistFile {
+            description: "pack".into(),
+            ..GistFile::fixture("g1", "a.txt")
+        }];
+        state.enter_confirm(
+            PendingAction::CompactGist {
+                gist_id: "g1".into(),
+                label: "pack".into(),
+                count: 3,
+            },
+            String::new(),
+        );
+        let c = build_confirm_vm(&state);
+        match c.background {
+            ConfirmBackgroundVm::CompactGist(bg) => {
+                assert!(bg.block_title.contains("pack") || bg.block_title.contains("g1"));
+                assert!(!bg.files.is_empty());
+            }
+            other => panic!("expected CompactGist bg, got {other:?}"),
+        }
     }
 }

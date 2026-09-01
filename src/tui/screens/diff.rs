@@ -4,7 +4,7 @@
 use crate::tui::bg::{record_pin_sync, refresh_locals, LoopFlow};
 use crate::tui::gist_content::{ContentLookup, FetchPolicy};
 use crate::tui::render::{diff_labels, preview_diff_text};
-use crate::tui::view_model::{ChromeVm, DiffVm};
+use crate::tui::view_model::ChromeVm;
 use crate::tui::{AppState, ConfigField, HelpTopic, HitTarget, KeyOutcome, PendingAction};
 use crossterm::event::KeyCode;
 use ratatui::{
@@ -12,6 +12,22 @@ use ratatui::{
     Frame,
 };
 use std::path::PathBuf;
+
+/// Diff screen / confirm background pane facts (#250). Highlighting still applied at paint time
+/// with the live theme (body text + ext are pure).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DiffVm {
+    pub title: String,
+    /// Diff body after optional context collapse.
+    pub body: String,
+    pub footer: String,
+    pub footer_colored: bool,
+    pub wrap: bool,
+    pub scroll: u16,
+    pub hscroll: u16,
+    pub syntax_highlight: bool,
+    pub ext: Option<String>,
+}
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::List;
 
@@ -213,7 +229,7 @@ pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
         .file_name()
         .or_else(|| preview_local.file_name())
         .and_then(|n| n.to_str())
-        .and_then(crate::tui::view_model::file_ext);
+        .and_then(crate::tui::render::labels::file_ext);
     let (footer, footer_colored) =
         crate::tui::footer_with_status(state.status.as_deref(), &diff_footer(state));
     DiffVm {
@@ -851,5 +867,21 @@ mod tests {
         );
 
         assert_eq!(state.status.as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn diff_vm_title_footer_and_body() {
+        let mut state = initial_state();
+        state.enter_diff(
+            "--- a\n+++ b\n-old\n+new\n".into(),
+            String::new(),
+            PathBuf::new(),
+            PathBuf::from("notes.txt"),
+        );
+        let d = build_diff_vm(&state);
+        assert!(d.title.contains("Diff") || d.title.contains("notes"));
+        assert!(d.body.contains("+new") || d.body.contains("old"));
+        assert!(d.footer.contains("scroll") || d.footer.contains("back"));
+        assert_eq!(d.ext.as_deref(), Some("txt"));
     }
 }

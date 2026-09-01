@@ -84,7 +84,7 @@ pub(crate) fn render_top_bar(
 pub(crate) fn render_compact_gist_bg_vm(
     frame: &mut Frame,
     area: Rect,
-    bg: &crate::tui::view_model::CompactGistBgVm,
+    bg: &crate::tui::screens::confirm::CompactGistBgVm,
     theme: &Theme,
 ) {
     let mut lines: Vec<Line> = vec![
@@ -395,8 +395,8 @@ const CONFIRM_MODAL_CHROME: u16 = 6;
 /// key from its own verb (`e` on one line, `edit first` on the next) and costs the sizing
 /// pass a row it did not count.
 pub(crate) fn confirm_key_rows(
-    keys: &[crate::tui::view_model::ConfirmKeyVm],
-    options: &[crate::tui::view_model::ConfirmKeyVm],
+    keys: &[crate::tui::screens::confirm::ConfirmKeyVm],
+    options: &[crate::tui::screens::confirm::ConfirmKeyVm],
     inner_width: u16,
     border: Color,
 ) -> Vec<Line<'static>> {
@@ -413,7 +413,7 @@ pub(crate) fn confirm_key_rows(
         .take_while(|n| n * cell <= inner_width as usize + 4)
         .last()
         .unwrap_or(1);
-    let line = |row_keys: &[crate::tui::view_model::ConfirmKeyVm]| {
+    let line = |row_keys: &[crate::tui::screens::confirm::ConfirmKeyVm]| {
         let mut spans: Vec<Span<'static>> = Vec::new();
         for (i, k) in row_keys.iter().enumerate() {
             spans.push(Span::styled(
@@ -439,7 +439,7 @@ pub(crate) fn confirm_key_rows(
 /// Body lines and the width they were laid out for, shared by sizing and painting so the
 /// modal can never be one row short of what it draws.
 fn confirm_modal_body(
-    prompt: &crate::tui::view_model::ConfirmPromptVm,
+    prompt: &crate::tui::screens::confirm::ConfirmPromptVm,
     inner_width: u16,
     border: Color,
     theme: &Theme,
@@ -494,7 +494,7 @@ fn confirm_modal_width(area: Rect) -> u16 {
 pub(crate) fn render_confirm_modal(
     frame: &mut Frame,
     title: &str,
-    prompt: &crate::tui::view_model::ConfirmPromptVm,
+    prompt: &crate::tui::screens::confirm::ConfirmPromptVm,
     border: Color,
     theme: &Theme,
 ) -> Rect {
@@ -520,7 +520,7 @@ pub(crate) fn render_confirm_input_modal(
     title: &str,
     prefix: &str,
     input: &TextInput,
-    keys: &[crate::tui::view_model::ConfirmKeyVm],
+    keys: &[crate::tui::screens::confirm::ConfirmKeyVm],
     border: Color,
     theme: &Theme,
 ) -> Rect {

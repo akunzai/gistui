@@ -2,11 +2,12 @@
 //! file (issue #287, Phase 2).
 
 use crate::tui::palette::{CrossAction, PaletteExec, PaletteMode};
-use crate::tui::view_model::{ChromeVm, PaletteVm};
-use crate::tui::EditResult;
+use crate::tui::screens::{lookup, ScreenVm};
+use crate::tui::view_model::ChromeVm;
 use crate::tui::{
     AppState, ConfigField, HelpTopic, HitTarget, KeyOutcome, MouseFrame, RowTarget, Screen,
 };
+use crate::tui::{EditResult, TextInput};
 use crossterm::event::{KeyCode, KeyModifiers};
 use ratatui::{
     layout::{Margin, Rect},
@@ -15,6 +16,46 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
     Frame,
 };
+
+/// Command palette / context menu overlay (#250). `background` is the already-built ViewModel
+/// for the screen underneath (issue #272) — `None` for a Confirm-origin (still unpainted, #277)
+/// or Palette-origin (unreachable: the palette can't be opened while itself active).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct PaletteVm {
+    pub background: Option<Box<ScreenVm>>,
+    pub title: &'static str,
+    pub has_query: bool,
+    /// Live query text + cursor, painted as the input line in Command mode
+    /// (`has_query`) — carried here so paint never reads `state.palette()` directly.
+    pub query: TextInput,
+    pub selected: usize,
+    pub items: Vec<PaletteRowVm>,
+    pub key_width: usize,
+    pub mode: PaletteMode,
+    pub anchor: Option<(u16, u16)>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PaletteRowVm {
+    pub key_hint: String,
+    pub label: String,
+    /// What the action risks, resolved by the keymap table so paint only looks it up.
+    pub category: crate::tui::keymap::Category,
+    pub enabled: bool,
+}
+
+/// ViewModel for the screen a palette is covering, by its origin's tag. `state`'s accessors
+/// (`config()`/`help()`/etc., #242) already resolve through a palette-parked payload, so these
+/// build fns are called directly rather than on `p.origin_screen` itself.
+///
+/// `None` for Confirm (blank background preserved as-is, tracked separately in #277) and Palette
+/// (unreachable — the palette can't be opened while itself active).
+pub(crate) fn build_background_screen_vm(state: &AppState, origin: &Screen) -> Option<ScreenVm> {
+    match origin {
+        Screen::Confirm(_) | Screen::Palette(_) => None,
+        other => Some((lookup(other).build_vm)(state)),
+    }
+}
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::List;
 
@@ -147,17 +188,16 @@ impl AppState {
 
 pub(crate) fn build_palette_vm(state: &AppState) -> PaletteVm {
     let p = state.palette().cloned().unwrap_or_default();
-    let background =
-        crate::tui::view_model::build_background_screen_vm(state, &p.origin_screen).map(Box::new);
+    let background = build_background_screen_vm(state, &p.origin_screen).map(Box::new);
     let has_query = p.mode == PaletteMode::Command;
     let title = match p.mode {
         PaletteMode::Menu => "Menu",
         PaletteMode::Command => "Command palette",
     };
-    let items: Vec<crate::tui::view_model::PaletteRowVm> = state
+    let items: Vec<PaletteRowVm> = state
         .palette_visible_items()
         .into_iter()
-        .map(|item| crate::tui::view_model::PaletteRowVm {
+        .map(|item| PaletteRowVm {
             key_hint: item.key_hint.clone(),
             label: item.label.clone(),
             category: item.category,
@@ -316,7 +356,9 @@ mod tests {
     use crate::tui::initial_state;
     use crate::tui::keymap::Category;
     use crate::tui::palette::{PaletteItem, PaletteState};
+    use crate::tui::PendingAction;
     use ratatui::{backend::TestBackend, Terminal};
+    use std::path::PathBuf;
 
     #[test]
     fn enabled_row_after_disabled_row_keeps_its_palette_index() {
@@ -376,5 +418,56 @@ mod tests {
             state.settings.theme_choice(),
             crate::config::ThemeChoice::Light
         );
+    }
+
+    #[test]
+    fn palette_vm_items_and_title() {
+        use crate::tui::palette::{PaletteExec, PaletteItem, PaletteMode, PaletteState};
+        use crossterm::event::KeyCode;
+
+        let mut state = initial_state();
+        state.screen = Screen::Palette(Box::new(PaletteState {
+            mode: PaletteMode::Menu,
+            items: vec![PaletteItem {
+                key_hint: "d".into(),
+                category: crate::tui::keymap::Category::Write,
+                label: "download".into(),
+                exec: PaletteExec::Key(KeyCode::Char('d'), crossterm::event::KeyModifiers::empty()),
+                enabled: true,
+                search: "d download".into(),
+            }],
+            selected: 0,
+            origin_screen: Screen::List,
+            anchor: Some((10, 5)),
+            ..PaletteState::default()
+        }));
+        let p = build_palette_vm(&state);
+        assert_eq!(p.title, "Menu");
+        match p.background.as_deref() {
+            Some(ScreenVm::List(_)) => {}
+            other => panic!("expected List background, got {other:?}"),
+        }
+        assert_eq!(p.items.len(), 1);
+        assert_eq!(p.items[0].label, "download");
+        assert!(p.items[0].enabled);
+        assert_eq!(p.anchor, Some((10, 5)));
+    }
+
+    #[test]
+    fn palette_vm_background_stays_blank_over_confirm() {
+        let mut state = initial_state();
+        state.enter_confirm(
+            PendingAction::Upload {
+                gist_id: "g1".into(),
+                filename: "notes.txt".into(),
+                local_path: PathBuf::from("notes.txt"),
+            },
+            String::new(),
+        );
+        // `;` (menu) has no items over Confirm and won't open (palette.rs:60-66); Ctrl+P
+        // (command palette) always opens because it also carries the cross-screen items.
+        state.open_palette_command();
+        let p = build_palette_vm(&state);
+        assert!(p.background.is_none());
     }
 }

@@ -219,7 +219,7 @@ pub(crate) const CREATE_DESC_PREFIX: &str = "Description (optional): ";
 pub(crate) fn render_diff_pane_vm(
     frame: &mut Frame,
     area: Rect,
-    diff: &crate::tui::view_model::DiffVm,
+    diff: &crate::tui::screens::diff::DiffVm,
     theme: &Theme,
 ) {
     let block = Block::default()
