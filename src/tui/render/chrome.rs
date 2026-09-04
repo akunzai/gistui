@@ -376,7 +376,7 @@ pub(crate) fn modal_block(
 
 /// Horizontal and vertical padding inside a confirm modal: two columns each side so the text
 /// clears the border, and one blank row above and below so a decision does not read as a
-/// status sliver (`docs/design.md`).
+/// status sliver (`docs/agents/design.md`).
 const CONFIRM_MODAL_PADDING: Padding = Padding {
     left: 2,
     right: 2,

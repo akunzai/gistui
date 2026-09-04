@@ -611,7 +611,7 @@ impl AppState {
 }
 
 /// The ` ⚑` suffix for whichever pane drives the match ranking, empty for the other one.
-/// Single-width on purpose — see the mark vocabulary in `docs/design.md`.
+/// Single-width on purpose — see the mark vocabulary in `docs/agents/design.md`.
 fn anchor_marker(state: &AppState, pane: FocusPane) -> &'static str {
     if state.anchor == pane {
         " ⚑"

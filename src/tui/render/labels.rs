@@ -1,7 +1,7 @@
 //! Gist, row, and time labels.
 //!
 //! The marks below are the whole vocabulary the row labels may draw from — see
-//! [`docs/design.md`](../../../docs/design.md). Every one is single-width on purpose: a
+//! [`docs/agents/design.md`](../../../docs/agents/design.md). Every one is single-width on purpose: a
 //! double-width glyph misaligns the columns beside it and forces width special-cases into
 //! `text_fit`. A meaning that would need an emoji gets a short word instead (`3 files`),
 //! never a picture.
