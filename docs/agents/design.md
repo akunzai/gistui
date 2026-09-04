@@ -1,7 +1,7 @@
 # Product design
 
 Long-term principles for the TUI's visible surface, its wording, and the README. Screen
-mechanics live in [`docs/agents/architecture.md`](agents/architecture.md); this file governs
+mechanics live in [`docs/agents/architecture.md`](architecture.md); this file governs
 what the user reads and sees.
 
 ## Product thesis
@@ -148,4 +148,4 @@ and the app read as one thing. Feature cards are not a substitute for showing th
 a claim that the demo or the keymap already makes does not also get a card.
 
 The demo uses fixed fixture data, dimensions, theme, and timing, and exposes no local
-username or home path. Regeneration rules live in [`docs/demo.md`](demo.md).
+username or home path. Regeneration rules live in [`docs/demo.md`](../demo.md).

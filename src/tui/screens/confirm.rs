@@ -43,7 +43,7 @@ pub(crate) enum ConfirmBackgroundVm {
 
 /// One key that resolves a confirm modal, plus the verb it performs. The verb is the same
 /// word the footer hint and the resulting status use, so an action reads identically all the
-/// way through (`docs/design.md`).
+/// way through (`docs/agents/design.md`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ConfirmKeyVm {
     pub key: &'static str,
@@ -730,7 +730,7 @@ mod tests {
         let prompt = prompt_vm(&state);
         assert_eq!(prompt.question, "Overwrite notes.txt?");
         // Destructive: cancel leads, and the consequence is stated rather than left to the
-        // border colour (see `docs/design.md`).
+        // border colour (see `docs/agents/design.md`).
         assert_eq!(keys(&state), ["n cancel", "y overwrite"]);
         assert!(prompt.detail.is_some());
         assert_eq!(style(&state), ("Overwrite", Color::Red));

@@ -48,5 +48,5 @@ command palette. The mouse works by default. `gistui --help` lists the flags.
 - [Install](docs/INSTALL.md) — every install path, and self-upgrade.
 - [Safety](docs/SAFETY.md) — what confirms, and what is never overwritten silently.
 - [Configuration](config.example.toml) — every config field, with its default.
-- [Design](docs/design.md) — the principles the UI and these docs follow.
+- [Design](docs/agents/design.md) — the principles the UI and these docs follow.
 - [Contributing](CONTRIBUTING.md) — setup and the verification gate.

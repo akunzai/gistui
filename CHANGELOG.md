@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The interface drops its emoji (GitHub's release-note categories keep theirs). Gist rows now read `3 files`, `1 comment`, and a trailing
   age instead of picture glyphs, so their columns no longer drift out of alignment; the
   anchor pane is marked `⚑`, a pinned pair `↔`, and empty lists and the update notice say
-  what they mean in words. `docs/design.md` records the marks the UI may use and why.
+  what they mean in words. `docs/agents/design.md` records the marks the UI may use and why.
 - Confirm prompts now separate the question from the answer: the action and its consequence
   on their own lines, then the keys that resolve it, each labelled with the verb it performs
   (`y  delete`, `y  upload`) instead of a bare `(y/n)`. Destructive confirms lead with

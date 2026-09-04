@@ -1,7 +1,7 @@
 //! The pinned-mapping list and the one key that decides what a pin *is* (issue #424).
 //!
 //! A pin is identified by **all three** of `local_path`, `gist_id`, and `gist_filename` —
-//! `docs/design.md` defines a pin as "a persistent local-file to gist-file mapping", and
+//! `docs/agents/design.md` defines a pin as "a persistent local-file to gist-file mapping", and
 //! `gist_id` alone cannot name a file inside a gist. One local file may therefore be pinned
 //! to several gist files at once; those siblings are legitimate, not a corrupt state.
 //!

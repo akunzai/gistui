@@ -47,7 +47,7 @@ pub(crate) const MIN_ELIDED_WIDTH: usize = 4;
 
 /// Width of `text` in terminal cells — the same measure ratatui truncates a title by, so a
 /// double-width glyph (a CJK path component, say) is not silently clipped by the block after
-/// we let it through. The UI's own marks are all single-width by design (`docs/design.md`).
+/// we let it through. The UI's own marks are all single-width by design (`docs/agents/design.md`).
 pub(crate) fn cell_width(text: &str) -> usize {
     ratatui::text::Span::raw(text).width()
 }
