@@ -2,20 +2,13 @@
 
 `gistui` is a Rust 2021 TUI for browsing, comparing, and managing GitHub Gists through `gh`.
 
-## Commands
-
-Toolchains and task wrappers live in [`mise.toml`](mise.toml); run `mise install` once. `gh` is a user runtime dependency and is not pinned.
-
-- Verification gate: `mise run check`
-- Single test: `cargo test <name_filter>`
-- Non-TTY readiness check: `cargo run -- --check`
-- Demo regeneration: `mise run demo` (see `@docs/demo.md`)
-
 ## Pointers
 
 - Product design — voice, product language, row/column layout, the mark vocabulary, README scope: `@docs/agents/design.md`
 - Architecture, state-machine, jobs, IO boundaries, safety seams, truncation, and GistFile constructors: `@docs/agents/architecture.md`
 - Agent-only contribution and release conventions: `@docs/agents/conventions.md`
+- Pull request shape, tests-land-with-behaviour paths, review readiness: `@docs/agents/pull-request.md`
+- Verification gate, commands, evidence, and known gaps: `@docs/agents/verification.md`
 - Human contribution flow: `@CONTRIBUTING.md`
 - Release runbook: `@RELEASING.md`
 - Configuration schema (metadata only): `@config.example.toml`

@@ -12,7 +12,7 @@
 rust = { version = "stable", components = "rustfmt,clippy" }
 "github:AmanVarshney01/tcut" = "latest"
 
-# Tasks mirror the AGENTS.md verification gate and demo harness so the same
+# Tasks mirror the docs/agents/verification.md gate and demo harness so the same
 # commands run locally and in CI. List them with `mise tasks`.
 
 [tasks.fmt]
