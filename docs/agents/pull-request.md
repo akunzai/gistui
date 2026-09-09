@@ -10,8 +10,8 @@ on structure; what follows adds what it does not say. Release-note labels, miles
 ## Preparing
 
 - Work from a feature branch, `feat/<topic>` or `fix/issue-<n>`.
-- Title carries a Conventional Commit prefix, as the merged history does. Where one request
-  holds more than one kind of change, the prefix names the dominant one.
+- Title carries **no** Conventional Commit prefix. Commit subjects do; the title reads as a
+  plain sentence naming the change, because release notes group by label, not by prefix.
 - **Open a pull request, draft included, only when asked.**
 
 ## Description shape
