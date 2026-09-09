@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Two scratch-directory operations started in the same instant (upload, restore revision, or
+  compact) no longer collide on one temp path, where finishing the second deleted the first's
+  payload out from under it.
+
 ## [0.20.0] — 2026-09-02
 
 - A pin sync that cannot be written to `config.toml` now says so on the status line

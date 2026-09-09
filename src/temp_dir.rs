@@ -10,6 +10,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// RAII unique scratch directory under the system temp dir.
@@ -22,11 +23,22 @@ pub struct ScratchDir {
 }
 
 impl ScratchDir {
-    /// Create a unique empty directory named `.gistui_{kind}_{pid}_{stamp}`.
+    /// Create a unique empty directory named `.gistui_{kind}_{pid}_{stamp}_{seq}`.
+    ///
+    /// `create_dir` refuses an existing directory rather than adopting it, so two
+    /// live `ScratchDir`s can never share a path — otherwise one's Drop deletes the
+    /// other's files. The timestamp alone did not guarantee that: two calls with the
+    /// same `kind` inside one clock tick produced the same name.
     pub fn create(kind: &str) -> std::io::Result<Self> {
-        let path = unique_path(kind);
-        fs::create_dir_all(&path)?;
-        Ok(Self { path })
+        loop {
+            let path = unique_path(kind);
+            match fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path }),
+                // A fresh `seq` every pass, so the retry cannot spin.
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e),
+            }
+        }
     }
 
     pub fn path(&self) -> &Path {
@@ -57,6 +69,9 @@ where
     f(dir.path())
 }
 
+/// Per-process counter, so uniqueness does not rest on the clock's resolution.
+static SEQ: AtomicU64 = AtomicU64::new(0);
+
 fn unique_path(kind: &str) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -71,7 +86,11 @@ fn unique_path(kind: &str) -> PathBuf {
     } else {
         safe.as_str()
     };
-    std::env::temp_dir().join(format!(".gistui_{kind}_{}_{stamp}", std::process::id()))
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        ".gistui_{kind}_{}_{stamp}_{seq}",
+        std::process::id()
+    ))
 }
 
 #[cfg(test)]
@@ -141,5 +160,41 @@ mod tests {
         let a = ScratchDir::create("uniq").expect("create a");
         let b = ScratchDir::create("uniq").expect("create b");
         assert_ne!(a.path(), b.path());
+    }
+
+    #[test]
+    fn concurrent_creates_of_one_kind_do_not_share_a_path() {
+        // Regression: the name was pid + timestamp only, so two `restore` scratch
+        // dirs created inside one clock tick landed on the same path. The second
+        // adopted the first's directory, and its Drop deleted the first's payload
+        // out from under a live job. Same kind, same instant, on purpose.
+        const THREADS: usize = 16;
+        let start = std::sync::Arc::new(std::sync::Barrier::new(THREADS));
+
+        let paths: Vec<PathBuf> = (0..THREADS)
+            .map(|i| {
+                let start = std::sync::Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    let scratch = ScratchDir::create("same").expect("create");
+                    let path = scratch.path().join("payload.txt");
+                    fs::write(&path, i.to_string().as_bytes()).expect("write");
+                    // Every other thread's dir is still live at this point, so a
+                    // shared path shows up as a lost or overwritten payload.
+                    assert_eq!(fs::read_to_string(&path).expect("read"), i.to_string());
+                    scratch.path().to_path_buf()
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|h| h.join().expect("thread"))
+            .collect();
+
+        let distinct: std::collections::HashSet<&PathBuf> = paths.iter().collect();
+        assert_eq!(
+            distinct.len(),
+            THREADS,
+            "every scratch dir needs its own path"
+        );
     }
 }
