@@ -38,6 +38,10 @@ on structure; what follows adds what it does not say. Release-note labels, miles
 3. A collapsed `<details>` trailer holding affected paths, implementation notes, verification
    commands, and log excerpts.
 
+**No personally identifiable information in any attachment**, whatever ends up attached. Gist
+titles, filenames, and usernames from a real account count; the capture rules in
+[`verification.md`](verification.md) say what to do instead.
+
 ## Tests land with the behaviour
 
 - **Product logic** — everything under `src/`. A change here lands with its tests in the same
