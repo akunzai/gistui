@@ -15,6 +15,78 @@ Write issue titles and bodies in **English**, matching the existing tracker and 
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
 
+## Description shape
+
+1. Open with what a maintainer or a new contributor would observe — the symptom, or the thing
+   they want to be able to do — in plain language. Skip file paths and module names unless the
+   reader cannot otherwise locate the issue.
+2. Add a visual the forge renders inline: stills for anything on screen, a short recording for
+   a multi-step interaction, a Mermaid `flowchart`/`stateDiagram` for a state or job change.
+   No attachment carries personally identifiable information — gist titles, filenames, and
+   usernames from a real account count, so record against a throwaway account or crop. Upload
+   with `gh issue create --attach './bug.png#alt text'`. The flag also works on
+   `gh issue comment` and `gh issue edit`, so a visual can land after the issue is open.
+3. Close with a collapsed trailer, so the technical detail does not push the human summary
+   below the fold:
+
+   ```markdown
+   <details><summary>Technical details</summary>
+
+   Version, platform, `gh` version, affected paths, log excerpts.
+
+   </details>
+   ```
+
+## Spec issues
+
+An issue an agent implements from inverts that priority. Acceptance criteria, scope, and how
+to verify sit above the fold; `<details>` holds only background.
+
+```markdown
+## Acceptance criteria
+
+- [ ] One observable outcome per line.
+
+## Scope
+
+- **In**: the screens, modules, or commands this change may touch.
+- **Out**: what it must leave alone.
+
+## How to verify
+
+The gate, plus the per-change calls the touched paths ask for.
+
+<details><summary>Background</summary>
+
+Why this came up, prior attempts, links.
+
+</details>
+```
+
+An issue with unanswered open questions is not ready to implement. Ask in a comment and leave
+it in triage until the answers land.
+
+## Labels
+
+Read the live set with `gh label list --limit 100`. The CLI defaults to 30 and presents that
+page as the whole set, so a label past the first page reads as absent. Apply only labels that
+already exist; a genuinely missing one is a conversation with the maintainer, never a
+`gh label create`.
+
+- **Triage state** — [`triage-labels.md`](triage-labels.md) owns the canonical roles and their
+  label strings. It is their only home here.
+- **Priority** — one of `P0` critical, `P1` current cycle, `P2` soon, `P3` nice to have,
+  `P4` backlog. An issue carries at most one.
+- **Release notes** — every pull request carries exactly one category label; the set and the
+  rule live in [`conventions.md`](conventions.md).
+- **Invitation** — `good first issue` and `help wanted`, on work a maintainer wants outside
+  hands on.
+- **Disposition** — `question` for a support request, `duplicate` alongside a comment pointing
+  at the original, `invalid` for a report that is not one.
+- **Automated** — `dependencies`, `rust`, and `github_actions` are Dependabot's. Leave them to it.
+- **Wayfinding** — the `wayfinder:*` labels named below are not in the live set. `/wayfinder`
+  needs the maintainer to create them first.
+
 ## Pull requests as a triage surface
 
 **PRs as a request surface: no.** _(Set to `yes` if this repo treats external PRs as feature requests; `/triage` reads this flag.)_
