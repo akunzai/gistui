@@ -105,3 +105,7 @@ change touches.
   running binary. Verify by hand after a release cut.
 - The release and publish workflows: only a tag push exercises them, so a change there is
   verified at the next cut. See [`RELEASING.md`](../../RELEASING.md).
+
+A gap you could have closed is not a gap. Run the check whose dependency
+you have already seen running, and report a check you skipped as untried,
+rather than recording it here as one this repo cannot run.
