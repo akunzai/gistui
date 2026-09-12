@@ -9,21 +9,21 @@ Index: [`AGENTS.md`](../../AGENTS.md). Source of truth for types lives in the mo
 | **Pure** (unit-tested) | `domain`, `config`, `ranking`, `local`, `diff`, `pins`, actions **plan/guard**, `tui::view_model`, `tui::list_ranking`, `tui::settings`, `tui::gist_content`, `tui::local_scan`, `pin_store` (file IO, but fully unit-tested over `tempfile` — same as `config`) | In-crate unit tests |
 | **Impure** (thin IO) | `gh`, actions **execute**, `tui::run_loop` / `tui::bg` / `tui::gist_refresh` / `tui::gist_revision` / `tui::pin_sync` | No live `gh`. Spawn/absorb is thin IO; action-job `on_*` apply handlers (screen modules / `gist_mutation.rs`) are unit-tested (#298, #383) |
 
-`build_view_model` (`@src/tui/view_model.rs`): `AppState` + pin-sync cache → presentation facts. Paint helpers apply theme/layout only — no business rules, FS, or network.
+`build_view_model` (`src/tui/view_model.rs`): `AppState` + pin-sync cache → presentation facts. Paint helpers apply theme/layout only — no business rules, FS, or network.
 
 **A view-model type lives with whoever owns it** (issue #434). Ask: *can one screen claim this type?* If yes it belongs to that screen module, beside its builder, its paint function, and its tests. If no — several screens use it as equals to describe themselves — it belongs to the shared renderer it is the contract for. `view_model.rs` keeps only `ViewModel`, `ChromeVm`, and the two functions that build them; `ScreenVm` lives with `screens::lookup`, whose `build_vm` column constructs its variants, so the screen list exists once rather than twice.
 
-Caller count is only a proxy for that rule. `DiffVm` is where the proxy fails: `build_diff_vm` and `render_diff_pane_vm` each have two screen callers, but `DiffVm` *is* the Diff screen (it is what `ScreenVm::Diff` carries) and Confirm is a named borrower calling Diff's own public builder for a background — so it belongs to `@src/tui/screens/diff.rs`. By contrast no screen owns `ListPaneVm`, so that family lives in `@src/tui/render/list_pane.rs`. `PaneTitleVm` goes one step further, to `@src/tui/render/text_fit.rs`: `ListPaneVm` merely holds one and hands it on, while `fit_title` is the only code that splits it into segments and decides which one gives way.
+Caller count is only a proxy for that rule. `DiffVm` is where the proxy fails: `build_diff_vm` and `render_diff_pane_vm` each have two screen callers, but `DiffVm` *is* the Diff screen (it is what `ScreenVm::Diff` carries) and Confirm is a named borrower calling Diff's own public builder for a background — so it belongs to `src/tui/screens/diff.rs`. By contrast no screen owns `ListPaneVm`, so that family lives in `src/tui/render/list_pane.rs`. `PaneTitleVm` goes one step further, to `src/tui/render/text_fit.rs`: `ListPaneVm` merely holds one and hands it on, while `fit_title` is the only code that splits it into segments and decides which one gives way.
 
 No **new** facade re-export was added for the moved types, and `src/tui/mod.rs`'s old `pub(crate) use view_model::{gist_row_display, ScreenVm}` is gone: call sites now name the real module. An import line naming that module is the point — a facade would make "where does this type live" unreadable again, and the next type would be added to the facade instead of to its module. (`render/mod.rs`'s pre-existing `pub(crate) use labels::*` / `text_fit::*` globs predate this and are how the render façade has always worked; the moved types are still imported by their real path everywhere.)
 
-## Runtime settings (`@src/tui/settings.rs`, issue #404)
+## Runtime settings (`src/tui/settings.rs`, issue #404)
 
 - `RuntimeSettings` is the only runtime owner of the seven Settings-screen preferences and the `--no-mouse` / `--no-update-check` session overrides. Effective mouse and update-check values are derived; `Theme` is derived from `ThemeChoice`.
 - Settings-screen edits, global theme toggle, and Diff context toggle all call `RuntimeSettings::adjust`. Only a mouse change returns `SettingsEffect::SyncMouseCapture`; dispatch owns that terminal IO.
 - Persistence loads the current `AppConfig`, calls `apply_to_config`, then saves. That projection updates every runtime-owned field and leaves pins, skip directories, and other config data intact.
 
-## Gist content store (`@src/tui/gist_content.rs`, issue #406)
+## Gist content store (`src/tui/gist_content.rs`, issue #406)
 
 - `GistContentStore` is the only owner of the 64-entry in-memory content LRU. Callers request
   `PreferCache` for Preview or `Refresh` for every explicit/fresh fetch; both miss paths hydrate
@@ -34,11 +34,11 @@ No **new** facade re-export was added for the moved types, and `src/tui/mod.rs`'
   restore. Successful Gist deletion invalidates every file for the Gist. Metadata-only mutations
   (description, compact, star, fork) do not invalidate content.
 
-## GistFile construction (`@src/domain.rs`, issue #379)
+## GistFile construction (`src/domain.rs`, issue #379)
 
 Three constructors, not one:
 
-- **API mapper** (`parse_gist_list_json` in `@src/gh/gists.rs`) lists every field. A new metadata column must fail to compile there — do not fill from `Default`.
+- **API mapper** (`parse_gist_list_json` in `src/gh/gists.rs`) lists every field. A new metadata column must fail to compile there — do not fill from `Default`.
 - **`for_sync`** — throwaway identity (`gist_id`, `filename`, `raw_url`) for sync/diff/upload. Production callers (`bg.rs`, `GistFileRef::to_gist_file`) stay on it.
 - **`fixture`** — tests. Override non-default fields with struct-update syntax.
 
@@ -46,12 +46,12 @@ Fields stay `pub`. No `#[serde(default)]` on the struct.
 
 ## Screen state machine
 
-- **`screens::lookup`** (`@src/tui/screens/mod.rs`, issues #377, #388) is the exhaustive match for the per-screen columns: help topic, wheel step, key guard, VM builder, key handler, navigation, and click selection. It first borrows `self.screen`, then calls an `fn(&mut AppState, …)` pointer: that two-phase pattern is #274's borrow rule. `render_screen_vm` matches `ScreenVm`, not `Screen`. `keymap::for_screen` stays in `keymap.rs` (bindings live there; putting them on the lookup would cycle `screens` ↔ `keymap`). No `ScreenModule` trait: the screen files already are the adapters.
-- **`build_confirm_vm` is the exhaustive lookup for `PendingAction`** (`@src/tui/screens/confirm.rs`, issue #417). One arm per pending action carries its title, border colour, body (`ConfirmModalKind`) and background together; there is no `_` arm, so a new variant that forgets its row fails to compile instead of silently inheriting the overwrite gate's destructive prompt. `confirm_modal_style` and `view_model::confirm_prompt` are gone — they were two of the five wildcard-terminated matches this replaced. `handle_key_confirm` is the second (and last) exhaustive match: it still returns `KeyOutcome` (ADR-0002) and still clones the action, because the arms need `&mut AppState`; its `None` arm means "not on the Confirm screen", which `screens::lookup` never routes here. Presentation is asserted through `build_confirm_vm` only — do not reach past it to a per-fact helper.
-- **`Screen` is `Clone`, not `Copy`** — payload variants own screen-local UI (`@src/tui/mod.rs`, issue #242).
+- **`screens::lookup`** (`src/tui/screens/mod.rs`, issues #377, #388) is the exhaustive match for the per-screen columns: help topic, wheel step, key guard, VM builder, key handler, navigation, and click selection. It first borrows `self.screen`, then calls an `fn(&mut AppState, …)` pointer: that two-phase pattern is #274's borrow rule. `render_screen_vm` matches `ScreenVm`, not `Screen`. `keymap::for_screen` stays in `keymap.rs` (bindings live there; putting them on the lookup would cycle `screens` ↔ `keymap`). No `ScreenModule` trait: the screen files already are the adapters.
+- **`build_confirm_vm` is the exhaustive lookup for `PendingAction`** (`src/tui/screens/confirm.rs`, issue #417). One arm per pending action carries its title, border colour, body (`ConfirmModalKind`) and background together; there is no `_` arm, so a new variant that forgets its row fails to compile instead of silently inheriting the overwrite gate's destructive prompt. `confirm_modal_style` and `view_model::confirm_prompt` are gone — they were two of the five wildcard-terminated matches this replaced. `handle_key_confirm` is the second (and last) exhaustive match: it still returns `KeyOutcome` (ADR-0002) and still clones the action, because the arms need `&mut AppState`; its `None` arm means "not on the Confirm screen", which `screens::lookup` never routes here. Presentation is asserted through `build_confirm_vm` only — do not reach past it to a per-fact helper.
+- **`Screen` is `Clone`, not `Copy`** — payload variants own screen-local UI (`src/tui/mod.rs`, issue #242).
 - **`List` stays a unit tag** — dual-pane selection / filters / sorts are session-global on `AppState` (user story 19).
 - Other variants (`Diff`, `Confirm`, `Preview`, `Help`, `Config`, `Revisions`, `Pins`, `Gists`, `GistDetail`, `Palette`, …) carry payloads (body/scroll/return/origin as needed).
-- **Diff/Confirm/Preview body+scroll** is `ScrollBody` (`@src/tui/scroll.rs`, issue #385), reached only via `scroll_body` / `scroll_body_mut`. The ten `diff_body_text` / `scroll_diff_*` methods are gone. Their `screens::lookup` rows share `scroll_navigation`; Help and Detail comments have no `ScrollBody`.
+- **Diff/Confirm/Preview body+scroll** is `ScrollBody` (`src/tui/scroll.rs`, issue #385), reached only via `scroll_body` / `scroll_body_mut`. The ten `diff_body_text` / `scroll_diff_*` methods are gone. Their `screens::lookup` rows share `scroll_navigation`; Help and Detail comments have no `ScrollBody`.
 - **`nav_stack`** (issue #271) holds return targets; Esc pops. Prefer stack ops over parallel “return” root fields for new navigation.
 - **Async screen entry is a moved value, not root staging.** `DeferredEntry` snapshots the
   return screen at intent time and moves through `KeyOutcome` and the job apply closure.
@@ -80,10 +80,10 @@ label, and gist-fetch payload without executing the worker closure (issue #422).
 
 - New key logic → `AppState::handle_key` (testable).
 - New IO → `dispatch` / `bg` helpers, not `handle_key`.
-- IO-bearing `KeyOutcome` variants carry payloads (issue #244): `@src/tui/mod.rs` (`KeyOutcome`), `@src/tui/dispatch.rs`.
+- IO-bearing `KeyOutcome` variants carry payloads (issue #244): `src/tui/mod.rs` (`KeyOutcome`), `src/tui/dispatch.rs`.
 - Diff/Confirm/Preview scroll keys go through `scroll_body_mut` (issue #385), not per-axis `AppState` methods.
 
-## Keymap (`@src/tui/keymap.rs`)
+## Keymap (`src/tui/keymap.rs`)
 
 `keymap::for_screen` returns one table per screen describing every key it binds (issue #369). The table **describes**; it does not dispatch and it does not gate — `handle_key_*` still executes keys, and `*_guard` still answers "is this available right now" (issue #288). Adding a key means adding a row *and* a `handle_key_*` arm; the tests below make the omission loud.
 
@@ -101,10 +101,10 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
 
 ## Background jobs
 
-- **`Jobs`** is the single registry: spawn / absorb / cancel (`@src/tui/bg.rs`, issue #243). It keeps eight methods: `startup`, `spawn_action`, `spawn_gist_fetch_action`, `cancel_action`, `request_local_scan`, `set_upload_edit_watch`, `absorb`, and `command_runner` (the injected `CommandRunner`, see the Gist revision workflow below).
-- **`GistRefresh` owns the whole-list pipeline** (`@src/tui/gist_refresh.rs`): it publishes the base `GistCatalog` as soon as owned/starred/login finish, then publishes fork counts, star counts, and fork metadata as coherent stages. Every result carries a refresh generation; only the latest generation may publish. A failed leg retains that field's last-known-good value, and the pipeline emits one aggregate status after the generation finishes.
-- **`GistCatalog` is the publish/cache unit** (`@src/domain.rs`). Cache writes serialize one complete catalog stage from one generation; do not cache or publish the refresh module's individual legs.
-- **Apply only marks; only the registry spawns** (issue #383). `on_*` handlers are free functions (`fn on_x(state: &mut AppState, ...) -> LoopFlow`) on the screen module that owns the payload they mutate, or on `@src/tui/gist_mutation.rs` when the outcome belongs to no single screen. They set `gist_list_stale` / `revisions_stale`; `Jobs::absorb` consumes those flags immediately after `on_action_outcome` and spawns. Do not spawn from apply. **Revisit** when a third kind of stale need appears: replace the flags with a described follow-up value rather than adding a third field.
+- **`Jobs`** is the single registry: spawn / absorb / cancel (`src/tui/bg.rs`, issue #243). It keeps eight methods: `startup`, `spawn_action`, `spawn_gist_fetch_action`, `cancel_action`, `request_local_scan`, `set_upload_edit_watch`, `absorb`, and `command_runner` (the injected `CommandRunner`, see the Gist revision workflow below).
+- **`GistRefresh` owns the whole-list pipeline** (`src/tui/gist_refresh.rs`): it publishes the base `GistCatalog` as soon as owned/starred/login finish, then publishes fork counts, star counts, and fork metadata as coherent stages. Every result carries a refresh generation; only the latest generation may publish. A failed leg retains that field's last-known-good value, and the pipeline emits one aggregate status after the generation finishes.
+- **`GistCatalog` is the publish/cache unit** (`src/domain.rs`). Cache writes serialize one complete catalog stage from one generation; do not cache or publish the refresh module's individual legs.
+- **Apply only marks; only the registry spawns** (issue #383). `on_*` handlers are free functions (`fn on_x(state: &mut AppState, ...) -> LoopFlow`) on the screen module that owns the payload they mutate, or on `src/tui/gist_mutation.rs` when the outcome belongs to no single screen. They set `gist_list_stale` / `revisions_stale`; `Jobs::absorb` consumes those flags immediately after `on_action_outcome` and spawns. Do not spawn from apply. **Revisit** when a third kind of stale need appears: replace the flags with a described follow-up value rather than adding a third field.
 - Action jobs and local scans use **generation supersession** (issue #221).
 - **Action startup is an internal seam** (issue #422): `Jobs` receives an `ActionJobSpec`
   whose semantic kind carries the non-content identity needed to distinguish work (for
@@ -118,15 +118,15 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
   all three stay private to `Jobs`; call sites still use only `spawn_action` /
   `spawn_gist_fetch_action`. Every revision job reifies as one `ActionJobKind::Revision(…)`
   whose payload the workflow owns.
-- **Local-scan orchestration lives in `@src/tui/local_scan.rs`** (issue #409), separate from filesystem walking (`crate::local`) and thread/channel IO (`Jobs`, `@src/tui/bg.rs`). `ScanRequest` (cwd, pinned mappings, `ScanMode::{Flat,Recursive}`, skip dirs, max depth) is the one snapshot startup, `Jobs::request_local_scan`, and `bg::refresh_locals` all build via `AppState::local_scan_request` — `ScanMode` is a snapshot of `local_recursive`, not a live read, so an in-flight scan keeps the mode it started with. A private `LocalScan` (generation + in-flight) on `AppState` is mutated only through `begin_local_scan` / `apply_local_scan` / `end_local_scan`; a stale generation can end no in-flight state and apply no candidates. `apply_local_scan` is the one candidate-application operation background and synchronous paths share: it preserves the selected path (an explicit target — e.g. a just-downloaded file — beats whatever is selected at apply time), clears local hscroll unless that exact path survives, and re-clamps the gist cursor (index *and* hscroll) if reranking invalidated it. A current failure or channel disconnect ends in-flight state and reports it (`"local scan failed: …"` for the interactive scan, `"local refresh failed: …"` appended onto whatever status the caller already set for the synchronous post-download refresh) without touching last-known-good candidates; only success clears its own `SCANNING_STATUS` placeholder, never a newer status a later action wrote. Pin/unpin never rescans — it does not touch the filesystem, and ranking reads `PinnedMapping` directly — so `LocalCandidate.pinned` does not exist; recursive alias dedup (`crate::local::path_priority`) still prefers a pinned path by reading `PinnedMapping` itself.
+- **Local-scan orchestration lives in `src/tui/local_scan.rs`** (issue #409), separate from filesystem walking (`crate::local`) and thread/channel IO (`Jobs`, `src/tui/bg.rs`). `ScanRequest` (cwd, pinned mappings, `ScanMode::{Flat,Recursive}`, skip dirs, max depth) is the one snapshot startup, `Jobs::request_local_scan`, and `bg::refresh_locals` all build via `AppState::local_scan_request` — `ScanMode` is a snapshot of `local_recursive`, not a live read, so an in-flight scan keeps the mode it started with. A private `LocalScan` (generation + in-flight) on `AppState` is mutated only through `begin_local_scan` / `apply_local_scan` / `end_local_scan`; a stale generation can end no in-flight state and apply no candidates. `apply_local_scan` is the one candidate-application operation background and synchronous paths share: it preserves the selected path (an explicit target — e.g. a just-downloaded file — beats whatever is selected at apply time), clears local hscroll unless that exact path survives, and re-clamps the gist cursor (index *and* hscroll) if reranking invalidated it. A current failure or channel disconnect ends in-flight state and reports it (`"local scan failed: …"` for the interactive scan, `"local refresh failed: …"` appended onto whatever status the caller already set for the synchronous post-download refresh) without touching last-known-good candidates; only success clears its own `SCANNING_STATUS` placeholder, never a newer status a later action wrote. Pin/unpin never rescans — it does not touch the filesystem, and ranking reads `PinnedMapping` directly — so `LocalCandidate.pinned` does not exist; recursive alias dedup (`crate::local::path_priority`) still prefers a pinned path by reading `PinnedMapping` itself.
 - Call sites start work via `Jobs` methods (`spawn_action`, `request_local_scan`, …) or `gist_revision::dispatch` — do not own ad-hoc channel fields on `AppState`.
 - `run_loop` only **polls** `jobs.absorb`.
 - **Action jobs carry their apply** (issue #375, ADR-0002's async-response half): `spawn_action(spec, run, apply)` runs `run` off-thread and boxes `apply(value)` for the event-loop tick. There is no `BgTaskOutcome` enum. `ActionApply` is `FnOnce(&mut AppState) -> LoopFlow`. `on_action_outcome` is a generation-guard shell that calls the closure. `KeyOutcome` / `dispatch_outcome` stay plain data (ADR-0002).
 - **`on_*` is the apply seam** (#298, #375, #383): named handlers are the apply bodies and the unit-test surface. They do not live on `Jobs`. `dispatch_outcome` / `route_outcome` sit on the spawn side, not the apply side, so neither is one. A new action is a spawn site plus an `on_*` when the apply is worth testing.
-- **A pin's key is three-part** (issue #424): `(local_path, gist_id, gist_filename)`, owned by `@src/pins.rs` (`PinKey`, `PinKey::matches`, `PinnedMapping::key()`, `is_pinned` / `upsert` / `remove` / `resolve_against` / `find_by_resolved_path`). One local file pinned to several gist files is a legitimate state, not corruption — `docs/agents/design.md` defines a pin as a local-file to gist-*file* mapping, and `gist_id` alone cannot name a file inside a gist. Never re-derive the key at a call site, and pass `PinnedMapping::key()` when you already hold the mapping. `upsert` never modifies an existing pin; `PinStore::record_sync` deliberately does not use it, because confirming a sync must never create a pin. Exactly-duplicate triples are degenerate input from a hand-edited `config.toml`: the operations take the first match, and `crate::config::load_config` stays a parser, not a silent rewriter.
+- **A pin's key is three-part** (issue #424): `(local_path, gist_id, gist_filename)`, owned by `src/pins.rs` (`PinKey`, `PinKey::matches`, `PinnedMapping::key()`, `is_pinned` / `upsert` / `remove` / `resolve_against` / `find_by_resolved_path`). One local file pinned to several gist files is a legitimate state, not corruption — `docs/agents/design.md` defines a pin as a local-file to gist-*file* mapping, and `gist_id` alone cannot name a file inside a gist. Never re-derive the key at a call site, and pass `PinnedMapping::key()` when you already hold the mapping. `upsert` never modifies an existing pin; `PinStore::record_sync` deliberately does not use it, because confirming a sync must never create a pin. Exactly-duplicate triples are degenerate input from a hand-edited `config.toml`: the operations take the first match, and `crate::config::load_config` stays a parser, not a silent rewriter.
 - **Shared spawn payload** (#375): a value both `run` and `apply` need is part of `run`'s return, unpacked by `apply`. That is how identity (`gist_id`, `fetch_id`, labels) crosses the thread boundary without a second clone.
 
-## Gist revision workflow (`@src/tui/gist_revision.rs`, issue #430)
+## Gist revision workflow (`src/tui/gist_revision.rs`, issue #430)
 
 One interface owns every Gist revision flow. Callers submit one plain-data `RevisionRequest`
 (ADR-0002: comparable, pattern-matchable, never a closure or a job handle) to
@@ -181,13 +181,13 @@ runs). The real `ScratchDir` is used, not a filesystem seam. Do not layer duplic
 implementation-detail assertions beneath this seam: parser and command-plan tests stay in
 `gh` / `actions`, screen intent and presentation tests stay on their screens.
 
-## Pinned mapping persistence (`@src/pin_store.rs`, issue #432)
+## Pinned mapping persistence (`src/pin_store.rs`, issue #432)
 
-`PinStore` is the one interface that writes pins to `config.toml`. `@src/pins.rs` stays
+`PinStore` is the one interface that writes pins to `config.toml`. `src/pins.rs` stays
 **pure** — it defines what a pin *is* and the list operations; `PinStore` owns everything
 around that: resolving the config path, loading, applying the stored-versus-absolute rule,
 hashing sync content, saving, and describing what changed. The `pin_mapping` /
-`unpin_mapping` / `record_sync` wrappers in `@src/actions.rs` are gone.
+`unpin_mapping` / `record_sync` wrappers in `src/actions.rs` are gone.
 
 - **Three operations, named not enumerated**: `pin`, `unpin` (by `PinKey`), `record_sync`.
   This path is synchronous — no job, no generation, no apply closure — so a plain-data
@@ -207,7 +207,7 @@ hashing sync content, saving, and describing what changed. The `pin_mapping` /
   correct value for `pinned` *and* `skip_dirs`, even when only one could have changed;
   `record_sync` used to project only `pinned`.
 - **`resolve_against` is the one definition of the stored-versus-absolute rule**
-  (`@src/pins.rs`, pure). A stored `local_path` may be relative — a portable config is a
+  (`src/pins.rs`, pure). A stored `local_path` may be relative — a portable config is a
   legitimate thing to hand-write — so a pin is *found* by its resolved form and *written*
   by its stored form; writing back the resolved form would duplicate the entry. It replaced
   three copies (`bg.rs`, `pin_sync.rs`, and an inline comparison in `dispatch.rs`).
@@ -223,7 +223,7 @@ hashing sync content, saving, and describing what changed. The `pin_mapping` /
   abbreviation), the Pins cursor clamp, `mark_pin_sync_cache_dirty`, and resolving a
   Pins-screen row index into a `PinKey` before calling `unpin`. A row index is a
   filtered-view concept and never reaches `PinStore`. `apply_pin_change` / `apply_unpin` /
-  `apply_pin_sync` (`@src/tui/bg.rs`) are that projection, and the unit-test surface for it.
+  `apply_pin_sync` (`src/tui/bg.rs`) are that projection, and the unit-test surface for it.
   Projecting `skip_dirs` does **not** trigger a rescan — pin/unpin never touch the
   filesystem (issue #409), so a hand edit to `skip_dirs` picked up by one of these loads
   only reaches the local list at the next scan.
@@ -240,14 +240,14 @@ hashing sync content, saving, and describing what changed. The `pin_mapping` /
   with no `else`, and `record_pin_sync` returned `()` so no caller could observe them.
   `SyncRecord::NotPinned` stays silent: there was nothing to record.
 
-## Pin-sync presentation (`@src/tui/pin_sync.rs`)
+## Pin-sync presentation (`src/tui/pin_sync.rs`)
 
 - `refresh_pin_sync_cache` is **impure** (stat/read/hash); fills `AppState::pin_sync_cache`.
 - Refresh on: enter/return Pins, pin-list change, successful pin-sync absorb, dirty flag / length mismatch — **not** every frame, **not** from the pure VM builder.
 - Action dispatch may call `compute_pin_sync_status` one-shot; paint uses `cached_pin_sync_status` / the VM only.
 - No mtime watch: staying on Pins after an external editor edit can leave badges stale until the next refresh.
 
-## List panes (`@src/tui/render/list_pane.rs`)
+## List panes (`src/tui/render/list_pane.rs`)
 
 `render_list_pane` paints **every** bordered list of selectable rows (issue #367): both List panes, Gist manager, Pinned Mappings, Revisions. Callers describe the pane with a `ListPaneVm` and never assemble the widget — clipping, horizontal scroll, empty state, title fit, the scrollbar, and the `PaneHit` all live behind that one call. `ListPaneVm`, `ListPaneEmpty`, `RowVm`, and `RowEmphasis` are declared here, with the renderer they are the contract for (issue #434).
 
@@ -257,11 +257,11 @@ hashing sync content, saving, and describing what changed. The `pin_mapping` /
 - **`focused`** drives border colour *and* selection highlight together (solid bar when focused, bold when not); single-pane screens pass `true`. `scrollbar` is `true` only for the two List panes.
 - **Empty state** is `ListPaneEmpty` plus a prebuilt `empty_message` from the builder. No screen hard-codes an empty message at paint time.
 
-**Both List panes are `ListCursor`** (`@src/tui/list_cursor.rs`, issue #415), reached through `AppState::focused_cursor` / `focused_cursor_mut` — the one seam where `focus` picks a pane, so a navigation operation is added once rather than once per pane. The `local_index` / `gist_index` / `local_hscroll` / `gist_hscroll` fields and the `scroll_focused_left` / `scroll_focused_right` methods are gone; `right` takes its cap from `focused_hscroll_max()`, computed before the borrow (#274). `ListCursor` owns one policy only — a vertical move clears the offset — so everything a cursor move *triggers* stays on the screen: `list_move_focused` / `list_page_focused` / `click_select_list` keep the anchor re-rank (a single step that hits a bound re-ranks nothing; a page always does), and `apply_local_scan` keeps path-identity resolution, calling `select` when it lands on a different row and assigning the index directly when the previously selected path survived. `anchor` and `list_ranking` only *read* `cursor.index`.
+**Both List panes are `ListCursor`** (`src/tui/list_cursor.rs`, issue #415), reached through `AppState::focused_cursor` / `focused_cursor_mut` — the one seam where `focus` picks a pane, so a navigation operation is added once rather than once per pane. The `local_index` / `gist_index` / `local_hscroll` / `gist_hscroll` fields and the `scroll_focused_left` / `scroll_focused_right` methods are gone; `right` takes its cap from `focused_hscroll_max()`, computed before the borrow (#274). `ListCursor` owns one policy only — a vertical move clears the offset — so everything a cursor move *triggers* stays on the screen: `list_move_focused` / `list_page_focused` / `click_select_list` keep the anchor re-rank (a single step that hits a bound re-ranks nothing; a page always does), and `apply_local_scan` keeps path-identity resolution, calling `select` when it lands on a different row and assigning the index directly when the previously selected path survived. `anchor` and `list_ranking` only *read* `cursor.index`.
 
 **The two List panes are user-resizable** (issue #395): `AppState::list_split_percent` is the local pane's share, session-only (no config field, no Settings row, no key binding — a restart is back at `DEFAULT_SPLIT_PERCENT`). Percent is the stored fact but `render_list_vm` sizes the panes in **cells** (`split_cells` → `Length`/`Min`) — handing ratatui a second percentage makes the divider lag the pointer mid-drag. `clamp_split_percent` holds 15–85% *and* `list_pane::MIN_PANE_CELLS` on both sides, and returns `None` when no split leaves two readable panes. The drag policy stays on the List screen; `MouseSession` owns only its lifecycle. The highlight belongs to neither pane, so it is `highlight_pane_divider`, not a `ListPaneVm::focused` variant.
 
-## Mouse interaction (`@src/tui/mouse.rs`)
+## Mouse interaction (`src/tui/mouse.rs`)
 
 - `MouseFrame` is rebuilt on every paint. Renderers register closed `HitTarget` values; its
   resolver owns cross-screen priority, independent of registration order. Palette overlays use
@@ -289,7 +289,7 @@ List-row horizontal scroll (issue #341) is **per selected row**, not pane-wide: 
 
 List-row budget: inner pane width minus borders+padding (`LIST_CHROME_CELLS`) minus `LIST_HIGHLIGHT_SYMBOL`. ratatui's default `HighlightSpacing::WhenSelected` indents **every** row once any row is selected — these lists always `select(...)` when they have rows, so unselected rows still pay the `▶ ` indent. Keep the widget's `highlight_symbol` and the budget on `LIST_HIGHLIGHT_SYMBOL` so they cannot drift.
 
-## Text fitting (`@src/tui/render/text_fit.rs`)
+## Text fitting (`src/tui/render/text_fit.rs`)
 
 Two ellipsis operations — different jobs, do not merge:
 
@@ -298,7 +298,7 @@ Two ellipsis operations — different jobs, do not merge:
 
 Titles reaching `render_list_pane` are always `PaneTitleVm` — declared here rather than in `list_pane.rs`, because `fit_title` is the only code that looks inside one (issue #434). A single-segment title is equivalent to `fit_block_title` (both end in `truncate_end` at width − 2).
 
-Narrow-terminal reflow (issue #342), also in `@src/tui/render/text_fit.rs` — different jobs from ellipsis, do not merge:
+Narrow-terminal reflow (issue #342), also in `src/tui/render/text_fit.rs` — different jobs from ellipsis, do not merge:
 
 - **`wrap_hanging`** — wrap a line to width, continuing at the source line's leading whitespace. Help body and gist-comment bodies (pre-wrap at paint; do not use `Paragraph` wrap, which drops indent).
 - **`fit_hints`** — drop whole ` · `-separated footer items so a coloured hint line stays one row; the last item (leave key) is kept. Status messages still wrap via `wrap_line_count`.
@@ -306,8 +306,8 @@ Narrow-terminal reflow (issue #342), also in `@src/tui/render/text_fit.rs` — d
 
 ## Render modules
 
-`@src/tui/render/mod.rs` is the rendering façade: it paints the canvas and dispatches `ScreenVm`.
-Keep focused helpers in its children: `@src/tui/render/labels.rs` owns gist/file/time and diff labels; `@src/tui/render/diff_view.rs` owns highlighted diff painting (screens enter through `render_diff_pane_vm`); and `@src/tui/render/chrome.rs` owns top bars, footers, modals, loading overlays, and palette rows.
+`src/tui/render/mod.rs` is the rendering façade: it paints the canvas and dispatches `ScreenVm`.
+Keep focused helpers in its children: `src/tui/render/labels.rs` owns gist/file/time and diff labels; `src/tui/render/diff_view.rs` owns highlighted diff painting (screens enter through `render_diff_pane_vm`); and `src/tui/render/chrome.rs` owns top bars, footers, modals, loading overlays, and palette rows.
 
 ## Terminal lifecycle
 
@@ -315,7 +315,7 @@ Keep focused helpers in its children: `@src/tui/render/labels.rs` owns gist/file
 
 ## Safety seams (rich refs)
 
-- Download overwrite gate (issue #246): `@src/actions.rs` — `DownloadMode` / `OverwriteConfirmed`.
-- Injectable `gh`/`git` boundary (issue #245, #386, #419): `foo(runner)` with `CommandRunner` first; adapters `SystemRunner` / `SeqRunner`. Every command path goes through it — reads, write actions, and gist compaction (`compact_in_dir`) alike. The seam expresses spawn-and-capture only; the few paths it cannot express are named on the `CommandRunner` doc in `@src/actions.rs`, and that list is the whole set. Fixtures in `tests/fixtures/gh/`.
-- Gold-style TUI pure logic: each `tui` module's own `#[cfg(test)] mod tests` (no network); shared `AppState` fixtures live in `@src/tui/test_support.rs`.
-- E2E frames: `@scripts/demo/` (real binary + fake `gh` + fake cwd).
+- Download overwrite gate (issue #246): `src/actions.rs` — `DownloadMode` / `OverwriteConfirmed`.
+- Injectable `gh`/`git` boundary (issue #245, #386, #419): `foo(runner)` with `CommandRunner` first; adapters `SystemRunner` / `SeqRunner`. Every command path goes through it — reads, write actions, and gist compaction (`compact_in_dir`) alike. The seam expresses spawn-and-capture only; the few paths it cannot express are named on the `CommandRunner` doc in `src/actions.rs`, and that list is the whole set. Fixtures in `tests/fixtures/gh/`.
+- Gold-style TUI pure logic: each `tui` module's own `#[cfg(test)] mod tests` (no network); shared `AppState` fixtures live in `src/tui/test_support.rs`.
+- E2E frames: `scripts/demo/` (real binary + fake `gh` + fake cwd).

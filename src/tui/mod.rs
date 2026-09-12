@@ -549,7 +549,7 @@ pub enum KeyOutcome {
     },
     /// Every Gist revision intent — history, either comparison, restore preview, and
     /// restore execution — as one plain-data request (issue #430). The workflow module
-    /// (`@src/tui/gist_revision.rs`) is the only thing that reads it.
+    /// (`src/tui/gist_revision.rs`) is the only thing that reads it.
     Revision(gist_revision::RevisionRequest),
     ToggleGistStar {
         gist_id: String,

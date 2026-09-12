@@ -39,7 +39,7 @@ pub(super) fn dispatch_outcome(
 ///
 /// Each spawn arm reifies its semantic kind, progress label, and non-content identity in an
 /// `ActionJobSpec`; `Jobs` hands that spec and the opaque closure to its action-spawner adapter
-/// (`@src/tui/bg.rs`, issue #422). Tests use the recording adapter, so spawn arms are
+/// (`src/tui/bg.rs`, issue #422). Tests use the recording adapter, so spawn arms are
 /// observable here without executing their closures.
 fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> LoopFlow {
     match outcome {
