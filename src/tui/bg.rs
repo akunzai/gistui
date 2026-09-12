@@ -145,7 +145,7 @@ pub(super) enum ActionJobKind {
         gist_id: String,
     },
     /// Every Gist revision job. Its semantic identity is owned by the workflow module
-    /// (`@src/tui/gist_revision.rs`, issue #430), not spelled out again here.
+    /// (`src/tui/gist_revision.rs`, issue #430), not spelled out again here.
     Revision(super::gist_revision::RevisionJobKind),
     ToggleGistStar {
         gist_id: String,
