@@ -12,6 +12,8 @@ on structure; what follows adds what it does not say. Release-note labels, miles
 - Work from a feature branch, `feat/<topic>` or `fix/issue-<n>`.
 - Title carries **no** Conventional Commit prefix. Commit subjects do; the title reads as a
   plain sentence naming the change, because release notes group by label, not by prefix.
+- Link the issue in the template's Related Issues section (`Closes #<n>`). If there is no
+  tracked issue, drop the section — never leave an unlinked `Closes #` or empty issue marker.
 - **Open a pull request, draft included, only when asked.**
 
 ## Description shape
