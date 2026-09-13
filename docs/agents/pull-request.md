@@ -35,8 +35,8 @@ on structure; what follows adds what it does not say. Release-note labels, miles
    (`website/*.png`) or a one-off `tcut` recording. Where capture is impossible,
    `<!-- screenshot pending: after -->` keeps the gap visible. What an attachment may hold is
    in [`verification.md`](verification.md).
-3. A collapsed `<details>` trailer holding affected paths, implementation notes, verification
-   commands, and log excerpts.
+3. A collapsed `<details>` trailer holding implementation notes, verification, and lessons
+   learned. Skip affected paths — GitHub's own diff view already shows those.
 
 **No personally identifiable information in any attachment**, whatever ends up attached. Gist
 titles, filenames, and usernames from a real account count; the capture rules in
