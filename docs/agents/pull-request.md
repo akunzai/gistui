@@ -12,6 +12,8 @@ on structure; what follows adds what it does not say. Release-note labels, miles
 - Work from a feature branch, `feat/<topic>` or `fix/issue-<n>`.
 - Title carries **no** Conventional Commit prefix. Commit subjects do; the title reads as a
   plain sentence naming the change, because release notes group by label, not by prefix.
+- Link the issue in the template's Related Issues section (`Closes #<n>`). If there is no
+  tracked issue, drop the section — never leave an unlinked `Closes #` or empty issue marker.
 - **Open a pull request, draft included, only when asked.**
 
 ## Description shape
@@ -35,8 +37,8 @@ on structure; what follows adds what it does not say. Release-note labels, miles
    (`website/*.png`) or a one-off `tcut` recording. Where capture is impossible,
    `<!-- screenshot pending: after -->` keeps the gap visible. What an attachment may hold is
    in [`verification.md`](verification.md).
-3. A collapsed `<details>` trailer holding affected paths, implementation notes, verification
-   commands, and log excerpts.
+3. A collapsed `<details>` trailer holding implementation notes, verification, and lessons
+   learned. Skip affected paths — GitHub's own diff view already shows those.
 
 **No personally identifiable information in any attachment**, whatever ends up attached. Gist
 titles, filenames, and usernames from a real account count; the capture rules in
