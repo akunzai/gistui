@@ -31,6 +31,10 @@ on structure; what follows adds what it does not say. Release-note labels, miles
 
    Pair before with after. At most one diagram unless it is such a pair.
 
+   In a Mermaid label, write a path parameter as `:id`, not `{id}` — `{}`
+   opens a rhombus node and fails the parse — and break lines with `<br/>`,
+   not `\n`, which is not a line break inside a quoted label.
+
    `--attach '<file>#<alt text>'` works on `gh pr create`, `edit`, and `comment`, and on the
    `gh issue` equivalents, so a visual can land after the request is open. `gh` is unpinned
    here, so `--help` carries the current limits. Stills come from `mise run demo`
