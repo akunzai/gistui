@@ -22,6 +22,7 @@ Infer the repo from `git remote -v` — `gh` does this automatically when run in
    reader cannot otherwise locate the issue.
 2. Add a visual the forge renders inline: stills for anything on screen, a short recording for
    a multi-step interaction, a Mermaid `flowchart`/`stateDiagram` for a state or job change.
+   In a Mermaid label, write a path parameter as `:id`, not `{id}`, and break lines with `<br/>`, not `\n`.
    No attachment carries personally identifiable information — gist titles, filenames, and
    usernames from a real account count, so record against a throwaway account or crop. Upload
    with `gh issue create --attach './bug.png#alt text'`. The flag also works on
