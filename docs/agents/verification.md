@@ -92,6 +92,7 @@ change touches.
   pure-module change goes in as test output.
 - Attachments carry no personally identifiable information. Gist titles, filenames, and
   usernames from a real account count — record against a throwaway account or crop.
+- UI locale: not applicable, the TUI has one language (English).
 
 <!-- drift:file scripts/demo.video.ts -->
 
