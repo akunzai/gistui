@@ -412,10 +412,12 @@ pub(crate) fn on_download_selected(
                     Err(error) => state.set_status(error),
                 }
             } else {
+                let normalize = state.settings.normalize_line_endings();
                 match crate::actions::execute_download(
                     &target,
                     &remote,
                     crate::actions::DownloadMode::CreateNew,
+                    normalize,
                 ) {
                     Ok(()) => {
                         state.set_status(format!(
@@ -425,12 +427,19 @@ pub(crate) fn on_download_selected(
                                 .unwrap_or(target.as_os_str())
                                 .to_string_lossy()
                         ));
+                        // Hash what actually landed on disk (post-normalization), not the
+                        // raw fetch, so the pin-sync content check doesn't see phantom drift.
+                        let written = if normalize {
+                            crate::diff::normalize_line_endings(&remote).into_owned()
+                        } else {
+                            remote.clone()
+                        };
                         record_pin_sync(
                             state,
                             &target,
                             &file.gist_id,
                             &file.filename,
-                            &remote,
+                            &written,
                             Some(crate::domain::SyncDirection::Download),
                         );
                         refresh_locals(state, Some(&target));

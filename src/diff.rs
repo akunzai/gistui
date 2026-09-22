@@ -11,9 +11,12 @@ fn strip_final_newline(s: &str) -> &str {
 
 /// Normalize CRLF and lone-CR line endings to LF so a difference that is purely a
 /// line-ending mismatch (e.g. a gist fetched with CRLF vs an LF local file) never
-/// registers as a change. Always applied, not user-configurable: a byte-identical file
-/// with different line endings is not a difference worth surfacing.
-fn normalize_line_endings(s: &str) -> Cow<'_, str> {
+/// registers as a change. Always applied here (diffing), not user-configurable: a
+/// byte-identical file with different line endings is not a difference worth surfacing.
+/// Also reused by upload/download when `normalize_line_endings` is enabled in settings,
+/// where it actually rewrites the bytes sent/written (see `AppState::content_to_upload`
+/// and `actions::execute_download`).
+pub(crate) fn normalize_line_endings(s: &str) -> Cow<'_, str> {
     if s.contains('\r') {
         Cow::Owned(s.replace("\r\n", "\n").replace('\r', "\n"))
     } else {

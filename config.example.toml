@@ -34,6 +34,12 @@ check_updates = true
 # Set false for strict, byte-exact diffs.
 ignore_trailing_newline = true
 
+# Rewrite CRLF/lone-CR line endings to LF in the bytes actually sent/written on upload and
+# download (unlike ignore_trailing_newline above, this changes real content, not just the
+# diff view). Default: true. Set false to preserve a file's original line-ending style
+# through upload/download untouched.
+normalize_line_endings = true
+
 # Directories skipped when recursive local file discovery is active (r key).
 # Hidden directories are included unless listed here. Git metadata directories
 # (.git, .hg, .svn) are always skipped. Add project-specific output dirs here.

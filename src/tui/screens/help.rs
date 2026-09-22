@@ -392,6 +392,8 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   syntax     unchanged context lines are syntax-highlighted by file type
   newline    a file-final-newline-only difference counts as identical
              (set ignore_trailing_newline = false for byte-exact diffs)
+  line endings  CRLF/CR are always normalized to LF in this diff view
+             (upload/download also rewrite to LF; toggle Normalize line endings off to disable)
   Esc / q    back"
         }
         HelpTopic::Preview => {

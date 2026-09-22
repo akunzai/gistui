@@ -11,17 +11,19 @@ pub enum ConfigField {
     CheckUpdates,
     DiffShowFull,
     IgnoreTrailingNewline,
+    NormalizeLineEndings,
     ScanDepth,
     DiffContext,
 }
 
 impl ConfigField {
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 8] = [
         Self::Theme,
         Self::Mouse,
         Self::CheckUpdates,
         Self::DiffShowFull,
         Self::IgnoreTrailingNewline,
+        Self::NormalizeLineEndings,
         Self::ScanDepth,
         Self::DiffContext,
     ];
@@ -33,6 +35,7 @@ impl ConfigField {
             Self::CheckUpdates => "Check for updates",
             Self::DiffShowFull => "Show full diff",
             Self::IgnoreTrailingNewline => "Ignore trailing newline",
+            Self::NormalizeLineEndings => "Normalize line endings",
             Self::ScanDepth => "Recursive scan depth",
             Self::DiffContext => "Diff context lines",
         }
@@ -49,6 +52,7 @@ impl ConfigField {
             Self::CheckUpdates => "daily GitHub version check",
             Self::DiffShowFull => "open Diff expanded",
             Self::IgnoreTrailingNewline => "hide newline-only diffs",
+            Self::NormalizeLineEndings => "force LF on upload/download",
             Self::ScanDepth => "directory levels to scan",
             Self::DiffContext => "unchanged lines around edits",
         }
@@ -72,6 +76,7 @@ pub struct RuntimeSettings {
     check_updates: bool,
     diff_show_full: bool,
     ignore_trailing_newline: bool,
+    normalize_line_endings: bool,
     scan_depth: u32,
     diff_context: u32,
     no_mouse: bool,
@@ -86,6 +91,7 @@ impl RuntimeSettings {
             check_updates: config.check_updates,
             diff_show_full: config.diff_show_full,
             ignore_trailing_newline: config.ignore_trailing_newline,
+            normalize_line_endings: config.normalize_line_endings,
             scan_depth: config.scan_depth,
             diff_context: config.diff_context,
             no_mouse,
@@ -116,6 +122,10 @@ impl RuntimeSettings {
             }
             ConfigField::IgnoreTrailingNewline => {
                 self.ignore_trailing_newline = !self.ignore_trailing_newline;
+                None
+            }
+            ConfigField::NormalizeLineEndings => {
+                self.normalize_line_endings = !self.normalize_line_endings;
                 None
             }
             ConfigField::ScanDepth => {
@@ -152,6 +162,7 @@ impl RuntimeSettings {
         config.check_updates = self.check_updates;
         config.diff_show_full = self.diff_show_full;
         config.ignore_trailing_newline = self.ignore_trailing_newline;
+        config.normalize_line_endings = self.normalize_line_endings;
         config.scan_depth = self.scan_depth;
         config.diff_context = self.diff_context;
     }
@@ -167,6 +178,12 @@ impl RuntimeSettings {
             ConfigField::CheckUpdates => if self.check_updates { "on" } else { "off" }.into(),
             ConfigField::DiffShowFull => if self.diff_show_full { "on" } else { "off" }.into(),
             ConfigField::IgnoreTrailingNewline => if self.ignore_trailing_newline {
+                "on"
+            } else {
+                "off"
+            }
+            .into(),
+            ConfigField::NormalizeLineEndings => if self.normalize_line_endings {
                 "on"
             } else {
                 "off"
@@ -194,6 +211,9 @@ impl RuntimeSettings {
     }
     pub fn ignore_trailing_newline(&self) -> bool {
         self.ignore_trailing_newline
+    }
+    pub fn normalize_line_endings(&self) -> bool {
+        self.normalize_line_endings
     }
     pub fn scan_depth(&self) -> u32 {
         self.scan_depth
