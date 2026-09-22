@@ -1112,18 +1112,27 @@ impl AppState {
             .edited_content
             .as_ref()
             .unwrap_or(&self.upload.original_content);
-        if let Some(local_path) = self.upload_local_path() {
+        let content = if let Some(local_path) = self.upload_local_path() {
             if Self::is_json_file(&local_path) {
-                if let Ok(transformed) = crate::domain::transform_json(
+                match crate::domain::transform_json(
                     base,
                     self.upload.json_pretty,
                     self.upload.json_sort,
                 ) {
-                    return transformed;
+                    Ok(transformed) => transformed,
+                    Err(_) => base.clone(),
                 }
+            } else {
+                base.clone()
             }
+        } else {
+            base.clone()
+        };
+        if self.settings.normalize_line_endings() {
+            crate::diff::normalize_line_endings(&content).into_owned()
+        } else {
+            content
         }
-        base.clone()
     }
 
     pub fn update_upload_diff(&mut self) {
@@ -2145,6 +2154,40 @@ mod tests {
         state.upload.original_content = r#"{"token":"abc123secret"}"#.into();
         state.upload.edited_content = Some(r#"{"token":"REDACTED"}"#.into());
         assert_eq!(state.content_to_upload(), r#"{"token":"REDACTED"}"#);
+    }
+
+    #[test]
+    fn content_to_upload_normalizes_crlf_by_default() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "a".into(),
+                filename: "notes.txt".into(),
+                local_path: PathBuf::from("/tmp/notes.txt"),
+            },
+        );
+        state.upload.original_content = "a\r\nb\r\n".into();
+        assert_eq!(state.content_to_upload(), "a\nb\n");
+    }
+
+    #[test]
+    fn content_to_upload_preserves_crlf_when_normalization_disabled() {
+        let mut state = initial_state();
+        set_pending(
+            &mut state,
+            PendingAction::Upload {
+                gist_id: "a".into(),
+                filename: "notes.txt".into(),
+                local_path: PathBuf::from("/tmp/notes.txt"),
+            },
+        );
+        state.upload.original_content = "a\r\nb\r\n".into();
+        state.settings.adjust(
+            crate::tui::settings::ConfigField::NormalizeLineEndings,
+            true,
+        );
+        assert_eq!(state.content_to_upload(), "a\r\nb\r\n");
     }
 
     // A gist you own *and* starred lands in both `gists` and `starred_gists`. The detail

@@ -724,13 +724,14 @@ pub(super) fn write_scratch_file(
 pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode) {
     let target = state.download_target();
     let content = state.preview_remote().to_string();
+    let normalize = state.settings.normalize_line_endings();
     let pin_key = state
         .diff()
         .and_then(|d| match (&d.gist_id, &d.gist_filename) {
             (Some(g), Some(f)) => Some((g.clone(), f.clone())),
             _ => None,
         });
-    match crate::actions::execute_download(&target, &content, mode) {
+    match crate::actions::execute_download(&target, &content, mode, normalize) {
         Ok(()) => {
             state.set_status(format!(
                 "Downloaded {}",
@@ -740,12 +741,19 @@ pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode)
                     .to_string_lossy()
             ));
             if let Some((gid, fname)) = pin_key {
+                // Hash what actually landed on disk (post-normalization), not the raw
+                // fetch, so the pin-sync content check doesn't see phantom drift.
+                let written = if normalize {
+                    crate::diff::normalize_line_endings(&content).into_owned()
+                } else {
+                    content.clone()
+                };
                 record_pin_sync(
                     state,
                     &target,
                     &gid,
                     &fname,
-                    &content,
+                    &written,
                     Some(crate::domain::SyncDirection::Download),
                 );
             }

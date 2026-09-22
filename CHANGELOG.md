@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- New `normalize_line_endings` setting (default on): upload and download now rewrite CRLF/lone-CR
+  line endings to LF in the bytes actually sent/written, so a gist edited on Windows stops
+  reintroducing CRLF on every subsequent download. Turn it off in Settings to preserve a file's
+  original line-ending style through upload/download untouched.
 - Two scratch-directory operations started in the same instant (upload, restore revision, or
   compact) no longer collide on one temp path, where finishing the second deleted the first's
   payload out from under it.

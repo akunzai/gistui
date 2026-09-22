@@ -34,6 +34,10 @@ fn default_ignore_trailing_newline() -> bool {
     true
 }
 
+fn default_normalize_line_endings() -> bool {
+    true
+}
+
 fn default_skip_dirs() -> Vec<String> {
     [
         "node_modules",
@@ -89,6 +93,12 @@ pub struct AppConfig {
     /// identical. Default `true`; set `false` for strict, byte-exact diffs.
     #[serde(default = "default_ignore_trailing_newline")]
     pub ignore_trailing_newline: bool,
+    /// Rewrite CRLF/lone-CR line endings to LF in the bytes actually sent/written on
+    /// upload and download. Unlike `ignore_trailing_newline`, this changes real content,
+    /// not just the diff view. Default `true`; set `false` to preserve a file's original
+    /// line-ending style through upload/download untouched.
+    #[serde(default = "default_normalize_line_endings")]
+    pub normalize_line_endings: bool,
 }
 
 #[derive(Serialize)]
@@ -110,6 +120,8 @@ struct SavedConfig<'a> {
     check_updates: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     ignore_trailing_newline: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    normalize_line_endings: Option<bool>,
 }
 
 impl<'a> From<&'a AppConfig> for SavedConfig<'a> {
@@ -130,6 +142,9 @@ impl<'a> From<&'a AppConfig> for SavedConfig<'a> {
             ignore_trailing_newline: (config.ignore_trailing_newline
                 != defaults.ignore_trailing_newline)
                 .then_some(config.ignore_trailing_newline),
+            normalize_line_endings: (config.normalize_line_endings
+                != defaults.normalize_line_endings)
+                .then_some(config.normalize_line_endings),
         }
     }
 }
@@ -146,6 +161,7 @@ impl Default for AppConfig {
             mouse: true,
             check_updates: true,
             ignore_trailing_newline: true,
+            normalize_line_endings: true,
         }
     }
 }
@@ -300,6 +316,7 @@ pub(crate) mod tests {
             mouse: true,
             check_updates: true,
             ignore_trailing_newline: true,
+            normalize_line_endings: true,
         };
 
         save_config(&path, &config).unwrap();
@@ -560,5 +577,24 @@ pub(crate) mod tests {
         let text = toml::to_string(&config).unwrap();
         let parsed: AppConfig = toml::from_str(&text).unwrap();
         assert!(!parsed.ignore_trailing_newline);
+    }
+
+    #[test]
+    fn normalize_line_endings_defaults_to_true_when_absent() {
+        // A config file with no `normalize_line_endings` key must load as enabled.
+        let toml = "scan_depth = 4\n";
+        let config: AppConfig = toml::from_str(toml).unwrap();
+        assert!(config.normalize_line_endings);
+    }
+
+    #[test]
+    fn normalize_line_endings_round_trips() {
+        let config = AppConfig {
+            normalize_line_endings: false,
+            ..Default::default()
+        };
+        let text = toml::to_string(&config).unwrap();
+        let parsed: AppConfig = toml::from_str(&text).unwrap();
+        assert!(!parsed.normalize_line_endings);
     }
 }
