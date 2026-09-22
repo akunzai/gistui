@@ -1,4 +1,5 @@
 use similar::{ChangeTag, TextDiff};
+use std::borrow::Cow;
 use std::fmt::Write;
 
 /// Strip at most one file-final `\n` so that a trailing-newline-only difference does not
@@ -8,12 +9,27 @@ fn strip_final_newline(s: &str) -> &str {
     s.strip_suffix('\n').unwrap_or(s)
 }
 
-/// Whether `a` and `b` hold the same content. When `ignore_trailing_newline` is set, an
-/// optional file-final newline is disregarded, so `"}"` and `"}\n"` compare equal — this is
-/// the predicate the overwrite-confirm gate uses to decide a download/upload is a no-op.
+/// Normalize CRLF and lone-CR line endings to LF so a difference that is purely a
+/// line-ending mismatch (e.g. a gist fetched with CRLF vs an LF local file) never
+/// registers as a change. Always applied, not user-configurable: a byte-identical file
+/// with different line endings is not a difference worth surfacing.
+fn normalize_line_endings(s: &str) -> Cow<'_, str> {
+    if s.contains('\r') {
+        Cow::Owned(s.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        Cow::Borrowed(s)
+    }
+}
+
+/// Whether `a` and `b` hold the same content, ignoring line-ending differences. When
+/// `ignore_trailing_newline` is set, an optional file-final newline is also disregarded, so
+/// `"}"` and `"}\n"` compare equal — this is the predicate the overwrite-confirm gate uses to
+/// decide a download/upload is a no-op.
 pub fn content_eq(a: &str, b: &str, ignore_trailing_newline: bool) -> bool {
+    let a = normalize_line_endings(a);
+    let b = normalize_line_endings(b);
     if ignore_trailing_newline {
-        strip_final_newline(a) == strip_final_newline(b)
+        strip_final_newline(&a) == strip_final_newline(&b)
     } else {
         a == b
     }
@@ -26,10 +42,12 @@ pub fn unified_diff(
     new: &str,
     ignore_trailing_newline: bool,
 ) -> String {
+    let old = normalize_line_endings(old);
+    let new = normalize_line_endings(new);
     let (old, new) = if ignore_trailing_newline {
-        (strip_final_newline(old), strip_final_newline(new))
+        (strip_final_newline(&old), strip_final_newline(&new))
     } else {
-        (old, new)
+        (old.as_ref(), new.as_ref())
     };
     let diff = TextDiff::from_lines(old, new);
     let mut out = format!("--- {old_label}\n+++ {new_label}\n");
@@ -105,6 +123,31 @@ mod tests {
         let diff = unified_diff("gist", "a\nb\n", "local", "a\nc\n", false);
         assert!(diff.contains("-b\n"));
         assert!(diff.contains("+c\n"));
+    }
+
+    fn has_change_lines(diff: &str) -> bool {
+        diff.lines()
+            .any(|l| !is_header(l) && (l.starts_with('-') || l.starts_with('+')))
+    }
+
+    #[test]
+    fn crlf_vs_lf_only_difference_produces_no_diff() {
+        // A gist fetched with Windows line endings against an LF local file must not show
+        // every line as replaced (the whole-file symptom this normalization fixes).
+        let diff = unified_diff("gist", "a\r\nb\r\nc\r\n", "local", "a\nb\nc\n", false);
+        assert!(!has_change_lines(&diff), "unexpected changes in: {diff}");
+    }
+
+    #[test]
+    fn lone_cr_line_ending_is_also_normalized() {
+        let diff = unified_diff("gist", "a\rb\rc\r", "local", "a\nb\nc\n", false);
+        assert!(!has_change_lines(&diff), "unexpected changes in: {diff}");
+    }
+
+    #[test]
+    fn content_eq_ignores_line_ending_style() {
+        assert!(content_eq("a\r\nb\r\n", "a\nb\n", false));
+        assert!(!content_eq("a\r\nb\r\n", "a\nx\n", false));
     }
 
     #[test]
