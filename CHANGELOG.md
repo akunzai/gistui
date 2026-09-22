@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] — 2026-09-22
+
+- A gist fetched with CRLF line endings no longer shows the whole file as replaced against an
+  LF local copy (or vice versa): the Diff view always normalizes CRLF/lone-CR to LF before
+  comparing, so only real content changes are surfaced.
 - New `normalize_line_endings` setting (default on): upload and download now rewrite CRLF/lone-CR
   line endings to LF in the bytes actually sent/written, so a gist edited on Windows stops
   reintroducing CRLF on every subsequent download. Turn it off in Settings to preserve a file's
@@ -271,7 +276,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.20.0...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.21.0...HEAD
+[0.21.0]: https://github.com/akunzai/gistui/releases/tag/v0.21.0
 [0.20.0]: https://github.com/akunzai/gistui/releases/tag/v0.20.0
 [0.19.0]: https://github.com/akunzai/gistui/releases/tag/v0.19.0
 [0.18.0]: https://github.com/akunzai/gistui/releases/tag/v0.18.0
