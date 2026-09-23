@@ -143,9 +143,9 @@ mouse table, the config schema — lives in `?` Help, `config.example.toml`, and
 is linked, not duplicated. Document released behaviour, not plans.
 
 `website/index.html` makes the same case to someone who has not installed anything: the demo
-above the fold, then why, then the keys themselves. It borrows the TUI's palette so the page
-and the app read as one thing. Feature cards are not a substitute for showing the tool —
-a claim that the demo or the keymap already makes does not also get a card.
+above the fold, then why, then the keys themselves. It borrows the TUI's dark and light
+palettes so the page and the app read as one thing. Feature cards are not a substitute for
+showing the tool — a claim that the demo or the keymap already makes does not also get a card.
 
 The demo uses fixed fixture data, dimensions, theme, and timing, and exposes no local
 username or home path. Regeneration rules live in [`docs/demo.md`](../demo.md).
