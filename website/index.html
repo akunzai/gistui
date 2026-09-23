@@ -16,8 +16,18 @@
 <meta name="twitter:title" content="gistui — a terminal UI for GitHub Gists" />
 <meta name="twitter:description" content="Your gists next to your working directory. Diff the two, push or pull with one key." />
 <meta name="twitter:image" content="https://akunzai.github.io/gistui/demo.gif" />
+<script>
+  // Apply a saved theme before first paint so the page does not flash.
+  try {
+    const saved = localStorage.getItem('theme');
+    if (saved === 'light' || saved === 'dark') {
+      document.documentElement.dataset.theme = saved;
+    }
+  } catch (e) {}
+</script>
 <style>
-  /* Palette: the TUI's own dark theme, so the page and the app read as one thing. */
+  /* Palette: the TUI's own dark and light themes, so the page and the app read as
+     one thing. The page follows the system until the visitor picks one. */
   :root {
     color-scheme: dark;
     --bg: #1a1b26;
@@ -32,7 +42,42 @@
     --cyan: #7dcfff;
     --yellow: #e0af68;
     --red: #f7768e;
+    --kbd-bg: #191b2b;
     --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      color-scheme: light;
+      --bg: #f7f8fa;
+      --bg-elev: #ffffff;
+      --border: #d8dce6;
+      --fg: #191c24;
+      --muted: #4e576d;
+      --dim: #798399;
+      --blue: #2563eb;
+      --green: #16a34a;
+      --purple: #7c3aed;
+      --cyan: #0284c7;
+      --yellow: #b45309;
+      --red: #dc2626;
+      --kbd-bg: #eef1f7;
+    }
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #f7f8fa;
+    --bg-elev: #ffffff;
+    --border: #d8dce6;
+    --fg: #191c24;
+    --muted: #4e576d;
+    --dim: #798399;
+    --blue: #2563eb;
+    --green: #16a34a;
+    --purple: #7c3aed;
+    --cyan: #0284c7;
+    --yellow: #b45309;
+    --red: #dc2626;
+    --kbd-bg: #eef1f7;
   }
   * { box-sizing: border-box; }
   html { scroll-behavior: smooth; }
@@ -61,12 +106,21 @@
   kbd {
     display: inline-block; min-width: 1.4em; text-align: center;
     padding: 1px 6px; font-size: 0.85em; line-height: 1.5;
-    color: var(--cyan); background: #191b2b;
+    color: var(--cyan); background: var(--kbd-bg);
     border: 1px solid var(--border); border-radius: 5px;
   }
 
   /* Hero */
   header.hero { padding: 76px 0 8px; }
+  .top-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .theme-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 13px; color: var(--muted);
+    background: var(--bg-elev); border: 1px solid var(--border);
+    padding: 6px 12px; border-radius: 6px; cursor: pointer;
+    transition: color 120ms ease, border-color 120ms ease;
+  }
+  .theme-btn:hover { color: var(--fg); border-color: var(--muted); }
   .logo {
     font-family: var(--mono); font-size: 42px; font-weight: 700; letter-spacing: -1.5px;
   }
@@ -205,7 +259,13 @@
 
 <header class="hero">
   <div class="wrap">
-    <div class="logo"><span class="br">&gt;_ </span>gistui</div>
+    <div class="top-bar">
+      <div class="logo"><span class="br">&gt;_ </span>gistui</div>
+      <button id="theme-toggle" class="theme-btn" type="button">
+        <span class="theme-icon" aria-hidden="true">◐</span>
+        <span class="theme-label">Theme</span>
+      </button>
+    </div>
     <p class="lede">
       Your GitHub Gists, next to the files in your working directory.
       <span class="sub">Diff the two and push or pull with one key. Runs on the GitHub CLI, so it stores no token of its own.</span>
@@ -354,6 +414,49 @@
     <p>MIT licensed. Built with Rust and ratatui.</p>
   </div>
 </footer>
+
+<script>
+  (function () {
+    const root = document.documentElement;
+    const btn = document.getElementById('theme-toggle');
+    const icon = btn.querySelector('.theme-icon');
+    const label = btn.querySelector('.theme-label');
+    const systemDark = window.matchMedia('(prefers-color-scheme: dark)');
+    const system = () => (systemDark.matches ? 'dark' : 'light');
+    const modes = {
+      auto: { icon: '◐', label: 'Auto' },
+      light: { icon: '○', label: 'Light' },
+      dark: { icon: '●', label: 'Dark' },
+    };
+
+    function render() {
+      const mode = modes[root.dataset.theme || 'auto'];
+      icon.textContent = mode.icon;
+      label.textContent = mode.label;
+      btn.setAttribute('aria-label', 'Theme: ' + mode.label);
+    }
+
+    // Auto -> the opposite of the system -> the same as the system -> Auto,
+    // so the first two clicks always change what the page looks like.
+    btn.addEventListener('click', () => {
+      const saved = root.dataset.theme;
+      const next = !saved
+        ? (system() === 'dark' ? 'light' : 'dark')
+        : saved !== system() ? system() : null;
+      if (next) {
+        root.dataset.theme = next;
+      } else {
+        delete root.dataset.theme;
+      }
+      try {
+        if (next) localStorage.setItem('theme', next);
+        else localStorage.removeItem('theme');
+      } catch (e) {}
+      render();
+    });
+    render();
+  })();
+</script>
 
 </body>
 </html>
