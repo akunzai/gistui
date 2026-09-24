@@ -15,3 +15,7 @@ _Avoid_: gist list, cache snapshot, fetch result
 **Gist revision**:
 An immutable historical state of a Gist. Restoring a file from one writes that content as a new Gist revision; it never rewrites existing history.
 _Avoid_: version snapshot, rewritten revision
+
+**Upload draft**:
+One upload awaiting confirmation: its target (local file ↔ gist file) and its pending content — the local file as read, plus any redact edit, JSON pretty/sort, and line-ending normalization. It lives and dies with Confirm; confirming fixes it into the exact bytes sent, and nothing reads Confirm after that.
+_Avoid_: upload state, upload buffer

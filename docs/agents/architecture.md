@@ -52,6 +52,7 @@ Fields stay `pub`. No `#[serde(default)]` on the struct.
 - **`List` stays a unit tag** — dual-pane selection / filters / sorts are session-global on `AppState` (user story 19).
 - Other variants (`Diff`, `Confirm`, `Preview`, `Help`, `Config`, `Revisions`, `Pins`, `Gists`, `GistDetail`, `Palette`, …) carry payloads (body/scroll/return/origin as needed).
 - **Diff/Confirm/Preview body+scroll** is `ScrollBody` (`src/tui/scroll.rs`, issue #385), reached only via `scroll_body` / `scroll_body_mut`. The ten `diff_body_text` / `scroll_diff_*` methods are gone. Their `screens::lookup` rows share `scroll_navigation`; Help and Detail comments have no `ScrollBody`.
+- **An upload awaiting confirmation is one `UploadDraft`** (`src/tui/upload_draft.rs`, issue #461) carried as `PendingAction::Upload`: target plus pending content, discarded with Confirm. `UploadDraft::content` is the one answer to "what bytes go out"; the Upload arm computes it once and hands the bytes to the job and its apply (#460). Nothing reads Confirm after spawn. Mutate the draft only through `upload_draft_mut` (live Confirm only), then `update_upload_diff`.
 - **`nav_stack`** (issue #271) holds return targets; Esc pops. Prefer stack ops over parallel “return” root fields for new navigation.
 - **Async screen entry is a moved value, not root staging.** `DeferredEntry` snapshots the
   return screen at intent time and moves through `KeyOutcome` and the job apply closure.

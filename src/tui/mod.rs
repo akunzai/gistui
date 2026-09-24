@@ -221,11 +221,7 @@ pub enum DetailFocus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingAction {
     Download,
-    Upload {
-        gist_id: String,
-        filename: String,
-        local_path: PathBuf,
-    },
+    Upload(Box<UploadDraft>),
     Create {
         local_path: PathBuf,
     },
@@ -599,23 +595,6 @@ pub enum MouseInput {
     Release,
 }
 
-/// Per-screen upload-diff state (the `u` flow). Data only — the upload methods
-/// (`init_upload_state`, `content_to_upload`, `update_upload_diff`) stay on `AppState`.
-#[derive(Debug, Clone, Default)]
-pub struct UploadState {
-    pub original_content: String,
-    pub edited_content: Option<String>,
-    pub json_pretty: bool,
-    pub json_sort: bool,
-    pub remote_content: Option<String>,
-    pub local_label: Option<String>,
-    pub gist_label: Option<String>,
-    /// True while a GUI-editor background watch (see `run_loop::spawn_upload_edit_watch`) is
-    /// live-updating the diff. Gates `y`/`e` in `handle_key_confirm` — the upload can't be
-    /// confirmed, and a second editor instance can't be spawned, until the editor closes.
-    pub watching: bool,
-}
-
 /// Revision-history state — carried on [`Screen::Revisions`] (issue #242).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct RevisionState {
@@ -814,7 +793,6 @@ pub struct AppState {
     /// Set after the first `q`/`Esc` on the main list; a second press confirms the quit. Any
     /// other key clears it. Prevents an accidental single-key exit.
     pub quit_armed: bool,
-    pub upload: UploadState,
     /// Navigation history (issue #271): every [`Self::enter`] pushes the screen being left;
     /// every [`Self::leave`] pops back to it. Flat — a screen's own return path never lives on
     /// its payload.
@@ -1099,91 +1077,45 @@ impl AppState {
         }
     }
 
-    pub fn upload_local_path(&self) -> Option<std::path::PathBuf> {
+    /// The Upload draft while its Confirm is open (or under the palette overlay).
+    pub fn upload_draft(&self) -> Option<&UploadDraft> {
         match self.pending_action() {
-            Some(PendingAction::Upload { local_path, .. }) => Some(local_path.clone()),
+            Some(PendingAction::Upload(draft)) => Some(draft),
             _ => None,
         }
     }
 
-    pub fn content_to_upload(&self) -> String {
-        let base = self
-            .upload
-            .edited_content
-            .as_ref()
-            .unwrap_or(&self.upload.original_content);
-        let content = if let Some(local_path) = self.upload_local_path() {
-            if Self::is_json_file(&local_path) {
-                match crate::domain::transform_json(
-                    base,
-                    self.upload.json_pretty,
-                    self.upload.json_sort,
-                ) {
-                    Ok(transformed) => transformed,
-                    Err(_) => base.clone(),
-                }
-            } else {
-                base.clone()
-            }
-        } else {
-            base.clone()
-        };
-        if self.settings.normalize_line_endings() {
-            crate::diff::normalize_line_endings(&content).into_owned()
-        } else {
-            content
+    /// The Upload draft, only while its Confirm is the live screen.
+    pub fn upload_draft_mut(&mut self) -> Option<&mut UploadDraft> {
+        match self.confirm_mut().map(|c| &mut c.action) {
+            Some(PendingAction::Upload(draft)) => Some(draft),
+            _ => None,
         }
     }
 
+    /// Rebuild Confirm's diff body from the live Upload draft.
     pub fn update_upload_diff(&mut self) {
-        let local_content = self.content_to_upload();
-        let remote = self
-            .upload
-            .remote_content
-            .as_ref()
-            .cloned()
-            .unwrap_or_default();
-        let local_label = self.upload.local_label.clone().unwrap_or_default();
-        let gist_label = self.upload.gist_label.clone().unwrap_or_default();
-
-        let diff = crate::diff::unified_diff(
-            &gist_label,
-            &remote,
-            &local_label,
-            &local_content,
-            self.settings.ignore_trailing_newline(),
-        );
+        let Some(diff) = self.upload_draft().map(|d| d.diff(&self.settings)) else {
+            return;
+        };
         if let Some(body) = self.scroll_body_mut() {
             body.text = diff;
         }
     }
 
-    /// Prime the upload-diff state from the local file. Returns the read error instead of
-    /// silently defaulting to empty content — an unreadable/deleted/non-UTF-8 file would
-    /// otherwise render the whole gist as additions, so the caller must surface it and abort
-    /// the upload rather than show a bogus diff.
-    pub fn init_upload_state(
-        &mut self,
-        local_path: &std::path::Path,
-        remote_content: Option<String>,
-        local_label: String,
-        gist_label: String,
-    ) -> std::io::Result<()> {
-        // Cap before buffering: multi-GB locals must not be read into the upload redact buffer.
-        if let Some(remote) = remote_content.as_ref() {
-            crate::domain::ensure_text_size(remote.len() as u64)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    /// Open Confirm on `draft` (with `entry` as its return path when it came from a
+    /// background job) and render its diff.
+    pub fn enter_upload_confirm(&mut self, draft: UploadDraft, entry: Option<DeferredEntry>) {
+        let confirm = Screen::Confirm(Box::new(ConfirmState {
+            action: PendingAction::Upload(Box::new(draft)),
+            body: ScrollBody::default(),
+        }));
+        self.status = None;
+        match entry {
+            Some(entry) => self.open_deferred(entry, confirm),
+            None => self.enter(confirm),
         }
-        self.upload.original_content = crate::domain::read_text_file_capped(local_path)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        self.upload.edited_content = None;
-        self.upload.json_pretty = false;
-        self.upload.json_sort = false;
-        self.upload.remote_content = remote_content;
-        self.upload.local_label = Some(local_label);
-        self.upload.gist_label = Some(gist_label);
         self.update_upload_diff();
-        Ok(())
     }
 
     /// Mark a new background task as in-flight and return its generation id.
@@ -1207,14 +1139,12 @@ impl AppState {
         generation == self.bg_task_generation
     }
 
-    /// Applies a background upload-edit-watch event (see `bg::UploadEditWatchEvent`) to
-    /// upload state. Discarded (no-op) if the Confirm/Upload context has since moved on — the
-    /// user left Confirm, a different upload edit session is now in progress, or the current
-    /// session isn't actively watching (e.g. the user cancelled with `n`, which stops the
-    /// watch flag but does not kill the background thread; that thread's stale events must not
-    /// leak into a later, unrelated Confirm session for the same gist/file) — identified by
-    /// comparing the event's `gist_id`/`filename` against the current `PendingAction::Upload`
-    /// and requiring `self.upload.watching`.
+    /// Applies a background upload-edit-watch event (see `bg::UploadEditWatchEvent`) to the
+    /// live Upload draft. Discarded (no-op) unless Confirm is the live screen, its draft targets
+    /// the event's `gist_id`/`filename`, and that draft is still watching. Cancelling Confirm
+    /// discards the draft but does not kill the background thread; a later Confirm for the same
+    /// gist/file starts a fresh, non-watching draft, so the stale thread's events cannot leak
+    /// into it.
     fn apply_upload_edit_event(&mut self, event: bg::UploadEditWatchEvent) {
         use bg::UploadEditWatchEvent as Ev;
         let (event_gist_id, event_filename) = match &event {
@@ -1228,32 +1158,31 @@ impl AppState {
                 gist_id, filename, ..
             } => (gist_id.as_str(), filename.as_str()),
         };
-        let context_matches = self.screen.is_confirm()
-            && self.upload.watching
-            && matches!(
-                self.pending_action(),
-                Some(PendingAction::Upload { gist_id, filename, .. })
-                    if gist_id == event_gist_id && filename == event_filename
-            );
-        if !context_matches {
+        let Some(draft) = self
+            .upload_draft_mut()
+            .filter(|d| d.watching && d.gist_id == event_gist_id && d.filename == event_filename)
+        else {
             return;
-        }
+        };
 
-        match event {
+        let status = match event {
             Ev::ContentChanged { content, .. } => {
-                self.upload.edited_content = Some(content);
-                self.update_upload_diff();
+                draft.edited_content = Some(content);
+                None
             }
             Ev::EditorClosed { content, .. } => {
-                self.upload.edited_content = Some(content);
-                self.update_upload_diff();
-                self.upload.watching = false;
-                self.set_status("Edited redact buffer");
+                draft.edited_content = Some(content);
+                draft.watching = false;
+                Some("Edited redact buffer".to_string())
             }
             Ev::ReadError { message, .. } => {
-                self.upload.watching = false;
-                self.set_status(format!("failed to read edited file: {message}"));
+                draft.watching = false;
+                Some(format!("failed to read edited file: {message}"))
             }
+        };
+        self.update_upload_diff();
+        if let Some(status) = status {
+            self.set_status(status);
         }
     }
 
@@ -1953,7 +1882,6 @@ pub fn initial_state() -> AppState {
         bg_task_msg: None,
         bg_task_generation: 0,
         quit_armed: false,
-        upload: UploadState::default(),
         nav_stack: Vec::new(),
         spinner_frame: 0,
         pin_sync_cache: Vec::new(),
@@ -2038,6 +1966,8 @@ use palette::PaletteState;
 mod render;
 use render::*;
 mod gist_mutation;
+mod upload_draft;
+pub(crate) use upload_draft::UploadDraft;
 mod screens;
 pub use screens::detail::InitialComments;
 mod text;
@@ -2069,9 +1999,8 @@ mod test_support;
 
 #[cfg(test)]
 mod tests {
-    use super::test_support::{set_pending, state_with_gists};
+    use super::test_support::state_with_gists;
     use super::*;
-    use std::path::PathBuf;
 
     /// Issue #348: the diff header's gist side must show the real update time when the gist is
     /// already loaded in memory (e.g. it's listed in Gist manager or Pinned Mappings), not
@@ -2120,74 +2049,6 @@ mod tests {
         let file = GistFileRef::id_name("s1", "notes.md");
         let resolved = state.gist_file_for_diff(&file);
         assert_eq!(resolved.updated_at, "2026-06-12T08:00:00Z");
-    }
-
-    // Whichever editor is used, the confirmed upload must send the edited (redacted) buffer, not
-    // the original file snapshot taken at preview time.
-    #[test]
-    fn content_to_upload_prefers_edited_content() {
-        let mut state = initial_state();
-        set_pending(
-            &mut state,
-            PendingAction::Upload {
-                gist_id: "a".into(),
-                filename: "notes.txt".into(),
-                local_path: PathBuf::from("/tmp/notes.txt"),
-            },
-        );
-        state.upload.original_content = "token=abc123secret".into();
-        state.upload.edited_content = Some("token=REDACTED".into());
-        assert_eq!(state.content_to_upload(), "token=REDACTED");
-    }
-
-    #[test]
-    fn content_to_upload_prefers_edited_content_for_json() {
-        let mut state = initial_state();
-        set_pending(
-            &mut state,
-            PendingAction::Upload {
-                gist_id: "a".into(),
-                filename: "settings.json".into(),
-                local_path: PathBuf::from("/tmp/settings.json"),
-            },
-        );
-        state.upload.original_content = r#"{"token":"abc123secret"}"#.into();
-        state.upload.edited_content = Some(r#"{"token":"REDACTED"}"#.into());
-        assert_eq!(state.content_to_upload(), r#"{"token":"REDACTED"}"#);
-    }
-
-    #[test]
-    fn content_to_upload_normalizes_crlf_by_default() {
-        let mut state = initial_state();
-        set_pending(
-            &mut state,
-            PendingAction::Upload {
-                gist_id: "a".into(),
-                filename: "notes.txt".into(),
-                local_path: PathBuf::from("/tmp/notes.txt"),
-            },
-        );
-        state.upload.original_content = "a\r\nb\r\n".into();
-        assert_eq!(state.content_to_upload(), "a\nb\n");
-    }
-
-    #[test]
-    fn content_to_upload_preserves_crlf_when_normalization_disabled() {
-        let mut state = initial_state();
-        set_pending(
-            &mut state,
-            PendingAction::Upload {
-                gist_id: "a".into(),
-                filename: "notes.txt".into(),
-                local_path: PathBuf::from("/tmp/notes.txt"),
-            },
-        );
-        state.upload.original_content = "a\r\nb\r\n".into();
-        state.settings.adjust(
-            crate::tui::settings::ConfigField::NormalizeLineEndings,
-            true,
-        );
-        assert_eq!(state.content_to_upload(), "a\r\nb\r\n");
     }
 
     // A gist you own *and* starred lands in both `gists` and `starred_gists`. The detail

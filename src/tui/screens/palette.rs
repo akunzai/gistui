@@ -457,11 +457,11 @@ mod tests {
     fn palette_vm_background_stays_blank_over_confirm() {
         let mut state = initial_state();
         state.enter_confirm(
-            PendingAction::Upload {
-                gist_id: "g1".into(),
-                filename: "notes.txt".into(),
-                local_path: PathBuf::from("notes.txt"),
-            },
+            PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "g1",
+                "notes.txt",
+                PathBuf::from("notes.txt"),
+            ))),
             String::new(),
         );
         // `;` (menu) has no items over Confirm and won't open (palette.rs:60-66); Ctrl+P

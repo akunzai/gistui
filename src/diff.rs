@@ -14,7 +14,7 @@ fn strip_final_newline(s: &str) -> &str {
 /// registers as a change. Always applied here (diffing), not user-configurable: a
 /// byte-identical file with different line endings is not a difference worth surfacing.
 /// Also reused by upload/download when `normalize_line_endings` is enabled in settings,
-/// where it actually rewrites the bytes sent/written (see `AppState::content_to_upload`
+/// where it actually rewrites the bytes sent/written (see `UploadDraft::content`
 /// and `actions::execute_download`).
 pub(crate) fn normalize_line_endings(s: &str) -> Cow<'_, str> {
     if s.contains('\r') {
