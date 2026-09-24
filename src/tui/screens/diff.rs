@@ -141,9 +141,9 @@ impl AppState {
 /// repeating a path.
 pub(crate) fn diff_title(state: &AppState) -> String {
     match state.pending_action() {
-        Some(PendingAction::Upload {
-            gist_id, filename, ..
-        }) => format!("Upload → gist {gist_id} / {filename}"),
+        Some(PendingAction::Upload(draft)) => {
+            format!("Upload → gist {} / {}", draft.gist_id, draft.filename)
+        }
         Some(PendingAction::Create { local_path }) => {
             format!(
                 "Create gist from {}",

@@ -169,31 +169,31 @@ impl AppState {
                 }
                 _ => {}
             },
-            Some(PendingAction::Upload { ref local_path, .. }) => match code {
-                KeyCode::Char('y') if self.upload.watching => {
+            Some(PendingAction::Upload(draft)) => match code {
+                KeyCode::Char('y') if draft.watching => {
                     self.set_status("editor still open — finish editing first");
                 }
                 KeyCode::Char('y') => return KeyOutcome::Upload,
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     // Return to wherever the upload was initiated from (List, or Pins for
-                    // a pin push) instead of always snapping back to List.
+                    // a pin push). The draft goes with Confirm; a still-running editor watch
+                    // thread is not force-killed and cleans itself up once the editor closes.
                     self.cancel_confirm();
-                    // The background watch thread (if any) is not force-killed — it cleans
-                    // itself up once the editor closes. Reset the flag now so a stale
-                    // late-arriving event (see AppState::apply_upload_edit_event) doesn't
-                    // matter, and so a future upload-edit session isn't blocked by it.
-                    self.upload.watching = false;
                 }
-                KeyCode::Char('e') if self.upload.watching => {
+                KeyCode::Char('e') if draft.watching => {
                     self.set_status("editor already open");
                 }
                 KeyCode::Char('e') => return KeyOutcome::EditUpload,
-                KeyCode::Char('p') if AppState::is_json_file(local_path) => {
-                    self.upload.json_pretty = !self.upload.json_pretty;
+                KeyCode::Char('p') if draft.is_json() => {
+                    if let Some(d) = self.upload_draft_mut() {
+                        d.json_pretty = !d.json_pretty;
+                    }
                     self.update_upload_diff();
                 }
-                KeyCode::Char('s') if AppState::is_json_file(local_path) => {
-                    self.upload.json_sort = !self.upload.json_sort;
+                KeyCode::Char('s') if draft.is_json() => {
+                    if let Some(d) = self.upload_draft_mut() {
+                        d.json_sort = !d.json_sort;
+                    }
                     self.update_upload_diff();
                 }
                 _ => {}
@@ -324,14 +324,10 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
             }),
             background: diff_background(state),
         },
-        PendingAction::Upload {
-            gist_id,
-            filename,
-            local_path,
-        } => ConfirmVm {
+        PendingAction::Upload(draft) => ConfirmVm {
             title: "Upload",
             border: theme.notice_color,
-            kind: ConfirmModalKind::Prompt(upload_prompt(state, gist_id, filename, local_path)),
+            kind: ConfirmModalKind::Prompt(upload_prompt(state, draft)),
             background: diff_background(state),
         },
         // Two steps, one row: the description editor first, then the visibility choice.
@@ -430,13 +426,9 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
 
 /// The upload question: a spinner while the external editor is still open, otherwise the
 /// upload prompt plus the JSON toggles the keys actually honour.
-fn upload_prompt(
-    state: &AppState,
-    gist_id: &str,
-    filename: &str,
-    local_path: &std::path::Path,
-) -> ConfirmPromptVm {
-    if state.upload.watching {
+fn upload_prompt(state: &AppState, draft: &crate::tui::UploadDraft) -> ConfirmPromptVm {
+    let (gist_id, filename) = (&draft.gist_id, &draft.filename);
+    if draft.watching {
         return ConfirmPromptVm {
             question: format!(
                 "{} Waiting for the editor to close…",
@@ -447,16 +439,16 @@ fn upload_prompt(
             options: Vec::new(),
         };
     }
-    let edit_label = if state.upload.edited_content.is_some() {
+    let edit_label = if draft.edited_content.is_some() {
         "edit first [edited]"
     } else {
         "edit first"
     };
     // Offered only for JSON, because `p` / `s` are guarded on the same predicate.
-    let options = if AppState::is_json_file(local_path) {
+    let options = if draft.is_json() {
         vec![
-            ConfirmKeyVm::new("p", format!("pretty {}", on_off(state.upload.json_pretty))),
-            ConfirmKeyVm::new("s", format!("sort {}", on_off(state.upload.json_sort))),
+            ConfirmKeyVm::new("p", format!("pretty {}", on_off(draft.json_pretty))),
+            ConfirmKeyVm::new("s", format!("sort {}", on_off(draft.json_sort))),
         ]
     } else {
         Vec::new()
@@ -558,25 +550,15 @@ pub(crate) fn on_upload_preview(
 ) -> LoopFlow {
     match result {
         Ok(remote) => {
-            let action = PendingAction::Upload {
-                gist_id: file.gist_id,
-                filename: file.filename,
-                local_path: local_path.clone(),
-            };
-            match state.init_upload_state(&local_path, Some(remote), local_label, gist_label) {
-                Ok(()) => {
-                    // init_upload_state writes via update_upload_diff only when
-                    // Confirm is already open; open Confirm first with empty
-                    // body, then rebuild the upload diff into the payload.
-                    state.open_deferred(
-                        entry,
-                        Screen::Confirm(Box::new(crate::tui::ConfirmState {
-                            action,
-                            body: crate::tui::ScrollBody::default(),
-                        })),
-                    );
-                    state.update_upload_diff();
-                }
+            match crate::tui::UploadDraft::read(
+                file.gist_id,
+                file.filename,
+                local_path.clone(),
+                remote,
+                local_label,
+                gist_label,
+            ) {
+                Ok(draft) => state.enter_upload_confirm(draft, Some(entry)),
                 Err(error) => {
                     state.set_status(format!(
                         "cannot read {}: {error}",
@@ -760,11 +742,11 @@ mod tests {
 
         set_pending(
             &mut state,
-            PendingAction::Upload {
-                gist_id: "g1".into(),
-                filename: "main.rs".into(),
-                local_path: PathBuf::from("main.rs"),
-            },
+            PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "g1",
+                "main.rs",
+                PathBuf::from("main.rs"),
+            ))),
         );
         let prompt = prompt_vm(&state);
         assert_eq!(prompt.question, "Upload main.rs to gist g1?");
@@ -805,11 +787,11 @@ mod tests {
             ("Download", PendingAction::Download),
             (
                 "Upload",
-                PendingAction::Upload {
-                    gist_id: "g1".into(),
-                    filename: "a.txt".into(),
-                    local_path: PathBuf::from("a.txt"),
-                },
+                PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                    "g1",
+                    "a.txt",
+                    PathBuf::from("a.txt"),
+                ))),
             ),
             (
                 "Create",
@@ -884,13 +866,13 @@ mod tests {
         let mut state = initial_state();
         set_pending(
             &mut state,
-            PendingAction::Upload {
-                gist_id: "g1".into(),
-                filename: "settings.json".into(),
-                local_path: PathBuf::from("settings.json"),
-            },
+            PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "g1",
+                "settings.json",
+                PathBuf::from("settings.json"),
+            ))),
         );
-        state.upload.json_pretty = true;
+        state.upload_draft_mut().unwrap().json_pretty = true;
         let options: Vec<String> = prompt_vm(&state)
             .options
             .iter()
@@ -925,13 +907,13 @@ mod tests {
         let mut state = initial_state();
         set_pending(
             &mut state,
-            PendingAction::Upload {
-                gist_id: "a".into(),
-                filename: "notes.txt".into(),
-                local_path: PathBuf::from("/tmp/notes.txt"),
-            },
+            PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "a",
+                "notes.txt",
+                PathBuf::from("/tmp/notes.txt"),
+            ))),
         );
-        state.upload.watching = true;
+        state.upload_draft_mut().unwrap().watching = true;
 
         let prompt = prompt_vm(&state);
         assert!(prompt.question.contains("Waiting for the editor"));
@@ -975,11 +957,11 @@ mod tests {
     }
 
     fn upload_pending(gist_id: &str, filename: &str) -> PendingAction {
-        PendingAction::Upload {
-            gist_id: gist_id.into(),
-            filename: filename.into(),
-            local_path: PathBuf::from(format!("/tmp/{filename}")),
-        }
+        PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+            gist_id,
+            filename,
+            PathBuf::from(format!("/tmp/{filename}")),
+        )))
     }
 
     #[test]
@@ -987,10 +969,10 @@ mod tests {
         let mut state = initial_state();
         state.screen = Screen::Confirm(Box::default());
         set_pending(&mut state, upload_pending("a", "notes.txt"));
-        state.upload.watching = true;
-        state.upload.remote_content = Some("old\n".into());
-        state.upload.local_label = Some("local".into());
-        state.upload.gist_label = Some("gist".into());
+        state.upload_draft_mut().unwrap().watching = true;
+        state.upload_draft_mut().unwrap().remote_content = "old\n".into();
+        state.upload_draft_mut().unwrap().local_label = "local".into();
+        state.upload_draft_mut().unwrap().gist_label = "gist".into();
 
         state.apply_upload_edit_event(crate::tui::bg::UploadEditWatchEvent::ContentChanged {
             gist_id: "a".into(),
@@ -998,9 +980,12 @@ mod tests {
             content: "new\n".into(),
         });
 
-        assert_eq!(state.upload.edited_content.as_deref(), Some("new\n"));
+        assert_eq!(
+            state.upload_draft().unwrap().edited_content.as_deref(),
+            Some("new\n")
+        );
         assert!(
-            state.upload.watching,
+            state.upload_draft().unwrap().watching,
             "still watching — editor hasn't closed yet"
         );
         assert!(state
@@ -1015,7 +1000,7 @@ mod tests {
         let mut state = initial_state();
         state.screen = Screen::Confirm(Box::default());
         set_pending(&mut state, upload_pending("a", "notes.txt"));
-        state.upload.watching = true;
+        state.upload_draft_mut().unwrap().watching = true;
 
         state.apply_upload_edit_event(crate::tui::bg::UploadEditWatchEvent::EditorClosed {
             gist_id: "a".into(),
@@ -1023,8 +1008,11 @@ mod tests {
             content: "final\n".into(),
         });
 
-        assert_eq!(state.upload.edited_content.as_deref(), Some("final\n"));
-        assert!(!state.upload.watching);
+        assert_eq!(
+            state.upload_draft().unwrap().edited_content.as_deref(),
+            Some("final\n")
+        );
+        assert!(!state.upload_draft().unwrap().watching);
     }
 
     #[test]
@@ -1032,7 +1020,7 @@ mod tests {
         let mut state = initial_state();
         state.screen = Screen::Confirm(Box::default());
         set_pending(&mut state, upload_pending("a", "notes.txt"));
-        state.upload.watching = true;
+        state.upload_draft_mut().unwrap().watching = true;
 
         state.apply_upload_edit_event(crate::tui::bg::UploadEditWatchEvent::ReadError {
             gist_id: "a".into(),
@@ -1040,7 +1028,7 @@ mod tests {
             message: "permission denied".into(),
         });
 
-        assert!(!state.upload.watching);
+        assert!(!state.upload_draft().unwrap().watching);
         assert_eq!(
             state.status.as_deref(),
             Some("failed to read edited file: permission denied")
@@ -1053,8 +1041,8 @@ mod tests {
         // A new upload edit session started before the OLD one's final event arrived.
         state.screen = Screen::Confirm(Box::default());
         set_pending(&mut state, upload_pending("a", "other.txt"));
-        state.upload.watching = true;
-        state.upload.edited_content = Some("current session content".into());
+        state.upload_draft_mut().unwrap().watching = true;
+        state.upload_draft_mut().unwrap().edited_content = Some("current session content".into());
 
         state.apply_upload_edit_event(crate::tui::bg::UploadEditWatchEvent::EditorClosed {
             gist_id: "a".into(),
@@ -1063,11 +1051,11 @@ mod tests {
         });
 
         assert_eq!(
-            state.upload.edited_content.as_deref(),
+            state.upload_draft().unwrap().edited_content.as_deref(),
             Some("current session content")
         );
         assert!(
-            state.upload.watching,
+            state.upload_draft().unwrap().watching,
             "the current session's watch must not be cancelled"
         );
     }
@@ -1081,8 +1069,8 @@ mod tests {
         // not silently overwrite this new, non-watching session's content.
         state.screen = Screen::Confirm(Box::default());
         set_pending(&mut state, upload_pending("a", "notes.txt"));
-        state.upload.watching = false; // never re-entered edit mode this session
-        state.upload.edited_content = None;
+        state.upload_draft_mut().unwrap().watching = false; // never re-entered edit mode this session
+        state.upload_draft_mut().unwrap().edited_content = None;
 
         state.apply_upload_edit_event(crate::tui::bg::UploadEditWatchEvent::ContentChanged {
             gist_id: "a".into(),
@@ -1091,7 +1079,8 @@ mod tests {
         });
 
         assert_eq!(
-            state.upload.edited_content, None,
+            state.upload_draft().unwrap().edited_content,
+            None,
             "an event from an abandoned (cancelled, still-running) watch session must not \
              leak into a new, non-watching session with the same gist/file identity"
         );
@@ -1199,11 +1188,11 @@ mod tests {
         let mut state = initial_state();
         set_pending(
             &mut state,
-            PendingAction::Upload {
-                gist_id: "a".into(),
-                filename: "settings.json".into(),
-                local_path: PathBuf::from("/tmp/settings.json"),
-            },
+            PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "a",
+                "settings.json",
+                PathBuf::from("/tmp/settings.json"),
+            ))),
         );
         assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::Upload);
     }
@@ -1213,11 +1202,11 @@ mod tests {
         let mut state = initial_state();
         set_pending(
             &mut state,
-            PendingAction::Upload {
-                gist_id: "a".into(),
-                filename: "settings.json".into(),
-                local_path: PathBuf::from("/tmp/settings.json"),
-            },
+            PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "a",
+                "settings.json",
+                PathBuf::from("/tmp/settings.json"),
+            ))),
         );
         assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::EditUpload);
     }
@@ -1227,13 +1216,13 @@ mod tests {
         let mut state = initial_state();
         set_pending(
             &mut state,
-            PendingAction::Upload {
-                gist_id: "a".into(),
-                filename: "settings.json".into(),
-                local_path: PathBuf::from("/tmp/settings.json"),
-            },
+            PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "a",
+                "settings.json",
+                PathBuf::from("/tmp/settings.json"),
+            ))),
         );
-        state.upload.watching = true;
+        state.upload_draft_mut().unwrap().watching = true;
 
         assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::None);
         assert_eq!(
@@ -1247,13 +1236,13 @@ mod tests {
         let mut state = initial_state();
         set_pending(
             &mut state,
-            PendingAction::Upload {
-                gist_id: "a".into(),
-                filename: "settings.json".into(),
-                local_path: PathBuf::from("/tmp/settings.json"),
-            },
+            PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "a",
+                "settings.json",
+                PathBuf::from("/tmp/settings.json"),
+            ))),
         );
-        state.upload.watching = true;
+        state.upload_draft_mut().unwrap().watching = true;
 
         assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::None);
         assert_eq!(state.status.as_deref(), Some("editor already open"));
@@ -1264,26 +1253,26 @@ mod tests {
         let mut state = initial_state();
         set_pending(
             &mut state,
-            PendingAction::Upload {
-                gist_id: "a".into(),
-                filename: "settings.json".into(),
-                local_path: PathBuf::from("/tmp/settings.json"),
-            },
+            PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "a",
+                "settings.json",
+                PathBuf::from("/tmp/settings.json"),
+            ))),
         );
-        assert!(!state.upload.json_pretty);
-        assert!(!state.upload.json_sort);
+        assert!(!state.upload_draft().unwrap().json_pretty);
+        assert!(!state.upload_draft().unwrap().json_sort);
 
         // Toggle pretty
         assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::None);
-        assert!(state.upload.json_pretty);
+        assert!(state.upload_draft().unwrap().json_pretty);
 
         // Toggle sort
         assert_eq!(state.handle_key(KeyCode::Char('s')), KeyOutcome::None);
-        assert!(state.upload.json_sort);
+        assert!(state.upload_draft().unwrap().json_sort);
 
         // Toggle pretty off
         assert_eq!(state.handle_key(KeyCode::Char('p')), KeyOutcome::None);
-        assert!(!state.upload.json_pretty);
+        assert!(!state.upload_draft().unwrap().json_pretty);
     }
 
     #[test]
@@ -1496,8 +1485,8 @@ mod tests {
         assert!(state.screen.is_confirm());
         assert!(matches!(
             state.pending_action(),
-            Some(PendingAction::Upload { gist_id, filename, .. })
-                if gist_id == "g1" && filename == "a.txt"
+            Some(PendingAction::Upload(d))
+                if d.gist_id == "g1" && d.filename == "a.txt"
         ));
     }
 
@@ -1608,11 +1597,11 @@ mod tests {
     fn confirm_vm_prompt_identity() {
         let mut state = initial_state();
         state.enter_confirm(
-            PendingAction::Upload {
-                gist_id: "g1".into(),
-                filename: "notes.txt".into(),
-                local_path: PathBuf::from("notes.txt"),
-            },
+            PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "g1",
+                "notes.txt",
+                PathBuf::from("notes.txt"),
+            ))),
             String::new(),
         );
         let c = build_confirm_vm(&state);

@@ -7,3 +7,5 @@ We decided **not** to encapsulate it. All four of those concrete issues (#286–
 **Revisit if**: a specific bug is traced to unconstrained cross-file mutation of a particular field — narrow that field with an accessor at that point, not preemptively across the whole struct.
 
 **Narrowed the Diff/Confirm/Preview scroll cluster as #385.** `text · scroll · hscroll` is now `ScrollBody` on those three payloads; `AppState` exposes `scroll_body` / `scroll_body_mut` instead of ten per-axis methods. This continues the revisit clause (narrow the demonstrated cluster in place) rather than encapsulating the rest of `AppState`.
+
+**Moved the upload cluster onto Confirm as #461.** `AppState.upload` is gone; an upload's target and content are one `UploadDraft` carried by `PendingAction::Upload`. The trigger was a demonstrated bug (#460): with the target on Confirm and the content on `AppState`, the upload outcome looked the target up after Confirm had been left. This follows the revisit clause (narrow the cluster a bug was traced to), not a reopening of the rest of `AppState`.

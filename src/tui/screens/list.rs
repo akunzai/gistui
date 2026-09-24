@@ -1073,26 +1073,25 @@ mod tests {
     }
 
     #[test]
-    fn confirm_upload_n_cancels_and_resets_watching() {
+    fn confirm_upload_n_cancels_and_discards_the_draft() {
         let mut state = initial_state();
-        set_pending(
-            &mut state,
-            PendingAction::Upload {
-                gist_id: "a".into(),
-                filename: "settings.json".into(),
-                local_path: PathBuf::from("/tmp/settings.json"),
+        let draft = crate::tui::UploadDraft::fixture("a", "settings.json", "/tmp/settings.json");
+        state.enter_upload_confirm(
+            crate::tui::UploadDraft {
+                watching: true,
+                ..draft.clone()
             },
+            None,
         );
-        state.upload.watching = true;
 
         assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);
         assert!(state.pending_action().is_none());
         assert_eq!(state.screen, Screen::List);
-        assert!(
-            !state.upload.watching,
-            "cancelling must reset watching so a future upload-edit session isn't blocked forever \
-             by a stale flag (the background thread is not force-killed and cleans up on its own)"
-        );
+
+        // The editor watch thread is not force-killed, but its watching flag went with the
+        // discarded draft: a fresh upload of the same file is not blocked by it.
+        state.enter_upload_confirm(draft, None);
+        assert_eq!(state.handle_key(KeyCode::Char('e')), KeyOutcome::EditUpload);
     }
 
     #[test]
@@ -1101,8 +1100,6 @@ mod tests {
         // The user already left Confirm (e.g. cancelled) before this late event arrived.
         state.screen = Screen::List;
         clear_pending(&mut state);
-        state.upload.watching = false;
-        state.upload.edited_content = None;
 
         state.apply_upload_edit_event(crate::tui::bg::UploadEditWatchEvent::ContentChanged {
             gist_id: "a".into(),
@@ -1110,7 +1107,9 @@ mod tests {
             content: "should be ignored".into(),
         });
 
-        assert_eq!(state.upload.edited_content, None);
+        assert!(state.upload_draft().is_none());
+        assert_eq!(state.screen, Screen::List);
+        assert!(state.status.is_none());
     }
 
     #[test]

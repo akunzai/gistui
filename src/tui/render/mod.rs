@@ -476,11 +476,11 @@ mod tests {
         state.screen = Screen::Confirm(Box::default());
         crate::tui::test_support::set_pending(
             &mut state,
-            crate::tui::PendingAction::Upload {
-                gist_id: "g1".into(),
-                filename: "settings.json".into(),
-                local_path: std::path::PathBuf::from("settings.json"),
-            },
+            crate::tui::PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "g1",
+                "settings.json",
+                std::path::PathBuf::from("settings.json"),
+            ))),
         );
         let rows = render_rows(&state, 80, 24);
         for hint in [

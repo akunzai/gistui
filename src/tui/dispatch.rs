@@ -214,19 +214,16 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             gist_id,
             filename,
         } => {
-            let action = PendingAction::Upload {
-                gist_id,
-                filename: filename.clone(),
-                local_path: local_path.clone(),
-            };
             let local_label = format!("local: {}", crate::config::display_path(&local_path));
-            let gist_label = "(new file)".to_string();
-            match state.init_upload_state(&local_path, Some(String::new()), local_label, gist_label)
-            {
-                Ok(()) => {
-                    state.enter_confirm(action, String::new());
-                    state.update_upload_diff();
-                }
+            match UploadDraft::read(
+                gist_id,
+                filename,
+                local_path.clone(),
+                String::new(),
+                local_label,
+                "(new file)".to_string(),
+            ) {
+                Ok(draft) => state.enter_upload_confirm(draft, None),
                 Err(error) => {
                     state.set_status(format!(
                         "cannot read {}: {error}",
@@ -261,16 +258,15 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             );
         }
         KeyOutcome::Upload => {
-            let Some(PendingAction::Upload {
-                gist_id,
-                filename,
-                local_path,
-            }) = state.pending_action().cloned()
-            else {
+            let Some(draft) = state.upload_draft() else {
                 return LoopFlow::Proceed;
             };
-
-            let upload_content = state.content_to_upload();
+            let upload_content = draft.content(&state.settings);
+            let (gist_id, filename, local_path) = (
+                draft.gist_id.clone(),
+                draft.filename.clone(),
+                draft.local_path.clone(),
+            );
 
             // ScratchDir owns cleanup: `write_scratch_file` drops it on early failure; on
             // success ownership moves into the bg job and drops after execute (issue #275).
@@ -298,7 +294,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             };
 
             // Confirm is gone once the job runs: the outcome gets the target and the exact
-            // bytes written above, never a re-read of Confirm or `AppState.upload` (#460).
+            // bytes written above, never a re-read of the Upload draft on Confirm (#460).
             state.leave();
             let runner = jobs.command_runner();
             jobs.spawn_action(
@@ -850,15 +846,13 @@ mod tests {
         state.pinned = vec![mapping];
         state.gist_catalog.owned = vec![GistFile::fixture("g1", "a.txt")];
         state.enter(Screen::Pins(Box::default()));
-        state.enter_confirm(
-            PendingAction::Upload {
-                gist_id: "g1".into(),
-                filename: "a.txt".into(),
-                local_path: local_path.clone(),
+        state.enter_upload_confirm(
+            UploadDraft {
+                original_content: "a\r\nb\r\n".into(),
+                ..UploadDraft::fixture("g1", "a.txt", &local_path)
             },
-            String::new(),
+            None,
         );
-        state.upload.original_content = "a\r\nb\r\n".into();
 
         let runner = std::sync::Arc::new(SeqRunner::new(vec![CommandOutput::ok("")]));
         let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());

@@ -395,11 +395,11 @@ mod tests {
         state.screen = Screen::Pins(Box::default());
         set_pending(
             &mut state,
-            PendingAction::Upload {
-                gist_id: "a".into(),
-                filename: "settings.json".into(),
-                local_path: PathBuf::from("/tmp/settings.json"),
-            },
+            PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "a",
+                "settings.json",
+                PathBuf::from("/tmp/settings.json"),
+            ))),
         );
 
         assert_eq!(state.handle_key(KeyCode::Char('n')), KeyOutcome::None);

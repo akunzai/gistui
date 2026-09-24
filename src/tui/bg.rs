@@ -608,10 +608,17 @@ pub(super) fn edit_upload_buffer(
     state: &mut AppState,
     jobs: &mut Jobs,
 ) -> Result<()> {
-    let Some(local_path) = state.upload_local_path() else {
+    let Some(draft) = state.upload_draft() else {
         return Ok(());
     };
-    let Some(local_filename) = local_path.file_name().and_then(|n| n.to_str()) else {
+    let (gist_id, gist_filename) = (draft.gist_id.clone(), draft.filename.clone());
+    let current_content = draft.content(&state.settings);
+    let Some(local_filename) = draft
+        .local_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(str::to_owned)
+    else {
         return Ok(());
     };
 
@@ -622,7 +629,6 @@ pub(super) fn edit_upload_buffer(
     let temp_file_path =
         std::env::temp_dir().join(format!(".gistui_redact_{timestamp}_{local_filename}"));
 
-    let current_content = state.content_to_upload();
     if let Err(e) = std::fs::write(&temp_file_path, &current_content) {
         state.set_status(format!("failed to write temp file: {e}"));
         return Ok(());
@@ -641,15 +647,6 @@ pub(super) fn edit_upload_buffer(
     // non-blocking and watch the temp file for saves instead of blocking on Command::status().
     // Terminal editors (below) still need the full terminal and stay fully blocking.
     if editor_is_gui(&program) {
-        let Some(PendingAction::Upload {
-            gist_id,
-            filename: gist_filename,
-            ..
-        }) = state.pending_action().cloned()
-        else {
-            let _ = std::fs::remove_file(&temp_file_path);
-            return Ok(());
-        };
         jobs.set_upload_edit_watch(spawn_upload_edit_watch(
             program,
             args,
@@ -657,7 +654,9 @@ pub(super) fn edit_upload_buffer(
             gist_id,
             gist_filename,
         ));
-        state.upload.watching = true;
+        if let Some(draft) = state.upload_draft_mut() {
+            draft.watching = true;
+        }
         state.set_status("Editing in external editor — diff updates live");
         return Ok(());
     }
@@ -681,7 +680,9 @@ pub(super) fn edit_upload_buffer(
     match result {
         Ok(_) => match std::fs::read_to_string(&temp_file_path) {
             Ok(edited_content) => {
-                state.upload.edited_content = Some(edited_content);
+                if let Some(draft) = state.upload_draft_mut() {
+                    draft.edited_content = Some(edited_content);
+                }
                 state.update_upload_diff();
                 state.set_status("Edited redact buffer");
             }
@@ -1802,14 +1803,12 @@ mod tests {
     #[test]
     fn on_upload_watch_events_drains_until_terminal_event() {
         let mut state = initial_state();
-        state.upload.watching = true;
-        state.enter_confirm(
-            PendingAction::Upload {
-                gist_id: "g1".into(),
-                filename: "a.txt".into(),
-                local_path: PathBuf::from("a.txt"),
+        state.enter_upload_confirm(
+            crate::tui::UploadDraft {
+                watching: true,
+                ..crate::tui::UploadDraft::fixture("g1", "a.txt", "a.txt")
             },
-            String::new(),
+            None,
         );
         let (tx, rx) = mpsc::channel();
         tx.send(UploadEditWatchEvent::ContentChanged {
@@ -1830,8 +1829,11 @@ mod tests {
         jobs.on_upload_watch_events(&mut state);
 
         assert!(jobs.upload_edit_watch.is_none());
-        assert!(!state.upload.watching);
-        assert_eq!(state.upload.edited_content.as_deref(), Some("two"));
+        assert!(!state.upload_draft().unwrap().watching);
+        assert_eq!(
+            state.upload_draft().unwrap().edited_content.as_deref(),
+            Some("two")
+        );
     }
 
     // ---- on_action_outcome: generation guard -------------------------------
