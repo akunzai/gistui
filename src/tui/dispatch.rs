@@ -264,7 +264,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             let Some(PendingAction::Upload {
                 gist_id,
                 filename,
-                local_path: _,
+                local_path,
             }) = state.pending_action().cloned()
             else {
                 return LoopFlow::Proceed;
@@ -297,18 +297,29 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                 crate::actions::upload_add_command(&temp_file_path, &file.gist_id)
             };
 
+            // Confirm is gone once the job runs: the outcome gets the target and the exact
+            // bytes written above, never a re-read of Confirm or `AppState.upload` (#460).
             state.leave();
+            let runner = jobs.command_runner();
             jobs.spawn_action(
                 state,
                 ActionJobSpec::new(ActionJobKind::Upload { file: file.clone() }, "Uploading…"),
                 move || {
-                    let result = crate::actions::execute_command(&plan)
+                    let result = crate::actions::run_command(runner.as_ref(), &plan)
                         .map(|_| ())
                         .map_err(|e| e.to_string());
                     drop(scratch);
                     result
                 },
-                move |result, state| gist_mutation::on_upload_replace(state, result, file),
+                move |result, state| {
+                    gist_mutation::on_upload_replace(
+                        state,
+                        result,
+                        file,
+                        &local_path,
+                        &upload_content,
+                    )
+                },
             );
         }
         KeyOutcome::Create(public) => {
@@ -803,5 +814,74 @@ mod tests {
             state.bg_task_msg.is_none(),
             "a delete with nothing pending must not reach gh"
         );
+    }
+
+    /// Issue #460: a pin push confirmed from Pins → Confirm must record the pin sync for the
+    /// bytes actually uploaded and return to Pins, even after the upload arm has left Confirm
+    /// and a setting changes while the job runs.
+    #[test]
+    fn upload_from_pin_push_records_pin_sync_and_returns_to_pins() {
+        use crate::actions::test_support::SeqRunner;
+        use crate::actions::CommandOutput;
+        use crate::domain::SyncDirection;
+
+        let _guard = crate::config::tests::ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", dir.path());
+
+        let local_path = dir.path().join("a.txt");
+        std::fs::write(&local_path, "a\r\nb\r\n").unwrap();
+        let mapping = PinnedMapping {
+            local_path: local_path.clone(),
+            gist_id: "g1".into(),
+            gist_filename: "a.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+        };
+        let mut config = crate::config::AppConfig::default();
+        config.pinned.push(mapping.clone());
+        crate::config::save_config(&crate::config::config_path().unwrap(), &config).unwrap();
+
+        let mut state = initial_state();
+        state.cwd = dir.path().to_path_buf();
+        state.pinned = vec![mapping];
+        state.gist_catalog.owned = vec![GistFile::fixture("g1", "a.txt")];
+        state.enter(Screen::Pins(Box::default()));
+        state.enter_confirm(
+            PendingAction::Upload {
+                gist_id: "g1".into(),
+                filename: "a.txt".into(),
+                local_path: local_path.clone(),
+            },
+            String::new(),
+        );
+        state.upload.original_content = "a\r\nb\r\n".into();
+
+        let runner = std::sync::Arc::new(SeqRunner::new(vec![CommandOutput::ok("")]));
+        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
+        route_outcome(KeyOutcome::Upload, &mut state, &mut jobs);
+        // A setting flipped mid-upload must not change what the pin records.
+        state
+            .settings
+            .adjust(crate::tui::ConfigField::NormalizeLineEndings, true);
+        // Drain only the action outcome: `absorb` would start a real gist-list refresh.
+        jobs.on_action_outcome(&mut state);
+
+        match prev {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        assert_eq!(runner.calls().len(), 1);
+        assert_eq!(state.status.as_deref(), Some("Uploaded a.txt to gist g1"));
+        assert_eq!(state.pinned[0].direction, Some(SyncDirection::Upload));
+        assert_eq!(
+            state.pinned[0].last_seen_hash.as_deref(),
+            Some(crate::domain::sha256_hex(b"a\nb\n").as_str())
+        );
+        assert!(state.screen.is_pins(), "landed on {:?}", state.screen);
+        assert_eq!(state.nav_stack.len(), 1);
     }
 }

@@ -23,29 +23,26 @@ fn apply(
     LoopFlow::Proceed
 }
 
-/// `UploadReplace` outcome: commit the pin-sync record and return to wherever the upload
-/// was initiated from, then re-fetch the gist list.
+/// `UploadReplace` outcome: commit the pin-sync record for the bytes that were uploaded,
+/// then re-fetch the gist list. Navigation already happened when the upload started — the
+/// Upload arm left Confirm for wherever it was opened from (List, or Pins for a pin push).
 pub(crate) fn on_upload_replace(
     state: &mut AppState,
     result: Result<(), String>,
     file: crate::domain::GistFileRef,
+    local_path: &std::path::Path,
+    content: &str,
 ) -> LoopFlow {
     apply(state, result, "upload", |state| {
         state.gist_content_store.invalidate_file(&file);
-        if let Some(local_path) = state.upload_local_path() {
-            let content = state.content_to_upload();
-            record_pin_sync(
-                state,
-                &local_path,
-                &file.gist_id,
-                &file.filename,
-                &content,
-                Some(crate::domain::SyncDirection::Upload),
-            );
-        }
-        // Return to wherever this upload was initiated from (List, or Pins
-        // for a pin push) instead of always snapping to List.
-        state.leave();
+        record_pin_sync(
+            state,
+            local_path,
+            &file.gist_id,
+            &file.filename,
+            content,
+            Some(crate::domain::SyncDirection::Upload),
+        );
         format!("Uploaded {} to gist {}", file.filename, file.gist_id)
     })
 }
@@ -171,7 +168,13 @@ mod tests {
     fn on_upload_replace_err_sets_status() {
         let mut state = initial_state();
 
-        on_upload_replace(&mut state, Err("boom".into()), gist_file_ref("g1", "a.txt"));
+        on_upload_replace(
+            &mut state,
+            Err("boom".into()),
+            gist_file_ref("g1", "a.txt"),
+            std::path::Path::new("/tmp/a.txt"),
+            "hello",
+        );
 
         assert_eq!(state.status.as_deref(), Some("upload failed: boom"));
         assert!(!state.gist_list_stale);
@@ -205,17 +208,13 @@ mod tests {
         state.pinned = vec![mapping];
         let file = crate::domain::GistFileRef::id_name("g1", "a.txt");
         state.gist_content_store.insert(&file, "stale".into());
-        state.enter_confirm(
-            PendingAction::Upload {
-                gist_id: "g1".into(),
-                filename: "a.txt".into(),
-                local_path: local_path.clone(),
-            },
-            String::new(),
+        on_upload_replace(
+            &mut state,
+            Ok(()),
+            gist_file_ref("g1", "a.txt"),
+            &local_path,
+            "hello",
         );
-        state.upload.original_content = "hello".into();
-
-        on_upload_replace(&mut state, Ok(()), gist_file_ref("g1", "a.txt"));
 
         assert!(state.gist_list_stale);
         assert_eq!(state.status.as_deref(), Some("Uploaded a.txt to gist g1"));

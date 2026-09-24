@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Uploading a file, including a pin push from the Pins screen, now records the pin as synced
+  and returns to the screen the upload started from, instead of leaving the pin unsynced and
+  landing one screen further back.
+
 ## [0.21.0] — 2026-09-22
 
 - A gist fetched with CRLF line endings no longer shows the whole file as replaced against an

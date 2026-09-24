@@ -1292,7 +1292,7 @@ impl Jobs {
     /// event-loop tick (stale revision fetch / no-op restore); otherwise `LoopFlow::Proceed`.
     ///
     /// A router shell: generation guard, then the apply closure the job carried (issue #375).
-    fn on_action_outcome(&mut self, state: &mut AppState) -> LoopFlow {
+    pub(super) fn on_action_outcome(&mut self, state: &mut AppState) -> LoopFlow {
         let Some((generation, apply)) = self.action.as_ref().and_then(|rx| rx.try_recv().ok())
         else {
             return LoopFlow::Proceed;
