@@ -994,9 +994,9 @@ pub(super) struct Jobs {
     action: ActionRx,
     action_spawner: Box<dyn ActionSpawner>,
     /// External-command boundary handed to worker closures that need one. Production
-    /// injects [`SystemRunner`]; tests inject a scripted runner (issue #430). Currently
-    /// consumed only by the Gist revision workflow — other action jobs still reach
-    /// `crate::actions::execute_command` directly.
+    /// injects [`SystemRunner`]; tests inject a scripted runner (issue #430). Consumed by
+    /// the Gist revision and Gist mutation workflows; a few read-only jobs (compact
+    /// analysis, comments) still reach [`SystemRunner`] directly.
     runner: SharedRunner,
 }
 
