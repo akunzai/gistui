@@ -14,30 +14,6 @@ pub enum ThemeChoice {
     Light,
 }
 
-fn default_scan_depth() -> u32 {
-    2
-}
-
-fn default_diff_context() -> u32 {
-    3
-}
-
-fn default_mouse() -> bool {
-    true
-}
-
-fn default_check_updates() -> bool {
-    true
-}
-
-fn default_ignore_trailing_newline() -> bool {
-    true
-}
-
-fn default_normalize_line_endings() -> bool {
-    true
-}
-
 fn default_skip_dirs() -> Vec<String> {
     [
         "node_modules",
@@ -66,85 +42,55 @@ pub struct AppConfig {
     /// Directory names skipped during recursive local file discovery.
     #[serde(default = "default_skip_dirs")]
     pub skip_dirs: Vec<String>,
+    /// The Settings-screen preferences, stored as top-level keys.
+    #[serde(flatten)]
+    pub prefs: Preferences,
+}
+
+/// The user preferences the Settings screen edits. Their defaults live only in
+/// [`Preferences::default`]. A key missing from `config.toml` takes that default, and a
+/// value equal to it is left out when the file is saved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Preferences {
     /// Maximum directory depth for recursive local file discovery (r key).
-    #[serde(default = "default_scan_depth")]
     pub scan_depth: u32,
     /// Unchanged context lines kept around each change in the diff view (`c` toggles
     /// between this radius and the full file).
-    #[serde(default = "default_diff_context")]
     pub diff_context: u32,
     /// Remembered state of the diff view's context toggle: `true` shows the full file,
     /// `false` collapses to `diff_context` lines. Persisted when the user presses `c`.
-    #[serde(default)]
     pub diff_show_full: bool,
     /// Built-in colour theme: `"dark"` (default) or `"light"`.
-    #[serde(default)]
     pub theme: ThemeChoice,
     /// Enable mouse support (wheel scroll, click-to-focus/select). Default `true`;
     /// set `false` to opt out (the `--no-mouse` CLI flag also forces it off).
-    #[serde(default = "default_mouse")]
     pub mouse: bool,
     /// Check GitHub on startup for a newer release and show a hint if one exists. Default
     /// `true`; set `false` to opt out (the `--no-update-check` CLI flag also forces it off).
-    #[serde(default = "default_check_updates")]
     pub check_updates: bool,
     /// Treat a difference that is *only* a file-final newline as "no difference": the diff
     /// view hides the phantom change and the overwrite-confirm gate counts the sides as
     /// identical. Default `true`; set `false` for strict, byte-exact diffs.
-    #[serde(default = "default_ignore_trailing_newline")]
     pub ignore_trailing_newline: bool,
     /// Rewrite CRLF/lone-CR line endings to LF in the bytes actually sent/written on
     /// upload and download. Unlike `ignore_trailing_newline`, this changes real content,
     /// not just the diff view. Default `true`; set `false` to preserve a file's original
     /// line-ending style through upload/download untouched.
-    #[serde(default = "default_normalize_line_endings")]
     pub normalize_line_endings: bool,
 }
 
-#[derive(Serialize)]
-struct SavedConfig<'a> {
-    pinned: &'a [PinnedMapping],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    skip_dirs: Option<&'a [String]>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    scan_depth: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    diff_context: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    diff_show_full: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    theme: Option<ThemeChoice>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    mouse: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    check_updates: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ignore_trailing_newline: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    normalize_line_endings: Option<bool>,
-}
-
-impl<'a> From<&'a AppConfig> for SavedConfig<'a> {
-    fn from(config: &'a AppConfig) -> Self {
-        let defaults = AppConfig::default();
+impl Default for Preferences {
+    fn default() -> Self {
         Self {
-            pinned: &config.pinned,
-            skip_dirs: (config.skip_dirs != defaults.skip_dirs).then_some(&config.skip_dirs),
-            scan_depth: (config.scan_depth != defaults.scan_depth).then_some(config.scan_depth),
-            diff_context: (config.diff_context != defaults.diff_context)
-                .then_some(config.diff_context),
-            diff_show_full: (config.diff_show_full != defaults.diff_show_full)
-                .then_some(config.diff_show_full),
-            theme: (config.theme != defaults.theme).then_some(config.theme),
-            mouse: (config.mouse != defaults.mouse).then_some(config.mouse),
-            check_updates: (config.check_updates != defaults.check_updates)
-                .then_some(config.check_updates),
-            ignore_trailing_newline: (config.ignore_trailing_newline
-                != defaults.ignore_trailing_newline)
-                .then_some(config.ignore_trailing_newline),
-            normalize_line_endings: (config.normalize_line_endings
-                != defaults.normalize_line_endings)
-                .then_some(config.normalize_line_endings),
+            scan_depth: 2,
+            diff_context: 3,
+            diff_show_full: false,
+            theme: ThemeChoice::Dark,
+            mouse: true,
+            check_updates: true,
+            ignore_trailing_newline: true,
+            normalize_line_endings: true,
         }
     }
 }
@@ -154,14 +100,7 @@ impl Default for AppConfig {
         Self {
             pinned: Vec::new(),
             skip_dirs: default_skip_dirs(),
-            scan_depth: default_scan_depth(),
-            diff_context: default_diff_context(),
-            diff_show_full: false,
-            theme: ThemeChoice::Dark,
-            mouse: true,
-            check_updates: true,
-            ignore_trailing_newline: true,
-            normalize_line_endings: true,
+            prefs: Preferences::default(),
         }
     }
 }
@@ -270,8 +209,17 @@ pub fn save_config(path: &Path, config: &AppConfig) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let raw = toml::to_string_pretty(&SavedConfig::from(config))?;
-    fs::write(path, raw).with_context(|| format!("write {}", path.display()))
+    fs::write(path, to_saved_toml(config)?).with_context(|| format!("write {}", path.display()))
+}
+
+/// The file `save_config` writes: every key whose value differs from the default, plus
+/// `pinned` (always present). A value equal to its default is left out, so a later change
+/// of default reaches users who never set it.
+fn to_saved_toml(config: &AppConfig) -> Result<String> {
+    let mut table = toml::Table::try_from(config)?;
+    let defaults = toml::Table::try_from(AppConfig::default())?;
+    table.retain(|key, value| key == "pinned" || defaults.get(key) != Some(value));
+    Ok(toml::to_string_pretty(&table)?)
 }
 
 #[cfg(test)]
@@ -329,14 +277,7 @@ pub(crate) mod tests {
                 remote_blob_sha: None,
             }],
             skip_dirs: default_skip_dirs(),
-            scan_depth: default_scan_depth(),
-            diff_context: default_diff_context(),
-            diff_show_full: false,
-            theme: ThemeChoice::Dark,
-            mouse: true,
-            check_updates: true,
-            ignore_trailing_newline: true,
-            normalize_line_endings: true,
+            prefs: Preferences::default(),
         };
 
         save_config(&path, &config).unwrap();
@@ -358,6 +299,38 @@ pub(crate) mod tests {
         assert_eq!(load_config(&path).unwrap(), config);
     }
 
+    /// Pins the saved file's exact shape — key order, omitted defaults, `pinned` always
+    /// present — with every preference off its default.
+    #[test]
+    fn save_config_writes_every_custom_value_in_a_stable_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let config = AppConfig {
+            skip_dirs: vec!["x".into()],
+            prefs: Preferences {
+                scan_depth: 5,
+                diff_context: 7,
+                diff_show_full: true,
+                theme: ThemeChoice::Light,
+                mouse: false,
+                check_updates: false,
+                ignore_trailing_newline: false,
+                normalize_line_endings: false,
+            },
+            ..Default::default()
+        };
+
+        save_config(&path, &config).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "pinned = []\nskip_dirs = [\"x\"]\nscan_depth = 5\ndiff_context = 7\n\
+             diff_show_full = true\ntheme = \"light\"\nmouse = false\ncheck_updates = false\n\
+             ignore_trailing_newline = false\nnormalize_line_endings = false\n"
+        );
+        assert_eq!(load_config(&path).unwrap(), config);
+    }
+
     #[test]
     fn save_config_keeps_only_custom_values() {
         let dir = tempfile::tempdir().unwrap();
@@ -371,11 +344,14 @@ pub(crate) mod tests {
                 last_seen_hash: None,
                 remote_blob_sha: None,
             }],
-            scan_depth: 4,
-            mouse: false,
+            prefs: Preferences {
+                scan_depth: 4,
+                mouse: false,
+                ..Default::default()
+            },
             ..Default::default()
         };
-        config.scan_depth = default_scan_depth();
+        config.prefs.scan_depth = Preferences::default().scan_depth;
 
         save_config(&path, &config).unwrap();
 
@@ -400,7 +376,7 @@ pub(crate) mod tests {
 
         let config = load_config(&path).unwrap();
 
-        assert!(!config.mouse, "the rest of the config still loads");
+        assert!(!config.prefs.mouse, "the rest of the config still loads");
         assert_eq!(config.pinned.len(), 1);
         assert_eq!(config.pinned[0].gist_filename, ".zshrc");
     }
@@ -586,18 +562,21 @@ pub(crate) mod tests {
         // A config file with no `mouse` key must load as enabled.
         let toml = "scan_depth = 4\n";
         let config: AppConfig = toml::from_str(toml).unwrap();
-        assert!(config.mouse);
+        assert!(config.prefs.mouse);
     }
 
     #[test]
     fn mouse_round_trips() {
         let config = AppConfig {
-            mouse: false,
+            prefs: Preferences {
+                mouse: false,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let text = toml::to_string(&config).unwrap();
         let parsed: AppConfig = toml::from_str(&text).unwrap();
-        assert!(!parsed.mouse);
+        assert!(!parsed.prefs.mouse);
     }
 
     #[test]
@@ -605,7 +584,7 @@ pub(crate) mod tests {
         // A config file with no `check_updates` key must load as enabled.
         let toml = "scan_depth = 4\n";
         let config: AppConfig = toml::from_str(toml).unwrap();
-        assert!(config.check_updates);
+        assert!(config.prefs.check_updates);
     }
 
     #[test]
@@ -613,18 +592,21 @@ pub(crate) mod tests {
         // A config file with no `ignore_trailing_newline` key must load as enabled.
         let toml = "scan_depth = 4\n";
         let config: AppConfig = toml::from_str(toml).unwrap();
-        assert!(config.ignore_trailing_newline);
+        assert!(config.prefs.ignore_trailing_newline);
     }
 
     #[test]
     fn ignore_trailing_newline_round_trips() {
         let config = AppConfig {
-            ignore_trailing_newline: false,
+            prefs: Preferences {
+                ignore_trailing_newline: false,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let text = toml::to_string(&config).unwrap();
         let parsed: AppConfig = toml::from_str(&text).unwrap();
-        assert!(!parsed.ignore_trailing_newline);
+        assert!(!parsed.prefs.ignore_trailing_newline);
     }
 
     #[test]
@@ -632,17 +614,20 @@ pub(crate) mod tests {
         // A config file with no `normalize_line_endings` key must load as enabled.
         let toml = "scan_depth = 4\n";
         let config: AppConfig = toml::from_str(toml).unwrap();
-        assert!(config.normalize_line_endings);
+        assert!(config.prefs.normalize_line_endings);
     }
 
     #[test]
     fn normalize_line_endings_round_trips() {
         let config = AppConfig {
-            normalize_line_endings: false,
+            prefs: Preferences {
+                normalize_line_endings: false,
+                ..Default::default()
+            },
             ..Default::default()
         };
         let text = toml::to_string(&config).unwrap();
         let parsed: AppConfig = toml::from_str(&text).unwrap();
-        assert!(!parsed.normalize_line_endings);
+        assert!(!parsed.prefs.normalize_line_endings);
     }
 }

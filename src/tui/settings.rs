@@ -1,61 +1,65 @@
 //! Runtime ownership for persisted TUI settings and CLI force-off overrides.
 
 use super::Theme;
-use crate::config::{AppConfig, ThemeChoice};
+use crate::config::{AppConfig, Preferences, ThemeChoice};
 
-/// Fields shown on the Settings screen, in display order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConfigField {
-    Theme,
-    Mouse,
-    CheckUpdates,
-    DiffShowFull,
-    IgnoreTrailingNewline,
-    NormalizeLineEndings,
-    ScanDepth,
-    DiffContext,
+/// Declares the Settings-screen fields in display order. Each field has a label, a one-line
+/// description (the Settings row), and help text (its `?` help line). `ALL` is generated from
+/// the same list, so a field can't be declared and then left off the screen or out of help.
+macro_rules! config_fields {
+    ($($variant:ident => $label:literal, $description:literal, $help:literal;)+) => {
+        /// Fields shown on the Settings screen, in display order.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum ConfigField {
+            $($variant),+
+        }
+
+        impl ConfigField {
+            pub const ALL: &'static [Self] = &[$(Self::$variant),+];
+
+            pub fn label(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $label),+
+                }
+            }
+
+            pub fn description(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $description),+
+                }
+            }
+
+            /// The field's line in the Config topic of `?` help.
+            pub fn help(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $help),+
+                }
+            }
+        }
+    };
+}
+
+config_fields! {
+    Theme => "Theme", "terminal colours", "dark / light (also global T)";
+    Mouse => "Mouse support", "click and wheel input",
+        "on / off (session still respects --no-mouse)";
+    CheckUpdates => "Check for updates", "daily GitHub version check",
+        "on / off (session still respects --no-update-check)";
+    DiffShowFull => "Show full diff", "open Diff expanded",
+        "on / off (opens Diff expanded; c still toggles it)";
+    IgnoreTrailingNewline => "Ignore trailing newline", "hide newline-only diffs",
+        "on / off (diff + overwrite confirm)";
+    NormalizeLineEndings => "Normalize line endings", "force LF on upload/create/download",
+        "on / off (LF in what upload, create, and download send / write)";
+    ScanDepth => "Recursive scan depth", "directory levels to scan",
+        "0–20 (r recursive discovery)";
+    DiffContext => "Diff context lines", "unchanged lines around edits",
+        "0–50 (c in Diff still toggles full vs this radius)";
 }
 
 impl ConfigField {
-    pub const ALL: [Self; 8] = [
-        Self::Theme,
-        Self::Mouse,
-        Self::CheckUpdates,
-        Self::DiffShowFull,
-        Self::IgnoreTrailingNewline,
-        Self::NormalizeLineEndings,
-        Self::ScanDepth,
-        Self::DiffContext,
-    ];
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Theme => "Theme",
-            Self::Mouse => "Mouse support",
-            Self::CheckUpdates => "Check for updates",
-            Self::DiffShowFull => "Show full diff",
-            Self::IgnoreTrailingNewline => "Ignore trailing newline",
-            Self::NormalizeLineEndings => "Normalize line endings",
-            Self::ScanDepth => "Recursive scan depth",
-            Self::DiffContext => "Diff context lines",
-        }
-    }
-
     pub fn is_numeric(self) -> bool {
         matches!(self, Self::ScanDepth | Self::DiffContext)
-    }
-
-    pub fn description(self) -> &'static str {
-        match self {
-            Self::Theme => "terminal colours",
-            Self::Mouse => "click and wheel input",
-            Self::CheckUpdates => "daily GitHub version check",
-            Self::DiffShowFull => "open Diff expanded",
-            Self::IgnoreTrailingNewline => "hide newline-only diffs",
-            Self::NormalizeLineEndings => "force LF on upload/create/download",
-            Self::ScanDepth => "directory levels to scan",
-            Self::DiffContext => "unchanged lines around edits",
-        }
     }
 }
 
@@ -71,14 +75,7 @@ pub struct SettingsChange {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeSettings {
-    theme_choice: ThemeChoice,
-    mouse: bool,
-    check_updates: bool,
-    diff_show_full: bool,
-    ignore_trailing_newline: bool,
-    normalize_line_endings: bool,
-    scan_depth: u32,
-    diff_context: u32,
+    prefs: Preferences,
     no_mouse: bool,
     no_update_check: bool,
 }
@@ -86,151 +83,122 @@ pub struct RuntimeSettings {
 impl RuntimeSettings {
     pub fn from_config(config: &AppConfig, no_mouse: bool, no_update_check: bool) -> Self {
         Self {
-            theme_choice: config.theme,
-            mouse: config.mouse,
-            check_updates: config.check_updates,
-            diff_show_full: config.diff_show_full,
-            ignore_trailing_newline: config.ignore_trailing_newline,
-            normalize_line_endings: config.normalize_line_endings,
-            scan_depth: config.scan_depth,
-            diff_context: config.diff_context,
+            prefs: config.prefs.clone(),
             no_mouse,
             no_update_check,
         }
     }
 
+    /// The on/off preference behind `field`, if it is one.
+    fn flag_mut(&mut self, field: ConfigField) -> Option<&mut bool> {
+        let p = &mut self.prefs;
+        match field {
+            ConfigField::Mouse => Some(&mut p.mouse),
+            ConfigField::CheckUpdates => Some(&mut p.check_updates),
+            ConfigField::DiffShowFull => Some(&mut p.diff_show_full),
+            ConfigField::IgnoreTrailingNewline => Some(&mut p.ignore_trailing_newline),
+            ConfigField::NormalizeLineEndings => Some(&mut p.normalize_line_endings),
+            ConfigField::Theme | ConfigField::ScanDepth | ConfigField::DiffContext => None,
+        }
+    }
+
     pub fn adjust(&mut self, field: ConfigField, forward: bool) -> Option<SettingsChange> {
-        let effect = match field {
+        if let Some(flag) = self.flag_mut(field) {
+            *flag = !*flag;
+            let effect = (field == ConfigField::Mouse).then_some(SettingsEffect::SyncMouseCapture);
+            return Some(SettingsChange { effect });
+        }
+        let p = &mut self.prefs;
+        let (value, max) = match field {
             ConfigField::Theme => {
-                self.theme_choice = match self.theme_choice {
+                p.theme = match p.theme {
                     ThemeChoice::Dark => ThemeChoice::Light,
                     ThemeChoice::Light => ThemeChoice::Dark,
                 };
-                None
+                return Some(SettingsChange { effect: None });
             }
-            ConfigField::Mouse => {
-                self.mouse = !self.mouse;
-                Some(SettingsEffect::SyncMouseCapture)
-            }
-            ConfigField::CheckUpdates => {
-                self.check_updates = !self.check_updates;
-                None
-            }
-            ConfigField::DiffShowFull => {
-                self.diff_show_full = !self.diff_show_full;
-                None
-            }
-            ConfigField::IgnoreTrailingNewline => {
-                self.ignore_trailing_newline = !self.ignore_trailing_newline;
-                None
-            }
-            ConfigField::NormalizeLineEndings => {
-                self.normalize_line_endings = !self.normalize_line_endings;
-                None
-            }
-            ConfigField::ScanDepth => {
-                let next = if forward {
-                    self.scan_depth.saturating_add(1).min(20)
-                } else {
-                    self.scan_depth.saturating_sub(1)
-                };
-                if next == self.scan_depth {
-                    return None;
-                }
-                self.scan_depth = next;
-                None
-            }
-            ConfigField::DiffContext => {
-                let next = if forward {
-                    self.diff_context.saturating_add(1).min(50)
-                } else {
-                    self.diff_context.saturating_sub(1)
-                };
-                if next == self.diff_context {
-                    return None;
-                }
-                self.diff_context = next;
-                None
-            }
+            ConfigField::ScanDepth => (&mut p.scan_depth, 20),
+            ConfigField::DiffContext => (&mut p.diff_context, 50),
+            ConfigField::Mouse
+            | ConfigField::CheckUpdates
+            | ConfigField::DiffShowFull
+            | ConfigField::IgnoreTrailingNewline
+            | ConfigField::NormalizeLineEndings => unreachable!("handled as a flag above"),
         };
-        Some(SettingsChange { effect })
+        let next = if forward {
+            value.saturating_add(1).min(max)
+        } else {
+            value.saturating_sub(1)
+        };
+        if next == *value {
+            return None;
+        }
+        *value = next;
+        Some(SettingsChange { effect: None })
     }
 
+    /// Write every runtime-owned preference back into `config`, leaving pins, skip
+    /// directories, and anything else in it alone.
     pub fn apply_to_config(&self, config: &mut AppConfig) {
-        config.theme = self.theme_choice;
-        config.mouse = self.mouse;
-        config.check_updates = self.check_updates;
-        config.diff_show_full = self.diff_show_full;
-        config.ignore_trailing_newline = self.ignore_trailing_newline;
-        config.normalize_line_endings = self.normalize_line_endings;
-        config.scan_depth = self.scan_depth;
-        config.diff_context = self.diff_context;
+        config.prefs = self.prefs.clone();
     }
 
     pub fn field_value(&self, field: ConfigField) -> String {
+        let p = &self.prefs;
+        let on_off = |on: bool| if on { "on" } else { "off" }.to_string();
         match field {
-            ConfigField::Theme => match self.theme_choice {
+            ConfigField::Theme => match p.theme {
                 ThemeChoice::Dark => "dark",
                 ThemeChoice::Light => "light",
             }
             .into(),
-            ConfigField::Mouse => if self.mouse { "on" } else { "off" }.into(),
-            ConfigField::CheckUpdates => if self.check_updates { "on" } else { "off" }.into(),
-            ConfigField::DiffShowFull => if self.diff_show_full { "on" } else { "off" }.into(),
-            ConfigField::IgnoreTrailingNewline => if self.ignore_trailing_newline {
-                "on"
-            } else {
-                "off"
-            }
-            .into(),
-            ConfigField::NormalizeLineEndings => if self.normalize_line_endings {
-                "on"
-            } else {
-                "off"
-            }
-            .into(),
-            ConfigField::ScanDepth => self.scan_depth.to_string(),
-            ConfigField::DiffContext => self.diff_context.to_string(),
+            ConfigField::Mouse => on_off(p.mouse),
+            ConfigField::CheckUpdates => on_off(p.check_updates),
+            ConfigField::DiffShowFull => on_off(p.diff_show_full),
+            ConfigField::IgnoreTrailingNewline => on_off(p.ignore_trailing_newline),
+            ConfigField::NormalizeLineEndings => on_off(p.normalize_line_endings),
+            ConfigField::ScanDepth => p.scan_depth.to_string(),
+            ConfigField::DiffContext => p.diff_context.to_string(),
         }
     }
 
     pub fn theme_choice(&self) -> ThemeChoice {
-        self.theme_choice
+        self.prefs.theme
     }
     pub fn theme(&self) -> Theme {
-        Theme::for_choice(self.theme_choice)
+        Theme::for_choice(self.prefs.theme)
     }
     pub fn mouse_enabled(&self) -> bool {
-        self.mouse && !self.no_mouse
+        self.prefs.mouse && !self.no_mouse
     }
     pub fn update_check_enabled(&self) -> bool {
-        self.check_updates && !self.no_update_check
+        self.prefs.check_updates && !self.no_update_check
     }
     pub fn diff_show_full(&self) -> bool {
-        self.diff_show_full
+        self.prefs.diff_show_full
     }
     pub fn ignore_trailing_newline(&self) -> bool {
-        self.ignore_trailing_newline
+        self.prefs.ignore_trailing_newline
     }
     pub fn normalize_line_endings(&self) -> bool {
-        self.normalize_line_endings
+        self.prefs.normalize_line_endings
     }
     /// The Sync policy these settings describe.
     pub fn sync_policy(&self) -> crate::sync_content::SyncPolicy {
         crate::sync_content::SyncPolicy {
-            normalize_line_endings: self.normalize_line_endings,
-            ignore_trailing_newline: self.ignore_trailing_newline,
+            normalize_line_endings: self.prefs.normalize_line_endings,
+            ignore_trailing_newline: self.prefs.ignore_trailing_newline,
         }
     }
     pub fn scan_depth(&self) -> u32 {
-        self.scan_depth
+        self.prefs.scan_depth
     }
     pub fn diff_context(&self) -> u32 {
-        self.diff_context
+        self.prefs.diff_context
     }
 
     pub fn effective_diff_context(&self) -> Option<usize> {
-        (!self.diff_show_full).then_some(self.diff_context as usize)
+        (!self.prefs.diff_show_full).then_some(self.prefs.diff_context as usize)
     }
 }
 
@@ -244,6 +212,38 @@ impl Default for RuntimeSettings {
 mod tests {
     use super::*;
 
+    /// Every Settings field, changed on screen, survives a save and a reload — the path that
+    /// used to lose a field silently when one of its hand-written copies was missed.
+    #[test]
+    fn every_field_change_survives_save_and_reload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        for &field in ConfigField::ALL {
+            let mut settings = RuntimeSettings::default();
+            assert!(
+                settings.adjust(field, true).is_some(),
+                "{field:?} didn't change"
+            );
+            let changed = settings.field_value(field);
+
+            let mut config = AppConfig::default();
+            settings.apply_to_config(&mut config);
+            crate::config::save_config(&path, &config).unwrap();
+            let reloaded = RuntimeSettings::from_config(
+                &crate::config::load_config(&path).unwrap(),
+                false,
+                false,
+            );
+
+            assert_eq!(reloaded.field_value(field), changed, "{field:?}");
+            assert_ne!(
+                RuntimeSettings::default().field_value(field),
+                changed,
+                "{field:?} must differ from its default"
+            );
+        }
+    }
+
     #[test]
     fn cli_overrides_force_effective_values_off_without_changing_preferences() {
         let config = AppConfig::default();
@@ -252,15 +252,18 @@ mod tests {
         assert!(!settings.update_check_enabled());
         let mut saved = AppConfig::default();
         settings.apply_to_config(&mut saved);
-        assert!(saved.mouse);
-        assert!(saved.check_updates);
+        assert!(saved.prefs.mouse);
+        assert!(saved.prefs.check_updates);
     }
 
     #[test]
     fn numeric_adjustments_clamp_and_report_no_change_at_bounds() {
         let mut config = AppConfig {
-            scan_depth: 20,
-            diff_context: 0,
+            prefs: Preferences {
+                scan_depth: 20,
+                diff_context: 0,
+                ..Default::default()
+            },
             ..AppConfig::default()
         };
         let mut settings = RuntimeSettings::from_config(&config, false, false);
@@ -269,7 +272,7 @@ mod tests {
         assert!(settings.adjust(ConfigField::ScanDepth, false).is_some());
         assert_eq!(settings.scan_depth(), 19);
         settings.apply_to_config(&mut config);
-        assert_eq!(config.diff_context, 0);
+        assert_eq!(config.prefs.diff_context, 0);
     }
 
     #[test]
@@ -284,13 +287,16 @@ mod tests {
     #[test]
     fn projection_updates_every_owned_field_and_preserves_the_rest() {
         let source = AppConfig {
-            theme: ThemeChoice::Light,
-            mouse: false,
-            check_updates: false,
-            diff_show_full: true,
-            ignore_trailing_newline: false,
-            scan_depth: 5,
-            diff_context: 7,
+            prefs: Preferences {
+                theme: ThemeChoice::Light,
+                mouse: false,
+                check_updates: false,
+                diff_show_full: true,
+                ignore_trailing_newline: false,
+                scan_depth: 5,
+                diff_context: 7,
+                ..Default::default()
+            },
             ..AppConfig::default()
         };
         let settings = RuntimeSettings::from_config(&source, false, false);

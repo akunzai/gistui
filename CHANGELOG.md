@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `?` help's Config topic lists every setting again (it was missing *Normalize line endings*);
+  it is now built from the same list as the Settings screen, so it can't fall behind.
+
 - The upload redact buffer (content before redaction) no longer sits in the shared temp
   directory under a predictable, world-readable name: it is created fresh in a private scratch
   directory (owner-only on Unix) and removed when editing ends, even if gistui quits while a GUI
