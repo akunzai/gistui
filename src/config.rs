@@ -183,10 +183,12 @@ pub fn load_config(path: &Path) -> Result<AppConfig> {
         return Ok(AppConfig::default());
     }
     let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    let mut config: AppConfig =
-        toml::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
-    default_gist_filenames(&mut config.pinned)
-        .with_context(|| format!("parse {}", path.display()))?;
+    parse_config(&raw).with_context(|| format!("parse {}", path.display()))
+}
+
+fn parse_config(raw: &str) -> Result<AppConfig> {
+    let mut config: AppConfig = toml::from_str(raw)?;
+    default_gist_filenames(&mut config.pinned)?;
     Ok(config)
 }
 
@@ -205,21 +207,158 @@ fn default_gist_filenames(pinned: &mut [PinnedMapping]) -> Result<()> {
     Ok(())
 }
 
+/// Save `config` to `path`, editing the existing file rather than rewriting it (issue #484).
+///
+/// A key whose value this save changes is written, or removed when it changes back to its
+/// default. Every other line is left as the user wrote it: comments, key order, keys gistui
+/// doesn't know, and values that happen to equal a default. `[[pinned]]` entries are matched
+/// by their key and updated in place. A file that doesn't exist yet is written fresh with
+/// only the non-default keys.
 pub fn save_config(path: &Path, config: &AppConfig) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, to_saved_toml(config)?).with_context(|| format!("write {}", path.display()))
+    let text = match fs::read_to_string(path) {
+        Ok(existing) => edit_saved_toml(&existing, config)
+            .with_context(|| format!("update {}", path.display()))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => to_saved_toml(config)?,
+        Err(e) => return Err(e).with_context(|| format!("read {}", path.display())),
+    };
+    fs::write(path, text).with_context(|| format!("write {}", path.display()))
 }
 
-/// The file `save_config` writes: every key whose value differs from the default, plus
-/// `pinned` (always present). A value equal to its default is left out, so a later change
-/// of default reaches users who never set it.
+/// A fresh file: every key whose value differs from the default, plus `pinned` (always
+/// present). A value equal to its default is left out, so a later change of default reaches
+/// users who never set it.
 fn to_saved_toml(config: &AppConfig) -> Result<String> {
     let mut table = toml::Table::try_from(config)?;
     let defaults = toml::Table::try_from(AppConfig::default())?;
     table.retain(|key, value| key == "pinned" || defaults.get(key) != Some(value));
     Ok(toml::to_string_pretty(&table)?)
+}
+
+/// `existing` with only what differs between it and `config` changed.
+fn edit_saved_toml(existing: &str, config: &AppConfig) -> Result<String> {
+    let mut doc: toml_edit::DocumentMut = existing.parse()?;
+    let before = toml::Table::try_from(parse_config(existing)?)?;
+    let after = toml::Table::try_from(config)?;
+    let defaults = toml::Table::try_from(AppConfig::default())?;
+
+    for (key, value) in after.iter().filter(|(key, _)| *key != "pinned") {
+        if before.get(key) == Some(value) {
+            continue;
+        }
+        if defaults.get(key) == Some(value) {
+            remove_keeping_comments(doc.as_table_mut(), key);
+        } else {
+            set_keeping_comments(doc.as_table_mut(), key, edit_value(value)?);
+        }
+    }
+    if before.get("pinned") != after.get("pinned") {
+        edit_pins(&mut doc, &parse_config(existing)?.pinned, &config.pinned)?;
+    }
+    // `toml_edit` writes LF; a CRLF file (the norm on Windows) stays CRLF.
+    let text = doc.to_string();
+    Ok(if existing.contains("\r\n") {
+        text.replace("\r\n", "\n").replace('\n', "\r\n")
+    } else {
+        text
+    })
+}
+
+fn edit_value(value: &toml::Value) -> Result<toml_edit::Value> {
+    Ok(value.to_string().parse()?)
+}
+
+/// Set `key` to `value`, keeping a trailing comment on the line it replaces.
+fn set_keeping_comments(table: &mut toml_edit::Table, key: &str, mut value: toml_edit::Value) {
+    if let Some(old) = table.get(key).and_then(toml_edit::Item::as_value) {
+        *value.decor_mut() = old.decor().clone();
+    }
+    table[key] = toml_edit::Item::Value(value);
+}
+
+/// Remove `key`. The comment lines above it move to the key that follows, so a file header
+/// or section comment isn't lost with the line.
+fn remove_keeping_comments(table: &mut toml_edit::Table, key: &str) {
+    let prefix = table
+        .key(key)
+        .and_then(|k| k.leaf_decor().prefix())
+        .and_then(|p| p.as_str())
+        .filter(|p| !p.trim().is_empty())
+        .map(str::to_string);
+    let next = {
+        let mut keys = table.iter().map(|(k, _)| k.to_string());
+        keys.by_ref().find(|k| k == key);
+        keys.next()
+    };
+    table.remove(key);
+    if let (Some(prefix), Some(next)) = (prefix, next) {
+        if let Some(mut next_key) = table.key_mut(&next) {
+            let kept = next_key
+                .leaf_decor()
+                .prefix()
+                .and_then(|p| p.as_str())
+                .unwrap_or("")
+                .to_string();
+            next_key
+                .leaf_decor_mut()
+                .set_prefix(format!("{prefix}{kept}"));
+        }
+    }
+}
+
+/// Rebuild `[[pinned]]` from `new`, reusing the file's own table (and so its comments) for
+/// every pin that is still there, with only its changed fields rewritten.
+fn edit_pins(
+    doc: &mut toml_edit::DocumentMut,
+    old: &[PinnedMapping],
+    new: &[PinnedMapping],
+) -> Result<()> {
+    let identity = |p: &PinnedMapping| {
+        (
+            p.local_path.clone(),
+            p.gist_id.clone(),
+            p.gist_filename.clone(),
+        )
+    };
+    let mut existing: Vec<Option<toml_edit::Table>> = match doc.get("pinned") {
+        Some(toml_edit::Item::ArrayOfTables(tables)) => tables.iter().cloned().map(Some).collect(),
+        _ => Vec::new(),
+    };
+    let mut pinned = toml_edit::ArrayOfTables::new();
+    for pin in new {
+        let fields = toml::Table::try_from(pin)?;
+        let reused = old
+            .iter()
+            .zip(existing.iter_mut())
+            .find(|(o, t)| t.is_some() && identity(o) == identity(pin))
+            .and_then(|(o, t)| Some((o, t.take()?)));
+        let table = match reused {
+            Some((old_pin, mut table)) => {
+                let old_fields = toml::Table::try_from(old_pin)?;
+                for (key, _) in old_fields.iter().filter(|(k, _)| !fields.contains_key(*k)) {
+                    remove_keeping_comments(&mut table, key);
+                }
+                for (key, value) in &fields {
+                    if old_fields.get(key) != Some(value) {
+                        set_keeping_comments(&mut table, key, edit_value(value)?);
+                    }
+                }
+                table
+            }
+            None => {
+                let mut table = toml_edit::Table::new();
+                for (key, value) in &fields {
+                    table[key.as_str()] = toml_edit::value(edit_value(value)?);
+                }
+                table
+            }
+        };
+        pinned.push(table);
+    }
+    doc["pinned"] = toml_edit::Item::ArrayOfTables(pinned);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -329,6 +468,111 @@ pub(crate) mod tests {
              ignore_trailing_newline = false\nnormalize_line_endings = false\n"
         );
         assert_eq!(load_config(&path).unwrap(), config);
+    }
+
+    fn edit(existing: &str, change: impl FnOnce(&mut AppConfig)) -> String {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, existing).unwrap();
+        let mut config = load_config(&path).unwrap();
+        change(&mut config);
+        save_config(&path, &config).unwrap();
+        let saved = fs::read_to_string(&path).unwrap();
+        assert_eq!(load_config(&path).unwrap(), config, "round-trips:\n{saved}");
+        saved
+    }
+
+    /// Issue #484: a save edits the file — comments, unknown keys, and values the user wrote
+    /// out (even when they equal a default) stay; only the changed key moves.
+    #[test]
+    fn save_config_keeps_comments_unknown_keys_and_untouched_values() {
+        let existing = "\
+# my gistui settings
+theme = \"light\" # I like it bright
+
+# written out on purpose, though it is the default
+mouse = true
+future_option = 42
+";
+        let saved = edit(existing, |c| c.prefs.scan_depth = 5);
+        assert_eq!(saved, format!("{existing}scan_depth = 5\n"));
+    }
+
+    /// The common case behind #484: a config copied from `config.example.toml` keeps every
+    /// line but the one a setting changed.
+    #[test]
+    fn save_config_keeps_a_copied_example_config_intact() {
+        let example = include_str!("../config.example.toml");
+        let saved = edit(example, |c| c.prefs.mouse = false);
+        assert_eq!(saved, example.replacen("mouse = true", "mouse = false", 1));
+    }
+
+    /// A CRLF config (as Windows writes, and as git checks this repo's example out there)
+    /// stays CRLF throughout, not just on the changed line.
+    #[test]
+    fn save_config_keeps_crlf_line_endings() {
+        let existing = "# settings\r\nmouse = true\r\ntheme = \"light\"\r\n";
+        let saved = edit(existing, |c| c.prefs.mouse = false);
+        assert_eq!(
+            saved,
+            "# settings\r\nmouse = false\r\ntheme = \"light\"\r\n"
+        );
+    }
+
+    #[test]
+    fn save_config_removes_a_key_changed_back_to_its_default() {
+        let existing = "# keep me\nmouse = false # was off\ntheme = \"light\"\n";
+        let saved = edit(existing, |c| c.prefs.mouse = true);
+        assert_eq!(saved, "# keep me\ntheme = \"light\"\n");
+    }
+
+    #[test]
+    fn save_config_updates_a_value_in_place() {
+        let existing = "# depth\nscan_depth = 4 # deep enough\nmouse = false\n";
+        let saved = edit(existing, |c| c.prefs.scan_depth = 6);
+        assert_eq!(
+            saved,
+            "# depth\nscan_depth = 6 # deep enough\nmouse = false\n"
+        );
+    }
+
+    /// `[[pinned]]` entries keep their comments across a sync record, a new pin, and the
+    /// removal of another pin; a hand-written pin without `gist_filename` stays that way.
+    #[test]
+    fn save_config_edits_pins_in_place() {
+        let existing = "\
+mouse = false
+
+# dotfiles
+[[pinned]]
+local_path = \"~/.zshrc\" # shell
+gist_id = \"abc\"
+
+# going away
+[[pinned]]
+local_path = \"~/old.txt\"
+gist_id = \"def\"
+gist_filename = \"old.txt\"
+";
+        let saved = edit(existing, |c| {
+            c.pinned[0].last_seen_hash = Some("h".into());
+            c.pinned.remove(1);
+            c.pinned.push(PinnedMapping {
+                local_path: PathBuf::from("new.txt"),
+                gist_id: "ghi".into(),
+                gist_filename: "new.txt".into(),
+                direction: None,
+                last_seen_hash: None,
+                remote_blob_sha: None,
+            });
+        });
+        assert!(saved.starts_with("mouse = false\n\n# dotfiles\n[[pinned]]\nlocal_path = \"~/.zshrc\" # shell\ngist_id = \"abc\"\nlast_seen_hash = \"h\"\n"), "{saved}");
+        assert!(
+            !saved.contains("old.txt") && !saved.contains("going away"),
+            "{saved}"
+        );
+        assert!(!saved.contains("gist_filename = \".zshrc\""), "{saved}");
+        assert!(saved.contains("gist_id = \"ghi\""), "{saved}");
     }
 
     #[test]

@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Changing a setting or a pin no longer rewrites `config.toml` from scratch: comments, key
+  order, keys gistui doesn't know, and values you wrote out stay as they are; only the changed
+  value moves (and a value set back to its default is removed).
+
 - `?` help's Config topic lists every setting again (it was missing *Normalize line endings*);
   it is now built from the same list as the Settings screen, so it can't fall behind.
 
