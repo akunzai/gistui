@@ -5,6 +5,7 @@
 use super::bg::*;
 use super::*;
 use crate::actions::SystemRunner;
+use gist_mutation::MutationRequest;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 
@@ -258,124 +259,23 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             );
         }
         KeyOutcome::Upload => {
-            let Some(draft) = state.upload_draft() else {
-                return LoopFlow::Proceed;
-            };
-            let upload_content = draft.content(&state.settings);
-            // The pin baseline is the local file on disk, not the bytes sent (#465).
-            let local_content = draft.original_content.clone();
-            let (gist_id, filename, local_path) = (
-                draft.gist_id.clone(),
-                draft.filename.clone(),
-                draft.local_path.clone(),
-            );
-
-            // ScratchDir owns cleanup: `write_scratch_file` drops it on early failure; on
-            // success ownership moves into the bg job and drops after execute (issue #275).
-            let Some((scratch, temp_file_path)) = write_scratch_file(
-                state,
-                "upload",
-                &filename,
-                "temp file",
-                upload_content.as_bytes(),
-            ) else {
-                return LoopFlow::Proceed;
-            };
-
-            let has_same_name = state
-                .gist_catalog
-                .owned
-                .iter()
-                .any(|g| g.gist_id == gist_id && g.filename == filename);
-
-            let file = crate::domain::GistFileRef::id_name(gist_id, filename);
-            let plan = if has_same_name {
-                crate::actions::upload_command(&temp_file_path, &file.to_gist_file())
-            } else {
-                crate::actions::upload_add_command(&temp_file_path, &file.gist_id)
-            };
-
-            // Confirm is gone once the job runs: the outcome gets the target and the local
-            // file's bytes as read, never a re-read of the Upload draft on Confirm (#460).
-            state.leave();
-            let runner = jobs.command_runner();
-            jobs.spawn_action(
-                state,
-                ActionJobSpec::new(ActionJobKind::Upload { file: file.clone() }, "Uploading…"),
-                move || {
-                    let result = crate::actions::run_command(runner.as_ref(), &plan)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string());
-                    drop(scratch);
-                    result
-                },
-                move |result, state| {
-                    gist_mutation::on_upload_replace(
-                        state,
-                        result,
-                        file,
-                        &local_path,
-                        &local_content,
-                        &upload_content,
-                    )
-                },
-            );
+            if let Some(draft) = state.upload_draft().cloned() {
+                gist_mutation::dispatch(jobs, state, MutationRequest::Upload(Box::new(draft)));
+            }
         }
         KeyOutcome::Create(public) => {
-            let Some(PendingAction::Create { local_path }) = state.pending_action().cloned() else {
-                return LoopFlow::Proceed;
-            };
-            let description = state.description_input.to_string();
-            // Send the bytes the Sync policy dictates (#465). When that rewrites the file,
-            // upload a same-named scratch copy; otherwise hand `gh` the file itself, so an
-            // unreadable or non-text file still creates as before.
-            let normalized = crate::domain::read_text_file_capped(&local_path)
-                .ok()
-                .and_then(|text| match state.settings.sync_policy().outbound(&text) {
-                    std::borrow::Cow::Owned(normalized) => Some(normalized),
-                    std::borrow::Cow::Borrowed(_) => None,
-                });
-            let mut scratch = None;
-            let mut source = local_path.clone();
-            if let Some(normalized) = normalized {
-                let Some(filename) = local_path.file_name().and_then(|n| n.to_str()) else {
-                    return LoopFlow::Proceed;
-                };
-                let Some((dir, path)) = write_scratch_file(
+            if let Some(PendingAction::Create { local_path }) = state.pending_action().cloned() {
+                let description = state.description_input.to_string();
+                gist_mutation::dispatch(
+                    jobs,
                     state,
-                    "create",
-                    filename,
-                    "temp file",
-                    normalized.as_bytes(),
-                ) else {
-                    return LoopFlow::Proceed;
-                };
-                scratch = Some(dir);
-                source = path;
-            }
-            let plan = crate::actions::create_command(&source, public, &description);
-            let runner = jobs.command_runner();
-
-            jobs.spawn_action(
-                state,
-                ActionJobSpec::new(
-                    ActionJobKind::Create {
-                        local_path: local_path.clone(),
+                    MutationRequest::Create {
+                        local_path,
                         public,
+                        description,
                     },
-                    "Creating gist…",
-                ),
-                move || {
-                    let result = crate::actions::run_command(runner.as_ref(), &plan)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string());
-                    drop(scratch);
-                    result
-                },
-                move |result, state| {
-                    gist_mutation::on_create_gist(state, result, local_path, public)
-                },
-            );
+                );
+            }
         }
         KeyOutcome::PreviewContent { entry, file } => {
             if let Some((file, preview_title)) =
@@ -415,110 +315,48 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
         KeyOutcome::CopyGistUrl { gist_id } => copy_gist_url_id(state, &gist_id),
         KeyOutcome::CopyPreviewContent => copy_preview_content(state),
         KeyOutcome::ExecuteDelete => {
-            let Some(PendingAction::Delete { gist_id, .. }) = state.pending_action().cloned()
-            else {
-                return LoopFlow::Proceed;
-            };
-            let plan = crate::actions::delete_command(&gist_id);
-            state.cancel_confirm_after_delete();
-
-            jobs.spawn_action(
-                state,
-                ActionJobSpec::new(
-                    ActionJobKind::DeleteGist {
-                        gist_id: gist_id.clone(),
-                    },
-                    "Deleting gist…",
-                ),
-                move || {
-                    crate::actions::execute_command(&plan)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string())
-                },
-                move |result, state| gist_mutation::on_delete_gist(state, result, gist_id),
-            );
+            if let Some(PendingAction::Delete { gist_id, .. }) = state.pending_action().cloned() {
+                gist_mutation::dispatch(jobs, state, MutationRequest::Delete { gist_id });
+            }
         }
         KeyOutcome::ExecuteRemoveFile => {
-            let Some(PendingAction::RemoveFile {
+            if let Some(PendingAction::RemoveFile {
                 gist_id, filename, ..
             }) = state.pending_action().cloned()
-            else {
-                return LoopFlow::Proceed;
-            };
-            let plan = crate::actions::remove_file_command(&gist_id, &filename);
-            state.back_to_list();
-
-            jobs.spawn_action(
-                state,
-                ActionJobSpec::new(
-                    ActionJobKind::RemoveFile {
-                        file: crate::domain::GistFileRef::id_name(
-                            gist_id.clone(),
-                            filename.clone(),
-                        ),
-                    },
-                    "Removing file…",
-                ),
-                move || {
-                    crate::actions::execute_command(&plan)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string())
-                },
-                move |result, state| {
-                    gist_mutation::on_remove_file(state, result, gist_id, filename)
-                },
-            );
+            {
+                let file = crate::domain::GistFileRef::id_name(gist_id, filename);
+                gist_mutation::dispatch(jobs, state, MutationRequest::RemoveFile { file });
+            }
         }
         KeyOutcome::ExecuteCompactGist => {
-            let Some(PendingAction::CompactGist {
+            if let Some(PendingAction::CompactGist {
                 gist_id,
                 label,
                 count,
             }) = state.pending_action().cloned()
-            else {
-                return LoopFlow::Proceed;
-            };
-            state.cancel_confirm();
-
-            jobs.spawn_action(
-                state,
-                ActionJobSpec::new(
-                    ActionJobKind::CompactGist {
-                        gist_id: gist_id.clone(),
+            {
+                gist_mutation::dispatch(
+                    jobs,
+                    state,
+                    MutationRequest::Compact {
+                        gist_id,
+                        label,
+                        count,
                     },
-                    "Compacting revisions…",
-                ),
-                move || {
-                    crate::actions::execute_compact_gist(&SystemRunner, &gist_id)
-                        .map_err(|e| e.to_string())
-                },
-                move |result, state| gist_mutation::on_compact_gist(state, result, label, count),
-            );
+                );
+            }
         }
         KeyOutcome::ApplyDescription {
             gist_id,
             description,
-        } => {
-            let plan = crate::actions::edit_description_command(&gist_id, &description);
-            state.editing_description = false;
-            state.description_input.clear();
-
-            jobs.spawn_action(
-                state,
-                ActionJobSpec::new(
-                    ActionJobKind::UpdateDescription {
-                        gist_id: gist_id.clone(),
-                    },
-                    "Updating description…",
-                ),
-                move || {
-                    crate::actions::execute_command(&plan)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string())
-                },
-                move |result, state| gist_mutation::on_apply_description(state, result, gist_id),
-            );
-        }
+        } => gist_mutation::dispatch(
+            jobs,
+            state,
+            MutationRequest::Description {
+                gist_id,
+                description,
+            },
+        ),
         KeyOutcome::RefreshLocals => {
             jobs.request_local_scan(state);
         }
@@ -567,56 +405,14 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
         }
         KeyOutcome::Revision(request) => gist_revision::dispatch(jobs, state, request),
         KeyOutcome::ToggleGistStar { gist_id, starring } => {
-            let plan = if starring {
-                crate::actions::star_gist_command(&gist_id)
-            } else {
-                crate::actions::unstar_gist_command(&gist_id)
-            };
-            let msg = if starring {
-                "Starring…"
-            } else {
-                "Unstarring…"
-            };
-            jobs.spawn_action(
-                state,
-                ActionJobSpec::new(
-                    ActionJobKind::ToggleGistStar {
-                        gist_id: gist_id.clone(),
-                        starring,
-                    },
-                    msg,
-                ),
-                move || {
-                    crate::actions::execute_command(&plan)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string())
-                },
-                move |result, state| {
-                    gist_mutation::on_gist_star_toggle(state, result, gist_id, starring)
-                },
-            );
+            gist_mutation::dispatch(jobs, state, MutationRequest::Star { gist_id, starring })
         }
         KeyOutcome::ForkGist { gist_id } => {
             if state.gist_is_owned(&gist_id) {
                 state.set_status("already yours — no fork needed");
                 return LoopFlow::Proceed;
             }
-            let plan = crate::actions::fork_gist_command(&gist_id);
-            jobs.spawn_action(
-                state,
-                ActionJobSpec::new(
-                    ActionJobKind::ForkGist {
-                        gist_id: gist_id.clone(),
-                    },
-                    "Forking…",
-                ),
-                move || {
-                    crate::actions::execute_command(&plan)
-                        .map(|_| ())
-                        .map_err(|e| e.to_string())
-                },
-                move |result, state| gist_mutation::on_fork_gist(state, result, gist_id),
-            );
+            gist_mutation::dispatch(jobs, state, MutationRequest::Fork { gist_id });
         }
         KeyOutcome::None => {}
         // Handled by `dispatch_outcome`'s shell above, so unreachable here. Listed

@@ -1,10 +1,296 @@
-//! Apply handlers for a **gist mutation** — a change to a gist itself, whose async
-//! outcome belongs to no single screen (issue #383). List, Gists, GistDetail, and
-//! Confirm can all launch one.
+//! The **Gist mutation** workflow: every change to a gist itself (upload, create, delete,
+//! remove a file, compact, description, star, fork). Its async outcome belongs to no single
+//! screen (issue #383) — List, Gists, GistDetail, Pins, and Confirm can all launch one.
+//!
+//! Callers hand [`dispatch`] one plain-data [`MutationRequest`], resolved when the user acted,
+//! so nothing here reads Confirm afterwards (#460). This module stages scratch copies, builds
+//! the `gh` plan, leaves the screen that launched it ([`leave_before_spawn`] — the one place
+//! that policy lives), runs the command through the injected [`crate::actions::CommandRunner`]
+//! seam, and hands the result to the `on_*` apply handler below. Restoring a Gist revision is
+//! the Gist revision workflow's (`gist_revision`), not this module's. Eligibility guards
+//! (ownership, what is selected) stay with the screens that build the request.
 
-use super::bg::{record_pin_sync, LoopFlow};
-use super::{AppState, Screen};
+use super::bg::{
+    record_pin_sync, write_scratch_file, ActionJobKind, ActionJobSpec, Jobs, LoopFlow,
+};
+use super::{AppState, Screen, UploadDraft};
+use crate::domain::GistFileRef;
 use std::path::PathBuf;
+
+/// One gist mutation, as plain data captured when the user acted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MutationRequest {
+    /// Upload the draft's content to its gist file (replacing it, or adding it when the
+    /// catalog has no such file yet).
+    Upload(Box<UploadDraft>),
+    /// Create a gist from a local file.
+    Create {
+        local_path: PathBuf,
+        public: bool,
+        description: String,
+    },
+    /// Delete a whole gist.
+    Delete { gist_id: String },
+    /// Remove one file from a gist.
+    RemoveFile { file: GistFileRef },
+    /// Collapse a gist's history to one revision (force-push). `label` / `count` are the
+    /// intent-time wording its status reports.
+    Compact {
+        gist_id: String,
+        label: String,
+        count: usize,
+    },
+    /// Replace a gist's description.
+    Description {
+        gist_id: String,
+        description: String,
+    },
+    /// Star (`starring`) or unstar a gist.
+    Star { gist_id: String, starring: bool },
+    /// Fork someone else's gist into the account.
+    Fork { gist_id: String },
+}
+
+/// Stage `request`, leave the screen that launched it, and spawn its `gh` job. A staging
+/// failure (a scratch copy that can't be written) reports and stays put.
+pub(super) fn dispatch(jobs: &mut Jobs, state: &mut AppState, request: MutationRequest) {
+    let Some(staged) = stage(state, &request) else {
+        return;
+    };
+    leave_before_spawn(state, &request);
+    let runner = jobs.command_runner();
+    let Staged {
+        plan,
+        scratch,
+        spec,
+        apply,
+    } = staged;
+    jobs.spawn_action(
+        state,
+        spec,
+        move || {
+            let result = match plan {
+                Plan::Command(plan) => {
+                    crate::actions::run_command(runner.as_ref(), &plan).map(|_| ())
+                }
+                Plan::Compact { gist_id } => {
+                    crate::actions::execute_compact_gist(runner.as_ref(), &gist_id)
+                }
+            }
+            .map_err(|e| e.to_string());
+            // ScratchDir owns cleanup: it drops here, after the command (issue #275).
+            drop(scratch);
+            result
+        },
+        move |result, state| apply(state, result),
+    );
+}
+
+enum Plan {
+    Command(crate::actions::CommandPlan),
+    /// Compaction is a clone → rewrite → force-push sequence, still behind the runner seam.
+    Compact {
+        gist_id: String,
+    },
+}
+
+type Apply = Box<dyn FnOnce(&mut AppState, Result<(), String>) -> LoopFlow + Send>;
+
+struct Staged {
+    plan: Plan,
+    scratch: Option<crate::temp_dir::ScratchDir>,
+    spec: ActionJobSpec,
+    apply: Apply,
+}
+
+fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
+    use crate::actions::*;
+    let staged = match request.clone() {
+        MutationRequest::Upload(draft) => {
+            let sent = draft.content(&state.settings);
+            // The pin baseline is the local file on disk, not the bytes sent (#465).
+            let local_content = draft.original_content.clone();
+            let (scratch, path) = write_scratch_file(
+                state,
+                "upload",
+                &draft.filename,
+                "temp file",
+                sent.as_bytes(),
+            )?;
+            let has_same_name = state
+                .gist_catalog
+                .owned
+                .iter()
+                .any(|g| g.gist_id == draft.gist_id && g.filename == draft.filename);
+            let file = GistFileRef::id_name(draft.gist_id.clone(), draft.filename.clone());
+            let plan = if has_same_name {
+                upload_command(&path, &file.to_gist_file())
+            } else {
+                upload_add_command(&path, &file.gist_id)
+            };
+            let local_path = draft.local_path.clone();
+            Staged {
+                plan: Plan::Command(plan),
+                scratch: Some(scratch),
+                spec: ActionJobSpec::new(
+                    ActionJobKind::Upload { file: file.clone() },
+                    "Uploading…",
+                ),
+                apply: Box::new(move |state, result| {
+                    on_upload_replace(state, result, file, &local_path, &local_content, &sent)
+                }),
+            }
+        }
+        MutationRequest::Create {
+            local_path,
+            public,
+            description,
+        } => {
+            // Send the bytes the Sync policy dictates (#465). When that rewrites the file,
+            // upload a same-named scratch copy; otherwise hand `gh` the file itself, so an
+            // unreadable or non-text file still creates as before.
+            let normalized = crate::domain::read_text_file_capped(&local_path)
+                .ok()
+                .and_then(|text| match state.settings.sync_policy().outbound(&text) {
+                    std::borrow::Cow::Owned(normalized) => Some(normalized),
+                    std::borrow::Cow::Borrowed(_) => None,
+                });
+            let (scratch, source) = match normalized {
+                Some(normalized) => {
+                    let filename = local_path.file_name().and_then(|n| n.to_str())?;
+                    let (dir, path) = write_scratch_file(
+                        state,
+                        "create",
+                        filename,
+                        "temp file",
+                        normalized.as_bytes(),
+                    )?;
+                    (Some(dir), path)
+                }
+                None => (None, local_path.clone()),
+            };
+            Staged {
+                plan: Plan::Command(create_command(&source, public, &description)),
+                scratch,
+                spec: ActionJobSpec::new(
+                    ActionJobKind::Create {
+                        local_path: local_path.clone(),
+                        public,
+                    },
+                    "Creating gist…",
+                ),
+                apply: Box::new(move |state, result| {
+                    on_create_gist(state, result, local_path, public)
+                }),
+            }
+        }
+        MutationRequest::Delete { gist_id } => Staged {
+            plan: Plan::Command(delete_command(&gist_id)),
+            scratch: None,
+            spec: ActionJobSpec::new(
+                ActionJobKind::DeleteGist {
+                    gist_id: gist_id.clone(),
+                },
+                "Deleting gist…",
+            ),
+            apply: Box::new(move |state, result| on_delete_gist(state, result, gist_id)),
+        },
+        MutationRequest::RemoveFile { file } => Staged {
+            plan: Plan::Command(remove_file_command(&file.gist_id, &file.filename)),
+            scratch: None,
+            spec: ActionJobSpec::new(
+                ActionJobKind::RemoveFile { file: file.clone() },
+                "Removing file…",
+            ),
+            apply: Box::new(move |state, result| {
+                on_remove_file(state, result, file.gist_id, file.filename)
+            }),
+        },
+        MutationRequest::Compact {
+            gist_id,
+            label,
+            count,
+        } => Staged {
+            plan: Plan::Compact {
+                gist_id: gist_id.clone(),
+            },
+            scratch: None,
+            spec: ActionJobSpec::new(
+                ActionJobKind::CompactGist { gist_id },
+                "Compacting revisions…",
+            ),
+            apply: Box::new(move |state, result| on_compact_gist(state, result, label, count)),
+        },
+        MutationRequest::Description {
+            gist_id,
+            description,
+        } => Staged {
+            plan: Plan::Command(edit_description_command(&gist_id, &description)),
+            scratch: None,
+            spec: ActionJobSpec::new(
+                ActionJobKind::UpdateDescription {
+                    gist_id: gist_id.clone(),
+                },
+                "Updating description…",
+            ),
+            apply: Box::new(move |state, result| on_apply_description(state, result, gist_id)),
+        },
+        MutationRequest::Star { gist_id, starring } => Staged {
+            plan: Plan::Command(if starring {
+                star_gist_command(&gist_id)
+            } else {
+                unstar_gist_command(&gist_id)
+            }),
+            scratch: None,
+            spec: ActionJobSpec::new(
+                ActionJobKind::ToggleGistStar {
+                    gist_id: gist_id.clone(),
+                    starring,
+                },
+                if starring {
+                    "Starring…"
+                } else {
+                    "Unstarring…"
+                },
+            ),
+            apply: Box::new(move |state, result| {
+                on_gist_star_toggle(state, result, gist_id, starring)
+            }),
+        },
+        MutationRequest::Fork { gist_id } => Staged {
+            plan: Plan::Command(fork_gist_command(&gist_id)),
+            scratch: None,
+            spec: ActionJobSpec::new(
+                ActionJobKind::ForkGist {
+                    gist_id: gist_id.clone(),
+                },
+                "Forking…",
+            ),
+            apply: Box::new(move |state, result| on_fork_gist(state, result, gist_id)),
+        },
+    };
+    Some(staged)
+}
+
+/// Where each mutation leaves the UI once it is staged, before its job runs — the one place
+/// this policy lives. Where it lands after the job is each `on_*` handler's business.
+fn leave_before_spawn(state: &mut AppState, request: &MutationRequest) {
+    match request {
+        // Back to wherever the upload was opened from (List, or Pins for a pin push).
+        MutationRequest::Upload(_) => state.leave(),
+        // Confirm stays up until the result arrives; `on_create_gist` navigates.
+        MutationRequest::Create { .. } => {}
+        // Also pops the just-deleted gist's own GistDetail.
+        MutationRequest::Delete { .. } => state.cancel_confirm_after_delete(),
+        MutationRequest::RemoveFile { .. } => state.back_to_list(),
+        MutationRequest::Compact { .. } => state.cancel_confirm(),
+        MutationRequest::Description { .. } => {
+            state.editing_description = false;
+            state.description_input.clear();
+        }
+        MutationRequest::Star { .. } | MutationRequest::Fork { .. } => {}
+    }
+}
 
 fn apply(
     state: &mut AppState,
@@ -181,6 +467,251 @@ mod tests {
     use crate::domain::{PinnedMapping, SyncDirection};
     use crate::tui::test_support::gist_file_ref;
     use crate::tui::*;
+    use std::sync::Arc;
+
+    use crate::actions::test_support::SeqRunner;
+    use crate::actions::CommandOutput;
+
+    /// Drive one request through the workflow: stage, leave, run the worker inline against
+    /// `runner`, then apply through the generation guard. Only the action outcome is drained —
+    /// `Jobs::absorb` would start a real gist-list refresh once an apply marks it stale.
+    fn run(state: &mut AppState, runner: &Arc<SeqRunner>, request: MutationRequest) {
+        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
+        dispatch(&mut jobs, state, request);
+        jobs.on_action_outcome(state);
+    }
+
+    fn ok_runner(n: usize) -> Arc<SeqRunner> {
+        Arc::new(SeqRunner::new(vec![CommandOutput::ok(""); n]))
+    }
+
+    /// Every single-command mutation runs exactly its planned `gh` command through the
+    /// injected runner, and reports success.
+    #[test]
+    fn each_mutation_runs_its_gh_command_through_the_runner() {
+        use crate::actions::*;
+        let file = GistFileRef::id_name("g1", "a.txt");
+        let cases: Vec<(MutationRequest, CommandPlan, &str)> = vec![
+            (
+                MutationRequest::Delete {
+                    gist_id: "g1".into(),
+                },
+                delete_command("g1"),
+                "deleted",
+            ),
+            (
+                MutationRequest::RemoveFile { file: file.clone() },
+                remove_file_command("g1", "a.txt"),
+                "a.txt",
+            ),
+            (
+                MutationRequest::Description {
+                    gist_id: "g1".into(),
+                    description: "new words".into(),
+                },
+                edit_description_command("g1", "new words"),
+                "description",
+            ),
+            (
+                MutationRequest::Star {
+                    gist_id: "g1".into(),
+                    starring: true,
+                },
+                star_gist_command("g1"),
+                "starred",
+            ),
+            (
+                MutationRequest::Star {
+                    gist_id: "g1".into(),
+                    starring: false,
+                },
+                unstar_gist_command("g1"),
+                "unstarred",
+            ),
+            (
+                MutationRequest::Fork {
+                    gist_id: "g1".into(),
+                },
+                fork_gist_command("g1"),
+                "forked",
+            ),
+        ];
+        for (request, expected, status_word) in cases {
+            let mut state = initial_state();
+            let runner = ok_runner(1);
+            let label = format!("{request:?}");
+
+            run(&mut state, &runner, request);
+
+            assert_eq!(runner.calls(), vec![expected], "{label}");
+            let status = state.status.clone().unwrap_or_default();
+            assert!(
+                status.to_lowercase().contains(status_word) && !status.contains("failed"),
+                "{label}: {status}"
+            );
+        }
+    }
+
+    #[test]
+    fn compact_runs_its_clone_rewrite_force_push_through_the_runner() {
+        let mut state = initial_state();
+        let runner = Arc::new(SeqRunner::new(vec![
+            CommandOutput::ok(""),
+            CommandOutput::ok("main\n"),
+            CommandOutput::ok(""),
+            CommandOutput::ok(""),
+            CommandOutput::ok(""),
+            CommandOutput::ok(""),
+            CommandOutput::ok(""),
+        ]));
+
+        run(
+            &mut state,
+            &runner,
+            MutationRequest::Compact {
+                gist_id: "g1".into(),
+                label: "my gist".into(),
+                count: 3,
+            },
+        );
+
+        let calls = runner.calls();
+        assert_eq!(calls.len(), 7);
+        assert_eq!(calls[0].program, "git");
+        assert_eq!(
+            &calls[0].args[..2],
+            ["clone", "https://gist.github.com/g1.git"]
+        );
+        assert!(calls[6].args.ends_with(&[
+            "push".to_string(),
+            "--force".to_string(),
+            "origin".to_string(),
+            "main".to_string()
+        ]));
+        assert!(!state.status.unwrap_or_default().contains("failed"));
+    }
+
+    /// With no such file in the catalog yet, the upload adds it to the gist.
+    #[test]
+    fn upload_of_a_file_new_to_the_gist_adds_it() {
+        let mut state = initial_state();
+        state.enter_upload_confirm(
+            UploadDraft {
+                original_content: "hello\n".into(),
+                ..UploadDraft::fixture("g1", "new.txt", "/tmp/new.txt")
+            },
+            None,
+        );
+        let draft = state.upload_draft().cloned().unwrap();
+        let runner = ok_runner(1);
+
+        run(
+            &mut state,
+            &runner,
+            MutationRequest::Upload(Box::new(draft)),
+        );
+
+        let calls = runner.calls();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(&calls[0].args[..3], ["gist", "edit", "g1"]);
+        assert!(
+            calls[0].args.contains(&"--add".to_string()),
+            "{:?}",
+            calls[0].args
+        );
+        assert!(calls[0].args.last().unwrap().ends_with("new.txt"));
+    }
+
+    /// The one place pre-spawn navigation lives, pinned per request (behaviour unchanged by
+    /// the workflow refactor; #476 tracks changing it for failures).
+    #[test]
+    fn leave_before_spawn_per_request() {
+        let confirm = |state: &mut AppState, action| state.enter_confirm(action, String::new());
+
+        // Delete from GistDetail: leaves Confirm and the deleted gist's detail.
+        let mut state = initial_state();
+        state.enter(Screen::Gists(Box::default()));
+        state.enter(Screen::GistDetail(Box::default()));
+        confirm(
+            &mut state,
+            PendingAction::Delete {
+                gist_id: "g1".into(),
+                label: "x".into(),
+            },
+        );
+        leave_before_spawn(
+            &mut state,
+            &MutationRequest::Delete {
+                gist_id: "g1".into(),
+            },
+        );
+        assert!(state.screen.is_gists(), "{:?}", state.screen);
+
+        // RemoveFile: a hard reset to the list.
+        let mut state = initial_state();
+        state.enter(Screen::Gists(Box::default()));
+        leave_before_spawn(
+            &mut state,
+            &MutationRequest::RemoveFile {
+                file: GistFileRef::id_name("g1", "a.txt"),
+            },
+        );
+        assert_eq!(state.screen, Screen::List);
+        assert!(state.nav_stack.is_empty());
+
+        // Compact: back to where Confirm was opened.
+        let mut state = initial_state();
+        state.enter(Screen::Gists(Box::default()));
+        confirm(
+            &mut state,
+            PendingAction::CompactGist {
+                gist_id: "g1".into(),
+                label: "x".into(),
+                count: 2,
+            },
+        );
+        leave_before_spawn(
+            &mut state,
+            &MutationRequest::Compact {
+                gist_id: "g1".into(),
+                label: "x".into(),
+                count: 2,
+            },
+        );
+        assert!(state.screen.is_gists());
+
+        // Create: Confirm stays up until the result arrives.
+        let mut state = initial_state();
+        confirm(
+            &mut state,
+            PendingAction::Create {
+                local_path: "/tmp/a.txt".into(),
+            },
+        );
+        leave_before_spawn(
+            &mut state,
+            &MutationRequest::Create {
+                local_path: "/tmp/a.txt".into(),
+                public: false,
+                description: String::new(),
+            },
+        );
+        assert!(state.screen.is_confirm());
+
+        // Description: editing ends and the input clears.
+        let mut state = initial_state();
+        state.editing_description = true;
+        state.description_input = TextInput::from("typed");
+        leave_before_spawn(
+            &mut state,
+            &MutationRequest::Description {
+                gist_id: "g1".into(),
+                description: "typed".into(),
+            },
+        );
+        assert!(!state.editing_description);
+        assert!(state.description_input.to_string().is_empty());
+    }
 
     #[test]
     fn on_upload_replace_err_sets_status() {
