@@ -10,12 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A failed gist create returns to the list without leaving the create confirmation behind it,
+  so going back no longer lands on a screen that no longer applies.
 - Creating a gist from a file whose name isn't valid UTF-8 now says it can't, instead of
   silently doing nothing.
-
 - A hand-written pin in `config.toml` may leave out `gist_filename`, as the example config
   says: it defaults to the local file's name, instead of the whole config failing to load.
-
 - Pins now tell which side changed since the last sync by content, not timestamps: a gist
   edited elsewhere shows ↓ even when the local file is untouched, editing another file in the
   same gist no longer flags this one, and a new ↕ mark shows when both sides changed — syncing
