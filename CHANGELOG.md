@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so going back no longer lands on a screen that no longer applies.
 - Creating a gist from a file whose name isn't valid UTF-8 now says it can't, instead of
   silently doing nothing.
+- A failed gist change (upload, delete, remove file, compact, description) now leaves you where
+  you confirmed it, with the error shown and your input — upload draft or typed description —
+  intact, instead of closing the confirmation first.
+- Esc no longer claims to cancel a gist change that is already running: the change always
+  finishes (the status says so), its result is applied, and the list refreshes, instead of it
+  landing on GitHub unseen.
 - A hand-written pin in `config.toml` may leave out `gist_filename`, as the example config
   says: it defaults to the local file's name, instead of the whole config failing to load.
 - Pins now tell which side changed since the last sync by content, not timestamps: a gist

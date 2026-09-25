@@ -4,9 +4,11 @@
 //!
 //! Callers hand [`dispatch`] one plain-data [`MutationRequest`], resolved when the user acted,
 //! so nothing here reads Confirm afterwards (#460). This module stages scratch copies, builds
-//! the `gh` plan, leaves the screen that launched it ([`leave_before_spawn`] — the one place
-//! that policy lives), runs the command through the injected [`crate::actions::CommandRunner`]
-//! seam, and hands the result to the `on_*` apply handler below. Restoring a Gist revision is
+//! the `gh` plan, runs the command through the injected [`crate::actions::CommandRunner`]
+//! seam, and hands the result to the `on_*` apply handler below. The launching screen stays up
+//! while the job runs (no key reaches it, and a gist change can't be cancelled — #478); the
+//! `on_*` handler leaves it on success, and on failure the user is still where they confirmed,
+//! with their input intact (#476). Restoring a Gist revision is
 //! the Gist revision workflow's (`gist_revision`), not this module's. Eligibility guards
 //! (ownership, what is selected) stay with the screens that build the request.
 
@@ -51,13 +53,12 @@ pub(crate) enum MutationRequest {
     Fork { gist_id: String },
 }
 
-/// Stage `request`, leave the screen that launched it, and spawn its `gh` job. A staging
-/// failure (a scratch copy that can't be written) reports and stays put.
+/// Stage `request` and spawn its `gh` job. A staging failure (a scratch copy that can't be
+/// written) reports and stays put.
 pub(super) fn dispatch(jobs: &mut Jobs, state: &mut AppState, request: MutationRequest) {
     let Some(staged) = stage(state, &request) else {
         return;
     };
-    leave_before_spawn(state, &request);
     let runner = jobs.command_runner();
     let Staged {
         plan,
@@ -282,26 +283,6 @@ fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
     Some(staged)
 }
 
-/// Where each mutation leaves the UI once it is staged, before its job runs — the one place
-/// this policy lives. Where it lands after the job is each `on_*` handler's business.
-fn leave_before_spawn(state: &mut AppState, request: &MutationRequest) {
-    match request {
-        // Back to wherever the upload was opened from (List, or Pins for a pin push).
-        MutationRequest::Upload(_) => state.leave(),
-        // Confirm stays up until the result arrives; `on_create_gist` navigates.
-        MutationRequest::Create { .. } => {}
-        // Also pops the just-deleted gist's own GistDetail.
-        MutationRequest::Delete { .. } => state.cancel_confirm_after_delete(),
-        MutationRequest::RemoveFile { .. } => state.back_to_list(),
-        MutationRequest::Compact { .. } => state.cancel_confirm(),
-        MutationRequest::Description { .. } => {
-            state.editing_description = false;
-            state.description_input.clear();
-        }
-        MutationRequest::Star { .. } | MutationRequest::Fork { .. } => {}
-    }
-}
-
 fn apply(
     state: &mut AppState,
     result: Result<(), String>,
@@ -320,9 +301,9 @@ fn apply(
 }
 
 /// `UploadReplace` outcome: commit the pin-sync record for the local file's bytes on disk
-/// (the pin baseline, #465 — not the possibly redacted / transformed bytes sent), then
-/// re-fetch the gist list. Navigation already happened when the upload started — the
-/// Upload arm left Confirm for wherever it was opened from (List, or Pins for a pin push).
+/// (the pin baseline, #465 — not the possibly redacted / transformed bytes sent), leave
+/// Confirm for wherever the upload was opened from (List, or Pins for a pin push), then
+/// re-fetch the gist list. A failure stays on Confirm with the draft intact (#476).
 pub(crate) fn on_upload_replace(
     state: &mut AppState,
     result: Result<(), String>,
@@ -332,6 +313,7 @@ pub(crate) fn on_upload_replace(
     sent_content: &str,
 ) -> LoopFlow {
     apply(state, result, "upload", |state| {
+        state.leave();
         state.gist_content_store.invalidate_file(&file);
         // The gist file's blob sha is now that of the bytes sent. Patch it into the in-memory
         // catalog so the pin reads as in sync before the refresh this upload triggers lands
@@ -391,19 +373,20 @@ pub(crate) fn on_create_gist(
     LoopFlow::Proceed
 }
 
-/// `DeleteGist` outcome.
+/// `DeleteGist` outcome. Success leaves Confirm and the deleted gist's own GistDetail.
 pub(crate) fn on_delete_gist(
     state: &mut AppState,
     result: Result<(), String>,
     gist_id: String,
 ) -> LoopFlow {
     apply(state, result, "delete", |state| {
+        state.cancel_confirm_after_delete();
         state.gist_content_store.invalidate_gist(&gist_id);
         format!("Deleted gist {gist_id}")
     })
 }
 
-/// `RemoveFile` outcome.
+/// `RemoveFile` outcome. Success returns to the list.
 pub(crate) fn on_remove_file(
     state: &mut AppState,
     result: Result<(), String>,
@@ -411,6 +394,7 @@ pub(crate) fn on_remove_file(
     filename: String,
 ) -> LoopFlow {
     apply(state, result, "remove", |state| {
+        state.back_to_list();
         state
             .gist_content_store
             .invalidate_file(&crate::domain::GistFileRef::id_name(
@@ -421,25 +405,29 @@ pub(crate) fn on_remove_file(
     })
 }
 
-/// `ApplyDescription` outcome.
+/// `ApplyDescription` outcome. Success ends editing; a failure keeps the editor open with
+/// the typed text (#476).
 pub(crate) fn on_apply_description(
     state: &mut AppState,
     result: Result<(), String>,
     gist_id: String,
 ) -> LoopFlow {
-    apply(state, result, "description update", |_| {
+    apply(state, result, "description update", |state| {
+        state.editing_description = false;
+        state.description_input.clear();
         format!("Updated description for gist {gist_id}")
     })
 }
 
-/// `CompactGist` outcome.
+/// `CompactGist` outcome. Success leaves Confirm.
 pub(crate) fn on_compact_gist(
     state: &mut AppState,
     result: Result<(), String>,
     label: String,
     count: usize,
 ) -> LoopFlow {
-    apply(state, result, "compact", |_| {
+    apply(state, result, "compact", |state| {
+        state.cancel_confirm();
         format!("Compacted \"{label}\" ({count} → 1 revision)")
     })
 }
@@ -674,93 +662,143 @@ mod tests {
         );
     }
 
-    /// The one place pre-spawn navigation lives, pinned per request (behaviour unchanged by
-    /// the workflow refactor; #476 tracks changing it for failures).
+    /// Issues #476 / #460: the launching screen stays up while a mutation runs. Success leaves
+    /// it exactly as the pre-#476 flow did; failure stays where the user confirmed, with the
+    /// error and their input intact.
     #[test]
-    fn leave_before_spawn_per_request() {
-        let confirm = |state: &mut AppState, action| state.enter_confirm(action, String::new());
-
-        // Delete from GistDetail: leaves Confirm and the deleted gist's detail.
-        let mut state = initial_state();
-        state.enter(Screen::Gists(Box::default()));
-        state.enter(Screen::GistDetail(Box::default()));
-        confirm(
-            &mut state,
-            PendingAction::Delete {
+    fn success_leaves_and_failure_stays_where_the_user_confirmed() {
+        fn upload(state: &mut AppState) -> MutationRequest {
+            state.enter(Screen::Pins(Box::default()));
+            state.enter_upload_confirm(
+                UploadDraft {
+                    original_content: "hi\n".into(),
+                    edited_content: Some("redacted\n".into()),
+                    ..UploadDraft::fixture("g1", "a.txt", "/tmp/a.txt")
+                },
+                None,
+            );
+            MutationRequest::Upload(Box::new(state.upload_draft().cloned().unwrap()))
+        }
+        fn delete(state: &mut AppState) -> MutationRequest {
+            state.enter(Screen::Gists(Box::default()));
+            state.enter(Screen::GistDetail(Box::default()));
+            state.enter_confirm(
+                PendingAction::Delete {
+                    gist_id: "g1".into(),
+                    label: "x".into(),
+                },
+                String::new(),
+            );
+            MutationRequest::Delete {
                 gist_id: "g1".into(),
-                label: "x".into(),
-            },
-        );
-        leave_before_spawn(
-            &mut state,
-            &MutationRequest::Delete {
-                gist_id: "g1".into(),
-            },
-        );
-        assert!(state.screen.is_gists(), "{:?}", state.screen);
-
-        // RemoveFile: a hard reset to the list.
-        let mut state = initial_state();
-        state.enter(Screen::Gists(Box::default()));
-        leave_before_spawn(
-            &mut state,
-            &MutationRequest::RemoveFile {
+            }
+        }
+        fn remove(state: &mut AppState) -> MutationRequest {
+            state.enter(Screen::Gists(Box::default()));
+            state.enter_confirm(
+                PendingAction::RemoveFile {
+                    gist_id: "g1".into(),
+                    filename: "a.txt".into(),
+                    label: "x".into(),
+                },
+                String::new(),
+            );
+            MutationRequest::RemoveFile {
                 file: GistFileRef::id_name("g1", "a.txt"),
-            },
-        );
-        assert_eq!(state.screen, Screen::List);
-        assert!(state.nav_stack.is_empty());
-
-        // Compact: back to where Confirm was opened.
-        let mut state = initial_state();
-        state.enter(Screen::Gists(Box::default()));
-        confirm(
-            &mut state,
-            PendingAction::CompactGist {
+            }
+        }
+        fn compact(state: &mut AppState) -> MutationRequest {
+            state.enter(Screen::Gists(Box::default()));
+            state.enter_confirm(
+                PendingAction::CompactGist {
+                    gist_id: "g1".into(),
+                    label: "x".into(),
+                    count: 2,
+                },
+                String::new(),
+            );
+            MutationRequest::Compact {
                 gist_id: "g1".into(),
                 label: "x".into(),
                 count: 2,
-            },
-        );
-        leave_before_spawn(
-            &mut state,
-            &MutationRequest::Compact {
-                gist_id: "g1".into(),
-                label: "x".into(),
-                count: 2,
-            },
-        );
-        assert!(state.screen.is_gists());
+            }
+        }
+        type Setup = fn(&mut AppState) -> MutationRequest;
+        type Landed = fn(&AppState) -> bool;
+        let cases: [(&str, Setup, Landed, usize); 4] = [
+            ("upload", upload, |s| s.screen.is_pins(), 1),
+            ("delete", delete, |s| s.screen.is_gists(), 7),
+            ("remove", remove, |s| s.screen == Screen::List, 1),
+            ("compact", compact, |s| s.screen.is_gists(), 7),
+        ];
+        for (name, setup, landed, commands) in cases {
+            let mut state = initial_state();
+            let request = setup(&mut state);
+            let outputs = if name == "compact" {
+                vec![CommandOutput::ok(""), CommandOutput::ok("main\n")]
+                    .into_iter()
+                    .chain(std::iter::repeat_n(CommandOutput::ok(""), 5))
+                    .collect()
+            } else {
+                vec![CommandOutput::ok(""); commands]
+            };
+            run(&mut state, &Arc::new(SeqRunner::new(outputs)), request);
+            assert!(
+                landed(&state),
+                "{name} success landed on {:?}",
+                state.screen
+            );
 
-        // Create: Confirm stays up until the result arrives.
-        let mut state = initial_state();
-        confirm(
-            &mut state,
-            PendingAction::Create {
-                local_path: "/tmp/a.txt".into(),
-            },
-        );
-        leave_before_spawn(
-            &mut state,
-            &MutationRequest::Create {
-                local_path: "/tmp/a.txt".into(),
-                public: false,
-                description: String::new(),
-            },
-        );
-        assert!(state.screen.is_confirm());
+            let mut state = initial_state();
+            let request = setup(&mut state);
+            let pending = state.pending_action().cloned();
+            run(
+                &mut state,
+                &Arc::new(SeqRunner::new(vec![CommandOutput::err("HTTP 502")])),
+                request,
+            );
+            assert!(state.screen.is_confirm(), "{name} failure left Confirm");
+            assert_eq!(
+                state.pending_action().cloned(),
+                pending,
+                "{name}: input intact"
+            );
+            assert!(
+                state
+                    .status
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("failed"),
+                "{name}: {:?}",
+                state.status
+            );
+        }
+    }
 
-        // Description: editing ends and the input clears.
-        let mut state = initial_state();
-        state.editing_description = true;
-        state.description_input = TextInput::from("typed");
-        leave_before_spawn(
+    #[test]
+    fn a_failed_description_update_keeps_the_editor_and_text() {
+        let request = || MutationRequest::Description {
+            gist_id: "g1".into(),
+            description: "typed".into(),
+        };
+        let editing = || {
+            let mut state = initial_state();
+            state.editing_description = true;
+            state.description_input = TextInput::from("typed");
+            state
+        };
+
+        let mut state = editing();
+        run(
             &mut state,
-            &MutationRequest::Description {
-                gist_id: "g1".into(),
-                description: "typed".into(),
-            },
+            &Arc::new(SeqRunner::new(vec![CommandOutput::err("boom")])),
+            request(),
         );
+        assert!(state.editing_description);
+        assert_eq!(state.description_input.to_string(), "typed");
+
+        let mut state = editing();
+        run(&mut state, &ok_runner(1), request());
         assert!(!state.editing_description);
         assert!(state.description_input.to_string().is_empty());
     }

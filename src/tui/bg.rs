@@ -156,6 +156,29 @@ pub(super) enum ActionJobKind {
     },
 }
 
+impl ActionJobKind {
+    /// A change to a gist itself. Once its `gh` command has started it runs to completion —
+    /// cutting a write short would leave GitHub in an unknown state — so it can't be cancelled
+    /// and its result always applies (#478).
+    fn is_gist_mutation(&self) -> bool {
+        match self {
+            Self::Upload { .. }
+            | Self::Create { .. }
+            | Self::DeleteGist { .. }
+            | Self::RemoveFile { .. }
+            | Self::CompactGist { .. }
+            | Self::UpdateDescription { .. }
+            | Self::ToggleGistStar { .. }
+            | Self::ForkGist { .. }
+            | Self::Revision(super::gist_revision::RevisionJobKind::ExecuteRestore { .. }) => true,
+            Self::GistFetch(_)
+            | Self::FetchComments { .. }
+            | Self::AnalyzeCompact { .. }
+            | Self::Revision(_) => false,
+        }
+    }
+}
+
 struct ActionJob {
     generation: u64,
     run: Box<dyn FnOnce() -> ActionApply + Send>,
@@ -992,6 +1015,9 @@ pub(super) struct Jobs {
     /// multiple `ContentChanged` events before its terminal `EditorClosed`/`ReadError`.
     upload_edit_watch: Option<std::sync::mpsc::Receiver<UploadEditWatchEvent>>,
     action: ActionRx,
+    /// Whether the in-flight action may be cancelled with Esc: reads yes, gist mutations no
+    /// (#478).
+    action_cancellable: bool,
     action_spawner: Box<dyn ActionSpawner>,
     /// External-command boundary handed to worker closures that need one. Production
     /// injects [`SystemRunner`]; tests inject a scripted runner (issue #430). Consumed by
@@ -1038,6 +1064,7 @@ impl Jobs {
             local: None,
             upload_edit_watch: None,
             action: None,
+            action_cancellable: true,
             action_spawner,
             runner,
         }
@@ -1096,6 +1123,7 @@ impl Jobs {
     {
         let generation = state.begin_bg_task();
         state.bg_task_msg = Some(spec.progress.clone());
+        self.action_cancellable = !spec.kind.is_gist_mutation();
         let run = Box::new(move || {
             let value = run();
             let boxed: ActionApply = Box::new(move |state: &mut AppState| apply(value, state));
@@ -1140,8 +1168,13 @@ impl Jobs {
     }
 
     /// Esc cancel: drop the action receiver and invalidate generation so a late completion
-    /// cannot mutate state.
+    /// cannot mutate state. A gist mutation is not cancellable (#478): it keeps running, its
+    /// result still applies, and the status says so.
     pub(super) fn cancel_action(&mut self, state: &mut AppState) {
+        if !self.action_cancellable {
+            state.set_status("can't cancel — waiting for GitHub");
+            return;
+        }
         state.invalidate_bg_task();
         self.action = None;
         state.set_status("Cancelled");
@@ -1631,9 +1664,54 @@ mod tests {
             local: None,
             upload_edit_watch: None,
             action: None,
+            action_cancellable: true,
             action_spawner: Box::new(ThreadActionSpawner),
             runner: std::sync::Arc::new(SystemRunner),
         }
+    }
+
+    /// Issue #478: Esc cancels a read, but not a gist mutation — that one keeps running and
+    /// its result still applies.
+    #[test]
+    fn cancel_action_cancels_reads_but_not_gist_mutations() {
+        let catalog = GistCatalog::default();
+
+        let mut state = initial_state();
+        let (mut jobs, _started) = Jobs::recording(&catalog);
+        jobs.spawn_action(
+            &mut state,
+            ActionJobSpec::new(
+                ActionJobKind::DeleteGist {
+                    gist_id: "g1".into(),
+                },
+                "Deleting gist…",
+            ),
+            || (),
+            |(), _| LoopFlow::Proceed,
+        );
+        jobs.cancel_action(&mut state);
+        assert_eq!(
+            state.status.as_deref(),
+            Some("can't cancel — waiting for GitHub")
+        );
+        assert!(state.bg_task_msg.is_some(), "still running");
+
+        let mut state = initial_state();
+        let (mut jobs, _started) = Jobs::recording(&catalog);
+        jobs.spawn_action(
+            &mut state,
+            ActionJobSpec::new(
+                ActionJobKind::AnalyzeCompact {
+                    gist_id: "g1".into(),
+                },
+                "Counting revisions…",
+            ),
+            || (),
+            |(), _| LoopFlow::Proceed,
+        );
+        jobs.cancel_action(&mut state);
+        assert_eq!(state.status.as_deref(), Some("Cancelled"));
+        assert!(state.bg_task_msg.is_none());
     }
 
     // ---- on_local_scan_ready ----------------------------------------------

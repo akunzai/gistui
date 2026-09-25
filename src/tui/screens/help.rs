@@ -442,6 +442,8 @@ File-only: skip_dirs — ~/.config/gistui/config.toml (or $XDG_CONFIG_HOME)"
         HelpTopic::General => {
             "\
   Esc / q    close an overlay; from the list, press twice to quit the app
+  Esc        while loading, cancel it — a change to a gist (upload, delete, …) can't be
+             cancelled once sent; it finishes, and a failure leaves you where you confirmed it
   ?          show this help
   Tab        in this help, open the topic index (1-9 / g / 0 jump straight to a topic)
   C          open Settings (flat list of preferences; also Ctrl+p)

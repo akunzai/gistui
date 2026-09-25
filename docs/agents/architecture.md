@@ -136,7 +136,7 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
 
 - **One entry for every change to a gist**: `gist_mutation::dispatch(jobs, state, MutationRequest)`. `route_outcome` resolves the Confirm's `PendingAction` (or the key's payload) into the plain-data request at key time, so the workflow never reads Confirm after that (#460). Eligibility guards (fork ownership, what is selected) stay with the screens and `route_outcome`.
 - The workflow stages scratch copies, builds the `gh` plan, and runs it through `Jobs::command_runner()` — compaction included, via `execute_compact_gist(runner, …)`. Restore is the Gist revision workflow's.
-- **Pre-spawn navigation lives in `leave_before_spawn`**, one match over the request. Where a mutation lands after its job is its `on_*` handler's business, as everywhere else.
+- **The launching screen stays up while a mutation runs** (#476): no key reaches it (the busy overlay swallows input), and a mutation is not cancellable — `Jobs::cancel_action` refuses when `ActionJobKind::is_gist_mutation` (#478), because cutting a write short leaves GitHub in an unknown state. Its `on_*` handler leaves the screen on success; on failure the user is still on the Confirm (or editor) they confirmed from, input intact.
 - Tests drive it like the revision workflow: `Jobs::inline` + `SeqRunner`, draining with `on_action_outcome` (not `absorb`, which would start a real list refresh).
 
 ## Gist revision workflow (`src/tui/gist_revision.rs`, issue #430)
