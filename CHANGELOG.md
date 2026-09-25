@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A failed gist create returns to the list without leaving the create confirmation behind it,
   so going back no longer lands on a screen that no longer applies.
+- Creating a gist from a file whose name isn't valid UTF-8 now says it can't, instead of
+  silently doing nothing.
 - A failed gist change (upload, delete, remove file, compact, description) now leaves you where
   you confirmed it, with the error shown and your input — upload draft or typed description —
   intact, instead of closing the confirmation first.
