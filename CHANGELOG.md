@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A hand-written pin in `config.toml` may leave out `gist_filename`, as the example config
+  says: it defaults to the local file's name, instead of the whole config failing to load.
+
 - Pins now tell which side changed since the last sync by content, not timestamps: a gist
   edited elsewhere shows ↓ even when the local file is untouched, editing another file in the
   same gist no longer flags this one, and a new ↕ mark shows when both sides changed — syncing
