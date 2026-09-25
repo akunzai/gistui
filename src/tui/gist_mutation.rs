@@ -13,7 +13,7 @@
 use super::bg::{
     record_pin_sync, write_scratch_file, ActionJobKind, ActionJobSpec, Jobs, LoopFlow,
 };
-use super::{AppState, Screen, UploadDraft};
+use super::{AppState, UploadDraft};
 use crate::domain::GistFileRef;
 use std::path::PathBuf;
 
@@ -371,8 +371,10 @@ pub(crate) fn on_create_gist(
             state.gist_list_stale = true;
         }
         Err(error) => {
+            // `back_to_list`, not a bare `screen = List`: the create Confirm was entered from
+            // the list, and a plain assignment would leave that entry behind it (#475).
             state.set_status(format!("create failed: {error}"));
-            state.screen = Screen::List;
+            state.back_to_list();
             state.description_input.clear();
         }
     }
@@ -817,11 +819,22 @@ mod tests {
     fn on_create_gist_err_resets_screen() {
         let mut state = initial_state();
         state.description_input.set("desc");
+        state.enter_confirm(
+            PendingAction::Create {
+                local_path: PathBuf::from("a.txt"),
+            },
+            String::new(),
+        );
 
         on_create_gist(&mut state, Err("boom".into()), PathBuf::from("a.txt"), true);
 
         assert_eq!(state.status.as_deref(), Some("create failed: boom"));
         assert!(matches!(state.screen, Screen::List));
+        assert!(
+            state.nav_stack.is_empty(),
+            "nothing stale left behind the list (#475): {:?}",
+            state.nav_stack
+        );
         assert!(state.description_input.is_empty());
         assert!(!state.gist_list_stale);
     }

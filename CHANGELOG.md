@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A failed gist create returns to the list without leaving the create confirmation behind it,
+  so going back no longer lands on a screen that no longer applies.
+
 - A hand-written pin in `config.toml` may leave out `gist_filename`, as the example config
   says: it defaults to the local file's name, instead of the whole config failing to load.
 
