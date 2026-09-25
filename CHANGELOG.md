@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A pin no longer stays on ↓ Pull after uploading a CRLF, redact-edited, or JSON-reformatted
+  file: the pin now remembers the local file as it sits on disk, not the bytes sent.
+- With `normalize_line_endings` off, a line-ending-only difference is a real difference: the
+  diff notes `line endings differ` under its header and `d` / `u` can sync it, instead of
+  reporting the files identical. Restoring a revision follows the same rule, so a
+  line-ending-only revision no longer opens an empty diff.
+- Creating a gist now honours `normalize_line_endings`, like upload and download.
 - Uploading a file, including a pin push from the Pins screen, now records the pin as synced
   and returns to the screen the upload started from, instead of leaving the pin unsynced and
   landing one screen further back.
