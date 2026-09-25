@@ -5,6 +5,7 @@
 use super::bg::*;
 use super::*;
 use crate::actions::SystemRunner;
+use editor::{edit_local_path, edit_upload_buffer};
 use gist_mutation::MutationRequest;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
