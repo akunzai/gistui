@@ -10,16 +10,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A failed gist create returns to the list without leaving the create confirmation behind it,
+  so going back no longer lands on a screen that no longer applies.
 - A failed gist change (upload, delete, remove file, compact, description) now leaves you where
   you confirmed it, with the error shown and your input — upload draft or typed description —
   intact, instead of closing the confirmation first.
 - Esc no longer claims to cancel a gist change that is already running: the change always
   finishes (the status says so), its result is applied, and the list refreshes, instead of it
   landing on GitHub unseen.
-
 - A hand-written pin in `config.toml` may leave out `gist_filename`, as the example config
   says: it defaults to the local file's name, instead of the whole config failing to load.
-
 - Pins now tell which side changed since the last sync by content, not timestamps: a gist
   edited elsewhere shows ↓ even when the local file is untouched, editing another file in the
   same gist no longer flags this one, and a new ↕ mark shows when both sides changed — syncing
