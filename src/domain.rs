@@ -9,6 +9,9 @@ use std::{
 pub struct PinnedMapping {
     pub local_path: PathBuf,
     pub gist_id: String,
+    /// Omitted in a hand-written `config.toml` → the local file's name, filled in by
+    /// `config::load_config` (issue #469).
+    #[serde(default)]
     pub gist_filename: String,
     pub direction: Option<SyncDirection>,
     /// Local side of the Sync baseline: SHA-256 of the local file's bytes on disk at the last

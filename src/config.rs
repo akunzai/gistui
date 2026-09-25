@@ -244,7 +244,26 @@ pub fn load_config(path: &Path) -> Result<AppConfig> {
         return Ok(AppConfig::default());
     }
     let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    toml::from_str(&raw).with_context(|| format!("parse {}", path.display()))
+    let mut config: AppConfig =
+        toml::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
+    default_gist_filenames(&mut config.pinned)
+        .with_context(|| format!("parse {}", path.display()))?;
+    Ok(config)
+}
+
+/// A hand-written pin may leave `gist_filename` out; it then names the gist file after the
+/// local file (issue #469).
+fn default_gist_filenames(pinned: &mut [PinnedMapping]) -> Result<()> {
+    for pin in pinned.iter_mut().filter(|p| p.gist_filename.is_empty()) {
+        let Some(name) = pin.local_path.file_name().and_then(|n| n.to_str()) else {
+            anyhow::bail!(
+                "pinned entry {} has no gist_filename, and no file name to default it to",
+                pin.local_path.display()
+            );
+        };
+        pin.gist_filename = name.to_string();
+    }
+    Ok(())
 }
 
 pub fn save_config(path: &Path, config: &AppConfig) -> Result<()> {
@@ -367,6 +386,33 @@ pub(crate) mod tests {
         assert_eq!(table.get("mouse"), Some(&toml::Value::Boolean(false)));
         assert!(!table.contains_key("scan_depth"));
         assert_eq!(load_config(&path).unwrap(), config);
+    }
+
+    #[test]
+    fn load_config_defaults_a_missing_gist_filename_to_the_local_file_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            "mouse = false\n\n[[pinned]]\nlocal_path = \"~/.zshrc\"\ngist_id = \"abc\"\n",
+        )
+        .unwrap();
+
+        let config = load_config(&path).unwrap();
+
+        assert!(!config.mouse, "the rest of the config still loads");
+        assert_eq!(config.pinned.len(), 1);
+        assert_eq!(config.pinned[0].gist_filename, ".zshrc");
+    }
+
+    #[test]
+    fn load_config_rejects_a_pin_with_no_name_to_default_to() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(&path, "[[pinned]]\nlocal_path = \"/\"\ngist_id = \"abc\"\n").unwrap();
+
+        let err = load_config(&path).unwrap_err();
+        assert!(format!("{err:#}").contains("no gist_filename"), "{err:#}");
     }
 
     #[test]
