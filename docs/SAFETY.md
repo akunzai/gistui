@@ -22,7 +22,10 @@ Star/unstar (`*`) and fork (`F`) are remote structure writes; they do not overwr
 ## Uploads
 
 - Uploads allow editing/redacting a temporary buffer in `$EDITOR` before sending, ensuring
-  sensitive local content or credentials are not accidentally pushed to GitHub.
+  sensitive local content or credentials are not accidentally pushed to GitHub. That buffer
+  holds the content before redaction, so it lives in a private scratch directory (owner-only on
+  Unix; Windows' temp dir is per-user), is created fresh rather than reusing any existing file,
+  and is removed when editing ends — including when gistui quits with the editor still open.
 - Identical files are detected: when the two sides match, upload/download are disabled.
 
 ## Destructive remote actions

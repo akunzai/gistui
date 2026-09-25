@@ -17,6 +17,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 ///
 /// Best-effort removed on drop, so early returns and ownership moved into a
 /// background job both clean up without a second manual `remove_dir_all`.
+///
+/// Its contents are often private (a file about to be uploaded, a pre-redaction buffer), and
+/// on Linux the temp dir is shared: on Unix the directory is `0700` and
+/// [`ScratchDir::create_file`] makes `0600` files. Windows' temp dir is already per-user.
 #[derive(Debug)]
 pub struct ScratchDir {
     path: PathBuf,
@@ -32,7 +36,7 @@ impl ScratchDir {
     pub fn create(kind: &str) -> std::io::Result<Self> {
         loop {
             let path = unique_path(kind);
-            match fs::create_dir(&path) {
+            match create_private_dir(&path) {
                 Ok(()) => return Ok(Self { path }),
                 // A fresh `seq` every pass, so the retry cannot spin.
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -44,6 +48,32 @@ impl ScratchDir {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Create `name` inside this directory — exclusively, so it never follows or reuses
+    /// something already there — owner-only on Unix, holding `body`.
+    pub fn create_file(&self, name: impl AsRef<Path>, body: &[u8]) -> std::io::Result<PathBuf> {
+        use std::io::Write;
+        let path = self.path.join(name);
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        options.open(&path)?.write_all(body)?;
+        Ok(path)
+    }
+}
+
+fn create_private_dir(path: &Path) -> std::io::Result<()> {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(path)
 }
 
 impl Drop for ScratchDir {
@@ -97,6 +127,27 @@ fn unique_path(kind: &str) -> PathBuf {
 mod tests {
     use super::*;
     use std::io;
+
+    #[test]
+    fn create_file_is_exclusive() {
+        let dir = ScratchDir::create("private").unwrap();
+        let path = dir.create_file("a.txt", b"secret").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"secret");
+        let again = dir.create_file("a.txt", b"other").unwrap_err();
+        assert_eq!(again.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read(&path).unwrap(), b"secret", "never overwrites");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scratch_dir_and_files_are_owner_only_on_unix() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = ScratchDir::create("private").unwrap();
+        let path = dir.create_file("a.txt", b"secret").unwrap();
+        let mode = |p: &Path| fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(dir.path()), 0o700);
+        assert_eq!(mode(&path), 0o600);
+    }
 
     #[test]
     fn with_temp_scratch_dir_creates_dir_and_cleans_up_on_success() {

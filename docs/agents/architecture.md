@@ -327,6 +327,12 @@ Keep focused helpers in its children: `src/tui/render/labels.rs` owns gist/file/
 
 `run()` wraps `run_loop()` so raw mode / alternate-screen teardown **always** runs. Keep fallible startup/IO inside `run_loop`, never between `enable_raw_mode` and teardown.
 
+## Editor session (`src/tui/editor.rs`)
+
+- One home for handing a file to the user's editor: `$VISUAL` → `$EDITOR` → `notepad` on Windows / `vi`; `$EDITOR` split with quotes (no backslash escapes; a whole existing path wins); on Windows a bare name resolves through `PATH` + `PATHEXT`, and the full path goes to `Command` (Rust escapes `.cmd`/`.bat` arguments or refuses — never `cmd /C`).
+- Handing the terminal over is `SuspendedTerminal` (suspend / `resume`, restored on drop) — the only suspend/restore sequence besides `run()`'s own setup and teardown.
+- The redact buffer is a `ScratchDir` file (`0700` dir / `0600` file on Unix, created exclusively). A GUI watch hands that `ScratchDir` to `Jobs`, which drops it when the session's last event lands or the app quits; the watch thread never owns cleanup. Reads use `read_text_file_capped`.
+
 ## Safety seams (rich refs)
 
 - Download overwrite gate (issue #246): `src/actions.rs` — `DownloadMode` / `OverwriteConfirmed`.

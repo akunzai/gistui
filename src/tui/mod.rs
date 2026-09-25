@@ -1974,6 +1974,7 @@ mod text;
 use text::{hscroll_max_for_text, local_row_label};
 mod bg;
 mod dispatch;
+mod editor;
 mod keymap;
 mod keys;
 mod list_cursor;

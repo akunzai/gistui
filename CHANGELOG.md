@@ -10,6 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- The upload redact buffer (content before redaction) no longer sits in the shared temp
+  directory under a predictable, world-readable name: it is created fresh in a private scratch
+  directory (owner-only on Unix) and removed when editing ends, even if gistui quits while a GUI
+  editor still has it open. Reading it back is capped like the first read. Every other scratch
+  directory (upload, create, restore) is owner-only on Unix too.
+- Editors on Windows: with no `$VISUAL` / `$EDITOR` set, Notepad opens (not a missing `vi`);
+  `.cmd` launchers such as VS Code's `code` are found on `PATH`; and an editor path with spaces
+  works quoted — or unquoted, when it names an existing file.
+
 - A failed gist create returns to the list without leaving the create confirmation behind it,
   so going back no longer lands on a screen that no longer applies.
 - Creating a gist from a file whose name isn't valid UTF-8 now says it can't, instead of

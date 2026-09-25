@@ -498,255 +498,6 @@ pub(super) fn copy_preview_content(state: &mut AppState) {
     }
 }
 
-/// Whether `program`'s basename matches a known GUI editor that forks and returns
-/// immediately (so it both needs `--wait` injected by `editor_command`, and — for the
-/// upload-redact-buffer flow — can be watched non-blocking instead of taking over the
-/// terminal). Keyed by basename so a full path or a `.exe` suffix still matches.
-pub(super) fn editor_is_gui(program: &str) -> bool {
-    // Extract basename handling both Unix (/) and Windows (\) separators, then strip .exe if present.
-    let basename = program.rsplit(['/', '\\']).next().unwrap_or(program);
-    let base = std::path::Path::new(basename)
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or(basename)
-        .to_ascii_lowercase();
-    matches!(
-        base.as_str(),
-        "code"
-            | "code-insiders"
-            | "codium"
-            | "vscodium"
-            | "cursor"
-            | "windsurf"
-            | "zed"
-            | "subl"
-            | "sublime_text"
-    )
-}
-
-/// Split a `$VISUAL`/`$EDITOR` string into `(program, args)`, injecting a "wait" flag for
-/// known GUI editors that fork and return immediately (`zed`, `code`, `cursor`, `subl`, …).
-/// Without it `Command::status()` returns *before* the user saves, so the caller reads back
-/// the stale, pre-edit buffer — which for the upload redact flow would silently publish the
-/// **un-redacted** original. Terminal editors (`vi`, `nano`, `emacs -nw`) already block and
-/// are left untouched. The file path is appended by the caller, so it always lands last.
-/// Returns `None` only when the string is blank (no program).
-pub(super) fn editor_command(editor: &str) -> Option<(String, Vec<String>)> {
-    let mut parts = editor.split_whitespace();
-    let program = parts.next()?.to_string();
-    let mut args: Vec<String> = parts.map(str::to_string).collect();
-
-    if editor_is_gui(&program) && !args.iter().any(|a| a == "--wait" || a == "-w") {
-        args.push("--wait".to_string());
-    }
-
-    Some((program, args))
-}
-
-/// Opens `path` in `$VISUAL`/`$EDITOR` (default `vi`). A terminal editor needs the full
-/// terminal, so the TUI leaves raw mode / the alternate screen for the duration and restores
-/// afterwards. `$EDITOR` may include flags (e.g. `code --wait`); a wait flag is added
-/// automatically for known GUI editors (see [`editor_command`]).
-pub(super) fn edit_local_path(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    state: &mut AppState,
-    path: &std::path::Path,
-) -> Result<()> {
-    let editor = std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .unwrap_or_else(|_| "vi".to_string());
-    let Some((program, args)) = editor_command(&editor) else {
-        state.set_status("no editor configured (set $EDITOR)");
-        return Ok(());
-    };
-
-    if state.settings.mouse_enabled() {
-        execute!(terminal.backend_mut(), DisableMouseCapture)?;
-    }
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    let result = std::process::Command::new(program)
-        .args(&args)
-        .arg(path)
-        .status();
-    enable_raw_mode()?;
-    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-    if state.settings.mouse_enabled() {
-        execute!(terminal.backend_mut(), EnableMouseCapture)?;
-    }
-    terminal.clear()?;
-
-    match result {
-        Ok(_) => state.set_status(format!("Edited {}", crate::config::display_path(path))),
-        Err(error) => state.set_status(format!("editor failed: {error}")),
-    }
-    Ok(())
-}
-
-/// Watches `temp_file_path` while a non-blocking GUI-editor child process has it open,
-/// sending a `ContentChanged` event on every detected save (polled every 500ms) and a
-/// terminal `EditorClosed`/`ReadError` event once the editor exits or fails to start. Deletes
-/// the temp file itself before returning — the caller never needs to clean up after this
-/// thread. This is the non-blocking counterpart to the `Command::status()` call further down
-/// in `edit_upload_buffer`, used only for editors `editor_is_gui` recognises.
-pub(super) fn spawn_upload_edit_watch(
-    program: String,
-    args: Vec<String>,
-    temp_file_path: PathBuf,
-    gist_id: String,
-    filename: String,
-) -> std::sync::mpsc::Receiver<UploadEditWatchEvent> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut child = match std::process::Command::new(&program)
-            .args(&args)
-            .arg(&temp_file_path)
-            .spawn()
-        {
-            Ok(child) => child,
-            Err(e) => {
-                let _ = tx.send(UploadEditWatchEvent::ReadError {
-                    gist_id,
-                    filename,
-                    message: format!("editor failed to start: {e}"),
-                });
-                let _ = std::fs::remove_file(&temp_file_path);
-                return;
-            }
-        };
-
-        let mut last_modified = std::fs::metadata(&temp_file_path)
-            .and_then(|m| m.modified())
-            .ok();
-        loop {
-            if matches!(child.try_wait(), Ok(Some(_))) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            if let Ok(modified) = std::fs::metadata(&temp_file_path).and_then(|m| m.modified()) {
-                if Some(modified) != last_modified {
-                    last_modified = Some(modified);
-                    if let Ok(content) = std::fs::read_to_string(&temp_file_path) {
-                        let _ = tx.send(UploadEditWatchEvent::ContentChanged {
-                            gist_id: gist_id.clone(),
-                            filename: filename.clone(),
-                            content,
-                        });
-                    }
-                }
-            }
-        }
-
-        let final_event = match std::fs::read_to_string(&temp_file_path) {
-            Ok(content) => UploadEditWatchEvent::EditorClosed {
-                gist_id,
-                filename,
-                content,
-            },
-            Err(e) => UploadEditWatchEvent::ReadError {
-                gist_id,
-                filename,
-                message: format!("failed to read edited file: {e}"),
-            },
-        };
-        let _ = tx.send(final_event);
-        let _ = std::fs::remove_file(&temp_file_path);
-    });
-    rx
-}
-
-pub(super) fn edit_upload_buffer(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    state: &mut AppState,
-    jobs: &mut Jobs,
-) -> Result<()> {
-    let Some(draft) = state.upload_draft() else {
-        return Ok(());
-    };
-    let (gist_id, gist_filename) = (draft.gist_id.clone(), draft.filename.clone());
-    let current_content = draft.content(&state.settings);
-    let Some(local_filename) = draft
-        .local_path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .map(str::to_owned)
-    else {
-        return Ok(());
-    };
-
-    let timestamp = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let temp_file_path =
-        std::env::temp_dir().join(format!(".gistui_redact_{timestamp}_{local_filename}"));
-
-    if let Err(e) = std::fs::write(&temp_file_path, &current_content) {
-        state.set_status(format!("failed to write temp file: {e}"));
-        return Ok(());
-    }
-
-    let editor = std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .unwrap_or_else(|_| "vi".to_string());
-    let Some((program, args)) = editor_command(&editor) else {
-        state.set_status("no editor configured (set $EDITOR)");
-        let _ = std::fs::remove_file(&temp_file_path);
-        return Ok(());
-    };
-
-    // GUI editors run in their own window, so gistui doesn't need the terminal back — spawn
-    // non-blocking and watch the temp file for saves instead of blocking on Command::status().
-    // Terminal editors (below) still need the full terminal and stay fully blocking.
-    if editor_is_gui(&program) {
-        jobs.set_upload_edit_watch(spawn_upload_edit_watch(
-            program,
-            args,
-            temp_file_path,
-            gist_id,
-            gist_filename,
-        ));
-        if let Some(draft) = state.upload_draft_mut() {
-            draft.watching = true;
-        }
-        state.set_status("Editing in external editor — diff updates live");
-        return Ok(());
-    }
-
-    if state.settings.mouse_enabled() {
-        execute!(terminal.backend_mut(), DisableMouseCapture)?;
-    }
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
-    let result = std::process::Command::new(program)
-        .args(&args)
-        .arg(&temp_file_path)
-        .status();
-    enable_raw_mode()?;
-    execute!(terminal.backend_mut(), EnterAlternateScreen)?;
-    if state.settings.mouse_enabled() {
-        execute!(terminal.backend_mut(), EnableMouseCapture)?;
-    }
-    terminal.clear()?;
-
-    match result {
-        Ok(_) => match std::fs::read_to_string(&temp_file_path) {
-            Ok(edited_content) => {
-                if let Some(draft) = state.upload_draft_mut() {
-                    draft.edited_content = Some(edited_content);
-                }
-                state.update_upload_diff();
-                state.set_status("Edited redact buffer");
-            }
-            Err(e) => state.set_status(format!("failed to read edited file: {e}")),
-        },
-        Err(error) => state.set_status(format!("editor failed: {error}")),
-    }
-
-    let _ = std::fs::remove_file(&temp_file_path);
-    Ok(())
-}
-
 /// Create a scratch dir and write `body` to `filename` inside it, setting a status message
 /// and returning `None` on either failure — the caller owns the early return (`ScratchDir`
 /// cleanup on early failure, or ownership moving into a bg job on success, per issue #275).
@@ -766,12 +517,13 @@ pub(super) fn write_scratch_file(
             return None;
         }
     };
-    let path = scratch.path().join(filename);
-    if let Err(e) = std::fs::write(&path, body) {
-        state.set_status(format!("failed to write {context}: {e}"));
-        return None;
+    match scratch.create_file(filename, body) {
+        Ok(path) => Some((scratch, path)),
+        Err(e) => {
+            state.set_status(format!("failed to write {context}: {e}"));
+            None
+        }
     }
-    Some((scratch, path))
 }
 
 pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode) {
@@ -1014,6 +766,10 @@ pub(super) struct Jobs {
     /// open (see `spawn_upload_edit_watch`). Unlike one-shot slots, this channel can carry
     /// multiple `ContentChanged` events before its terminal `EditorClosed`/`ReadError`.
     upload_edit_watch: Option<std::sync::mpsc::Receiver<UploadEditWatchEvent>>,
+    /// The redact buffer's directory for the live watch. Held here, not by the watch thread,
+    /// so it is removed when the session ends and when the app quits with the editor still
+    /// open (a detached thread never runs its drops).
+    upload_edit_scratch: Option<crate::temp_dir::ScratchDir>,
     action: ActionRx,
     /// Whether the in-flight action may be cancelled with Esc: reads yes, gist mutations no
     /// (#478).
@@ -1063,6 +819,7 @@ impl Jobs {
             gist_refresh: super::gist_refresh::GistRefresh::new(catalog, fetch_gists),
             local: None,
             upload_edit_watch: None,
+            upload_edit_scratch: None,
             action: None,
             action_cancellable: true,
             action_spawner,
@@ -1192,8 +949,10 @@ impl Jobs {
     pub(super) fn set_upload_edit_watch(
         &mut self,
         rx: std::sync::mpsc::Receiver<UploadEditWatchEvent>,
+        scratch: crate::temp_dir::ScratchDir,
     ) {
         self.upload_edit_watch = Some(rx);
+        self.upload_edit_scratch = Some(scratch);
     }
 
     /// Poll ready job completions and apply them to `state`.
@@ -1361,6 +1120,7 @@ impl Jobs {
         }
         if upload_watch_finished {
             self.upload_edit_watch = None;
+            self.upload_edit_scratch = None;
         }
     }
 
@@ -1663,6 +1423,7 @@ mod tests {
             gist_refresh: GistRefresh::new(&GistCatalog::default(), false),
             local: None,
             upload_edit_watch: None,
+            upload_edit_scratch: None,
             action: None,
             action_cancellable: true,
             action_spawner: Box::new(ThreadActionSpawner),
@@ -1949,11 +1710,17 @@ mod tests {
         })
         .unwrap();
         let mut jobs = empty_jobs();
-        jobs.upload_edit_watch = Some(rx);
+        let scratch = crate::temp_dir::ScratchDir::create("redact-test").unwrap();
+        let buffer_dir = scratch.path().to_path_buf();
+        jobs.set_upload_edit_watch(rx, scratch);
 
         jobs.on_upload_watch_events(&mut state);
 
         assert!(jobs.upload_edit_watch.is_none());
+        assert!(
+            !buffer_dir.exists(),
+            "the redact buffer goes when the session ends"
+        );
         assert!(!state.upload_draft().unwrap().watching);
         assert_eq!(
             state.upload_draft().unwrap().edited_content.as_deref(),
@@ -2040,89 +1807,6 @@ mod tests {
             "status was {:?}",
             state.status
         );
-    }
-
-    #[test]
-    fn editor_command_injects_wait_for_gui_editors() {
-        for ed in ["zed", "code", "code-insiders", "cursor", "windsurf", "subl"] {
-            let (program, args) = editor_command(ed).unwrap();
-            assert_eq!(program, ed);
-            assert!(
-                args.iter().any(|a| a == "--wait" || a == "-w"),
-                "expected a wait flag for GUI editor {ed:?}, got {args:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn editor_command_matches_gui_editor_by_basename() {
-        // A full path or a `.exe` suffix must still be recognised as a GUI editor.
-        let (program, args) = editor_command("/usr/local/bin/zed -n").unwrap();
-        assert_eq!(program, "/usr/local/bin/zed");
-        assert_eq!(args, vec!["-n", "--wait"]);
-    }
-
-    #[test]
-    fn editor_command_leaves_terminal_editors_untouched() {
-        for ed in ["vi", "vim", "nvim", "nano", "emacs", "hx"] {
-            let (program, args) = editor_command(ed).unwrap();
-            assert_eq!(program, ed);
-            assert!(
-                args.is_empty(),
-                "terminal editor {ed:?} should get no injected flag, got {args:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn editor_command_keeps_an_existing_wait_flag() {
-        // Don't duplicate a wait flag the user already configured (either spelling).
-        let (_, args) = editor_command("code --wait").unwrap();
-        assert_eq!(args, vec!["--wait"]);
-        let (_, args) = editor_command("subl -w").unwrap();
-        assert_eq!(args, vec!["-w"]);
-    }
-
-    #[test]
-    fn editor_command_blank_is_none() {
-        assert!(editor_command("").is_none());
-        assert!(editor_command("   ").is_none());
-    }
-
-    #[test]
-    fn editor_is_gui_matches_known_gui_editors() {
-        for ed in [
-            "zed",
-            "code",
-            "code-insiders",
-            "codium",
-            "vscodium",
-            "cursor",
-            "windsurf",
-            "subl",
-            "sublime_text",
-        ] {
-            assert!(
-                editor_is_gui(ed),
-                "{ed} should be recognised as a GUI editor"
-            );
-        }
-    }
-
-    #[test]
-    fn editor_is_gui_rejects_terminal_editors() {
-        for ed in ["vi", "vim", "nvim", "nano", "emacs", "hx"] {
-            assert!(
-                !editor_is_gui(ed),
-                "{ed} should not be recognised as a GUI editor"
-            );
-        }
-    }
-
-    #[test]
-    fn editor_is_gui_matches_by_basename_from_full_path() {
-        assert!(editor_is_gui("/usr/local/bin/zed"));
-        assert!(editor_is_gui("C:\\Tools\\code.exe"));
     }
 
     #[test]
