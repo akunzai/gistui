@@ -592,16 +592,12 @@ fn copy_via(plan: &CommandPlan, text: &str) -> Result<()> {
     Ok(())
 }
 
-/// Write `content` to `local_path`.
+/// Write `content` to `local_path` exactly as given. The Sync policy decides those bytes
+/// ([`crate::sync_content::SyncPolicy::write_download`]).
 ///
 /// Existing targets require [`DownloadMode::Overwrite`] (user confirmed after diff).
 /// New paths use [`DownloadMode::CreateNew`] with no confirm token.
-pub fn execute_download(
-    local_path: &Path,
-    content: &str,
-    mode: DownloadMode,
-    normalize_line_endings: bool,
-) -> Result<()> {
+pub fn execute_download(local_path: &Path, content: &str, mode: DownloadMode) -> Result<()> {
     match mode {
         DownloadMode::CreateNew if local_path.exists() => {
             bail!(
@@ -614,13 +610,7 @@ pub fn execute_download(
     if let Some(parent) = local_path.parent() {
         fs::create_dir_all(parent)?;
     }
-    let content = if normalize_line_endings {
-        crate::diff::normalize_line_endings(content)
-    } else {
-        content.into()
-    };
-    fs::write(local_path, content.as_ref())
-        .with_context(|| format!("write {}", local_path.display()))
+    fs::write(local_path, content).with_context(|| format!("write {}", local_path.display()))
 }
 
 #[cfg(test)]
@@ -989,7 +979,7 @@ mod tests {
         let path = dir.path().join("settings.json");
         std::fs::write(&path, "old").unwrap();
 
-        let err = execute_download(&path, "new", DownloadMode::CreateNew, true).unwrap_err();
+        let err = execute_download(&path, "new", DownloadMode::CreateNew).unwrap_err();
         assert!(err.to_string().contains("refusing to overwrite"));
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
     }
@@ -1000,7 +990,7 @@ mod tests {
         // creating any missing parent directories along the way.
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested/dir/settings.json");
-        execute_download(&path, "hello", DownloadMode::CreateNew, true).unwrap();
+        execute_download(&path, "hello", DownloadMode::CreateNew).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hello");
     }
 
@@ -1009,30 +999,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("settings.json");
         std::fs::write(&path, "old").unwrap();
-        execute_download(
-            &path,
-            "new",
-            DownloadMode::overwrite_after_user_confirm(),
-            true,
-        )
-        .unwrap();
+        execute_download(&path, "new", DownloadMode::overwrite_after_user_confirm()).unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "new");
-    }
-
-    #[test]
-    fn download_normalizes_crlf_to_lf_when_enabled() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        execute_download(&path, "a\r\nb\r\n", DownloadMode::CreateNew, true).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\nb\n");
-    }
-
-    #[test]
-    fn download_preserves_crlf_when_disabled() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("settings.json");
-        execute_download(&path, "a\r\nb\r\n", DownloadMode::CreateNew, false).unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\r\nb\r\n");
     }
 
     #[test]

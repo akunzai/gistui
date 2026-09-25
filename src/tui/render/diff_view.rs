@@ -68,7 +68,7 @@ fn inline_ins_line(
 
 /// Renders a `--- /+++` header line, tinting the leading `local`/`gist` keyword (yellow/blue)
 /// so each side's identity is readable regardless of which way the diff is oriented — the
-/// `Enter` preview flips direction with focus (see `preview_diff_text`). The side is classified
+/// `Enter` preview flips direction with focus (see `SyncPolicy::preview_diff`). The side is classified
 /// from the un-scrolled line (anchored right after the marker), then the keyword is coloured in
 /// the horizontally-scrolled slice; the rest stays bold.
 fn header_line(line: &str, hscroll: usize, theme: &Theme) -> Line<'static> {

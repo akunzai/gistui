@@ -23,6 +23,11 @@ No **new** facade re-export was added for the moved types, and `src/tui/mod.rs`'
 - Settings-screen edits, global theme toggle, and Diff context toggle all call `RuntimeSettings::adjust`. Only a mouse change returns `SettingsEffect::SyncMouseCapture`; dispatch owns that terminal IO.
 - Persistence loads the current `AppConfig`, calls `apply_to_config`, then saves. That projection updates every runtime-owned field and leaves pins, skip directories, and other config data intact.
 
+## Sync policy (`src/sync_content.rs`, issue #464)
+
+- **One owner for sync content rules.** `SyncPolicy` (built by `RuntimeSettings::sync_policy`) answers what an upload/create sends (`outbound`), what a download writes (`to_disk`, `write_download`), whether two sides are `identical`, and the `diff` / `preview_diff` between them. Callers never call `diff::normalize_line_endings`, `content_eq`, or `unified_diff` directly.
+- **A download is one path**: `bg::write_download` writes through the policy, records the pin baseline from the bytes it returns, reports, and rescans locals; callers only navigate. `actions::execute_download` writes exactly the bytes it is given.
+
 ## Gist content store (`src/tui/gist_content.rs`, issue #406)
 
 - `GistContentStore` is the only owner of the 64-entry in-memory content LRU. Callers request

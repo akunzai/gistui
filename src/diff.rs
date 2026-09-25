@@ -13,9 +13,8 @@ fn strip_final_newline(s: &str) -> &str {
 /// line-ending mismatch (e.g. a gist fetched with CRLF vs an LF local file) never
 /// registers as a change. Always applied here (diffing), not user-configurable: a
 /// byte-identical file with different line endings is not a difference worth surfacing.
-/// Also reused by upload/download when `normalize_line_endings` is enabled in settings,
-/// where it actually rewrites the bytes sent/written (see `UploadDraft::content`
-/// and `actions::execute_download`).
+/// The Sync policy (`crate::sync_content`) also uses it to rewrite the bytes sent and
+/// written when `normalize_line_endings` is enabled.
 pub(crate) fn normalize_line_endings(s: &str) -> Cow<'_, str> {
     if s.contains('\r') {
         Cow::Owned(s.replace("\r\n", "\n").replace('\r', "\n"))

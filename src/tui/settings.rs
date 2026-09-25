@@ -215,6 +215,13 @@ impl RuntimeSettings {
     pub fn normalize_line_endings(&self) -> bool {
         self.normalize_line_endings
     }
+    /// The Sync policy these settings describe.
+    pub fn sync_policy(&self) -> crate::sync_content::SyncPolicy {
+        crate::sync_content::SyncPolicy {
+            normalize_line_endings: self.normalize_line_endings,
+            ignore_trailing_newline: self.ignore_trailing_newline,
+        }
+    }
     pub fn scan_depth(&self) -> u32 {
         self.scan_depth
     }

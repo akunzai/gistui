@@ -19,3 +19,7 @@ _Avoid_: version snapshot, rewritten revision
 **Upload draft**:
 One upload awaiting confirmation: its target (local file ↔ gist file) and its pending content — the local file as read, plus any redact edit, JSON pretty/sort, and line-ending normalization. It lives and dies with Confirm; confirming fixes it into the exact bytes sent, and nothing reads Confirm after that.
 _Avoid_: upload state, upload buffer
+
+**Sync policy**:
+The content rules for syncing a local file with a gist file: which bytes an upload or create sends, which bytes a download writes, when the two sides count as identical, and how the diff between them reads. The `normalize_line_endings` and `ignore_trailing_newline` settings decide it. A pin's baseline is the local file's bytes on disk after a sync. Restoring a Gist revision copies gist to gist, so its payload is not a sync.
+_Avoid_: normalization helper, line-ending logic
