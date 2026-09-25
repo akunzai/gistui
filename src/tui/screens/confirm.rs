@@ -630,12 +630,11 @@ pub(crate) fn on_restore_revision_ready(
             }
             let old_label = format!("revision {version_label}");
             let new_label = format!("current {filename}");
-            let diff = crate::diff::unified_diff(
+            let diff = state.settings.sync_policy().diff(
                 &old_label,
                 &revision_content,
                 &new_label,
                 &current_content,
-                state.settings.ignore_trailing_newline(),
             );
             state.open_deferred(
                 entry,

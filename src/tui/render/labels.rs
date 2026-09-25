@@ -370,37 +370,6 @@ pub(crate) fn diff_labels(
     (local_label, gist_label)
 }
 
-/// Orientation for the `Enter` diff preview, driven by the focused pane: focusing the gist
-/// pane frames it as a *download* (old = local, new = gist), focusing the local pane frames
-/// it as an *upload* (old = gist, new = local). The dedicated `d`/`u` actions keep their own
-/// fixed orientation; this only affects the read-only preview.
-pub(crate) fn preview_diff_text(
-    upload_orientation: bool,
-    local_label: &str,
-    local_content: &str,
-    gist_label: &str,
-    remote: &str,
-    ignore_trailing_newline: bool,
-) -> String {
-    if upload_orientation {
-        crate::diff::unified_diff(
-            gist_label,
-            remote,
-            local_label,
-            local_content,
-            ignore_trailing_newline,
-        )
-    } else {
-        crate::diff::unified_diff(
-            local_label,
-            local_content,
-            gist_label,
-            remote,
-            ignore_trailing_newline,
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -445,17 +414,6 @@ mod tests {
             "config — My Ghostty config"
         );
         assert_eq!(gist_row_label(&g, GistView::Id), "abc / config");
-    }
-
-    #[test]
-    fn preview_diff_text_flips_with_focus() {
-        // Download orientation (gist pane focused): old = local, new = gist.
-        let dl = preview_diff_text(false, "local: a", "old\n", "gist b", "new\n", false);
-        assert!(dl.starts_with("--- local: a\n+++ gist b\n"));
-
-        // Upload orientation (local pane focused): old = gist, new = local.
-        let ul = preview_diff_text(true, "local: a", "old\n", "gist b", "new\n", false);
-        assert!(ul.starts_with("--- gist b\n+++ local: a\n"));
     }
 
     #[test]

@@ -81,21 +81,16 @@ impl UploadDraft {
         } else {
             base.clone()
         };
-        if settings.normalize_line_endings() {
-            crate::diff::normalize_line_endings(&content).into_owned()
-        } else {
-            content
-        }
+        settings.sync_policy().outbound(&content).into_owned()
     }
 
     /// The gist-vs-upload unified diff Confirm shows.
     pub fn diff(&self, settings: &RuntimeSettings) -> String {
-        crate::diff::unified_diff(
+        settings.sync_policy().diff(
             &self.gist_label,
             &self.remote_content,
             &self.local_label,
             &self.content(settings),
-            settings.ignore_trailing_newline(),
         )
     }
 

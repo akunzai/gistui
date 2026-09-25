@@ -1,9 +1,9 @@
 //! `Screen::Diff` — key handling, view-model, paint, palette items, and apply handlers
 //! colocated in one file (issue #287, Phase 2; issue #383).
 
-use crate::tui::bg::{record_pin_sync, refresh_locals, LoopFlow};
+use crate::tui::bg::{record_pin_sync, LoopFlow};
 use crate::tui::gist_content::{ContentLookup, FetchPolicy};
-use crate::tui::render::{diff_labels, preview_diff_text};
+use crate::tui::render::diff_labels;
 use crate::tui::view_model::ChromeVm;
 use crate::tui::{AppState, ConfigField, HelpTopic, HitTarget, KeyOutcome, PendingAction};
 use crossterm::event::KeyCode;
@@ -308,19 +308,15 @@ pub(crate) fn on_preview_diff(
             {
                 Ok(local) => {
                     let local_content = local.unwrap_or_default();
-                    let diff = preview_diff_text(
+                    let policy = state.settings.sync_policy();
+                    let diff = policy.preview_diff(
                         upload_orientation,
                         &local_label,
                         &local_content,
                         &gist_label,
                         &remote,
-                        state.settings.ignore_trailing_newline(),
                     );
-                    let identical = crate::diff::content_eq(
-                        &local_content,
-                        &remote,
-                        state.settings.ignore_trailing_newline(),
-                    );
+                    let identical = policy.identical(&local_content, &remote);
                     state.open_deferred(
                         entry,
                         crate::tui::Screen::Diff(Box::new(crate::tui::DiffState {
@@ -381,18 +377,9 @@ pub(crate) fn on_download_selected(
             if target.exists() {
                 match crate::domain::read_text_file_capped(&target) {
                     Ok(local_content) => {
-                        let diff = crate::diff::unified_diff(
-                            &local_label,
-                            &local_content,
-                            &gist_label,
-                            &remote,
-                            state.settings.ignore_trailing_newline(),
-                        );
-                        let identical = crate::diff::content_eq(
-                            &local_content,
-                            &remote,
-                            state.settings.ignore_trailing_newline(),
-                        );
+                        let policy = state.settings.sync_policy();
+                        let diff = policy.diff(&local_label, &local_content, &gist_label, &remote);
+                        let identical = policy.identical(&local_content, &remote);
                         state.open_deferred(
                             entry,
                             crate::tui::Screen::Diff(Box::new(crate::tui::DiffState {
@@ -412,40 +399,13 @@ pub(crate) fn on_download_selected(
                     Err(error) => state.set_status(error),
                 }
             } else {
-                let normalize = state.settings.normalize_line_endings();
-                match crate::actions::execute_download(
+                let _ = crate::tui::bg::write_download(
+                    state,
                     &target,
                     &remote,
                     crate::actions::DownloadMode::CreateNew,
-                    normalize,
-                ) {
-                    Ok(()) => {
-                        state.set_status(format!(
-                            "Downloaded {}",
-                            target
-                                .file_name()
-                                .unwrap_or(target.as_os_str())
-                                .to_string_lossy()
-                        ));
-                        // Hash what actually landed on disk (post-normalization), not the
-                        // raw fetch, so the pin-sync content check doesn't see phantom drift.
-                        let written = if normalize {
-                            crate::diff::normalize_line_endings(&remote).into_owned()
-                        } else {
-                            remote.clone()
-                        };
-                        record_pin_sync(
-                            state,
-                            &target,
-                            &file.gist_id,
-                            &file.filename,
-                            &written,
-                            Some(crate::domain::SyncDirection::Download),
-                        );
-                        refresh_locals(state, Some(&target));
-                    }
-                    Err(error) => state.set_status(format!("download failed: {error}")),
-                }
+                    Some(&file),
+                );
             }
         }
         Err(error) => state.set_status(format!("fetch failed: {error}")),
@@ -464,12 +424,11 @@ pub(crate) fn on_revision_diff(
 ) -> LoopFlow {
     match result {
         Ok((old_content, new_content)) => {
-            let diff = crate::diff::unified_diff(
+            let diff = state.settings.sync_policy().diff(
                 &old_label,
                 &old_content,
                 &new_label,
                 &new_content,
-                state.settings.ignore_trailing_newline(),
             );
             let identical = old_content == new_content;
             // `enter_diff` (via `enter`) parks the live Revisions screen so Esc

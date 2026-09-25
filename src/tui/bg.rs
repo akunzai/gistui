@@ -725,39 +725,14 @@ pub(super) fn write_scratch_file(
 pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode) {
     let target = state.download_target();
     let content = state.preview_remote().to_string();
-    let normalize = state.settings.normalize_line_endings();
-    let pin_key = state
+    let pin = state
         .diff()
         .and_then(|d| match (&d.gist_id, &d.gist_filename) {
-            (Some(g), Some(f)) => Some((g.clone(), f.clone())),
+            (Some(g), Some(f)) => Some(crate::domain::GistFileRef::id_name(g, f)),
             _ => None,
         });
-    match crate::actions::execute_download(&target, &content, mode, normalize) {
+    match write_download(state, &target, &content, mode, pin.as_ref()) {
         Ok(()) => {
-            state.set_status(format!(
-                "Downloaded {}",
-                target
-                    .file_name()
-                    .unwrap_or(target.as_os_str())
-                    .to_string_lossy()
-            ));
-            if let Some((gid, fname)) = pin_key {
-                // Hash what actually landed on disk (post-normalization), not the raw
-                // fetch, so the pin-sync content check doesn't see phantom drift.
-                let written = if normalize {
-                    crate::diff::normalize_line_endings(&content).into_owned()
-                } else {
-                    content.clone()
-                };
-                record_pin_sync(
-                    state,
-                    &target,
-                    &gid,
-                    &fname,
-                    &written,
-                    Some(crate::domain::SyncDirection::Download),
-                );
-            }
             // Skip past the download overwrite gate's Confirm (if any) and its parked Diff to
             // land on whatever was behind them.
             if state.screen.is_confirm() {
@@ -766,13 +741,51 @@ pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode)
             if state.screen.is_diff() {
                 state.leave();
             }
-            refresh_locals(state, Some(&target));
         }
+        Err(()) => state.cancel_confirm_to_diff(),
+    }
+}
+
+/// Download one gist file to `target`: write it as the Sync policy dictates, record the pin
+/// baseline from the bytes actually written (when `pin` names the pair), report, and rescan
+/// locals. Navigation stays with the caller. On failure the status already says why.
+pub(super) fn write_download(
+    state: &mut AppState,
+    target: &std::path::Path,
+    remote: &str,
+    mode: crate::actions::DownloadMode,
+    pin: Option<&crate::domain::GistFileRef>,
+) -> std::result::Result<(), ()> {
+    let written = match state
+        .settings
+        .sync_policy()
+        .write_download(target, remote, mode)
+    {
+        Ok(written) => written,
         Err(error) => {
             state.set_status(format!("download failed: {error}"));
-            state.cancel_confirm_to_diff();
+            return Err(());
         }
+    };
+    state.set_status(format!(
+        "Downloaded {}",
+        target
+            .file_name()
+            .unwrap_or(target.as_os_str())
+            .to_string_lossy()
+    ));
+    if let Some(pin) = pin {
+        record_pin_sync(
+            state,
+            target,
+            &pin.gist_id,
+            &pin.filename,
+            &written,
+            Some(crate::domain::SyncDirection::Download),
+        );
     }
+    refresh_locals(state, Some(target));
+    Ok(())
 }
 
 /// Synchronous local re-scan after a successful download, using the active recursive mode
