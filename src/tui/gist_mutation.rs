@@ -146,6 +146,15 @@ fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
             public,
             description,
         } => {
+            // `gh` takes the path as text, and a gist file name is UTF-8 on GitHub's side too:
+            // a non-UTF-8 name can't be created, so say so instead of doing nothing (#477).
+            if local_path.to_str().is_none() {
+                state.set_status(format!(
+                    "cannot create a gist from {}: its name isn't valid UTF-8",
+                    local_path.display()
+                ));
+                return None;
+            }
             // Send the bytes the Sync policy dictates (#465). When that rewrites the file,
             // upload a same-named scratch copy; otherwise hand `gh` the file itself, so an
             // unreadable or non-text file still creates as before.
@@ -157,6 +166,7 @@ fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
                 });
             let (scratch, source) = match normalized {
                 Some(normalized) => {
+                    // UTF-8 by the check above; a readable file always has a name.
                     let filename = local_path.file_name().and_then(|n| n.to_str())?;
                     let (dir, path) = write_scratch_file(
                         state,
@@ -622,6 +632,46 @@ mod tests {
             calls[0].args
         );
         assert!(calls[0].args.last().unwrap().ends_with("new.txt"));
+    }
+
+    /// Issue #477: a non-UTF-8 file name can't reach `gh` (plans are text) or GitHub, so the
+    /// create says why and runs nothing, instead of silently doing nothing.
+    #[cfg(unix)]
+    #[test]
+    fn create_from_a_non_utf8_file_name_says_why() {
+        use std::os::unix::ffi::OsStrExt;
+        let local_path = std::path::Path::new(std::ffi::OsStr::from_bytes(b"/tmp/bad\xffname.txt"))
+            .to_path_buf();
+        let mut state = initial_state();
+        state.enter_confirm(
+            PendingAction::Create {
+                local_path: local_path.clone(),
+            },
+            String::new(),
+        );
+        let runner = ok_runner(0);
+
+        run(
+            &mut state,
+            &runner,
+            MutationRequest::Create {
+                local_path,
+                public: false,
+                description: String::new(),
+            },
+        );
+
+        assert!(runner.calls().is_empty());
+        assert!(state.screen.is_confirm(), "stays on the create Confirm");
+        assert!(
+            state
+                .status
+                .as_deref()
+                .unwrap_or_default()
+                .contains("isn't valid UTF-8"),
+            "{:?}",
+            state.status
+        );
     }
 
     /// The one place pre-spawn navigation lives, pinned per request (behaviour unchanged by
