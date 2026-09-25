@@ -479,6 +479,7 @@ mod tests {
             gist_filename: "a.txt".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         });
         let items = menu_items(&state);
         assert!(enabled_for(&items, "Pin / unpin pair")); // foreign, but already pinned (unpin)

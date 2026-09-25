@@ -332,24 +332,31 @@ pub(crate) fn on_preview_diff(
                             gist_filename: gist_file.map(|file| file.filename),
                         })),
                     );
-                    // A pin diff that turns out identical confirms the cached
-                    // last_seen_hash is (still) accurate — refresh it for free
-                    // using the content we already fetched, so the Pins list's
-                    // content-hash check (AppState::compute_pin_sync_status) stays
-                    // correct even if the gist changed elsewhere since the last
-                    // real sync. Hash the LOCAL content's raw bytes (not the
-                    // trailing-newline-normalized `identical` comparison), so
-                    // this matches the raw-byte hashing compute_pin_sync_status does.
+                    // A pin diff that turns out identical confirms both sides are in sync:
+                    // refresh the Sync baseline for free from the content already in hand,
+                    // so the Pins list stays correct even if either side changed since the
+                    // last real sync. The local side hashes the file's raw bytes (not the
+                    // normalized `identical` comparison), matching compute_pin_sync_status;
+                    // the remote side is the gist content as fetched (issue #466).
                     if identical {
                         let pin = state.diff().and_then(|d| {
                             Some((
                                 d.gist_id.clone()?,
                                 d.gist_filename.clone()?,
                                 d.local_path.clone(),
+                                d.remote_content.clone(),
                             ))
                         });
-                        if let Some((gid, fname, local_abs)) = pin {
-                            record_pin_sync(state, &local_abs, &gid, &fname, &local_content, None);
+                        if let Some((gid, fname, local_abs, remote)) = pin {
+                            record_pin_sync(
+                                state,
+                                &local_abs,
+                                &gid,
+                                &fname,
+                                &local_content,
+                                &remote,
+                                None,
+                            );
                         }
                     }
                 }

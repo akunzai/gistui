@@ -11,7 +11,14 @@ pub struct PinnedMapping {
     pub gist_id: String,
     pub gist_filename: String,
     pub direction: Option<SyncDirection>,
+    /// Local side of the Sync baseline: SHA-256 of the local file's bytes on disk at the last
+    /// sync.
     pub last_seen_hash: Option<String>,
+    /// Remote side of the Sync baseline: git blob SHA-1 of the gist file's content at the last
+    /// sync — the same sha a gist file's `raw_url` carries (issue #466). Absent on pins
+    /// recorded before it existed; the next sync fills it in.
+    #[serde(default)]
+    pub remote_blob_sha: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,8 +28,8 @@ pub enum SyncDirection {
     Download,
 }
 
-/// Suggested sync action for a pinned pair, decided by comparing modification
-/// times. Pure; derived by [`sync_status`].
+/// Suggested sync action for a pinned pair: from the Sync baseline when the pin has one
+/// ([`baseline_status`]), otherwise by comparing modification times ([`sync_status`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncStatus {
     /// Both sides carry the same modification time.
@@ -31,6 +38,8 @@ pub enum SyncStatus {
     Push,
     /// Remote is newer → download the gist into the local file.
     Pull,
+    /// Both sides changed since the last sync — the user picks a direction (issue #466).
+    Conflict,
     /// The local file could not be stat-ed (almost always: it no longer exists).
     Missing,
     /// A timestamp is unavailable — direction cannot be suggested.
@@ -44,6 +53,7 @@ impl SyncStatus {
             SyncStatus::InSync => "✓",
             SyncStatus::Push => "↑",
             SyncStatus::Pull => "↓",
+            SyncStatus::Conflict => "↕",
             SyncStatus::Missing => "✕",
             SyncStatus::Unknown => "?",
         }
@@ -62,6 +72,67 @@ pub fn sync_status(local_ts: Option<u64>, remote_ts: Option<u64>) -> SyncStatus 
         (Some(_), Some(_)) => SyncStatus::InSync,
         (Some(_), None) => SyncStatus::Unknown,
     }
+}
+
+/// Pure decision from the Sync baseline: which sides changed since the last sync?
+pub fn baseline_status(local_changed: bool, remote_changed: bool) -> SyncStatus {
+    match (local_changed, remote_changed) {
+        (false, false) => SyncStatus::InSync,
+        (true, false) => SyncStatus::Push,
+        (false, true) => SyncStatus::Pull,
+        (true, true) => SyncStatus::Conflict,
+    }
+}
+
+/// Git blob SHA-1 of `bytes` (what `git hash-object` prints) — the per-file sha GitHub puts
+/// in a gist file's `raw_url`.
+pub fn git_blob_sha1(bytes: &[u8]) -> String {
+    use sha1::Sha1;
+    let mut hasher = Sha1::new();
+    hasher.update(format!("blob {}\0", bytes.len()).as_bytes());
+    hasher.update(bytes);
+    hex_lower(&hasher.finalize())
+}
+
+/// The remote side of a Sync baseline for gist content fetched as `fetched`, given the blob
+/// sha the catalog's `raw_url` currently shows. `gh gist view --raw` appends a `\n` to a file
+/// that lacks one, so the fetched text is not always the gist's exact bytes: when it — or it
+/// minus that one trailing `\n` — hashes to the catalog sha, that sha is the gist's. Otherwise
+/// the catalog is stale (or has no sha), and the fetched text is the best evidence.
+pub fn remote_blob_sha(fetched: &str, catalog_sha: Option<&str>) -> String {
+    let sha = git_blob_sha1(fetched.as_bytes());
+    let Some(catalog_sha) = catalog_sha else {
+        return sha;
+    };
+    let matches = sha == catalog_sha
+        || fetched
+            .strip_suffix('\n')
+            .is_some_and(|s| git_blob_sha1(s.as_bytes()) == catalog_sha);
+    if matches {
+        catalog_sha.to_string()
+    } else {
+        sha
+    }
+}
+
+/// The blob sha in a gist file `raw_url`
+/// (`https://gist.githubusercontent.com/<user>/<gist_id>/raw/<sha>/<filename>`), if the URL
+/// has that shape.
+pub fn raw_url_blob_sha(raw_url: &str) -> Option<&str> {
+    let (_, rest) = raw_url.split_once("/raw/")?;
+    let sha = rest.split('/').next()?;
+    (sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit())).then_some(sha)
+}
+
+/// `raw_url` with its blob sha replaced by `sha`; `None` when it has no blob sha.
+pub fn raw_url_with_blob_sha(raw_url: &str, sha: &str) -> Option<String> {
+    let old = raw_url_blob_sha(raw_url)?;
+    let start = raw_url.find("/raw/")? + "/raw/".len();
+    Some(format!(
+        "{}{sha}{}",
+        &raw_url[..start],
+        &raw_url[start + old.len()..]
+    ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -404,7 +475,10 @@ pub struct GistComment {
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
-    let digest = hasher.finalize();
+    hex_lower(&hasher.finalize())
+}
+
+fn hex_lower(digest: &[u8]) -> String {
     let mut out = String::with_capacity(digest.len() * 2);
     for byte in digest {
         use std::fmt::Write as _;
@@ -500,6 +574,61 @@ pub fn group_gists(files: &[GistFile]) -> Vec<GistGroup> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn git_blob_sha1_matches_git_hash_object() {
+        assert_eq!(
+            git_blob_sha1(b""),
+            "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+        );
+        assert_eq!(
+            git_blob_sha1(b"hello\n"),
+            "ce013625030ba8dba906f756967f9e9ca394464a"
+        );
+    }
+
+    #[test]
+    fn raw_url_blob_sha_reads_and_replaces_the_sha_segment() {
+        let url = "https://gist.githubusercontent.com/u/g1/raw/ce013625030ba8dba906f756967f9e9ca394464a/a.txt";
+        assert_eq!(
+            raw_url_blob_sha(url),
+            Some("ce013625030ba8dba906f756967f9e9ca394464a")
+        );
+        assert_eq!(
+            raw_url_with_blob_sha(url, "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391").as_deref(),
+            Some("https://gist.githubusercontent.com/u/g1/raw/e69de29bb2d1d6434b8b29ae775ad8c2e48c5391/a.txt")
+        );
+        assert_eq!(
+            raw_url_blob_sha("https://example.test/g1/raw/xyz999/a.txt"),
+            None
+        );
+        assert_eq!(
+            raw_url_with_blob_sha("https://example.test/a.txt", "abc"),
+            None
+        );
+    }
+
+    #[test]
+    fn remote_blob_sha_forgives_the_newline_gh_appends() {
+        let hello = git_blob_sha1(b"hello");
+        // gh printed "hello\n" for a gist file holding "hello".
+        assert_eq!(remote_blob_sha("hello\n", Some(&hello)), hello);
+        assert_eq!(remote_blob_sha("hello", Some(&hello)), hello);
+        // The catalog is stale: the fetched text is the evidence.
+        assert_eq!(
+            remote_blob_sha("new\n", Some(&hello)),
+            git_blob_sha1(b"new\n")
+        );
+        assert_eq!(remote_blob_sha("hello", None), hello);
+    }
+
+    #[test]
+    fn baseline_status_table() {
+        assert_eq!(baseline_status(false, false), SyncStatus::InSync);
+        assert_eq!(baseline_status(true, false), SyncStatus::Push);
+        assert_eq!(baseline_status(false, true), SyncStatus::Pull);
+        assert_eq!(baseline_status(true, true), SyncStatus::Conflict);
+    }
+
     use super::*;
 
     #[test]

@@ -316,6 +316,28 @@ pub(super) fn spawn_pin_diff(
     m: &crate::domain::PinnedMapping,
     entry: crate::tui::DeferredEntry,
 ) {
+    spawn_pin_diff_inner(state, jobs, m, entry, None);
+}
+
+/// [`spawn_pin_diff`], then set `status` once the diff has opened (entering a screen clears
+/// the status, so it cannot be set up front).
+pub(super) fn spawn_pin_diff_then(
+    state: &mut AppState,
+    jobs: &mut Jobs,
+    m: &crate::domain::PinnedMapping,
+    entry: crate::tui::DeferredEntry,
+    status: &'static str,
+) {
+    spawn_pin_diff_inner(state, jobs, m, entry, Some(status));
+}
+
+fn spawn_pin_diff_inner(
+    state: &mut AppState,
+    jobs: &mut Jobs,
+    m: &crate::domain::PinnedMapping,
+    entry: crate::tui::DeferredEntry,
+    status: Option<&'static str>,
+) {
     let local_abs = m.resolve_against(&state.cwd);
     let gist_id = m.gist_id.clone();
     let filename = m.gist_filename.clone();
@@ -331,7 +353,7 @@ pub(super) fn spawn_pin_diff(
         move |result, _file, state| {
             // Pin diffs originate from the Pins screen (no focused pane); keep the
             // historical download orientation (old = local, new = gist).
-            screens::diff::on_preview_diff(
+            let flow = screens::diff::on_preview_diff(
                 state,
                 entry,
                 result,
@@ -341,7 +363,11 @@ pub(super) fn spawn_pin_diff(
                 target,
                 false,
                 Some(gist_file),
-            )
+            );
+            if let Some(status) = status.filter(|_| state.screen.is_diff()) {
+                state.set_status(status);
+            }
+            flow
         },
     );
 }
@@ -356,15 +382,19 @@ pub(super) fn record_pin_sync(
     local_abs: &std::path::Path,
     gist_id: &str,
     filename: &str,
-    content: &str,
+    local_content: &str,
+    remote_content: &str,
     direction: Option<crate::domain::SyncDirection>,
 ) {
     let pair = crate::pins::PinKey::new(local_abs, gist_id, filename);
     if crate::pins::find_by_resolved_path(&state.pinned, &state.cwd, pair).is_none() {
         return;
     }
-    let result = crate::pin_store::PinStore::in_default_location()
-        .and_then(|store| store.record_sync(&state.cwd, pair, content, direction));
+    let remote_blob_sha =
+        crate::domain::remote_blob_sha(remote_content, state.catalog_blob_sha(gist_id, filename));
+    let result = crate::pin_store::PinStore::in_default_location().and_then(|store| {
+        store.record_sync(&state.cwd, pair, local_content, &remote_blob_sha, direction)
+    });
     apply_pin_sync(state, result);
 }
 
@@ -781,6 +811,7 @@ pub(super) fn write_download(
             &pin.gist_id,
             &pin.filename,
             &written,
+            remote,
             Some(crate::domain::SyncDirection::Download),
         );
     }
@@ -1398,6 +1429,7 @@ mod tests {
             gist_filename: "b.txt".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         };
 
         apply_unpin(
@@ -1440,6 +1472,7 @@ mod tests {
             gist_filename: "a.txt".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }];
 
         apply_unpin(
@@ -1492,6 +1525,7 @@ mod tests {
                     gist_filename: "ignored.txt".into(),
                     direction: None,
                     last_seen_hash: None,
+                    remote_blob_sha: None,
                 }]),
                 crate::pin_store::SyncRecord::NotPinned,
             )),
@@ -1516,6 +1550,7 @@ mod tests {
             std::path::Path::new("/cwd/a.txt"),
             "g1",
             "a.txt",
+            "body",
             "body",
             Some(crate::domain::SyncDirection::Download),
         );

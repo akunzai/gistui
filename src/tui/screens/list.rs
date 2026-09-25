@@ -1981,6 +1981,7 @@ mod tests {
             gist_filename: "settings.json".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }];
         assert!(matches!(
             state.handle_key(KeyCode::Char('p')),
@@ -2613,6 +2614,7 @@ mod tests {
             gist_filename: "notes.txt".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }];
         state.focus = FocusPane::Local;
         state.anchor = FocusPane::Local;
