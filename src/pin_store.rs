@@ -100,20 +100,22 @@ impl PinStore {
         Ok((config.into(), outcome))
     }
 
-    /// Record that `content` is now known to match the gist side for `pair`.
+    /// Record the Sync baseline for `pair`: `local_content` is the local file's bytes on disk
+    /// and `remote_blob_sha` the gist file's blob sha, now known to be in sync (issue #466).
     ///
     /// `pair.local_path` is an absolute path the app resolved for itself; the stored entry
     /// may be relative, so the pin is *found* by its resolved form and *written* by its
     /// stored form. `direction: None` means the match was passively confirmed (a diff
     /// turned out identical) and leaves the recorded direction alone.
     ///
-    /// Hashing lives here because `last_seen_hash` being a hex SHA-256 is a fact about
+    /// Local hashing lives here because `last_seen_hash` being a hex SHA-256 is a fact about
     /// this file format, not something each caller should know.
     pub fn record_sync(
         &self,
         cwd: &Path,
         pair: PinKey<'_>,
-        content: &str,
+        local_content: &str,
+        remote_blob_sha: &str,
         direction: Option<SyncDirection>,
     ) -> Result<(PinChange, SyncRecord)> {
         let mut config = load_config(&self.config_path)?;
@@ -121,7 +123,8 @@ impl PinStore {
             return Ok((config.into(), SyncRecord::NotPinned));
         };
         let mapping = &mut config.pinned[index];
-        mapping.last_seen_hash = Some(crate::domain::sha256_hex(content.as_bytes()));
+        mapping.last_seen_hash = Some(crate::domain::sha256_hex(local_content.as_bytes()));
+        mapping.remote_blob_sha = Some(remote_blob_sha.to_string());
         if let Some(direction) = direction {
             mapping.direction = Some(direction);
         }
@@ -173,6 +176,7 @@ mod tests {
             gist_filename: filename.into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }
     }
 
@@ -225,6 +229,7 @@ mod tests {
             vec![PinnedMapping {
                 direction: Some(SyncDirection::Upload),
                 last_seen_hash: Some("known".into()),
+                remote_blob_sha: None,
                 ..mapping("/abs/a.txt", "g1", "a.txt")
             }],
         );
@@ -300,6 +305,7 @@ mod tests {
                 Path::new("/cwd"),
                 key(Path::new("/abs/a.txt"), "g1", "a.txt"),
                 "body\n",
+                "0123456789abcdef0123456789abcdef01234567",
                 Some(SyncDirection::Upload),
             )
             .expect("record");
@@ -324,6 +330,7 @@ mod tests {
             vec![PinnedMapping {
                 direction: Some(SyncDirection::Download),
                 last_seen_hash: Some("stale".into()),
+                remote_blob_sha: None,
                 ..mapping("/abs/a.txt", "g1", "a.txt")
             }],
         );
@@ -333,6 +340,7 @@ mod tests {
                 Path::new("/cwd"),
                 key(Path::new("/abs/a.txt"), "g1", "a.txt"),
                 "fresh\n",
+                "0123456789abcdef0123456789abcdef01234567",
                 None,
             )
             .expect("record");
@@ -355,6 +363,7 @@ mod tests {
                 Path::new("/cwd"),
                 key(Path::new("/abs/a.txt"), "g1", "a.txt"),
                 "body\n",
+                "0123456789abcdef0123456789abcdef01234567",
                 Some(SyncDirection::Upload),
             )
             .expect("record");
@@ -378,6 +387,7 @@ mod tests {
                 Path::new("/cwd"),
                 key(Path::new("/cwd/a.txt"), "g1", "a.txt"),
                 "body\n",
+                "0123456789abcdef0123456789abcdef01234567",
                 Some(SyncDirection::Upload),
             )
             .expect("record");
@@ -410,7 +420,13 @@ mod tests {
         let (unpinned, _) = f.store.unpin(key(local, "g1", "b.txt")).expect("unpin");
         let (synced, _) = f
             .store
-            .record_sync(Path::new("/cwd"), key(local, "g1", "a.txt"), "x", None)
+            .record_sync(
+                Path::new("/cwd"),
+                key(local, "g1", "a.txt"),
+                "x",
+                "sha",
+                None,
+            )
             .expect("record");
 
         for change in [pinned, unpinned, synced] {
@@ -442,6 +458,7 @@ mod tests {
                 Path::new("/cwd"),
                 key(Path::new("/abs/a.txt"), "g1", "a.txt"),
                 "x",
+                "0123456789abcdef0123456789abcdef01234567",
                 None
             )
             .is_err());

@@ -66,7 +66,7 @@ mod tests {
         };
         assert!(pins.footer.contains("s sync") && pins.footer.contains("x unpin"));
         assert!(
-            pins.footer_title.contains("✓ synced") && pins.footer_title.contains("↓ remote newer")
+            pins.footer_title.contains("✓ synced") && pins.footer_title.contains("↓ gist changed")
         );
 
         state.screen = Screen::Gists(Box::default());

@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Pins now tell which side changed since the last sync by content, not timestamps: a gist
+  edited elsewhere shows ↓ even when the local file is untouched, editing another file in the
+  same gist no longer flags this one, and a new ↕ mark shows when both sides changed — syncing
+  it opens the diff so you choose `d` or `u`. Pins synced before this upgrade switch over at
+  their next sync.
+
 - A pin no longer stays on ↓ Pull after uploading a CRLF, redact-edited, or JSON-reformatted
   file: the pin now remembers the local file as it sits on disk, not the bytes sent.
 - With `normalize_line_endings` off, a line-ending-only difference is a real difference: the

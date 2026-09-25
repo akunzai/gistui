@@ -316,6 +316,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                         file,
                         &local_path,
                         &local_content,
+                        &upload_content,
                     )
                 },
             );
@@ -655,6 +656,10 @@ fn apply_sync_status(
         crate::domain::SyncStatus::Unknown => {
             state.set_status("can't tell which side is newer — use u to push or d to pull")
         }
+        // Both sides changed: show the diff and let the user pick d or u (issue #466).
+        crate::domain::SyncStatus::Conflict => {
+            spawn_pin_diff_then(state, jobs, m, entry, "both sides changed — press d or u")
+        }
     }
 }
 
@@ -681,6 +686,7 @@ mod tests {
             gist_filename: "a.txt".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }];
         if let Some(modified) = local_mtime {
             state.locals = vec![LocalCandidate {
@@ -889,6 +895,7 @@ mod tests {
             gist_filename: "a.txt".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         };
         let mut config = crate::config::AppConfig::default();
         config.pinned.push(mapping.clone());
@@ -973,5 +980,45 @@ mod tests {
             );
             assert_eq!(files, &vec![expected.to_string()], "normalize={normalize}");
         }
+    }
+
+    /// Issue #466: smart-sync on a Conflict opens the pin's diff instead of picking a side.
+    #[test]
+    fn sync_pin_auto_on_conflict_opens_the_pin_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("a.txt");
+        std::fs::write(&local, "edited").unwrap();
+        let mut state = initial_state();
+        state.pinned = vec![PinnedMapping {
+            local_path: local,
+            gist_id: "g1".into(),
+            gist_filename: "a.txt".into(),
+            direction: None,
+            last_seen_hash: Some(crate::domain::sha256_hex(b"synced")),
+            remote_blob_sha: Some("1111111111111111111111111111111111111111".into()),
+        }];
+        state.gist_catalog.owned = vec![GistFile {
+            raw_url: Some(
+                "https://gist.githubusercontent.com/u/g1/raw/2222222222222222222222222222222222222222/a.txt"
+                    .into(),
+            ),
+            ..GistFile::fixture("g1", "a.txt")
+        }];
+        assert_eq!(
+            state.compute_pin_sync_status(0),
+            crate::domain::SyncStatus::Conflict
+        );
+        let entry = state.defer_entry();
+        let (mut jobs, started) = recording_jobs();
+
+        route_outcome(
+            KeyOutcome::SyncPinAuto { entry, index: 0 },
+            &mut state,
+            &mut jobs,
+        );
+
+        let started = started.take();
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0].progress, "Loading diff…");
     }
 }

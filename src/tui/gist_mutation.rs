@@ -33,15 +33,32 @@ pub(crate) fn on_upload_replace(
     file: crate::domain::GistFileRef,
     local_path: &std::path::Path,
     local_content: &str,
+    sent_content: &str,
 ) -> LoopFlow {
     apply(state, result, "upload", |state| {
         state.gist_content_store.invalidate_file(&file);
+        // The gist file's blob sha is now that of the bytes sent. Patch it into the in-memory
+        // catalog so the pin reads as in sync before the refresh this upload triggers lands
+        // (issue #466); the refresh then publishes the same sha.
+        let sha = crate::domain::git_blob_sha1(sent_content.as_bytes());
+        for g in state.gist_catalog.owned.iter_mut() {
+            if g.gist_id == file.gist_id && g.filename == file.filename {
+                if let Some(url) = g
+                    .raw_url
+                    .as_deref()
+                    .and_then(|u| crate::domain::raw_url_with_blob_sha(u, &sha))
+                {
+                    g.raw_url = Some(url);
+                }
+            }
+        }
         record_pin_sync(
             state,
             local_path,
             &file.gist_id,
             &file.filename,
             local_content,
+            sent_content,
             Some(crate::domain::SyncDirection::Upload),
         );
         format!("Uploaded {} to gist {}", file.filename, file.gist_id)
@@ -175,6 +192,7 @@ mod tests {
             gist_file_ref("g1", "a.txt"),
             std::path::Path::new("/tmp/a.txt"),
             "hello",
+            "hello",
         );
 
         assert_eq!(state.status.as_deref(), Some("upload failed: boom"));
@@ -198,6 +216,7 @@ mod tests {
             gist_filename: "a.txt".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         };
         let mut config = crate::config::AppConfig::default();
         config.pinned.push(mapping.clone());
@@ -209,12 +228,21 @@ mod tests {
         state.pinned = vec![mapping];
         let file = crate::domain::GistFileRef::id_name("g1", "a.txt");
         state.gist_content_store.insert(&file, "stale".into());
+        state.gist_catalog.owned = vec![crate::domain::GistFile {
+            raw_url: Some(
+                "https://gist.githubusercontent.com/u/g1/raw/1111111111111111111111111111111111111111/a.txt"
+                    .into(),
+            ),
+            ..crate::domain::GistFile::fixture("g1", "a.txt")
+        }];
+        // The local file is CRLF on disk; the upload sent LF.
         on_upload_replace(
             &mut state,
             Ok(()),
             gist_file_ref("g1", "a.txt"),
             &local_path,
             "hello",
+            "hello\n",
         );
 
         assert!(state.gist_list_stale);
@@ -231,6 +259,21 @@ mod tests {
         assert_eq!(
             state.pinned[0].last_seen_hash.as_deref(),
             Some(crate::domain::sha256_hex(b"hello").as_str())
+        );
+        // Issue #466: the remote baseline is the blob sha of the bytes sent, and the catalog
+        // already shows it, so the pin reads as in sync before the refresh lands.
+        let sent_sha = crate::domain::git_blob_sha1(b"hello\n");
+        assert_eq!(
+            state.pinned[0].remote_blob_sha.as_deref(),
+            Some(sent_sha.as_str())
+        );
+        assert_eq!(
+            state.catalog_blob_sha("g1", "a.txt"),
+            Some(sent_sha.as_str())
+        );
+        assert_eq!(
+            state.compute_pin_sync_status(0),
+            crate::domain::SyncStatus::InSync
         );
 
         match prev {

@@ -82,6 +82,7 @@ pub fn upsert(pinned: &mut Vec<PinnedMapping>, key: PinKey<'_>) {
         gist_filename: key.gist_filename.to_string(),
         direction: None,
         last_seen_hash: None,
+        remote_blob_sha: None,
     });
 }
 
@@ -149,6 +150,7 @@ mod tests {
             gist_filename: filename.into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }
     }
 
@@ -266,6 +268,7 @@ mod tests {
         let mut pinned = vec![PinnedMapping {
             direction: Some(SyncDirection::Upload),
             last_seen_hash: Some("known".into()),
+            remote_blob_sha: None,
             ..mapping("/a.txt", "g1", "a.txt")
         }];
 
@@ -323,10 +326,12 @@ mod tests {
         let mut pinned = vec![
             PinnedMapping {
                 last_seen_hash: Some("first".into()),
+                remote_blob_sha: None,
                 ..mapping("/a.txt", "g1", "a.txt")
             },
             PinnedMapping {
                 last_seen_hash: Some("second".into()),
+                remote_blob_sha: None,
                 ..mapping("/a.txt", "g1", "a.txt")
             },
         ];

@@ -382,6 +382,7 @@ mod tests {
             gist_filename: "config.json".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }];
         let text = render_state_size(&state, 50, 16);
         assert!(

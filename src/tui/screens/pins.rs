@@ -28,7 +28,7 @@ pub(crate) struct PinsVm {
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::Pins;
 const PINS_STATUS_LEGEND: &str =
-    "✓ synced · ↑ local newer · ↓ remote newer · ✕ missing · ? unknown";
+    "✓ synced · ↑ local changed · ↓ gist changed · ↕ both changed · ✕ missing · ? unknown";
 
 pub(crate) fn help_topic() -> HelpTopic {
     HELP_TOPIC
@@ -263,7 +263,10 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
                 });
                 RowVm {
                     label,
-                    emphasis: if status == crate::domain::SyncStatus::Missing {
+                    emphasis: if matches!(
+                        status,
+                        crate::domain::SyncStatus::Missing | crate::domain::SyncStatus::Conflict
+                    ) {
                         RowEmphasis::Danger
                     } else {
                         RowEmphasis::None
@@ -420,6 +423,7 @@ mod tests {
             gist_filename: "a.txt".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }];
         assert!(matches!(
             state.handle_key(KeyCode::Char('s')),
@@ -449,6 +453,7 @@ mod tests {
             gist_filename: "a.txt".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }];
         let KeyOutcome::PreviewPinDiff { entry, .. } = state.handle_key(KeyCode::Enter) else {
             panic!("expected deferred pin diff");
@@ -470,6 +475,7 @@ mod tests {
             gist_filename: "logo.png".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }];
         assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
     }
@@ -522,6 +528,7 @@ mod tests {
             gist_filename: "b.txt".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         });
         state.handle_key(KeyCode::Right);
         assert!(pins_ref(&state).cursor.hscroll > 0);
@@ -545,6 +552,7 @@ mod tests {
                 gist_filename: (*fname).into(),
                 direction: None,
                 last_seen_hash: None,
+                remote_blob_sha: None,
             })
             .collect();
         state
@@ -636,6 +644,7 @@ mod tests {
                 gist_filename: format!("f{i}.txt"),
                 direction: None,
                 last_seen_hash: None,
+                remote_blob_sha: None,
             })
             .collect();
         state.handle_key_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
@@ -775,6 +784,7 @@ mod tests {
             gist_filename: "notes.txt".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }];
         // Hand-populate cache — builder must not need a real file.
         state.pin_sync_cache = vec![crate::tui::PinSyncCacheEntry {
@@ -802,6 +812,7 @@ mod tests {
             gist_filename: "a.txt".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }];
         state.pin_sync_cache.clear();
         let pins = build_pins_vm(&state);
@@ -822,6 +833,7 @@ mod tests {
             gist_filename: "a.txt".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }];
         if let Some(p) = state.pins_mut() {
             p.filter_query = crate::tui::TextInput::from("zzz-no-match");
