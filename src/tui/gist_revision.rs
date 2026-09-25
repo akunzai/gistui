@@ -725,7 +725,10 @@ mod tests {
             ),
             (
                 "selected-versus-current current",
-                vec![CommandOutput::ok(small.clone()), CommandOutput::ok(&big)],
+                vec![
+                    CommandOutput::ok(small.clone()),
+                    CommandOutput::ok(revision_json("a.txt", &big)),
+                ],
                 |entry| RevisionRequest::DiffAgainstCurrent {
                     entry,
                     target: target(),
@@ -746,7 +749,10 @@ mod tests {
             ),
             (
                 "restore-preview current",
-                vec![CommandOutput::ok(small), CommandOutput::ok(&big)],
+                vec![
+                    CommandOutput::ok(small),
+                    CommandOutput::ok(revision_json("a.txt", &big)),
+                ],
                 |entry| RevisionRequest::PreviewRestore {
                     entry,
                     target: target(),
@@ -782,7 +788,7 @@ mod tests {
         let e = entry(&state);
         let runner = scripted(vec![
             CommandOutput::ok(revision_json("a.txt", "old\n")),
-            CommandOutput::ok("current\n"),
+            CommandOutput::ok(revision_json("a.txt", "current\n")),
         ]);
 
         run(
@@ -801,7 +807,7 @@ mod tests {
             runner.calls(),
             vec![
                 crate::gh::gist_revision_plan("g1", "v1"),
-                crate::gh::gist_view_plan("g1", "a.txt"),
+                crate::gh::gist_get_plan("g1"),
             ]
         );
         let diff = state.diff().expect("Screen::Diff");
@@ -873,7 +879,7 @@ mod tests {
             vec![
                 crate::gh::gist_revision_plan("g1", "v1"),
                 crate::gh::raw_url_fetch_plan(entry_raw),
-                crate::gh::gist_view_plan("g1", "a.txt"),
+                crate::gh::gist_get_plan("g1"),
                 crate::gh::raw_url_fetch_plan(current_raw),
             ]
         );
@@ -889,7 +895,7 @@ mod tests {
         let runner = scripted(vec![
             CommandOutput::err("HTTP 502"),
             CommandOutput::ok("old\n"),
-            CommandOutput::ok("current\n"),
+            CommandOutput::ok(revision_json("a.txt", "current\n")),
         ]);
 
         run(
@@ -920,7 +926,7 @@ mod tests {
         let e = entry(&state);
         let runner = scripted(vec![
             CommandOutput::ok(revision_json("a.txt", "old\n")),
-            CommandOutput::ok("current\n"),
+            CommandOutput::ok(revision_json("a.txt", "current\n")),
         ]);
         let mut jobs = Jobs::inline(&GistCatalog::default(), runner.clone());
 
@@ -952,7 +958,7 @@ mod tests {
         let e = entry(&state);
         let runner = scripted(vec![
             CommandOutput::ok(revision_json("a.txt", "same\n")),
-            CommandOutput::ok("same\n"),
+            CommandOutput::ok(revision_json("a.txt", "same\n")),
         ]);
 
         let flow = run(
@@ -983,7 +989,7 @@ mod tests {
         let e = entry(&state);
         let runner = scripted(vec![
             CommandOutput::ok(revision_json("a.txt", "old\n")),
-            CommandOutput::ok("current\n"),
+            CommandOutput::ok(revision_json("a.txt", "current\n")),
         ]);
 
         run(
@@ -1316,7 +1322,7 @@ mod tests {
         let e = entry(&state);
         let runner = scripted(vec![
             CommandOutput::ok(revision_json("a.txt", "old\n")),
-            CommandOutput::ok("current\n"),
+            CommandOutput::ok(revision_json("a.txt", "current\n")),
         ]);
         let mut jobs = Jobs::inline(&GistCatalog::default(), runner.clone());
         let request = RevisionRequest::DiffAgainstCurrent {
@@ -1333,7 +1339,7 @@ mod tests {
         dispatch(&mut jobs, &mut state, request);
         jobs.absorb(&mut state, &None).expect("absorb");
 
-        assert_eq!(runner.calls()[1], crate::gh::gist_view_plan("g1", "a.txt"));
+        assert_eq!(runner.calls()[1], crate::gh::gist_get_plan("g1"));
         Ok(())
     }
 }

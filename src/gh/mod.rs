@@ -124,8 +124,8 @@ pub use forks::{
 mod gists;
 pub use gists::{
     current_user_plan, fetch_current_user_login, fetch_gist_file_content, fetch_gist_list_json,
-    fetch_gist_starred_list_json, gist_list_plan, gist_node_id_map, gist_starred_list_plan,
-    gist_view_plan, merge_gist_node_id_maps, parse_gist_list_json, parse_starred_gist_ids,
+    fetch_gist_starred_list_json, gist_get_plan, gist_list_plan, gist_node_id_map,
+    gist_starred_list_plan, merge_gist_node_id_maps, parse_gist_list_json, parse_starred_gist_ids,
 };
 
 mod revisions;
