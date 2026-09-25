@@ -42,19 +42,43 @@ pub fn current_user_plan() -> CommandPlan {
     }
 }
 
-/// Plan for fetching a single gist file's raw content.
-pub fn gist_view_plan(gist_id: &str, filename: &str) -> CommandPlan {
+/// Plan for one gist's REST record (`GET /gists/{id}`). It carries every file's exact content,
+/// unlike `gh gist view --raw`, which appends a `\n` to a file that lacks one (issue #471).
+pub fn gist_get_plan(gist_id: &str) -> CommandPlan {
     CommandPlan {
         program: "gh".into(),
-        args: vec![
-            "gist".into(),
-            "view".into(),
-            gist_id.to_string(),
-            "--filename".into(),
-            filename.to_string(),
-            "--raw".into(),
-        ],
+        args: vec!["api".into(), format!("/gists/{gist_id}")],
     }
+}
+
+/// One file's content in a `GET /gists/{id}` record: the exact text, or — when the API
+/// truncated it — the `raw_url` that serves it whole.
+#[derive(Debug, PartialEq, Eq)]
+enum GistFileBody {
+    Text(String),
+    Truncated { raw_url: String },
+}
+
+fn gist_file_body(raw: &str, filename: &str) -> Result<GistFileBody> {
+    let gist: serde_json::Value = serde_json::from_str(raw).context("parse gist JSON")?;
+    let file = gist
+        .get("files")
+        .and_then(|files| files.get(filename))
+        .with_context(|| format!("gist has no file named {filename}"))?;
+    if file.get("truncated").and_then(|t| t.as_bool()) == Some(true) {
+        let raw_url = file
+            .get("raw_url")
+            .and_then(|u| u.as_str())
+            .with_context(|| format!("{filename} is truncated and has no raw_url"))?;
+        return Ok(GistFileBody::Truncated {
+            raw_url: raw_url.to_string(),
+        });
+    }
+    let content = file
+        .get("content")
+        .and_then(|c| c.as_str())
+        .with_context(|| format!("{filename} has no content"))?;
+    Ok(GistFileBody::Text(content.to_string()))
 }
 
 pub fn parse_gist_list_json(raw: &str) -> Result<Vec<GistFile>> {
@@ -144,8 +168,13 @@ pub fn fetch_gist_file_content(
     filename: &str,
     raw_url: Option<&str>,
 ) -> Result<String> {
-    match run_command(runner, &gist_view_plan(gist_id, filename)) {
-        Ok(content) => Ok(content),
+    let body =
+        run_command(runner, &gist_get_plan(gist_id)).and_then(|raw| gist_file_body(&raw, filename));
+    match body {
+        Ok(GistFileBody::Text(content)) => Ok(content),
+        Ok(GistFileBody::Truncated { raw_url }) => {
+            run_command(runner, &raw_url_fetch_plan(&raw_url))
+        }
         Err(primary) => {
             if let Some(url) = raw_url.filter(|u| !u.is_empty()) {
                 run_command(runner, &raw_url_fetch_plan(url))
@@ -223,7 +252,58 @@ mod tests {
         let content = fetch_gist_file_content(&runner, "id", "file.md", Some(url)).unwrap();
         assert_eq!(content, "big content");
         let calls = runner.calls();
-        assert_eq!(calls[0], gist_view_plan("id", "file.md"));
+        assert_eq!(calls[0], gist_get_plan("id"));
         assert_eq!(calls[1], raw_url_fetch_plan(url));
+    }
+
+    fn ok(stdout: &str) -> crate::actions::CommandOutput {
+        crate::actions::CommandOutput::ok(stdout)
+    }
+
+    /// Issue #471: the file's exact text comes from the gist record, so a file without a final
+    /// newline does not gain one.
+    #[test]
+    fn fetch_gist_file_content_keeps_a_missing_final_newline() {
+        use crate::actions::test_support::SeqRunner;
+
+        let runner = SeqRunner::new(vec![ok(
+            r#"{"files":{"a.txt":{"content":"no newline","truncated":false},"b.txt":{"content":"x\n"}}}"#,
+        )]);
+
+        let content = fetch_gist_file_content(&runner, "id", "a.txt", None).unwrap();
+        assert_eq!(content, "no newline");
+        assert_eq!(runner.calls(), vec![gist_get_plan("id")]);
+    }
+
+    #[test]
+    fn fetch_gist_file_content_fetches_a_truncated_file_from_its_fresh_raw_url() {
+        use crate::actions::test_support::SeqRunner;
+
+        let fresh = "https://gist.githubusercontent.com/u/id/raw/new/a.txt";
+        let stale = "https://gist.githubusercontent.com/u/id/raw/old/a.txt";
+        let runner = SeqRunner::new(vec![
+            ok(&format!(
+                r#"{{"files":{{"a.txt":{{"content":"part","truncated":true,"raw_url":"{fresh}"}}}}}}"#
+            )),
+            ok("whole"),
+        ]);
+
+        let content = fetch_gist_file_content(&runner, "id", "a.txt", Some(stale)).unwrap();
+        assert_eq!(content, "whole");
+        assert_eq!(
+            runner.calls(),
+            vec![gist_get_plan("id"), raw_url_fetch_plan(fresh)]
+        );
+    }
+
+    #[test]
+    fn fetch_gist_file_content_falls_back_when_the_record_lacks_the_file() {
+        use crate::actions::test_support::SeqRunner;
+
+        let url = "https://gist.githubusercontent.com/u/id/raw/hash/a.txt";
+        let runner = SeqRunner::new(vec![ok(r#"{"files":{}}"#), ok("from raw")]);
+
+        let content = fetch_gist_file_content(&runner, "id", "a.txt", Some(url)).unwrap();
+        assert_eq!(content, "from raw");
     }
 }

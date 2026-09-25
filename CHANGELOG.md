@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Downloading, diffing, or previewing a gist file that doesn't end with a newline no longer
+  adds one: file content is now read from the gist's API record rather than
+  `gh gist view --raw`, which appends a newline to such files.
+
 - A pin no longer stays on ↓ Pull after uploading a CRLF, redact-edited, or JSON-reformatted
   file: the pin now remembers the local file as it sits on disk, not the bytes sent.
 - With `normalize_line_endings` off, a line-ending-only difference is a real difference: the

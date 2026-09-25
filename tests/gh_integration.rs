@@ -13,7 +13,7 @@ use gistui::actions::{run_command, upload_command, CommandOutput, CommandPlan, C
 use gistui::domain::GistFile;
 use gistui::gh::{
     auth_status_plan, check_gh_ready, fetch_gist_comments_page, fetch_gist_file_content,
-    fetch_gist_list_json, gh_version_plan, gist_comments_page_plan, gist_list_plan, gist_view_plan,
+    fetch_gist_list_json, gh_version_plan, gist_comments_page_plan, gist_get_plan, gist_list_plan,
     parse_gist_comments_json, parse_gist_list_json,
 };
 
@@ -83,16 +83,15 @@ fn fetch_gist_list_surfaces_stderr_on_failure() {
 }
 
 #[test]
-fn fetch_gist_file_content_returns_stdout_and_plans_view() {
-    let runner = FakeRunner::new(vec![FakeRunner::ok("hello = true\n")]);
+fn fetch_gist_file_content_reads_the_gist_record() {
+    let runner = FakeRunner::new(vec![FakeRunner::ok(
+        r#"{"files":{"config.toml":{"content":"hello = true\n"}}}"#,
+    )]);
 
     let content = fetch_gist_file_content(&runner, "abc123", "config.toml", None).unwrap();
 
     assert_eq!(content, "hello = true\n");
-    assert_eq!(
-        runner.calls.borrow()[0],
-        gist_view_plan("abc123", "config.toml")
-    );
+    assert_eq!(runner.calls.borrow()[0], gist_get_plan("abc123"));
 }
 
 #[test]

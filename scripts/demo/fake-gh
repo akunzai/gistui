@@ -118,7 +118,7 @@ def gist_revision_row(gid, version):
     }
 
 
-def gist_api_row(gid, g):
+def gist_api_row(gid, g, with_content=False):
     fork_n = int(g.get("forks", 0))
     row = {
         "id": gid,
@@ -138,6 +138,11 @@ def gist_api_row(gid, g):
             for fn in g["files"]
         },
     }
+    if with_content:
+        # `GET /gists/{id}` carries each file's content; the list endpoint does not.
+        for fn, f in row["files"].items():
+            f["content"] = g["files"][fn]
+            f["truncated"] = False
     if g.get("is_fork") and g.get("fork_of_id"):
         row["fork_of"] = {"id": g["fork_of_id"]}
     return row
@@ -241,7 +246,7 @@ def main():
                 d = load()
                 g = d["gists"].get(tail)
                 if g:
-                    print(json.dumps(gist_api_row(tail, g)))
+                    print(json.dumps(gist_api_row(tail, g, with_content=True)))
                     return 0
                 return 0
             gid, rest = tail.split("/", 1)
