@@ -52,7 +52,7 @@ impl ConfigField {
             Self::CheckUpdates => "daily GitHub version check",
             Self::DiffShowFull => "open Diff expanded",
             Self::IgnoreTrailingNewline => "hide newline-only diffs",
-            Self::NormalizeLineEndings => "force LF on upload/download",
+            Self::NormalizeLineEndings => "force LF on upload/create/download",
             Self::ScanDepth => "directory levels to scan",
             Self::DiffContext => "unchanged lines around edits",
         }

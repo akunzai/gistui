@@ -624,7 +624,11 @@ pub(crate) fn on_restore_revision_ready(
 ) -> LoopFlow {
     match result {
         Ok((revision_content, current_content)) => {
-            if revision_content == current_content {
+            if state
+                .settings
+                .sync_policy()
+                .identical(&revision_content, &current_content)
+            {
                 state.set_status("revision matches current — nothing to restore");
                 return LoopFlow::SkipIteration;
             }
@@ -1573,6 +1577,44 @@ mod tests {
             Some(PendingAction::RestoreRevision { gist_id, filename, .. })
                 if gist_id == "g1" && filename == "a.txt"
         ));
+    }
+
+    /// Issue #465: a line-endings-only revision follows the Sync policy's identical rule —
+    /// nothing to restore with normalization on; with it off, Confirm opens, its diff says
+    /// why, and the payload keeps the revision's own bytes.
+    #[test]
+    fn on_restore_revision_ready_line_endings_only_follows_the_setting() {
+        let run = |state: &mut AppState| {
+            on_restore_revision_ready(
+                state,
+                initial_state().defer_entry(),
+                Ok(("a\r\nb\r\n".into(), "a\nb\n".into())),
+                "g1".into(),
+                "a.txt".into(),
+                "abc123".into(),
+                "abc1234".into(),
+            )
+        };
+
+        let mut state = initial_state();
+        assert!(matches!(run(&mut state), LoopFlow::SkipIteration));
+        assert!(state.pending_action().is_none());
+
+        let mut state = initial_state();
+        state
+            .settings
+            .adjust(crate::tui::ConfigField::NormalizeLineEndings, true);
+        assert!(matches!(run(&mut state), LoopFlow::Proceed));
+        assert!(matches!(
+            state.pending_action(),
+            Some(PendingAction::RestoreRevision { content, .. }) if content == "a\r\nb\r\n"
+        ));
+        assert!(state
+            .confirm()
+            .unwrap()
+            .body
+            .text
+            .contains("@@ line endings differ: --- CRLF, +++ LF @@"));
     }
 
     #[test]

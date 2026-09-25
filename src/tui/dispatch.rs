@@ -262,6 +262,8 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                 return LoopFlow::Proceed;
             };
             let upload_content = draft.content(&state.settings);
+            // The pin baseline is the local file on disk, not the bytes sent (#465).
+            let local_content = draft.original_content.clone();
             let (gist_id, filename, local_path) = (
                 draft.gist_id.clone(),
                 draft.filename.clone(),
@@ -293,8 +295,8 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                 crate::actions::upload_add_command(&temp_file_path, &file.gist_id)
             };
 
-            // Confirm is gone once the job runs: the outcome gets the target and the exact
-            // bytes written above, never a re-read of the Upload draft on Confirm (#460).
+            // Confirm is gone once the job runs: the outcome gets the target and the local
+            // file's bytes as read, never a re-read of the Upload draft on Confirm (#460).
             state.leave();
             let runner = jobs.command_runner();
             jobs.spawn_action(
@@ -313,7 +315,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                         result,
                         file,
                         &local_path,
-                        &upload_content,
+                        &local_content,
                     )
                 },
             );
@@ -323,7 +325,35 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                 return LoopFlow::Proceed;
             };
             let description = state.description_input.to_string();
-            let plan = crate::actions::create_command(&local_path, public, &description);
+            // Send the bytes the Sync policy dictates (#465). When that rewrites the file,
+            // upload a same-named scratch copy; otherwise hand `gh` the file itself, so an
+            // unreadable or non-text file still creates as before.
+            let normalized = crate::domain::read_text_file_capped(&local_path)
+                .ok()
+                .and_then(|text| match state.settings.sync_policy().outbound(&text) {
+                    std::borrow::Cow::Owned(normalized) => Some(normalized),
+                    std::borrow::Cow::Borrowed(_) => None,
+                });
+            let mut scratch = None;
+            let mut source = local_path.clone();
+            if let Some(normalized) = normalized {
+                let Some(filename) = local_path.file_name().and_then(|n| n.to_str()) else {
+                    return LoopFlow::Proceed;
+                };
+                let Some((dir, path)) = write_scratch_file(
+                    state,
+                    "create",
+                    filename,
+                    "temp file",
+                    normalized.as_bytes(),
+                ) else {
+                    return LoopFlow::Proceed;
+                };
+                scratch = Some(dir);
+                source = path;
+            }
+            let plan = crate::actions::create_command(&source, public, &description);
+            let runner = jobs.command_runner();
 
             jobs.spawn_action(
                 state,
@@ -335,9 +365,11 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                     "Creating gist…",
                 ),
                 move || {
-                    crate::actions::execute_command(&plan)
+                    let result = crate::actions::run_command(runner.as_ref(), &plan)
                         .map(|_| ())
-                        .map_err(|e| e.to_string())
+                        .map_err(|e| e.to_string());
+                    drop(scratch);
+                    result
                 },
                 move |result, state| {
                     gist_mutation::on_create_gist(state, result, local_path, public)
@@ -812,13 +844,34 @@ mod tests {
         );
     }
 
-    /// Issue #460: a pin push confirmed from Pins → Confirm must record the pin sync for the
-    /// bytes actually uploaded and return to Pins, even after the upload arm has left Confirm
-    /// and a setting changes while the job runs.
+    /// Succeeds every command and records, per call, the contents of each argument that
+    /// names an existing file — the scratch copy a job hands `gh` is gone once it returns.
+    #[derive(Default)]
+    struct FileCapturingRunner {
+        sent: std::sync::Mutex<Vec<(crate::actions::CommandPlan, Vec<String>)>>,
+    }
+
+    impl crate::actions::CommandRunner for FileCapturingRunner {
+        fn run(
+            &self,
+            plan: &crate::actions::CommandPlan,
+        ) -> anyhow::Result<crate::actions::CommandOutput> {
+            let files = plan
+                .args
+                .iter()
+                .filter_map(|arg| std::fs::read_to_string(arg).ok())
+                .collect();
+            self.sent.lock().unwrap().push((plan.clone(), files));
+            Ok(crate::actions::CommandOutput::ok(""))
+        }
+    }
+
+    /// Issue #460: a pin push confirmed from Pins → Confirm must record the pin sync and
+    /// return to Pins, even after the upload arm has left Confirm and a setting changes while
+    /// the job runs. Issue #465: it sends the normalized bytes, but the pin baseline is the
+    /// local file as it sits on disk.
     #[test]
     fn upload_from_pin_push_records_pin_sync_and_returns_to_pins() {
-        use crate::actions::test_support::SeqRunner;
-        use crate::actions::CommandOutput;
         use crate::domain::SyncDirection;
 
         let _guard = crate::config::tests::ENV_MUTEX
@@ -854,7 +907,7 @@ mod tests {
             None,
         );
 
-        let runner = std::sync::Arc::new(SeqRunner::new(vec![CommandOutput::ok("")]));
+        let runner = std::sync::Arc::new(FileCapturingRunner::default());
         let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
         route_outcome(KeyOutcome::Upload, &mut state, &mut jobs);
         // A setting flipped mid-upload must not change what the pin records.
@@ -868,14 +921,57 @@ mod tests {
             Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
             None => std::env::remove_var("XDG_CONFIG_HOME"),
         }
-        assert_eq!(runner.calls().len(), 1);
+        let sent = runner.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].1, vec!["a\nb\n".to_string()]);
         assert_eq!(state.status.as_deref(), Some("Uploaded a.txt to gist g1"));
         assert_eq!(state.pinned[0].direction, Some(SyncDirection::Upload));
         assert_eq!(
             state.pinned[0].last_seen_hash.as_deref(),
-            Some(crate::domain::sha256_hex(b"a\nb\n").as_str())
+            Some(crate::domain::sha256_hex(b"a\r\nb\r\n").as_str())
         );
         assert!(state.screen.is_pins(), "landed on {:?}", state.screen);
         assert_eq!(state.nav_stack.len(), 1);
+    }
+
+    /// Issue #465: create sends the bytes the Sync policy dictates — a normalized scratch copy
+    /// under the same filename when normalization rewrites the file, the file itself otherwise.
+    #[test]
+    fn create_sends_normalized_bytes_only_when_normalization_rewrites_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_path = dir.path().join("a.txt");
+        std::fs::write(&local_path, "a\r\nb\r\n").unwrap();
+
+        for (normalize, expected) in [(true, "a\nb\n"), (false, "a\r\nb\r\n")] {
+            let mut state = initial_state();
+            if !normalize {
+                state
+                    .settings
+                    .adjust(crate::tui::ConfigField::NormalizeLineEndings, true);
+            }
+            state.enter_confirm(
+                PendingAction::Create {
+                    local_path: local_path.clone(),
+                },
+                String::new(),
+            );
+            let runner = std::sync::Arc::new(FileCapturingRunner::default());
+            let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
+
+            route_outcome(KeyOutcome::Create(false), &mut state, &mut jobs);
+
+            let sent = runner.sent.lock().unwrap();
+            assert_eq!(sent.len(), 1, "normalize={normalize}");
+            let (plan, files) = &sent[0];
+            assert_eq!(&plan.args[..2], ["gist", "create"]);
+            assert!(plan.args[2].ends_with("a.txt"), "{:?}", plan.args);
+            assert_eq!(
+                plan.args[2] == local_path.display().to_string(),
+                !normalize,
+                "normalize={normalize}: {:?}",
+                plan.args
+            );
+            assert_eq!(files, &vec![expected.to_string()], "normalize={normalize}");
+        }
     }
 }

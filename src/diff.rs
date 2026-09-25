@@ -112,8 +112,10 @@ pub fn collapse_context(diff: &str, radius: usize) -> String {
     out
 }
 
+/// Header lines survive collapsing: the `--- / +++` labels, and any `@@` note placed under
+/// them (e.g. the Sync policy's line-ending note). `unified_diff` itself never emits `@@`.
 fn is_header(line: &str) -> bool {
-    line.starts_with("---") || line.starts_with("+++")
+    line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@")
 }
 
 #[cfg(test)]

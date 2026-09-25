@@ -430,7 +430,10 @@ pub(crate) fn on_revision_diff(
                 &new_label,
                 &new_content,
             );
-            let identical = old_content == new_content;
+            let identical = state
+                .settings
+                .sync_policy()
+                .identical(&old_content, &new_content);
             // `enter_diff` (via `enter`) parks the live Revisions screen so Esc
             // restores list cursor/entries.
             state.open_deferred(
@@ -764,6 +767,43 @@ mod tests {
         let diff = state.diff().expect("expected Screen::Diff");
         assert_eq!(diff.remote_content, "remote body");
         assert!(!diff.identical);
+    }
+
+    /// Issue #465: a CRLF gist against an LF local file is identical (nothing to sync) with
+    /// normalization on; with it off the difference is real, so `d` / `u` stay available.
+    #[test]
+    fn on_preview_diff_line_endings_only_follows_the_setting() {
+        let dir = tempfile::tempdir().unwrap();
+        let local = dir.path().join("a.txt");
+        std::fs::write(&local, "a\nb\n").unwrap();
+
+        for normalize in [true, false] {
+            let mut state = initial_state();
+            if !normalize {
+                state
+                    .settings
+                    .adjust(crate::tui::ConfigField::NormalizeLineEndings, true);
+            }
+            on_preview_diff(
+                &mut state,
+                initial_state().defer_entry(),
+                Ok("a\r\nb\r\n".into()),
+                Some(local.clone()),
+                "local".into(),
+                "gist".into(),
+                local.clone(),
+                false,
+                None,
+            );
+
+            let diff = state.diff().expect("expected Screen::Diff");
+            assert_eq!(diff.identical, normalize, "normalize={normalize}");
+            assert_eq!(
+                diff.body.text.contains("line endings differ"),
+                !normalize,
+                "normalize={normalize}"
+            );
+        }
     }
 
     #[test]

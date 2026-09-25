@@ -23,15 +23,16 @@ fn apply(
     LoopFlow::Proceed
 }
 
-/// `UploadReplace` outcome: commit the pin-sync record for the bytes that were uploaded,
-/// then re-fetch the gist list. Navigation already happened when the upload started — the
+/// `UploadReplace` outcome: commit the pin-sync record for the local file's bytes on disk
+/// (the pin baseline, #465 — not the possibly redacted / transformed bytes sent), then
+/// re-fetch the gist list. Navigation already happened when the upload started — the
 /// Upload arm left Confirm for wherever it was opened from (List, or Pins for a pin push).
 pub(crate) fn on_upload_replace(
     state: &mut AppState,
     result: Result<(), String>,
     file: crate::domain::GistFileRef,
     local_path: &std::path::Path,
-    content: &str,
+    local_content: &str,
 ) -> LoopFlow {
     apply(state, result, "upload", |state| {
         state.gist_content_store.invalidate_file(&file);
@@ -40,7 +41,7 @@ pub(crate) fn on_upload_replace(
             local_path,
             &file.gist_id,
             &file.filename,
-            content,
+            local_content,
             Some(crate::domain::SyncDirection::Upload),
         );
         format!("Uploaded {} to gist {}", file.filename, file.gist_id)

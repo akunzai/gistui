@@ -34,10 +34,11 @@ check_updates = true
 # Set false for strict, byte-exact diffs.
 ignore_trailing_newline = true
 
-# Rewrite CRLF/lone-CR line endings to LF in the bytes actually sent/written on upload and
-# download (unlike ignore_trailing_newline above, this changes real content, not just the
-# diff view). Default: true. Set false to preserve a file's original line-ending style
-# through upload/download untouched.
+# Rewrite CRLF/lone-CR line endings to LF in the bytes actually sent/written on upload,
+# create, and download (unlike ignore_trailing_newline above, this changes real content, not
+# just the diff view); a line-ending-only difference then counts as identical. Default: true.
+# Set false to preserve a file's original line-ending style through sync: a line-ending-only
+# difference is then a real one that the diff notes and `d` / `u` can sync.
 normalize_line_endings = true
 
 # Directories skipped when recursive local file discovery is active (r key).
