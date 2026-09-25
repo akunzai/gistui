@@ -10,13 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] — 2026-09-25
+
 - Changing a setting or a pin no longer rewrites `config.toml` from scratch: comments, key
   order, keys gistui doesn't know, and values you wrote out stay as they are; only the changed
   value moves (and a value set back to its default is removed).
-
 - `?` help's Config topic lists every setting again (it was missing *Normalize line endings*);
   it is now built from the same list as the Settings screen, so it can't fall behind.
-
 - The upload redact buffer (content before redaction) no longer sits in the shared temp
   directory under a predictable, world-readable name: it is created fresh in a private scratch
   directory (owner-only on Unix) and removed when editing ends, even if gistui quits while a GUI
@@ -25,7 +25,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Editors on Windows: with no `$VISUAL` / `$EDITOR` set, Notepad opens (not a missing `vi`);
   `.cmd` launchers such as VS Code's `code` are found on `PATH`; and an editor path with spaces
   works quoted — or unquoted, when it names an existing file.
-
 - A failed gist create returns to the list without leaving the create confirmation behind it,
   so going back no longer lands on a screen that no longer applies.
 - Creating a gist from a file whose name isn't valid UTF-8 now says it can't, instead of
@@ -323,7 +322,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.21.0...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.22.0...HEAD
+[0.22.0]: https://github.com/akunzai/gistui/releases/tag/v0.22.0
 [0.21.0]: https://github.com/akunzai/gistui/releases/tag/v0.21.0
 [0.20.0]: https://github.com/akunzai/gistui/releases/tag/v0.20.0
 [0.19.0]: https://github.com/akunzai/gistui/releases/tag/v0.19.0
