@@ -19,7 +19,8 @@ No **new** facade re-export was added for the moved types, and `src/tui/mod.rs`'
 
 ## Runtime settings (`src/tui/settings.rs`, issue #404)
 
-- `RuntimeSettings` is the only runtime owner of the seven Settings-screen preferences and the `--no-mouse` / `--no-update-check` session overrides. Effective mouse and update-check values are derived; `Theme` is derived from `ThemeChoice`.
+- The Settings-screen preferences are one struct, `config::Preferences`: its `Default` is the only place their defaults live, `AppConfig` flattens it into top-level keys, and `RuntimeSettings` holds it (plus the `--no-mouse` / `--no-update-check` session overrides) as the only runtime owner. Effective mouse and update-check values are derived; `Theme` is derived from `ThemeChoice`.
+- A new preference is: a `Preferences` field (+ its default), a `config_fields!` line (label, Settings description, `?` help — `ConfigField::ALL` and the Config help topic are generated from it), and its arms in `adjust` / `field_value` (exhaustive; on/off fields go through `flag_mut`). Saving needs nothing: `save_config` writes every key that differs from `AppConfig::default()`, in declaration order (`toml` `preserve_order`), plus `pinned`.
 - Settings-screen edits, global theme toggle, and Diff context toggle all call `RuntimeSettings::adjust`. Only a mouse change returns `SettingsEffect::SyncMouseCapture`; dispatch owns that terminal IO.
 - Persistence loads the current `AppConfig`, calls `apply_to_config`, then saves. That projection updates every runtime-owned field and leaves pins, skip directories, and other config data intact.
 

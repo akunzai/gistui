@@ -253,6 +253,38 @@ pub(crate) fn about_topic_lines_plain(state: &AppState) -> Vec<String> {
     lines
 }
 
+/// The Config topic. Its field list is built from [`crate::tui::ConfigField::ALL`], so a new
+/// setting shows up in help as soon as it shows up on the Settings screen.
+fn config_topic() -> &'static str {
+    static BODY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        use crate::tui::ConfigField;
+        let width = ConfigField::ALL
+            .iter()
+            .map(|f| f.label().chars().count())
+            .max()
+            .unwrap_or(0)
+            + 2;
+        let fields: String = ConfigField::ALL
+            .iter()
+            .map(|f| format!("  {:<width$}{}\n", f.label(), f.help()))
+            .collect();
+        format!(
+            "\
+Settings (C, top-bar (C)onfig, or Ctrl+p → Open settings)
+  Up/Down    move between fields (also j / k)
+  Enter/Space  toggle a boolean, or increase a number
+  h / l      decrease / increase (also ← / →)
+  Esc / q    close (opening Settings never writes config by itself —
+             values are saved only after you change a field)
+
+Fields
+{fields}
+File-only: skip_dirs — ~/.config/gistui/config.toml (or $XDG_CONFIG_HOME)"
+        )
+    });
+    BODY.as_str()
+}
+
 pub(crate) fn help_topic_body(topic: HelpTopic) -> &'static str {
     match topic {
         HelpTopic::List => {
@@ -419,26 +451,7 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   p          (JSON only) toggle pretty-print formatting
   s          (JSON only) toggle recursive key sorting"
         }
-        HelpTopic::Config => {
-            "\
-Settings (C, top-bar (C)onfig, or Ctrl+p → Open settings)
-  Up/Down    move between fields (also j / k)
-  Enter/Space  toggle a boolean, or increase a number
-  h / l      decrease / increase (also ← / →)
-  Esc / q    close (opening Settings never writes config by itself —
-             values are saved only after you change a field)
-
-Fields
-  Theme                  dark / light (also global T)
-  Mouse support          on / off (session still respects --no-mouse)
-  Check for updates      on / off (session still respects --no-update-check)
-  Show full diff         on / off (opens Diff expanded; c still toggles it)
-  Ignore trailing newline  on / off (diff + overwrite confirm)
-  Recursive scan depth   0–20 (r recursive discovery)
-  Diff context lines     0–50 (c in Diff still toggles full vs this radius)
-
-File-only: skip_dirs — ~/.config/gistui/config.toml (or $XDG_CONFIG_HOME)"
-        }
+        HelpTopic::Config => config_topic(),
         HelpTopic::General => {
             "\
   Esc / q    close an overlay; from the list, press twice to quit the app
@@ -595,6 +608,19 @@ mod tests {
     use crate::tui::test_support::{help_mut, help_ref, state_with_gists};
     use crate::tui::*;
     use crossterm::event::KeyCode;
+
+    #[test]
+    fn config_topic_lists_every_settings_field() {
+        let body = help_topic_body(HelpTopic::Config);
+        for field in crate::tui::ConfigField::ALL {
+            assert!(
+                body.lines()
+                    .any(|l| l.contains(field.label()) && l.contains(field.help())),
+                "{} is missing from the Config help topic",
+                field.label()
+            );
+        }
+    }
 
     #[test]
     fn footer_help_rows_align_with_the_key_column() {
