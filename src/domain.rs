@@ -94,27 +94,6 @@ pub fn git_blob_sha1(bytes: &[u8]) -> String {
     hex_lower(&hasher.finalize())
 }
 
-/// The remote side of a Sync baseline for gist content fetched as `fetched`, given the blob
-/// sha the catalog's `raw_url` currently shows. `gh gist view --raw` appends a `\n` to a file
-/// that lacks one, so the fetched text is not always the gist's exact bytes: when it — or it
-/// minus that one trailing `\n` — hashes to the catalog sha, that sha is the gist's. Otherwise
-/// the catalog is stale (or has no sha), and the fetched text is the best evidence.
-pub fn remote_blob_sha(fetched: &str, catalog_sha: Option<&str>) -> String {
-    let sha = git_blob_sha1(fetched.as_bytes());
-    let Some(catalog_sha) = catalog_sha else {
-        return sha;
-    };
-    let matches = sha == catalog_sha
-        || fetched
-            .strip_suffix('\n')
-            .is_some_and(|s| git_blob_sha1(s.as_bytes()) == catalog_sha);
-    if matches {
-        catalog_sha.to_string()
-    } else {
-        sha
-    }
-}
-
 /// The blob sha in a gist file `raw_url`
 /// (`https://gist.githubusercontent.com/<user>/<gist_id>/raw/<sha>/<filename>`), if the URL
 /// has that shape.
@@ -605,20 +584,6 @@ mod tests {
             raw_url_with_blob_sha("https://example.test/a.txt", "abc"),
             None
         );
-    }
-
-    #[test]
-    fn remote_blob_sha_forgives_the_newline_gh_appends() {
-        let hello = git_blob_sha1(b"hello");
-        // gh printed "hello\n" for a gist file holding "hello".
-        assert_eq!(remote_blob_sha("hello\n", Some(&hello)), hello);
-        assert_eq!(remote_blob_sha("hello", Some(&hello)), hello);
-        // The catalog is stale: the fetched text is the evidence.
-        assert_eq!(
-            remote_blob_sha("new\n", Some(&hello)),
-            git_blob_sha1(b"new\n")
-        );
-        assert_eq!(remote_blob_sha("hello", None), hello);
     }
 
     #[test]

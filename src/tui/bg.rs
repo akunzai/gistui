@@ -390,8 +390,7 @@ pub(super) fn record_pin_sync(
     if crate::pins::find_by_resolved_path(&state.pinned, &state.cwd, pair).is_none() {
         return;
     }
-    let remote_blob_sha =
-        crate::domain::remote_blob_sha(remote_content, state.catalog_blob_sha(gist_id, filename));
+    let remote_blob_sha = crate::domain::git_blob_sha1(remote_content.as_bytes());
     let result = crate::pin_store::PinStore::in_default_location().and_then(|store| {
         store.record_sync(&state.cwd, pair, local_content, &remote_blob_sha, direction)
     });
