@@ -250,6 +250,7 @@ hashing sync content, saving, and describing what changed. The `pin_mapping` /
 
 - `refresh_pin_sync_cache` is **impure** (stat/read/hash); fills `AppState::pin_sync_cache`.
 - Refresh on: enter/return Pins, pin-list change, successful pin-sync absorb, dirty flag / length mismatch — **not** every frame, **not** from the pure VM builder.
+- **Status comes from the Sync baseline when a pin has one** (issue #466): local SHA-256 of the file on disk vs `last_seen_hash`, remote blob sha from the catalog's `raw_url` vs `remote_blob_sha` → `domain::baseline_status` (InSync / Push / Pull / Conflict). No timestamps on that path; a pin without both baselines, or a file with no `raw_url` sha, keeps the mtime + local-hash fallback. `record_pin_sync` derives the remote side with `domain::remote_blob_sha`, which forgives the `\n` `gh gist view --raw` appends. A successful upload patches the catalog's `raw_url` sha in memory so the pin reads in sync before the refresh lands.
 - Action dispatch may call `compute_pin_sync_status` one-shot; paint uses `cached_pin_sync_status` / the VM only.
 - No mtime watch: staying on Pins after an external editor edit can leave badges stale until the next refresh.
 

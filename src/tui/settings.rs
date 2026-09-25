@@ -301,6 +301,7 @@ mod tests {
             gist_filename: "a.txt".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         });
         target.skip_dirs = vec!["keep-me".into()];
         settings.apply_to_config(&mut target);

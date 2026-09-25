@@ -23,3 +23,7 @@ _Avoid_: upload state, upload buffer
 **Sync policy**:
 The content rules for syncing a local file with a gist file: which bytes an upload or create sends, which bytes a download writes, when the two sides count as identical, and how the diff between them reads. The `normalize_line_endings` and `ignore_trailing_newline` settings decide it. A pin's baseline is the local file's bytes on disk after a sync. Restoring a Gist revision copies gist to gist, so its payload is not a sync.
 _Avoid_: normalization helper, line-ending logic
+
+**Sync baseline**:
+What a pin remembers of its last sync, one value per side: the local file's bytes on disk (SHA-256) and the gist file's content (its git blob SHA, the one in its `raw_url`). Comparing both sides with now tells whether the local file changed, the gist changed, or both (a conflict).
+_Avoid_: last seen hash, sync timestamp

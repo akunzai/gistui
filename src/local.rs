@@ -161,6 +161,7 @@ mod tests {
                 gist_filename: "settings.json".into(),
                 direction: None,
                 last_seen_hash: None,
+                remote_blob_sha: None,
             },
             PinnedMapping {
                 local_path: outside,
@@ -168,6 +169,7 @@ mod tests {
                 gist_filename: "x".into(),
                 direction: None,
                 last_seen_hash: None,
+                remote_blob_sha: None,
             },
         ];
 
@@ -251,6 +253,7 @@ mod tests {
             gist_filename: "pinned.toml".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }];
         let skip_dirs = vec![".ignored".to_string()];
 

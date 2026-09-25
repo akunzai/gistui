@@ -224,6 +224,7 @@ pub(super) fn pins_state_with_long_home_path() -> AppState {
         gist_filename: "config.json".into(),
         direction: None,
         last_seen_hash: None,
+        remote_blob_sha: None,
     }];
     pins_mut(&mut state).cursor.index = 0;
     state

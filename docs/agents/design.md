@@ -65,7 +65,7 @@ Only these marks are used, and only where the meaning is unambiguous in context:
 | `⑂` | fork | gist rows, gist info line |
 | `⚑` | this pane is the anchor | List pane titles |
 | `↔` | a pinned local/gist pair | List rows, Pins rows |
-| `✓ ↑ ↓ ✕ ?` | pin sync status | Pins rows, with a legend on screen |
+| `✓ ↑ ↓ ↕ ✕ ?` | pin sync status | Pins rows, with a legend on screen |
 | `▶` / `▸` | the selected row | every list |
 
 Every mark is single-width. A double-width glyph misaligns the columns beside it and forces

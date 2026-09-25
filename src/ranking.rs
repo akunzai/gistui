@@ -160,6 +160,7 @@ mod tests {
             gist_filename: "other.json".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }];
 
         let ranked = rank_gist_files(&local, &files, &pinned);
@@ -233,6 +234,7 @@ mod tests {
             gist_filename: "todo.md".into(),
             direction: None,
             last_seen_hash: None,
+            remote_blob_sha: None,
         }];
 
         let ranked = rank_local_files(&target, &locals, &pinned);

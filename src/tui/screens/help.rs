@@ -324,7 +324,7 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   d          force pull  (download gist → local, diff + y/n confirm)
   x          unpin the selected pair
   Footer     shows sync actions; the status row explains the glyphs
-  status     ✓ synced · ↑ local newer · ↓ remote newer · ✕ missing · ? unknown
+  status     ✓ synced · ↑ local changed · ↓ gist changed · ↕ both changed · ✕ missing · ? unknown
   Each row shows (local <age> · gist <age>) relative modification times.
 "#
         }
@@ -597,7 +597,8 @@ mod tests {
     #[test]
     fn footer_help_rows_align_with_the_key_column() {
         let pins = help_topic_body(HelpTopic::Pins);
-        let legend = "✓ synced · ↑ local newer · ↓ remote newer · ✕ missing · ? unknown";
+        let legend =
+            "✓ synced · ↑ local changed · ↓ gist changed · ↕ both changed · ✕ missing · ? unknown";
         assert_eq!(pins.matches(legend).count(), 1);
 
         let pin_lines: Vec<_> = pins.lines().collect();

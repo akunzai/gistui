@@ -44,6 +44,7 @@ flate2 = "1"
 ratatui = "0.30"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+sha1 = "0.11"
 sha2 = "0.11"
 similar = "3"
 synoptic = "2.2.9"
