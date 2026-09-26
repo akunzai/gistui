@@ -195,7 +195,11 @@ pub fn execute_plan(plan: &UpgradePlan, client: &impl ReleaseClient) -> Result<E
         .download(&archive_url)
         .with_context(|| format!("could not download release asset for {}", platform.target))?;
     let checksum_bytes = client.download(&checksum_url)?;
-    let expected_hash = parse_sha256_file(&String::from_utf8_lossy(&checksum_bytes))?;
+    let expected_hash = parse_sha256_file(
+        &String::from_utf8_lossy(&checksum_bytes),
+        &asset.archive_name,
+    )
+    .with_context(|| format!("invalid checksum file for {}", asset.archive_name))?;
     verify_sha256(&archive_bytes, &expected_hash)
         .with_context(|| format!("checksum mismatch for {}", asset.archive_name))?;
 
@@ -302,16 +306,30 @@ pub fn parse_latest_release_tag(body: &[u8]) -> Result<String> {
         .context("latest-release JSON missing tag_name")
 }
 
-pub fn parse_sha256_file(content: &str) -> Result<String> {
-    let line = content
-        .lines()
-        .map(str::trim)
-        .find(|l| !l.is_empty())
-        .context("checksum file is empty")?;
-    let hash = line
-        .split_whitespace()
-        .next()
-        .context("checksum line missing hash")?;
+/// Read the expected digest from a release's `<archive>.sha256` asset.
+///
+/// Fails closed: the file must hold exactly one `<sha256-hex>  <archive_name>` line
+/// naming the archive being installed. CRLF and the `*` binary-mode marker that
+/// `sha256sum -b` writes are tolerated; every published release matches this shape.
+pub fn parse_sha256_file(content: &str, archive_name: &str) -> Result<String> {
+    let mut lines = content.lines().map(str::trim).filter(|l| !l.is_empty());
+    let line = lines.next().context("checksum file is empty")?;
+    if lines.next().is_some() {
+        bail!("checksum file has more than one entry");
+    }
+    let mut fields = line.split_whitespace();
+    let hash = fields.next().context("checksum line missing hash")?;
+    let name = fields.next().context("checksum line missing file name")?;
+    if fields.next().is_some() {
+        bail!("checksum line has unexpected extra fields");
+    }
+    if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        bail!("checksum is not a SHA-256 hex digest");
+    }
+    let name = name.strip_prefix('*').unwrap_or(name);
+    if name != archive_name {
+        bail!("checksum file names {name}, expected {archive_name}");
+    }
     Ok(hash.to_ascii_lowercase())
 }
 
@@ -649,11 +667,41 @@ mod tests {
         assert_eq!(parse_latest_release_tag(body).unwrap(), "v0.12.0");
     }
 
+    const ARCHIVE: &str = "gistui-v0.11.0-x86_64-apple-darwin.tar.gz";
+
     #[test]
     fn parse_sha256_file_tolerates_crlf_and_two_field_format() {
         let hash = "a".repeat(64);
-        let content = format!("{hash}  gistui-v0.11.0-x86_64-apple-darwin.tar.gz\r\n");
-        assert_eq!(parse_sha256_file(&content).unwrap(), hash);
+        let content = format!("{hash}  {ARCHIVE}\r\n");
+        assert_eq!(parse_sha256_file(&content, ARCHIVE).unwrap(), hash);
+    }
+
+    #[test]
+    fn parse_sha256_file_accepts_binary_marker_and_lowercases() {
+        let content = format!("{}  *{ARCHIVE}\n", "AB".repeat(32));
+        assert_eq!(
+            parse_sha256_file(&content, ARCHIVE).unwrap(),
+            "ab".repeat(32)
+        );
+    }
+
+    #[test]
+    fn parse_sha256_file_rejects_malformed_or_foreign_entries() {
+        let hash = "a".repeat(64);
+        let other = "gistui-v0.11.0-aarch64-apple-darwin.tar.gz";
+        for (content, why) in [
+            (String::new(), "empty"),
+            ("\r\n  \n".to_string(), "blank"),
+            (hash.clone(), "hash only, no file name"),
+            (format!("{}  {ARCHIVE}", "a".repeat(63)), "short digest"),
+            (format!("{}  {ARCHIVE}", "g".repeat(64)), "non-hex digest"),
+            (format!("{hash}  {other}"), "names another archive"),
+            (format!("{hash}  {ARCHIVE}.zip"), "names a longer file"),
+            (format!("{hash}  {ARCHIVE} extra"), "extra field"),
+            (format!("{hash}  {ARCHIVE}\n{hash}  {other}"), "two entries"),
+        ] {
+            assert!(parse_sha256_file(&content, ARCHIVE).is_err(), "{why}");
+        }
     }
 
     #[test]
@@ -816,6 +864,90 @@ mod tests {
             execute_plan(&plan, &client).unwrap(),
             ExecuteOutcome::UpdateAvailable
         );
+    }
+
+    /// A standalone plan to upgrade `exe` to the latest release, plus the URLs of
+    /// that release's archive and checksum for the host platform.
+    fn upgrade_fixture(exe: &Path) -> (UpgradePlan, ReleaseAsset, String, String) {
+        let platform = detect_platform().unwrap();
+        let asset = release_asset("99.0.0", &platform);
+        let archive_url = format!(
+            "{}/{}/{}",
+            asset.download_base, asset.version, asset.archive_name
+        );
+        let checksum_url = format!("{archive_url}.sha256");
+        let plan = UpgradePlan {
+            exe_path: exe.to_path_buf(),
+            method: InstallMethod::Standalone,
+            current_version: "0.0.1".to_string(),
+            target_version: String::new(),
+            asset: asset.clone(),
+            check_only: false,
+        };
+        (plan, asset, archive_url, checksum_url)
+    }
+
+    #[test]
+    fn execute_plan_fails_closed_without_a_checksum_asset() {
+        let dir = tempdir().unwrap();
+        let exe = dir.path().join("gistui");
+        fs::write(&exe, b"old").unwrap();
+        let (plan, _, archive_url, _) = upgrade_fixture(&exe);
+        let client = FakeClient {
+            latest: "v99.0.0".to_string(),
+            files: std::collections::HashMap::from([(archive_url, b"archive".to_vec())]),
+        };
+
+        assert!(execute_plan(&plan, &client).is_err());
+        assert_eq!(fs::read(&exe).unwrap(), b"old");
+    }
+
+    #[test]
+    fn execute_plan_refuses_an_archive_whose_digest_does_not_match() {
+        let dir = tempdir().unwrap();
+        let exe = dir.path().join("gistui");
+        fs::write(&exe, b"old").unwrap();
+        let (plan, asset, archive_url, checksum_url) = upgrade_fixture(&exe);
+        let client = FakeClient {
+            latest: "v99.0.0".to_string(),
+            files: std::collections::HashMap::from([
+                (archive_url, b"tampered".to_vec()),
+                (
+                    checksum_url,
+                    format!("{}  {}\n", sha256_hex(b"original"), asset.archive_name).into_bytes(),
+                ),
+            ]),
+        };
+
+        let err = execute_plan(&plan, &client).unwrap_err();
+        assert!(format!("{err:#}").contains("checksum mismatch"), "{err:#}");
+        assert_eq!(fs::read(&exe).unwrap(), b"old");
+    }
+
+    #[test]
+    fn execute_plan_refuses_a_checksum_for_another_archive() {
+        let dir = tempdir().unwrap();
+        let exe = dir.path().join("gistui");
+        fs::write(&exe, b"old").unwrap();
+        let (plan, _, archive_url, checksum_url) = upgrade_fixture(&exe);
+        let client = FakeClient {
+            latest: "v99.0.0".to_string(),
+            files: std::collections::HashMap::from([
+                (archive_url, b"archive".to_vec()),
+                (
+                    checksum_url,
+                    format!("{}  gistui-v99.0.0-other.tar.gz\n", sha256_hex(b"archive"))
+                        .into_bytes(),
+                ),
+            ]),
+        };
+
+        let err = execute_plan(&plan, &client).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("invalid checksum file"),
+            "{err:#}"
+        );
+        assert_eq!(fs::read(&exe).unwrap(), b"old");
     }
 
     #[test]

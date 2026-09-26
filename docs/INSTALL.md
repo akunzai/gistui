@@ -36,6 +36,14 @@ tar -xzf gistui-<version>-<target>.tar.gz
 install -m 755 gistui-<version>-<target>/gistui ~/.local/bin/gistui
 ```
 
+Releases after v0.22.0 also carry a signed build-provenance attestation for each
+archive. With the [GitHub CLI](https://cli.github.com), check that an archive was built by
+this repository's release workflow:
+
+```bash
+gh attestation verify gistui-<version>-<target>.tar.gz --repo akunzai/gistui
+```
+
 ## Homebrew (macOS / Linux)
 
 ```bash
@@ -139,7 +147,7 @@ gistui --upgrade --upgrade-version v0.12.0  # pin to a specific release (0.12.0 
 ```
 
 The upgrader downloads the same checksummed release assets as the install scripts,
-verifies SHA-256, and replaces the **currently running** binary. On Windows the
+verifies SHA-256 (refusing a missing or malformed checksum), and replaces the **currently running** binary. On Windows the
 running `.exe` cannot be overwritten immediately — gistui stages the new binary and
 finishes the swap after you exit the process.
 

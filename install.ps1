@@ -102,8 +102,17 @@ try {
     Die "checksum download failed for $archive"
   }
 
+  # Fail closed: the asset must be exactly one "<sha256-hex>  <archive>" line that
+  # names this archive (CRLF and the "*" binary-mode marker tolerated).
   Write-Host "verifying checksum..."
-  $expected = (((Get-Content $sha256Path -Raw).Trim() -split '\s+')[0])
+  $lines = @([System.IO.File]::ReadAllLines($sha256Path) | Where-Object { $_.Trim() })
+  if ($lines.Count -ne 1) { Die "malformed checksum file for $archive" }
+  $fields = @($lines[0].Trim() -split '\s+')
+  if ($fields.Count -ne 2) { Die "malformed checksum file for $archive" }
+  $expected = $fields[0]
+  if ($expected -notmatch '^[0-9A-Fa-f]{64}$') { Die "malformed checksum in $archive.sha256" }
+  $named = $fields[1].TrimStart('*')
+  if ($named -cne $archive) { Die "checksum file names $named, expected $archive" }
   # Hash via .NET rather than Get-FileHash so we don't depend on the
   # Microsoft.PowerShell.Utility cmdlet being loadable.
   $stream = [System.IO.File]::OpenRead($zipPath)

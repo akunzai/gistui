@@ -12,12 +12,15 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-    # Floating major tags already track latest minor/patch at runtime.
-    # Only surface major action upgrades.
+    # Actions are pinned to commit SHAs with a `# vX.Y.Z` comment, so every
+    # release — patch included — needs a bump here. One grouped PR a week.
+    groups:
+      github-actions:
+        patterns: ["*"]
     ignore:
-      - dependency-name: "*"
-        update-types:
-          - version-update:semver-minor
-          - version-update:semver-patch
+      # Pinned to the head of its `stable` branch, which has no version tags
+      # for Dependabot to follow; refresh by hand with
+      # `gh api repos/dtolnay/rust-toolchain/branches/stable --jq .commit.sha`.
+      - dependency-name: dtolnay/rust-toolchain
     commit-message:
       prefix: ci
