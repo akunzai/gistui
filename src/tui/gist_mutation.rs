@@ -851,11 +851,7 @@ mod tests {
         assert!(state.gist_list_stale);
         assert_eq!(state.status.as_deref(), Some("Uploaded a.txt to gist g1"));
         assert!(matches!(
-            state.gist_content_store.lookup(
-                &state.gist_catalog,
-                file,
-                crate::tui::gist_content::FetchPolicy::PreferCache
-            ),
+            state.gist_content_store.lookup(&state.gist_catalog, file),
             crate::tui::gist_content::ContentLookup::Miss(_)
         ));
         assert_eq!(state.pinned[0].direction, Some(SyncDirection::Upload));
@@ -932,11 +928,7 @@ mod tests {
         assert_eq!(state.status.as_deref(), Some("delete failed: boom"));
         assert!(!state.gist_list_stale);
         assert!(matches!(
-            state.gist_content_store.lookup(
-                &state.gist_catalog,
-                file,
-                crate::tui::gist_content::FetchPolicy::PreferCache
-            ),
+            state.gist_content_store.lookup(&state.gist_catalog, file),
             crate::tui::gist_content::ContentLookup::Hit(_)
         ));
     }
@@ -956,19 +948,15 @@ mod tests {
         assert!(state.gist_list_stale);
         assert_eq!(state.status.as_deref(), Some("Deleted gist g1"));
         assert!(matches!(
-            state.gist_content_store.lookup(
-                &state.gist_catalog,
-                deleted,
-                crate::tui::gist_content::FetchPolicy::PreferCache
-            ),
+            state
+                .gist_content_store
+                .lookup(&state.gist_catalog, deleted),
             crate::tui::gist_content::ContentLookup::Miss(_)
         ));
         assert!(matches!(
-            state.gist_content_store.lookup(
-                &state.gist_catalog,
-                retained,
-                crate::tui::gist_content::FetchPolicy::PreferCache
-            ),
+            state
+                .gist_content_store
+                .lookup(&state.gist_catalog, retained),
             crate::tui::gist_content::ContentLookup::Hit(_)
         ));
     }
@@ -994,11 +982,7 @@ mod tests {
         assert!(state.gist_list_stale);
         assert_eq!(state.status.as_deref(), Some("Removed a.txt from gist g1"));
         assert!(matches!(
-            state.gist_content_store.lookup(
-                &state.gist_catalog,
-                file,
-                crate::tui::gist_content::FetchPolicy::PreferCache
-            ),
+            state.gist_content_store.lookup(&state.gist_catalog, file),
             crate::tui::gist_content::ContentLookup::Miss(_)
         ));
     }

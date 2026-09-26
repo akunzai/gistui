@@ -2,7 +2,7 @@
 //! colocated in one file (issue #287, Phase 2; issue #383).
 
 use crate::tui::bg::LoopFlow;
-use crate::tui::gist_content::{ContentLookup, FetchPolicy};
+use crate::tui::gist_content::{ContentLookup, GistContentStore};
 use crate::tui::view_model::ChromeVm;
 use crate::tui::{AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame};
 use crossterm::event::KeyCode;
@@ -43,11 +43,10 @@ pub(crate) fn stage_preview_content(
     state: &mut AppState,
     file: crate::domain::GistFileRef,
 ) -> Option<(crate::domain::GistFileRef, String)> {
-    match state.gist_content_store.lookup(
-        &state.gist_catalog,
-        file.clone(),
-        FetchPolicy::PreferCache,
-    ) {
+    match state
+        .gist_content_store
+        .lookup(&state.gist_catalog, file.clone())
+    {
         ContentLookup::Hit(content) => {
             let title = state.preview_title(&file.gist_id, &file.filename);
             state.enter_preview(title, content, Some(file));
@@ -65,13 +64,7 @@ pub(crate) fn stage_refresh_preview(
     state: &mut AppState,
     file: crate::domain::GistFileRef,
 ) -> (crate::domain::GistFileRef, String) {
-    let ContentLookup::Miss(file) =
-        state
-            .gist_content_store
-            .lookup(&state.gist_catalog, file, FetchPolicy::Refresh)
-    else {
-        unreachable!("refresh always bypasses cached content")
-    };
+    let file = GistContentStore::fetch_target(&state.gist_catalog, file);
     let title = state.preview_title(&file.gist_id, &file.filename);
     (file, title)
 }
@@ -318,8 +311,7 @@ mod tests {
         assert!(matches!(
             state.gist_content_store.lookup(
                 &state.gist_catalog,
-                file.clone(),
-                FetchPolicy::PreferCache
+                file.clone()
             ),
             ContentLookup::Hit(ref content) if content == "cached"
         ));
@@ -486,8 +478,7 @@ mod tests {
         assert!(matches!(
             state.gist_content_store.lookup(
                 &state.gist_catalog,
-                file.clone(),
-                FetchPolicy::PreferCache
+                file.clone()
             ),
             ContentLookup::Hit(ref content) if content == "body"
         ));

@@ -2,7 +2,7 @@
 //! colocated in one file (issue #287, Phase 2; issue #383).
 
 use crate::tui::bg::{record_pin_sync, LoopFlow};
-use crate::tui::gist_content::{ContentLookup, FetchPolicy};
+use crate::tui::gist_content::GistContentStore;
 use crate::tui::render::diff_labels;
 use crate::tui::view_model::ChromeVm;
 use crate::tui::{AppState, ConfigField, HelpTopic, HitTarget, KeyOutcome, PendingAction};
@@ -63,13 +63,7 @@ fn stage_gist_diff_fetch(
     file: crate::domain::GistFileRef,
 ) -> (crate::domain::GistFileRef, String, String) {
     let gist = state.gist_file_for_diff(&file);
-    let ContentLookup::Miss(file) =
-        state
-            .gist_content_store
-            .lookup(&state.gist_catalog, file, FetchPolicy::Refresh)
-    else {
-        unreachable!("fresh fetch always bypasses cached content")
-    };
+    let file = GistContentStore::fetch_target(&state.gist_catalog, file);
     let (local_label, gist_label) = diff_labels(local_path, &gist);
     (file, local_label, gist_label)
 }

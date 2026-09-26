@@ -2,7 +2,7 @@
 //! one file (issue #287, Phase 2; issue #383).
 
 use crate::tui::bg::LoopFlow;
-use crate::tui::gist_content::{ContentLookup, FetchPolicy};
+use crate::tui::gist_content::GistContentStore;
 use crate::tui::gist_mutation::MutationRequest;
 use crate::tui::render::{gist_info_line, unix_now};
 use crate::tui::screens::diff::DiffVm;
@@ -144,13 +144,7 @@ pub(crate) fn stage_upload_preview(
 ) -> (crate::domain::GistFileRef, String, String) {
     let gist_file = state.gist_file_for_diff(&file);
     let (local_label, gist_label) = crate::tui::render::diff_labels(Some(&local_path), &gist_file);
-    let ContentLookup::Miss(file) =
-        state
-            .gist_content_store
-            .lookup(&state.gist_catalog, file, FetchPolicy::Refresh)
-    else {
-        unreachable!("fresh fetch always bypasses cached content")
-    };
+    let file = GistContentStore::fetch_target(&state.gist_catalog, file);
     (file, local_label, gist_label)
 }
 

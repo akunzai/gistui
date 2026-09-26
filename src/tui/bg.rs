@@ -32,11 +32,12 @@ pub(super) enum UploadEditWatchEvent {
 }
 
 pub(super) fn fetch_gist_content(
+    runner: &dyn crate::actions::CommandRunner,
     gist_id: &str,
     filename: &str,
     raw_url: Option<&str>,
 ) -> std::result::Result<String, String> {
-    let content = crate::gh::fetch_gist_file_content(&SystemRunner, gist_id, filename, raw_url)
+    let content = crate::gh::fetch_gist_file_content(runner, gist_id, filename, raw_url)
         .map_err(|e| e.to_string())?;
     crate::domain::ensure_text_size(content.len() as u64)?;
     Ok(content)
@@ -245,9 +246,11 @@ impl ActionSpawner for InlineActionSpawner {
 
 /// Initial newest-first comment load: probe the total, then fetch the newest page.
 /// Thin IO boundary (network) — not unit-tested.
-pub(super) fn load_initial_comments(gist_id: &str) -> Result<crate::tui::InitialComments, String> {
-    let probe =
-        crate::gh::fetch_gist_comments_probe(&SystemRunner, gist_id).map_err(|e| e.to_string())?;
+pub(super) fn load_initial_comments(
+    runner: &dyn crate::actions::CommandRunner,
+    gist_id: &str,
+) -> Result<crate::tui::InitialComments, String> {
+    let probe = crate::gh::fetch_gist_comments_probe(runner, gist_id).map_err(|e| e.to_string())?;
     let total = crate::gh::comments_total_from_probe(&probe);
     if total == 0 {
         return Ok(crate::tui::InitialComments {
@@ -258,7 +261,7 @@ pub(super) fn load_initial_comments(gist_id: &str) -> Result<crate::tui::Initial
     }
     let oldest_page = crate::gh::last_page(total, crate::gh::COMMENTS_PAGE_SIZE);
     let raw = crate::gh::fetch_gist_comments_page(
-        &SystemRunner,
+        runner,
         gist_id,
         oldest_page,
         crate::gh::COMMENTS_PAGE_SIZE,
@@ -800,12 +803,14 @@ impl Jobs {
         fetch_gists: bool,
         catalog: &crate::domain::GistCatalog,
     ) -> Self {
+        let runner: SharedRunner = std::sync::Arc::new(SystemRunner);
         Self::with_action_spawner(
             update,
             fetch_gists,
             catalog,
             Box::new(ThreadActionSpawner),
-            std::sync::Arc::new(SystemRunner),
+            runner.clone(),
+            runner,
         )
     }
 
@@ -815,10 +820,15 @@ impl Jobs {
         catalog: &crate::domain::GistCatalog,
         action_spawner: Box<dyn ActionSpawner>,
         runner: SharedRunner,
+        refresh_runner: SharedRunner,
     ) -> Self {
         Self {
             update,
-            gist_refresh: super::gist_refresh::GistRefresh::new(catalog, fetch_gists),
+            gist_refresh: super::gist_refresh::GistRefresh::new(
+                catalog,
+                fetch_gists,
+                refresh_runner,
+            ),
             local: None,
             upload_edit_watch: None,
             upload_edit_scratch: None,
@@ -844,16 +854,28 @@ impl Jobs {
             Box::new(RecordingActionSpawner {
                 started: started.clone(),
             }),
-            std::sync::Arc::new(SystemRunner),
+            crate::tui::test_support::no_runner(),
+            crate::tui::test_support::no_runner(),
         );
         (jobs, started)
     }
 
     /// A registry that executes worker closures inline against `runner`, so a test can
     /// drive a complete workflow through spawn, absorb, and apply (issue #430).
+    ///
+    /// The catalog refresh an apply may start runs on its own background threads, which
+    /// inline execution can't order against the scripted calls, so it gets a runner that
+    /// never answers: it must not consume `runner`'s script or land in its call log (#511).
     #[cfg(test)]
     pub(super) fn inline(catalog: &crate::domain::GistCatalog, runner: SharedRunner) -> Self {
-        Self::with_action_spawner(None, false, catalog, Box::new(InlineActionSpawner), runner)
+        Self::with_action_spawner(
+            None,
+            false,
+            catalog,
+            Box::new(InlineActionSpawner),
+            runner,
+            crate::tui::test_support::no_runner(),
+        )
     }
 
     /// Run `run` on a background thread; apply `apply(value)` on the event-loop tick.
@@ -914,12 +936,17 @@ impl Jobs {
             + 'static,
     {
         let spec = ActionJobSpec::gist_fetch(msg, file.clone());
+        let runner = self.command_runner();
         self.start_action(
             state,
             spec,
             move || {
-                let result =
-                    fetch_gist_content(&file.gist_id, &file.filename, file.raw_url.as_deref());
+                let result = fetch_gist_content(
+                    runner.as_ref(),
+                    &file.gist_id,
+                    &file.filename,
+                    file.raw_url.as_deref(),
+                );
                 (result, file)
             },
             move |(result, file), state| apply(result, file, state),
@@ -1409,14 +1436,18 @@ mod tests {
     fn empty_jobs() -> Jobs {
         Jobs {
             update: None,
-            gist_refresh: GistRefresh::new(&GistCatalog::default(), false),
+            gist_refresh: GistRefresh::new(
+                &GistCatalog::default(),
+                false,
+                crate::tui::test_support::no_runner(),
+            ),
             local: None,
             upload_edit_watch: None,
             upload_edit_scratch: None,
             action: None,
             action_cancellable: true,
             action_spawner: Box::new(ThreadActionSpawner),
-            runner: std::sync::Arc::new(SystemRunner),
+            runner: crate::tui::test_support::no_runner(),
         }
     }
 

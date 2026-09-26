@@ -31,11 +31,12 @@ No **new** facade re-export was added for the moved types, and `src/tui/mod.rs`'
 
 ## Gist content store (`src/tui/gist_content.rs`, issue #406)
 
-- `GistContentStore` is the only owner of the 64-entry in-memory content LRU. Callers request
-  `PreferCache` for Preview or `Refresh` for every explicit/fresh fetch; both miss paths hydrate
-  a missing raw URL from `GistCatalog` before IO starts.
-- `Refresh` bypasses but does not evict last-known-good content. Only a successful Preview fetch
-  inserts its result. Failed, cancelled, or superseded work therefore leaves the store unchanged.
+- `GistContentStore` is the only owner of the 64-entry in-memory content LRU. Preview asks
+  `lookup` (cache first; a miss returns the fetch target); every explicit/fresh fetch asks
+  `fetch_target` (issue #511), which bypasses the cache. Both hydrate a missing raw URL from
+  `GistCatalog` before IO starts.
+- `fetch_target` bypasses but does not evict last-known-good content. Only a successful Preview
+  fetch inserts its result. Failed, cancelled, or superseded work therefore leaves the store unchanged.
 - Successful file-content mutations invalidate that file after upload, remove, or revision
   restore. Successful Gist deletion invalidates every file for the Gist. Metadata-only mutations
   (description, compact, star, fork) do not invalidate content.
@@ -348,6 +349,6 @@ Keep focused helpers in its children: `src/tui/render/labels.rs` owns gist/file/
 ## Safety seams (rich refs)
 
 - Download overwrite gate (issue #246): `src/actions.rs` — `DownloadMode` / `OverwriteConfirmed`.
-- Injectable `gh`/`git`/raw-fetch boundary (issue #245, #386, #419, #507): `foo(runner)` with `CommandRunner` first; adapters `SystemRunner` / `SeqRunner`. Raw gist file downloads are its second method, `fetch_raw` (in-process `ureq`, no `curl`); `SeqRunner` records them as `raw_get(url)` in the same call sequence as commands, so a test asserts the whole order. Every command path goes through it — reads, write actions, and gist compaction (`compact_in_dir`) alike. The seam expresses spawn-and-capture only; the few paths it cannot express are named on the `CommandRunner` doc in `src/actions.rs`, and that list is the whole set. Fixtures in `tests/fixtures/gh/`.
+- Injectable `gh`/`git`/raw-fetch boundary (issue #245, #386, #419, #507): `foo(runner)` with `CommandRunner` first; adapters `SystemRunner` / `SeqRunner`. Raw gist file downloads are its second method, `fetch_raw` (in-process `ureq`, no `curl`); `SeqRunner` records them as `raw_get(url)` in the same call sequence as commands, so a test asserts the whole order. Every command path goes through it — reads, write actions, and gist compaction (`compact_in_dir`) alike. In the TUI, `SystemRunner` is built only in `Jobs::startup` (issue #511): every job, the catalog refresh (`GistRefresh::new` takes the runner), comment loads, and the compact revision count use `jobs.command_runner()`, so each is drivable end to end through `Jobs::inline` + `SeqRunner`. The one other `SystemRunner` is `main`'s `--check`; `execute_command` is left to fire-and-forget launches (browser, URL opener). The seam expresses spawn-and-capture only; the few paths it cannot express are named on the `CommandRunner` doc in `src/actions.rs`, and that list is the whole set. Fixtures in `tests/fixtures/gh/`.
 - Gold-style TUI pure logic: each `tui` module's own `#[cfg(test)] mod tests` (no network); shared `AppState` fixtures live in `src/tui/test_support.rs`.
 - E2E frames: `scripts/demo/` (real binary + fake `gh` + fake cwd).

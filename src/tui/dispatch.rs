@@ -4,7 +4,6 @@
 
 use super::bg::*;
 use super::*;
-use crate::actions::SystemRunner;
 use editor::{edit_local_path, edit_upload_buffer};
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
@@ -122,6 +121,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             let Some(fetch_id) = screens::detail::stage_fetch_comments(state, gist_id) else {
                 return LoopFlow::Proceed;
             };
+            let runner = jobs.command_runner();
             jobs.spawn_action(
                 state,
                 ActionJobSpec::new(
@@ -132,7 +132,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                     "Loading comments…",
                 ),
                 move || {
-                    let result = load_initial_comments(&fetch_id);
+                    let result = load_initial_comments(runner.as_ref(), &fetch_id);
                     (result, fetch_id)
                 },
                 move |(result, fetch_id), state| {
@@ -145,6 +145,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             else {
                 return LoopFlow::Proceed;
             };
+            let runner = jobs.command_runner();
             jobs.spawn_action(
                 state,
                 ActionJobSpec::new(
@@ -156,7 +157,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                 ),
                 move || {
                     let result = crate::gh::fetch_gist_comments_page(
-                        &SystemRunner,
+                        runner.as_ref(),
                         &fetch_id,
                         page,
                         crate::gh::COMMENTS_PAGE_SIZE,
@@ -177,6 +178,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             gist_id,
             label,
         } => {
+            let runner = jobs.command_runner();
             jobs.spawn_action(
                 state,
                 ActionJobSpec::new(
@@ -186,7 +188,8 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                     "Checking revisions…",
                 ),
                 move || {
-                    let result = crate::actions::execute_command(
+                    let result = crate::actions::run_command(
+                        runner.as_ref(),
                         &crate::actions::gist_revision_count_command(&gist_id),
                     )
                     .map_err(|e| e.to_string())
@@ -392,6 +395,8 @@ fn apply_sync_status(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::actions::test_support::SeqRunner;
+    use crate::actions::CommandOutput;
     use crate::domain::{GistFile, LocalCandidate, PinnedMapping};
     use crate::tui::gist_mutation::MutationRequest;
     use crate::tui::test_support::{idle_jobs, recording_jobs};
@@ -695,5 +700,117 @@ mod tests {
         let started = started.take();
         assert_eq!(started.len(), 1);
         assert_eq!(started[0].progress, "Loading diff…");
+    }
+
+    // ---- reads through the injected runner (issue #511) ------------------
+
+    fn scripted(outputs: Vec<crate::actions::CommandOutput>) -> std::sync::Arc<SeqRunner> {
+        std::sync::Arc::new(SeqRunner::new(outputs))
+    }
+
+    /// A failed preview refresh reports the error and keeps the last-known-good content:
+    /// nothing is cached until a fetch succeeds.
+    #[test]
+    fn a_failed_preview_refresh_keeps_the_cached_content() {
+        let mut state = test_support::state_with_gists();
+        let file = crate::domain::GistFileRef::id_name("g1", "a.txt");
+        state.gist_content_store.insert(&file, "last good".into());
+        let runner = scripted(vec![CommandOutput::err("HTTP 502")]);
+        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
+        let entry = state.defer_entry();
+
+        route_outcome(
+            KeyOutcome::RefreshPreview {
+                entry,
+                file: file.clone(),
+            },
+            &mut state,
+            &mut jobs,
+        );
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(runner.calls(), vec![crate::gh::gist_get_plan("g1")]);
+        assert!(
+            state
+                .status
+                .as_deref()
+                .is_some_and(|s| s.contains("HTTP 502")),
+            "{:?}",
+            state.status
+        );
+        assert_eq!(
+            state.gist_content_store.lookup(&state.gist_catalog, file),
+            crate::tui::gist_content::ContentLookup::Hit("last good".into())
+        );
+    }
+
+    /// A pin pull fetches through the injected runner and lands on the Diff; identical sides
+    /// record the pin's Sync baseline (#492) end to end.
+    #[test]
+    fn a_pin_pull_fetches_through_the_runner_and_lands_on_the_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_path = dir.path().join("a.txt");
+        std::fs::write(&local_path, "a").unwrap();
+        let mapping = PinnedMapping::fixture(local_path, "g1", "a.txt");
+        let mut state = test_support::state_with_stored_pin(dir.path(), mapping);
+        let runner = scripted(vec![CommandOutput::ok(
+            r#"{"files":{"a.txt":{"content":"a\n"}}}"#,
+        )]);
+        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
+        let entry = state.defer_entry();
+
+        route_outcome(
+            KeyOutcome::SyncPinPull { entry, index: 0 },
+            &mut state,
+            &mut jobs,
+        );
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(runner.calls(), vec![crate::gh::gist_get_plan("g1")]);
+        assert!(state.diff_identical());
+        assert_eq!(
+            state.pinned[0].baseline,
+            crate::sync_baseline::SyncBaseline::after_sync(b"a", b"a\n")
+        );
+    }
+
+    /// The first comments load probes the total, then fetches the newest page.
+    #[test]
+    fn the_first_comments_load_probes_then_fetches_the_newest_page() {
+        let comments = include_str!("../../tests/fixtures/gh/gist-comments.json");
+        let mut state = initial_state();
+        state.enter(Screen::GistDetail(Box::new(DetailState {
+            gist_id: Some("g1".into()),
+            ..DetailState::default()
+        })));
+        let runner = scripted(vec![
+            CommandOutput::ok(format!("HTTP/2.0 200 OK\n\n{comments}")),
+            CommandOutput::ok(comments),
+        ]);
+        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
+
+        route_outcome(
+            KeyOutcome::FetchComments {
+                gist_id: "g1".into(),
+            },
+            &mut state,
+            &mut jobs,
+        );
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(
+            runner.calls(),
+            vec![
+                crate::gh::gist_comments_probe_plan("g1"),
+                crate::gh::gist_comments_page_plan("g1", 1, crate::gh::COMMENTS_PAGE_SIZE),
+            ]
+        );
+        assert_eq!(
+            state
+                .detail()
+                .and_then(|d| d.comments.as_ref())
+                .map(Vec::len),
+            Some(3)
+        );
     }
 }

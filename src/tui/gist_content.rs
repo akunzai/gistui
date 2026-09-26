@@ -4,12 +4,6 @@ use crate::domain::{GistCatalog, GistFileRef};
 
 type ContentKey = (String, String);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum FetchPolicy {
-    PreferCache,
-    Refresh,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum ContentLookup {
     Hit(String),
@@ -22,18 +16,19 @@ pub(super) struct GistContentStore {
 }
 
 impl GistContentStore {
-    pub fn lookup(
-        &mut self,
-        catalog: &GistCatalog,
-        mut file: GistFileRef,
-        policy: FetchPolicy,
-    ) -> ContentLookup {
-        let key = key(&file);
-        if policy == FetchPolicy::PreferCache {
-            if let Some(content) = self.cache.get(&key).cloned() {
-                return ContentLookup::Hit(content);
-            }
+    /// Cached content for `file`, or — on a miss — the fetch target to request it with.
+    pub fn lookup(&mut self, catalog: &GistCatalog, file: GistFileRef) -> ContentLookup {
+        match self.cache.get(&key(&file)).cloned() {
+            Some(content) => ContentLookup::Hit(content),
+            None => ContentLookup::Miss(Self::fetch_target(catalog, file)),
         }
+    }
+
+    /// `file` ready to fetch fresh, bypassing the cache: its `raw_url` filled in from the
+    /// catalog when the caller didn't have one, so a truncated file can still be read whole.
+    /// Nothing is cached until a Preview fetch succeeds (`on_preview_content`), so a failed
+    /// refresh keeps the last-known-good content.
+    pub fn fetch_target(catalog: &GistCatalog, mut file: GistFileRef) -> GistFileRef {
         if file.raw_url.is_none() {
             file.raw_url = catalog
                 .owned
@@ -42,7 +37,7 @@ impl GistContentStore {
                 .find(|gist| gist.gist_id == file.gist_id && gist.filename == file.filename)
                 .and_then(|gist| gist.raw_url.clone());
         }
-        ContentLookup::Miss(file)
+        file
     }
 
     pub fn insert(&mut self, file: &GistFileRef, content: String) {
@@ -86,21 +81,17 @@ mod tests {
     }
 
     #[test]
-    fn prefer_cache_hits_while_refresh_returns_a_hydrated_request() {
+    fn lookup_hits_while_fetch_target_hydrates_the_request() {
         let file = GistFileRef::id_name("g1", "a.txt");
         let mut store = GistContentStore::default();
         store.insert(&file, "cached".into());
         assert_eq!(
-            store.lookup(&catalog(), file.clone(), FetchPolicy::PreferCache),
+            store.lookup(&catalog(), file.clone()),
             ContentLookup::Hit("cached".into())
         );
         assert_eq!(
-            store.lookup(&catalog(), file, FetchPolicy::Refresh),
-            ContentLookup::Miss(GistFileRef::new(
-                "g1",
-                "a.txt",
-                Some("https://example.test/a.txt".into())
-            ))
+            GistContentStore::fetch_target(&catalog(), file),
+            GistFileRef::new("g1", "a.txt", Some("https://example.test/a.txt".into()))
         );
     }
 
@@ -109,12 +100,9 @@ mod tests {
         let file = GistFileRef::id_name("g1", "a.txt");
         let mut store = GistContentStore::default();
         store.insert(&file, "old".into());
-        assert!(matches!(
-            store.lookup(&catalog(), file.clone(), FetchPolicy::Refresh),
-            ContentLookup::Miss(_)
-        ));
+        let _target = GistContentStore::fetch_target(&catalog(), file.clone());
         assert_eq!(
-            store.lookup(&catalog(), file, FetchPolicy::PreferCache),
+            store.lookup(&catalog(), file),
             ContentLookup::Hit("old".into())
         );
     }
@@ -130,16 +118,16 @@ mod tests {
         }
         store.invalidate_file(&a);
         assert!(matches!(
-            store.lookup(&catalog(), a, FetchPolicy::PreferCache),
+            store.lookup(&catalog(), a),
             ContentLookup::Miss(_)
         ));
         store.invalidate_gist("g1");
         assert!(matches!(
-            store.lookup(&catalog(), b, FetchPolicy::PreferCache),
+            store.lookup(&catalog(), b),
             ContentLookup::Miss(_)
         ));
         assert_eq!(
-            store.lookup(&catalog(), c, FetchPolicy::PreferCache),
+            store.lookup(&catalog(), c),
             ContentLookup::Hit("c.txt".into())
         );
     }
