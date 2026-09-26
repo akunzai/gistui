@@ -170,14 +170,7 @@ mod tests {
     }
 
     fn mapping(local: &str, gist_id: &str, filename: &str) -> PinnedMapping {
-        PinnedMapping {
-            local_path: PathBuf::from(local),
-            gist_id: gist_id.into(),
-            gist_filename: filename.into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }
+        PinnedMapping::fixture(local, gist_id, filename)
     }
 
     // ---- pin -------------------------------------------------------------
@@ -229,7 +222,6 @@ mod tests {
             vec![PinnedMapping {
                 direction: Some(SyncDirection::Upload),
                 last_seen_hash: Some("known".into()),
-                remote_blob_sha: None,
                 ..mapping("/abs/a.txt", "g1", "a.txt")
             }],
         );
@@ -330,7 +322,6 @@ mod tests {
             vec![PinnedMapping {
                 direction: Some(SyncDirection::Download),
                 last_seen_hash: Some("stale".into()),
-                remote_blob_sha: None,
                 ..mapping("/abs/a.txt", "g1", "a.txt")
             }],
         );

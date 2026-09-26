@@ -893,14 +893,7 @@ mod tests {
 
         let local_path = dir.path().join("a.txt");
         std::fs::write(&local_path, local_file).unwrap();
-        let mapping = crate::domain::PinnedMapping {
-            local_path: local_path.clone(),
-            gist_id: "g1".into(),
-            gist_filename: "a.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        };
+        let mapping = crate::domain::PinnedMapping::fixture(local_path.clone(), "g1", "a.txt");
         let mut config = crate::config::AppConfig::default();
         config.pinned.push(mapping.clone());
         crate::config::save_config(&crate::config::config_path().unwrap(), &config).unwrap();

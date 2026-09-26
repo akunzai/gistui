@@ -473,14 +473,9 @@ mod tests {
         let items = menu_items(&state);
         assert!(!enabled_for(&items, "Pin / unpin pair")); // foreign, not yet pinned
 
-        state.pinned.push(crate::domain::PinnedMapping {
-            local_path: PathBuf::from("a.txt"),
-            gist_id: "g1".into(),
-            gist_filename: "a.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        });
+        state.pinned.push(crate::domain::PinnedMapping::fixture(
+            "a.txt", "g1", "a.txt",
+        ));
         let items = menu_items(&state);
         assert!(enabled_for(&items, "Pin / unpin pair")); // foreign, but already pinned (unpin)
     }

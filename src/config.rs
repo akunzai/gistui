@@ -408,12 +408,9 @@ pub(crate) mod tests {
         let path = dir.path().join("config.toml");
         let config = AppConfig {
             pinned: vec![PinnedMapping {
-                local_path: PathBuf::from("/tmp/settings.json"),
-                gist_id: "abc123".into(),
-                gist_filename: "settings.json".into(),
                 direction: Some(SyncDirection::Upload),
                 last_seen_hash: Some("hash".into()),
-                remote_blob_sha: None,
+                ..PinnedMapping::fixture("/tmp/settings.json", "abc123", "settings.json")
             }],
             skip_dirs: default_skip_dirs(),
             prefs: Preferences::default(),
@@ -557,14 +554,8 @@ gist_filename = \"old.txt\"
         let saved = edit(existing, |c| {
             c.pinned[0].last_seen_hash = Some("h".into());
             c.pinned.remove(1);
-            c.pinned.push(PinnedMapping {
-                local_path: PathBuf::from("new.txt"),
-                gist_id: "ghi".into(),
-                gist_filename: "new.txt".into(),
-                direction: None,
-                last_seen_hash: None,
-                remote_blob_sha: None,
-            });
+            c.pinned
+                .push(PinnedMapping::fixture("new.txt", "ghi", "new.txt"));
         });
         assert!(saved.starts_with("mouse = false\n\n# dotfiles\n[[pinned]]\nlocal_path = \"~/.zshrc\" # shell\ngist_id = \"abc\"\nlast_seen_hash = \"h\"\n"), "{saved}");
         assert!(
@@ -580,14 +571,11 @@ gist_filename = \"old.txt\"
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let mut config = AppConfig {
-            pinned: vec![PinnedMapping {
-                local_path: PathBuf::from("/tmp/settings.json"),
-                gist_id: "abc".into(),
-                gist_filename: "settings.json".into(),
-                direction: None,
-                last_seen_hash: None,
-                remote_blob_sha: None,
-            }],
+            pinned: vec![PinnedMapping::fixture(
+                "/tmp/settings.json",
+                "abc",
+                "settings.json",
+            )],
             prefs: Preferences {
                 scan_depth: 4,
                 mouse: false,

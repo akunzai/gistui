@@ -218,14 +218,11 @@ pub(super) fn pins_state_with_long_home_path() -> AppState {
     let mut state = initial_state();
     state.screen = Screen::Pins(Box::default());
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/home/u"));
-    state.pinned = vec![PinnedMapping {
-        local_path: home.join("code/very/deeply/nested/project/config.json"),
-        gist_id: "g1".into(),
-        gist_filename: "config.json".into(),
-        direction: None,
-        last_seen_hash: None,
-        remote_blob_sha: None,
-    }];
+    state.pinned = vec![PinnedMapping::fixture(
+        home.join("code/very/deeply/nested/project/config.json"),
+        "g1",
+        "config.json",
+    )];
     pins_mut(&mut state).cursor.index = 0;
     state
 }

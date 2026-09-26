@@ -44,6 +44,24 @@ impl<'a> PinKey<'a> {
 }
 
 impl PinnedMapping {
+    /// Identity-only constructor for tests: the pair, with no sync history yet. Override the
+    /// fields a test cares about with struct-update syntax, so adding a pin field no longer
+    /// means editing every test that builds one.
+    pub fn fixture(
+        local_path: impl Into<PathBuf>,
+        gist_id: impl Into<String>,
+        gist_filename: impl Into<String>,
+    ) -> Self {
+        Self {
+            local_path: local_path.into(),
+            gist_id: gist_id.into(),
+            gist_filename: gist_filename.into(),
+            direction: None,
+            last_seen_hash: None,
+            remote_blob_sha: None,
+        }
+    }
+
     /// This mapping's identity. Use it instead of re-listing the three fields at a call
     /// site — dropping one is exactly how unpin used to remove the wrong row.
     pub fn key(&self) -> PinKey<'_> {
@@ -144,14 +162,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn mapping(local: &str, gist_id: &str, filename: &str) -> PinnedMapping {
-        PinnedMapping {
-            local_path: PathBuf::from(local),
-            gist_id: gist_id.into(),
-            gist_filename: filename.into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }
+        PinnedMapping::fixture(local, gist_id, filename)
     }
 
     fn key<'a>(local: &'a Path, gist_id: &'a str, filename: &'a str) -> PinKey<'a> {
@@ -268,7 +279,6 @@ mod tests {
         let mut pinned = vec![PinnedMapping {
             direction: Some(SyncDirection::Upload),
             last_seen_hash: Some("known".into()),
-            remote_blob_sha: None,
             ..mapping("/a.txt", "g1", "a.txt")
         }];
 
@@ -326,12 +336,10 @@ mod tests {
         let mut pinned = vec![
             PinnedMapping {
                 last_seen_hash: Some("first".into()),
-                remote_blob_sha: None,
                 ..mapping("/a.txt", "g1", "a.txt")
             },
             PinnedMapping {
                 last_seen_hash: Some("second".into()),
-                remote_blob_sha: None,
                 ..mapping("/a.txt", "g1", "a.txt")
             },
         ];

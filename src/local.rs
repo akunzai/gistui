@@ -155,22 +155,8 @@ mod tests {
         fs::write(&cwd_file, "{}").unwrap();
         let outside = dir.path().join("nope/elsewhere.json");
         let pinned = vec![
-            PinnedMapping {
-                local_path: cwd_file.clone(),
-                gist_id: "a".into(),
-                gist_filename: "settings.json".into(),
-                direction: None,
-                last_seen_hash: None,
-                remote_blob_sha: None,
-            },
-            PinnedMapping {
-                local_path: outside,
-                gist_id: "b".into(),
-                gist_filename: "x".into(),
-                direction: None,
-                last_seen_hash: None,
-                remote_blob_sha: None,
-            },
+            PinnedMapping::fixture(cwd_file.clone(), "a", "settings.json"),
+            PinnedMapping::fixture(outside, "b", "x"),
         ];
 
         let candidates =
@@ -247,14 +233,11 @@ mod tests {
         fs::write(dir.path().join(".svn/pristine/abc"), "").unwrap();
         fs::write(dir.path().join(".ignored/file"), "").unwrap();
         std::os::unix::fs::symlink(&pinned_file, &alias).unwrap();
-        let pinned = vec![PinnedMapping {
-            local_path: pinned_file.clone(),
-            gist_id: "gist".into(),
-            gist_filename: "pinned.toml".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        let pinned = vec![PinnedMapping::fixture(
+            pinned_file.clone(),
+            "gist",
+            "pinned.toml",
+        )];
         let skip_dirs = vec![".ignored".to_string()];
 
         let candidates =

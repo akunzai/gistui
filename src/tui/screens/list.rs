@@ -1975,14 +1975,11 @@ mod tests {
             state.handle_key(KeyCode::Char('p')),
             KeyOutcome::Pin { .. }
         ));
-        state.pinned = vec![PinnedMapping {
-            local_path: PathBuf::from("/tmp/settings.json"),
-            gist_id: "a".into(),
-            gist_filename: "settings.json".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        state.pinned = vec![PinnedMapping::fixture(
+            "/tmp/settings.json",
+            "a",
+            "settings.json",
+        )];
         assert!(matches!(
             state.handle_key(KeyCode::Char('p')),
             KeyOutcome::Unpin { .. }
@@ -2608,14 +2605,7 @@ mod tests {
             ..GistFile::fixture("g1", "notes.txt")
         }];
         state.gist_catalog.starred_ids.insert("g1".into());
-        state.pinned = vec![PinnedMapping {
-            local_path: PathBuf::from("notes.txt"),
-            gist_id: "g1".into(),
-            gist_filename: "notes.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        state.pinned = vec![PinnedMapping::fixture("notes.txt", "g1", "notes.txt")];
         state.focus = FocusPane::Local;
         state.anchor = FocusPane::Local;
         state.local_cursor.index = 0;

@@ -166,14 +166,11 @@ mod tests {
 
         let mut state = initial_state();
         state.locals.clear();
-        state.pinned = vec![crate::domain::PinnedMapping {
-            local_path: outside.clone(),
-            gist_id: "g1".into(),
-            gist_filename: "settings.json".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        state.pinned = vec![crate::domain::PinnedMapping::fixture(
+            outside.clone(),
+            "g1",
+            "settings.json",
+        )];
 
         let (local_ts, _remote_ts) = state.pin_mtimes(0);
         assert!(
@@ -193,14 +190,11 @@ mod tests {
 
         let mut state = initial_state();
         state.locals.clear();
-        state.pinned = vec![crate::domain::PinnedMapping {
-            local_path: gone,
-            gist_id: "g1".into(),
-            gist_filename: "settings.json".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        state.pinned = vec![crate::domain::PinnedMapping::fixture(
+            gone,
+            "g1",
+            "settings.json",
+        )];
         state.gist_catalog.owned = vec![GistFile {
             updated_at: "2026-01-01T00:00:00Z".into(),
             ..GistFile::fixture("g1", "settings.json")
@@ -231,12 +225,8 @@ mod tests {
         let mut state = initial_state();
         state.locals.clear();
         state.pinned = vec![crate::domain::PinnedMapping {
-            local_path: local,
-            gist_id: "g1".into(),
-            gist_filename: "settings.json".into(),
-            direction: None,
             last_seen_hash: Some(hash),
-            remote_blob_sha: None,
+            ..crate::domain::PinnedMapping::fixture(local, "g1", "settings.json")
         }];
         state.gist_catalog.owned = vec![GistFile {
             // Far in the past, so the just-written local file (mtime ~ now) reads as newer —
@@ -266,12 +256,8 @@ mod tests {
         let mut state = initial_state();
         state.locals.clear();
         state.pinned = vec![crate::domain::PinnedMapping {
-            local_path: local,
-            gist_id: "g1".into(),
-            gist_filename: "settings.json".into(),
-            direction: None,
             last_seen_hash: Some("does-not-match-anything".into()),
-            remote_blob_sha: None,
+            ..crate::domain::PinnedMapping::fixture(local, "g1", "settings.json")
         }];
         state.gist_catalog.owned = vec![GistFile {
             updated_at: "2020-01-01T00:00:00Z".into(),
@@ -298,14 +284,11 @@ mod tests {
 
         let mut state = initial_state();
         state.locals.clear();
-        state.pinned = vec![crate::domain::PinnedMapping {
-            local_path: local,
-            gist_id: "g1".into(),
-            gist_filename: "settings.json".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        state.pinned = vec![crate::domain::PinnedMapping::fixture(
+            local,
+            "g1",
+            "settings.json",
+        )];
         state.gist_catalog.owned = vec![GistFile {
             updated_at: "2020-01-01T00:00:00Z".into(),
             ..GistFile::fixture("g1", "settings.json")
@@ -336,12 +319,9 @@ mod tests {
         let mut state = initial_state();
         state.locals.clear();
         state.pinned = vec![crate::domain::PinnedMapping {
-            local_path: local,
-            gist_id: "g1".into(),
-            gist_filename: "a.txt".into(),
-            direction: None,
             last_seen_hash: Some(crate::domain::sha256_hex(b"synced")),
             remote_blob_sha: Some(OLD_SHA.into()),
+            ..crate::domain::PinnedMapping::fixture(local, "g1", "a.txt")
         }];
         state.gist_catalog.owned = vec![GistFile {
             updated_at: "2999-01-01T00:00:00Z".into(),
