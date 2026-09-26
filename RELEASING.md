@@ -15,9 +15,10 @@ one before succeeded:
    `gh attestation verify <archive> --repo akunzai/gistui`).
 3. Waits for approval of the `release` environment, then creates the GitHub Release with the
    binaries attached and updates the Homebrew formula and Scoop manifest.
-4. Waits for a second approval of the same environment, then publishes the crate to
-   [crates.io](https://crates.io/crates/gistui). If only this step fails, re-run the failed
-   job from the tag's workflow run; the release already exists.
+4. Publishes the crate to [crates.io](https://crates.io/crates/gistui) from the `crates-io`
+   environment, with no second approval: it starts only after the approved release job has
+   succeeded. If only this step fails, re-run the failed job from the tag's workflow run; the
+   release already exists.
 
 The crate is published only while the `CARGO_REGISTRY_TOKEN` secret is configured; without
 it the publish step skips itself and succeeds. The downstream package definitions are
@@ -46,11 +47,10 @@ are kept out of the published tarball); `cargo publish --dry-run` validates the 
 3. Merge to `main` (CI gate green).
 4. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 5. Approve: open the tag's Release run in the Actions tab. Once the gate, builds, and
-   attestation are green, approve the `release` deployment under **Review deployments**;
-   approve it again when the crates.io job asks. Nothing leaves the repository before the
-   first approval. Only a tag matching `v*` can deploy to that environment, and the
-   publishing secrets (`HOMEBREW_BUMP_TOKEN`, `CARGO_REGISTRY_TOKEN`) belong on it as
-   environment secrets.
+   attestation are green, approve the `release` deployment under **Review deployments**.
+   That is the only approval; nothing leaves the repository before it. `release` (with a
+   required reviewer) holds `HOMEBREW_BUMP_TOKEN`; `crates-io` (no reviewer) holds
+   `CARGO_REGISTRY_TOKEN`. Both admit only tags matching `v*`.
 6. Verify: the GitHub release has the binaries, [crates.io](https://crates.io/crates/gistui)
    shows the new version (and docs.rs built), and `Formula/gistui.rb` / `bucket/gistui.json`
    show a new `chore: bump gistui to vX.Y.Z` commit on the tap's / bucket's `main` (pushed by

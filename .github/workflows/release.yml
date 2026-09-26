@@ -198,14 +198,16 @@ jobs:
         run: scripts/release/update-scoop-manifest.sh
 
   # Runs after the GitHub release so the crate never appears before the
-  # binaries its binstall metadata points at, and waits for a second approval
-  # of the `release` environment. A failure here leaves the release in place;
-  # re-run this job from the tag's workflow run.
+  # binaries its binstall metadata points at. It needs no approval of its own:
+  # it can only start once the approved `release` job has succeeded. The
+  # `crates-io` environment (v* tags only, no reviewers) keeps the token off
+  # other refs. A failure here leaves the release in place; re-run this job
+  # from the tag's workflow run.
   publish:
     name: Publish to crates.io
     needs: release
     runs-on: ubuntu-latest
-    environment: release
+    environment: crates-io
     permissions:
       contents: read
     steps:
