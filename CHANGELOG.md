@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] — 2026-09-27
+
 - `u` in a pin's diff uploads to the pin's own gist file even when it is named differently
   from the local file; it used to add a second file named after the local one.
 - Downloading with `d` from a diff opened in the List now marks a pinned pair as synced, as it
@@ -346,7 +348,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.22.0...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.23.0...HEAD
+[0.23.0]: https://github.com/akunzai/gistui/releases/tag/v0.23.0
 [0.22.0]: https://github.com/akunzai/gistui/releases/tag/v0.22.0
 [0.21.0]: https://github.com/akunzai/gistui/releases/tag/v0.21.0
 [0.20.0]: https://github.com/akunzai/gistui/releases/tag/v0.20.0
