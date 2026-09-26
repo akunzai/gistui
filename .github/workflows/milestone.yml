@@ -1,0 +1,35 @@
+name: Milestone
+
+# Every PR names the release it targets (docs/agents/change-gates.md).
+# Contributors without triage access cannot set a milestone, so this check is
+# the maintainer's reminder: assigning one re-runs it via `milestoned`.
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, edited, milestoned, demilestoned]
+
+# Opening a PR with a milestone fires `opened` and `milestoned` together, and
+# either run may finish last, so each asks the API for the current milestone
+# instead of trusting its own event payload.
+concurrency:
+  group: milestone-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  pull-requests: read
+
+jobs:
+  milestone:
+    name: Require milestone
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the PR has a milestone
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          MILESTONE="$(gh pr view "$PR_URL" --json milestone --jq '.milestone.title // ""')"
+          if [ -z "$MILESTONE" ]; then
+            echo "::error::No milestone. A maintainer assigns the release this PR targets; open the next version's milestone if none exists."
+            exit 1
+          fi
+          echo "Milestone: $MILESTONE"
