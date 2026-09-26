@@ -57,7 +57,7 @@ titles, filenames, and usernames from a real account count; the capture rules in
 - **The two seams** — `src/tui/run_loop.rs` and `src/gh/mod.rs` are not unit-tested by design.
   A change there says so in the description and names what covers it instead.
 
-No coverage threshold. The reviewer judges whether the new behaviour is actually exercised.
+No coverage threshold — the CI `Coverage` job reports to Codecov for reference only and never gates. The reviewer judges whether the new behaviour is actually exercised.
 
 ## Review readiness
 

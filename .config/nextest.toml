@@ -1,0 +1,7 @@
+# JUnit report for Codecov Test Analytics, written to
+# target/nextest/ci/junit.xml. CI runs `cargo llvm-cov nextest --profile ci`.
+[profile.ci]
+fail-fast = false
+
+[profile.ci.junit]
+path = "junit.xml"
