@@ -374,7 +374,11 @@ mod tests {
         );
         assert_eq!(
             state.handle_key(KeyCode::Char('y')),
-            KeyOutcome::ExecuteCompactGist
+            KeyOutcome::Mutation(crate::tui::gist_mutation::MutationRequest::Compact {
+                gist_id: "a".into(),
+                label: "My Ghostty config".into(),
+                count: 3,
+            })
         );
 
         // Re-open confirm for the cancel path (y does not leave Confirm until IO runs).

@@ -6,7 +6,6 @@ use super::bg::*;
 use super::*;
 use crate::actions::SystemRunner;
 use editor::{edit_local_path, edit_upload_buffer};
-use gist_mutation::MutationRequest;
 use ratatui::{backend::CrosstermBackend, Terminal};
 use std::io;
 
@@ -260,25 +259,6 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                 },
             );
         }
-        KeyOutcome::Upload => {
-            if let Some(draft) = state.upload_draft().cloned() {
-                gist_mutation::dispatch(jobs, state, MutationRequest::Upload(Box::new(draft)));
-            }
-        }
-        KeyOutcome::Create(public) => {
-            if let Some(PendingAction::Create { local_path }) = state.pending_action().cloned() {
-                let description = state.description_input.to_string();
-                gist_mutation::dispatch(
-                    jobs,
-                    state,
-                    MutationRequest::Create {
-                        local_path,
-                        public,
-                        description,
-                    },
-                );
-            }
-        }
         KeyOutcome::PreviewContent { entry, file } => {
             if let Some((file, preview_title)) =
                 screens::preview::stage_preview_content(state, file)
@@ -316,49 +296,6 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
         }
         KeyOutcome::CopyGistUrl { gist_id } => copy_gist_url_id(state, &gist_id),
         KeyOutcome::CopyPreviewContent => copy_preview_content(state),
-        KeyOutcome::ExecuteDelete => {
-            if let Some(PendingAction::Delete { gist_id, .. }) = state.pending_action().cloned() {
-                gist_mutation::dispatch(jobs, state, MutationRequest::Delete { gist_id });
-            }
-        }
-        KeyOutcome::ExecuteRemoveFile => {
-            if let Some(PendingAction::RemoveFile {
-                gist_id, filename, ..
-            }) = state.pending_action().cloned()
-            {
-                let file = crate::domain::GistFileRef::id_name(gist_id, filename);
-                gist_mutation::dispatch(jobs, state, MutationRequest::RemoveFile { file });
-            }
-        }
-        KeyOutcome::ExecuteCompactGist => {
-            if let Some(PendingAction::CompactGist {
-                gist_id,
-                label,
-                count,
-            }) = state.pending_action().cloned()
-            {
-                gist_mutation::dispatch(
-                    jobs,
-                    state,
-                    MutationRequest::Compact {
-                        gist_id,
-                        label,
-                        count,
-                    },
-                );
-            }
-        }
-        KeyOutcome::ApplyDescription {
-            gist_id,
-            description,
-        } => gist_mutation::dispatch(
-            jobs,
-            state,
-            MutationRequest::Description {
-                gist_id,
-                description,
-            },
-        ),
         KeyOutcome::RefreshLocals => {
             jobs.request_local_scan(state);
         }
@@ -406,16 +343,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             }
         }
         KeyOutcome::Revision(request) => gist_revision::dispatch(jobs, state, request),
-        KeyOutcome::ToggleGistStar { gist_id, starring } => {
-            gist_mutation::dispatch(jobs, state, MutationRequest::Star { gist_id, starring })
-        }
-        KeyOutcome::ForkGist { gist_id } => {
-            if state.gist_is_owned(&gist_id) {
-                state.set_status("already yours — no fork needed");
-                return LoopFlow::Proceed;
-            }
-            gist_mutation::dispatch(jobs, state, MutationRequest::Fork { gist_id });
-        }
+        KeyOutcome::Mutation(request) => gist_mutation::dispatch(jobs, state, request),
         KeyOutcome::None => {}
         // Handled by `dispatch_outcome`'s shell above, so unreachable here. Listed
         // rather than wildcarded to guard the forward direction: a *new* variant nobody
@@ -465,7 +393,9 @@ fn apply_sync_status(
 mod tests {
     use super::*;
     use crate::domain::{GistFile, LocalCandidate, PinnedMapping};
+    use crate::tui::gist_mutation::MutationRequest;
     use crate::tui::test_support::{idle_jobs, recording_jobs};
+    use crossterm::event::KeyCode;
     use std::path::PathBuf;
 
     /// A pinned `/cwd/a.txt` ↔ `g1:a.txt` pair. `local_mtime` and `remote_updated_at`
@@ -530,9 +460,9 @@ mod tests {
         let (mut jobs, started) = recording_jobs();
 
         route_outcome(
-            KeyOutcome::ForkGist {
+            KeyOutcome::Mutation(MutationRequest::Fork {
                 gist_id: "not-owned".into(),
-            },
+            }),
             &mut state,
             &mut jobs,
         );
@@ -597,27 +527,6 @@ mod tests {
 
     // ---- early returns ----------------------------------------------------
 
-    #[test]
-    fn fork_gist_on_an_owned_gist_returns_before_spawning() {
-        let mut state = test_support::state_with_gists();
-
-        route(
-            &mut state,
-            KeyOutcome::ForkGist {
-                gist_id: "g1".into(),
-            },
-        );
-
-        assert_eq!(
-            state.status.as_deref(),
-            Some("already yours — no fork needed")
-        );
-        assert!(
-            state.bg_task_msg.is_none(),
-            "an owned gist must not be forked"
-        );
-    }
-
     /// The listed-not-wildcarded arm guards new variants; this guards the other
     /// direction, where an arm is dropped from `dispatch_outcome` and would otherwise
     /// become a silent no-op.
@@ -626,19 +535,6 @@ mod tests {
     fn a_terminal_bearing_outcome_reaching_route_outcome_trips_the_assert() {
         let mut state = initial_state();
         route(&mut state, KeyOutcome::EditUpload);
-    }
-
-    #[test]
-    fn execute_delete_without_a_pending_action_spawns_nothing() {
-        let mut state = test_support::state_with_gists();
-
-        route(&mut state, KeyOutcome::ExecuteDelete);
-
-        assert!(state.pending_action().is_none());
-        assert!(
-            state.bg_task_msg.is_none(),
-            "a delete with nothing pending must not reach gh"
-        );
     }
 
     /// Succeeds every command and records, per call, the contents of each argument that
@@ -700,7 +596,8 @@ mod tests {
 
         let runner = std::sync::Arc::new(FileCapturingRunner::default());
         let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
-        route_outcome(KeyOutcome::Upload, &mut state, &mut jobs);
+        let confirmed = state.handle_key(KeyCode::Char('y'));
+        route_outcome(confirmed, &mut state, &mut jobs);
         // A setting flipped mid-upload must not change what the pin records.
         state
             .settings
@@ -749,7 +646,12 @@ mod tests {
             let runner = std::sync::Arc::new(FileCapturingRunner::default());
             let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
 
-            route_outcome(KeyOutcome::Create(false), &mut state, &mut jobs);
+            let create = KeyOutcome::Mutation(MutationRequest::Create {
+                local_path: local_path.clone(),
+                public: false,
+                description: String::new(),
+            });
+            route_outcome(create, &mut state, &mut jobs);
 
             let sent = runner.sent.lock().unwrap();
             assert_eq!(sent.len(), 1, "normalize={normalize}");
