@@ -402,7 +402,7 @@ mod tests {
     use crate::actions::CommandOutput;
     use crate::domain::{GistCatalog, GistFile};
     use crate::tui::bg::LoopFlow;
-    use crate::tui::gist_content::{ContentLookup, FetchPolicy};
+    use crate::tui::gist_content::ContentLookup;
     use crate::tui::test_support::state_with_gists;
     use crate::tui::{initial_state, ListCursor, PendingAction, RevisionState, Screen};
     use std::sync::Arc;
@@ -1103,9 +1103,7 @@ mod tests {
         assert!(rev.entries.is_none());
         assert!(rev.fetch_error.is_none());
         assert!(matches!(
-            state
-                .gist_content_store
-                .lookup(&state.gist_catalog, file, FetchPolicy::PreferCache),
+            state.gist_content_store.lookup(&state.gist_catalog, file),
             ContentLookup::Miss(_)
         ));
     }

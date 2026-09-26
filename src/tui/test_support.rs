@@ -242,6 +242,12 @@ pub(super) fn pins_state_with_long_home_path() -> AppState {
     state
 }
 
+/// A runner for a test that must not reach `gh`: it has no scripted output, so any call
+/// fails instead of spawning a real process (issue #511).
+pub(super) fn no_runner() -> super::bg::SharedRunner {
+    std::sync::Arc::new(crate::actions::test_support::SeqRunner::new(Vec::new()))
+}
+
 /// An idle [`Jobs`] for tests that call into `dispatch`'s routing layer (issue #421).
 ///
 /// `Jobs::startup`'s `fetch_gists` flag is what keeps `GistRefresh::new` from calling

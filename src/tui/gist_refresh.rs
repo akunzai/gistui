@@ -1,6 +1,7 @@
 //! Whole-list Gist refresh: base catalog fetch, progressive enrichment, and supersession.
 
-use crate::actions::SystemRunner;
+use super::bg::SharedRunner;
+use crate::actions::CommandRunner;
 use crate::domain::{GistCatalog, GistFile};
 use std::collections::{HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver};
@@ -46,10 +47,12 @@ pub(super) struct GistRefresh {
     fork_meta: ForkMetaRx,
     remaining_enrichments: u8,
     failures: Vec<&'static str>,
+    /// `Jobs`' injected runner: every `gh` call a refresh makes goes through it.
+    runner: SharedRunner,
 }
 
 impl GistRefresh {
-    pub fn new(catalog: &GistCatalog, start: bool) -> Self {
+    pub fn new(catalog: &GistCatalog, start: bool, runner: SharedRunner) -> Self {
         let mut refresh = Self {
             generation: 0,
             catalog: catalog.clone(),
@@ -59,6 +62,7 @@ impl GistRefresh {
             fork_meta: None,
             remaining_enrichments: 0,
             failures: Vec::new(),
+            runner,
         };
         if start {
             refresh.start(catalog);
@@ -69,7 +73,7 @@ impl GistRefresh {
     pub fn start(&mut self, catalog: &GistCatalog) {
         self.generation = self.generation.wrapping_add(1);
         self.catalog = catalog.clone();
-        self.base = Some(spawn_base_fetch(self.generation));
+        self.base = Some(spawn_base_fetch(self.generation, self.runner.clone()));
         self.fork_counts = None;
         self.star_counts = None;
         self.fork_meta = None;
@@ -149,9 +153,10 @@ impl GistRefresh {
             .chain(&self.catalog.starred)
             .map(|gist| gist.gist_id.clone())
             .collect();
+        let runner = self.runner.clone();
         self.fork_counts = Some(spawn_count(self.generation, move || {
             crate::gh::collect_gist_fork_counts(
-                &SystemRunner,
+                runner.as_ref(),
                 owned_raw.as_deref(),
                 starred_raw.as_deref(),
                 gist_ids,
@@ -159,8 +164,9 @@ impl GistRefresh {
         }));
         let node_ids =
             crate::gh::merge_gist_node_id_maps(&self.catalog.owned, &self.catalog.starred);
+        let runner = self.runner.clone();
         self.star_counts = Some(spawn_count(self.generation, move || {
-            crate::gh::collect_gist_star_counts(&SystemRunner, node_ids)
+            crate::gh::collect_gist_star_counts(runner.as_ref(), node_ids)
         }));
         let owned_ids = self
             .catalog
@@ -168,7 +174,11 @@ impl GistRefresh {
             .iter()
             .map(|gist| gist.gist_id.clone())
             .collect();
-        self.fork_meta = Some(spawn_fork_meta(self.generation, owned_ids));
+        self.fork_meta = Some(spawn_fork_meta(
+            self.generation,
+            owned_ids,
+            self.runner.clone(),
+        ));
         self.remaining_enrichments = 3;
     }
 
@@ -249,17 +259,17 @@ impl GistRefresh {
     }
 }
 
-fn spawn_base_fetch(generation: u64) -> Receiver<BaseResult> {
+fn spawn_base_fetch(generation: u64, runner: SharedRunner) -> Receiver<BaseResult> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let result = match crate::gh::check_gh_ready(&SystemRunner) {
+        let runner = runner.as_ref();
+        let result = match crate::gh::check_gh_ready(runner) {
             Ok(()) => {
                 let (owned, starred, user_login) = std::thread::scope(|scope| {
-                    let owned = scope.spawn(fetch_owned);
-                    let starred = scope.spawn(fetch_starred);
-                    let user = scope.spawn(|| {
-                        crate::gh::fetch_current_user_login(&SystemRunner).map_err(|_| ())
-                    });
+                    let owned = scope.spawn(|| fetch_owned(runner));
+                    let starred = scope.spawn(|| fetch_starred(runner));
+                    let user =
+                        scope.spawn(|| crate::gh::fetch_current_user_login(runner).map_err(|_| ()));
                     (
                         owned.join().unwrap_or(Err(())),
                         starred.join().unwrap_or(Err(())),
@@ -287,8 +297,8 @@ fn spawn_base_fetch(generation: u64) -> Receiver<BaseResult> {
     rx
 }
 
-fn fetch_owned() -> Result<ListLeg, ()> {
-    let raw = crate::gh::fetch_gist_list_json(&SystemRunner).map_err(|_| ())?;
+fn fetch_owned(runner: &dyn CommandRunner) -> Result<ListLeg, ()> {
+    let raw = crate::gh::fetch_gist_list_json(runner).map_err(|_| ())?;
     Ok(ListLeg {
         files: crate::gh::parse_gist_list_json(&raw).map_err(|_| ())?,
         comments: crate::gh::parse_gist_comment_counts(&raw).map_err(|_| ())?,
@@ -296,8 +306,8 @@ fn fetch_owned() -> Result<ListLeg, ()> {
     })
 }
 
-fn fetch_starred() -> Result<StarredLeg, ()> {
-    let raw = crate::gh::fetch_gist_starred_list_json(&SystemRunner).map_err(|_| ())?;
+fn fetch_starred(runner: &dyn CommandRunner) -> Result<StarredLeg, ()> {
+    let raw = crate::gh::fetch_gist_starred_list_json(runner).map_err(|_| ())?;
     Ok(StarredLeg {
         ids: crate::gh::parse_starred_gist_ids(&raw).map_err(|_| ())?,
         list: ListLeg {
@@ -319,10 +329,14 @@ fn spawn_count(
     rx
 }
 
-fn spawn_fork_meta(generation: u64, owned_ids: HashSet<String>) -> Receiver<ForkMetaMessage> {
+fn spawn_fork_meta(
+    generation: u64,
+    owned_ids: HashSet<String>,
+    runner: SharedRunner,
+) -> Receiver<ForkMetaMessage> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let result = crate::gh::collect_owned_fork_of_ids(&SystemRunner, owned_ids);
+        let result = crate::gh::collect_owned_fork_of_ids(runner.as_ref(), owned_ids);
         let _ = tx.send((generation, result));
     });
     rx
@@ -338,6 +352,8 @@ fn poll<T>(slot: &mut Option<Receiver<T>>) -> Option<T> {
 mod tests {
     use super::*;
     use crate::gh::CountCollection;
+
+    use crate::tui::test_support::no_runner;
 
     fn gist(id: &str) -> GistFile {
         GistFile::fixture(id, format!("{id}.txt"))
@@ -357,7 +373,7 @@ mod tests {
 
     #[test]
     fn partial_base_failure_retains_last_known_good_and_reports_once() {
-        let mut refresh = GistRefresh::new(&old_catalog(), false);
+        let mut refresh = GistRefresh::new(&old_catalog(), false, no_runner());
         refresh.generation = 1;
         let (tx, rx) = mpsc::channel();
         tx.send(BaseResult {
@@ -394,7 +410,7 @@ mod tests {
     #[test]
     fn stale_generation_is_ignored() {
         let catalog = old_catalog();
-        let mut refresh = GistRefresh::new(&catalog, false);
+        let mut refresh = GistRefresh::new(&catalog, false, no_runner());
         refresh.generation = 2;
         let (tx, rx) = mpsc::channel();
         tx.send(BaseResult {
@@ -413,7 +429,7 @@ mod tests {
 
     #[test]
     fn enrichment_publishes_one_coherent_catalog_stage() {
-        let mut refresh = GistRefresh::new(&old_catalog(), false);
+        let mut refresh = GistRefresh::new(&old_catalog(), false, no_runner());
         refresh.generation = 1;
         refresh.remaining_enrichments = 1;
         let (tx, rx) = mpsc::channel();
@@ -438,7 +454,7 @@ mod tests {
 
     #[test]
     fn incomplete_enrichment_retains_cache_and_reports_at_end() {
-        let mut refresh = GistRefresh::new(&old_catalog(), false);
+        let mut refresh = GistRefresh::new(&old_catalog(), false, no_runner());
         refresh.generation = 1;
         refresh.remaining_enrichments = 1;
         let (tx, rx) = mpsc::channel();
