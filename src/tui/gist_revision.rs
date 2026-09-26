@@ -878,9 +878,9 @@ mod tests {
             runner.calls(),
             vec![
                 crate::gh::gist_revision_plan("g1", "v1"),
-                crate::gh::raw_url_fetch_plan(entry_raw),
+                crate::actions::test_support::raw_get(entry_raw),
                 crate::gh::gist_get_plan("g1"),
-                crate::gh::raw_url_fetch_plan(current_raw),
+                crate::actions::test_support::raw_get(current_raw),
             ]
         );
         let diff = state.diff().expect("Screen::Diff");
@@ -912,7 +912,7 @@ mod tests {
 
         assert_eq!(
             runner.calls()[1],
-            crate::gh::raw_url_fetch_plan(&crate::gh::build_gist_revision_raw_url(
+            crate::actions::test_support::raw_get(&crate::gh::build_gist_revision_raw_url(
                 "alice", "g1", "v1", "a.txt"
             ))
         );

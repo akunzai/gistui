@@ -1,6 +1,6 @@
 //! Gist listing, node-id mapping, and file-content fetch (issue #301).
 
-use super::{parse_gh_gists, raw_url_fetch_plan};
+use super::{fetch_raw_text, parse_gh_gists};
 use crate::actions::{run_command, CommandPlan, CommandRunner};
 use crate::domain::GistFile;
 use anyhow::{Context, Result};
@@ -172,12 +172,10 @@ pub fn fetch_gist_file_content(
         run_command(runner, &gist_get_plan(gist_id)).and_then(|raw| gist_file_body(&raw, filename));
     match body {
         Ok(GistFileBody::Text(content)) => Ok(content),
-        Ok(GistFileBody::Truncated { raw_url }) => {
-            run_command(runner, &raw_url_fetch_plan(&raw_url))
-        }
+        Ok(GistFileBody::Truncated { raw_url }) => fetch_raw_text(runner, &raw_url),
         Err(primary) => {
             if let Some(url) = raw_url.filter(|u| !u.is_empty()) {
-                run_command(runner, &raw_url_fetch_plan(url))
+                fetch_raw_text(runner, url)
                     .with_context(|| format!("{primary}; raw_url fallback also failed"))
             } else {
                 Err(primary)
@@ -189,6 +187,30 @@ pub fn fetch_gist_file_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Issue #507: raw bytes that are not UTF-8 fail the fetch instead of being decoded lossily
+    /// into content that would be diffed, written, or hashed as a pin baseline.
+    #[test]
+    fn a_raw_file_that_is_not_utf8_fails() {
+        struct Latin1;
+        impl CommandRunner for Latin1 {
+            fn run(&self, _: &CommandPlan) -> Result<crate::actions::CommandOutput> {
+                Ok(crate::actions::CommandOutput {
+                    success: true,
+                    stdout: r#"{"files":{"a.txt":{"truncated":true,"raw_url":"https://r/a.txt"}}}"#
+                        .into(),
+                    stderr: String::new(),
+                })
+            }
+            fn fetch_raw(&self, _: &str) -> Result<Vec<u8>> {
+                Ok(b"caf\xe9".to_vec())
+            }
+        }
+
+        let error = fetch_gist_file_content(&Latin1, "id", "a.txt", None).unwrap_err();
+
+        assert_eq!(error.to_string(), "https://r/a.txt is not UTF-8 text");
+    }
 
     #[test]
     fn parses_gist_list_into_file_rows() {
@@ -253,7 +275,7 @@ mod tests {
         assert_eq!(content, "big content");
         let calls = runner.calls();
         assert_eq!(calls[0], gist_get_plan("id"));
-        assert_eq!(calls[1], raw_url_fetch_plan(url));
+        assert_eq!(calls[1], crate::actions::test_support::raw_get(url));
     }
 
     fn ok(stdout: &str) -> crate::actions::CommandOutput {
@@ -292,7 +314,10 @@ mod tests {
         assert_eq!(content, "whole");
         assert_eq!(
             runner.calls(),
-            vec![gist_get_plan("id"), raw_url_fetch_plan(fresh)]
+            vec![
+                gist_get_plan("id"),
+                crate::actions::test_support::raw_get(fresh)
+            ]
         );
     }
 

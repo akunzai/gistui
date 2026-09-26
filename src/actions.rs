@@ -46,13 +46,15 @@ pub struct CommandOutput {
     pub stderr: String,
 }
 
-/// The injectable boundary for every external command (`gh`, `git`) the app shells out
-/// to. Production uses [`SystemRunner`]; tests supply a fake so integration tests
-/// exercise command planning, success/failure handling, and output parsing
-/// without touching the network or requiring `gh`.
+/// The injectable boundary for the app's external IO: every command it shells out to (`gh`,
+/// `git`) and every raw gist file it downloads. Production uses [`SystemRunner`]; tests
+/// supply a fake so integration tests exercise command planning, success/failure handling,
+/// and output parsing without touching the network or requiring `gh`. One runner carries
+/// both, so a scripted test sees commands and raw fetches in the order they happened.
 ///
-/// The seam expresses one shape only: spawn a program with arguments, wait, capture
-/// stdout/stderr. Three paths need more than that and so call `std::process::Command`
+/// It expresses two shapes: [`CommandRunner::run`] spawns a program with arguments, waits,
+/// and captures stdout/stderr; [`CommandRunner::fetch_raw`] GETs a gist `raw_url` (#507 —
+/// no `curl` needed). Three paths need more than that and so call `std::process::Command`
 /// directly. They are the whole set — anything else belongs behind this trait:
 ///
 /// - **Piped stdin** — [`copy_via`] writes the payload to the child's stdin and closes
@@ -63,6 +65,9 @@ pub struct CommandOutput {
 ///   keeps polling it, rather than waiting for a single result.
 pub trait CommandRunner {
     fn run(&self, plan: &CommandPlan) -> Result<CommandOutput>;
+    /// The body of an HTTP GET of a gist `raw_url` — anonymous, unauthenticated. A non-2xx
+    /// status is an error.
+    fn fetch_raw(&self, url: &str) -> Result<Vec<u8>>;
 }
 
 /// The real boundary: spawns the planned program via `std::process::Command`.
@@ -79,6 +84,26 @@ impl CommandRunner for SystemRunner {
             stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
+    }
+
+    fn fetch_raw(&self, url: &str) -> Result<Vec<u8>> {
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .user_agent("gistui")
+            .timeout_global(Some(std::time::Duration::from_secs(30)))
+            .build()
+            .into();
+        let limit = crate::domain::MAX_TEXT_FILE_BYTES;
+        agent
+            .get(url)
+            .call()
+            .and_then(|mut response| response.body_mut().with_config().limit(limit).read_to_vec())
+            .map_err(|e| match e {
+                ureq::Error::BodyExceedsLimit(_) => anyhow!(
+                    "file too large for preview/diff (over the {} MiB limit)",
+                    limit / (1024 * 1024)
+                ),
+                e => anyhow!("fetch {url}: {e}"),
+            })
     }
 }
 
@@ -186,6 +211,25 @@ pub mod test_support {
                 .get(i)
                 .cloned()
                 .ok_or_else(|| anyhow!("no output for call {i}"))
+        }
+
+        /// Recorded as [`raw_get`] in the same sequence as commands; a scripted success's
+        /// stdout is the body, a scripted failure's stderr the error.
+        fn fetch_raw(&self, url: &str) -> Result<Vec<u8>> {
+            let output = self.run(&raw_get(url))?;
+            if output.success {
+                Ok(output.stdout.into_bytes())
+            } else {
+                Err(anyhow!("{}", output.stderr))
+            }
+        }
+    }
+
+    /// How a [`CommandRunner::fetch_raw`] of `url` appears in a [`SeqRunner`]'s calls.
+    pub fn raw_get(url: &str) -> CommandPlan {
+        CommandPlan {
+            program: "GET".into(),
+            args: vec![url.into()],
         }
     }
 }

@@ -58,6 +58,24 @@ impl CommandRunner for FakeRunner {
             .pop_front()
             .expect("FakeRunner ran out of scripted outputs"))
     }
+
+    /// Recorded as a `GET <url>` plan in the same call sequence; a scripted success's
+    /// stdout is the body, a scripted failure's stderr the error.
+    fn fetch_raw(&self, url: &str) -> anyhow::Result<Vec<u8>> {
+        let output = self.run(&raw_get(url))?;
+        if output.success {
+            Ok(output.stdout.into_bytes())
+        } else {
+            Err(anyhow::anyhow!("{}", output.stderr))
+        }
+    }
+}
+
+fn raw_get(url: &str) -> CommandPlan {
+    CommandPlan {
+        program: "GET".into(),
+        args: vec![url.into()],
+    }
 }
 
 const GIST_LIST_JSON: &str = include_str!("fixtures/gh/gist-list.json");
@@ -199,8 +217,8 @@ fn parse_gist_comments_handles_empty_array() {
     assert!(comments.is_empty());
 }
 
-/// Issue #495: a truncated file is fetched whole from its `raw_url` with a curl that fails
-/// on an HTTP error status, so a 404 page never comes back as the file's content.
+/// Issues #495, #507: a truncated file is fetched whole from its `raw_url` through the
+/// runner, and an HTTP error status fails the fetch rather than becoming the file's content.
 #[test]
 fn a_truncated_file_fetch_fails_on_an_http_error() {
     let url = "https://gist.githubusercontent.com/u/abc123/raw/0123/big.txt";
@@ -208,17 +226,11 @@ fn a_truncated_file_fetch_fails_on_an_http_error() {
         FakeRunner::ok(&format!(
             r#"{{"files":{{"big.txt":{{"truncated":true,"raw_url":"{url}"}}}}}}"#
         )),
-        FakeRunner::fail("curl: (56) The requested URL returned error: 404"),
+        FakeRunner::fail("fetch https://…: http status: 404"),
     ]);
 
     let error = fetch_gist_file_content(&runner, "abc123", "big.txt", None).unwrap_err();
 
-    assert!(error.to_string().contains("error: 404"), "{error}");
-    assert_eq!(
-        runner.calls.borrow()[1],
-        CommandPlan {
-            program: "curl".into(),
-            args: vec!["-fsSL".into(), url.into()],
-        }
-    );
+    assert!(error.to_string().contains("404"), "{error}");
+    assert_eq!(runner.calls.borrow()[1], raw_get(url));
 }

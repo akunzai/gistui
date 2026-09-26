@@ -96,14 +96,12 @@ struct GhCommentUser {
     login: String,
 }
 
-/// Plan for fetching gist file bytes from a list-response `raw_url` (no auth). `-f` makes an
-/// HTTP error status a failed command instead of an error page returned as content (#495);
-/// `-S` keeps curl's reason on stderr, which is what a failed command reports.
-pub fn raw_url_fetch_plan(url: &str) -> CommandPlan {
-    CommandPlan {
-        program: "curl".into(),
-        args: vec!["-fsSL".into(), url.into()],
-    }
+/// A gist file's text from its `raw_url`, fetched through `runner` (no `gh`, no auth). An HTTP
+/// error status fails rather than returning the error page (#495), and bytes that are not
+/// UTF-8 fail rather than being decoded lossily into content that can't round-trip (#507).
+pub fn fetch_raw_text(runner: &dyn CommandRunner, url: &str) -> Result<String> {
+    let bytes = runner.fetch_raw(url)?;
+    String::from_utf8(bytes).map_err(|_| anyhow::anyhow!("{url} is not UTF-8 text"))
 }
 
 // Per-resource submodules (issue #301). Each is a private `mod` re-exported flat below, so

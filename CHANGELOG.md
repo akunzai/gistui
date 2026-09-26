@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- gistui no longer needs `curl`: a gist file too large to come back inline, and a revision
+  file fetched from its raw URL, are now downloaded by gistui itself, so they work on Windows
+  versions that don't ship `curl.exe`. Such a download now gives up after 30 seconds, and a
+  file that isn't UTF-8 text is reported instead of being shown with replacement characters.
 - A gist file too large to come back inline, or a revision file fetched from its raw URL, now
   reports an HTTP error (such as 404) instead of treating the error page as the file's
   content, so it can't be shown in a diff, downloaded, or recorded as a pin's baseline.
