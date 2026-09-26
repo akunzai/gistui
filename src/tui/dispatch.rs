@@ -60,7 +60,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                 state,
                 "Loading diff…",
                 file,
-                move |result, _file, state| {
+                move |result, file, state| {
                     screens::diff::on_preview_diff(
                         state,
                         entry,
@@ -70,7 +70,8 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                         gist_label,
                         target,
                         upload_orientation,
-                        None,
+                        file,
+                        false,
                     )
                 },
             );

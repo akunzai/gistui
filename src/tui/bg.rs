@@ -385,7 +385,8 @@ fn spawn_pin_diff_inner(
                 gist_label,
                 target,
                 false,
-                Some(gist_file),
+                gist_file,
+                true,
             );
             if let Some(status) = status.filter(|_| state.screen.is_diff()) {
                 state.set_status(status);

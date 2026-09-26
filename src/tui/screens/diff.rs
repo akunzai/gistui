@@ -284,9 +284,78 @@ pub(crate) fn render_diff_vm(
     }
 }
 
-/// `PreviewDiff` outcome: build the local-vs-gist preview diff and, if the two sides are
-/// byte-identical, opportunistically refresh the pin-sync cache with the content already
-/// fetched (see the inline comment below for why).
+/// One local↔gist pair about to be shown as a Diff: both sides as read, how to frame them,
+/// and which gist file the remote side is.
+struct SyncDiff {
+    local_path: PathBuf,
+    local_content: String,
+    remote: String,
+    local_label: String,
+    gist_label: String,
+    download_target: PathBuf,
+    /// Frame the diff as an upload (gist → local) rather than a download.
+    upload_orientation: bool,
+    file: crate::domain::GistFileRef,
+    /// Carry `file` on the Diff, so `u` / `d` act on this pair (see `is_pin_diff_context`).
+    pin_context: bool,
+}
+
+/// Open the Diff for a local↔gist pair — the one place a Sync-policy verdict is shown.
+///
+/// A pinned pair that turns out identical is in sync: refresh its Sync baseline for free from
+/// the content already in hand, so the Pins list stays correct even if either side changed
+/// since the last real sync (issues #466, #492). The local side hashes the file's raw bytes
+/// (not the normalized `identical` comparison), matching compute_pin_sync_status; the remote
+/// side is the gist content as fetched. `record_pin_sync` ignores a pair nobody pinned.
+fn open_sync_diff(state: &mut AppState, entry: crate::tui::DeferredEntry, pair: SyncDiff) {
+    let policy = state.settings.sync_policy();
+    let diff = policy.preview_diff(
+        pair.upload_orientation,
+        &pair.local_label,
+        &pair.local_content,
+        &pair.gist_label,
+        &pair.remote,
+    );
+    let identical = policy.identical(&pair.local_content, &pair.remote);
+    let (gist_id, gist_filename) = if pair.pin_context {
+        (
+            Some(pair.file.gist_id.clone()),
+            Some(pair.file.filename.clone()),
+        )
+    } else {
+        (None, None)
+    };
+    state.open_deferred(
+        entry,
+        crate::tui::Screen::Diff(Box::new(crate::tui::DiffState {
+            body: crate::tui::ScrollBody {
+                text: diff,
+                ..crate::tui::ScrollBody::default()
+            },
+            remote_content: pair.remote.clone(),
+            local_path: pair.local_path.clone(),
+            download_target: pair.download_target,
+            identical,
+            gist_id,
+            gist_filename,
+        })),
+    );
+    // After entering the Diff, which clears the status a failed record appends to.
+    if identical {
+        record_pin_sync(
+            state,
+            &pair.local_path,
+            &pair.file.gist_id,
+            &pair.file.filename,
+            &pair.local_content,
+            &pair.remote,
+            None,
+        );
+    }
+}
+
+/// `PreviewDiff` outcome: build the local-vs-gist preview diff. `pin_context` is set for a
+/// diff opened from Pins.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn on_preview_diff(
     state: &mut AppState,
@@ -297,7 +366,8 @@ pub(crate) fn on_preview_diff(
     gist_label: String,
     target: PathBuf,
     upload_orientation: bool,
-    gist_file: Option<crate::domain::GistFileRef>,
+    file: crate::domain::GistFileRef,
+    pin_context: bool,
 ) -> LoopFlow {
     match result {
         Ok(remote) => {
@@ -306,60 +376,21 @@ pub(crate) fn on_preview_diff(
                 .map(|p| crate::domain::read_text_file_capped(p))
                 .transpose()
             {
-                Ok(local) => {
-                    let local_content = local.unwrap_or_default();
-                    let policy = state.settings.sync_policy();
-                    let diff = policy.preview_diff(
+                Ok(local) => open_sync_diff(
+                    state,
+                    entry,
+                    SyncDiff {
+                        local_path: local_path.unwrap_or_default(),
+                        local_content: local.unwrap_or_default(),
+                        remote,
+                        local_label,
+                        gist_label,
+                        download_target: target,
                         upload_orientation,
-                        &local_label,
-                        &local_content,
-                        &gist_label,
-                        &remote,
-                    );
-                    let identical = policy.identical(&local_content, &remote);
-                    state.open_deferred(
-                        entry,
-                        crate::tui::Screen::Diff(Box::new(crate::tui::DiffState {
-                            body: crate::tui::ScrollBody {
-                                text: diff,
-                                ..crate::tui::ScrollBody::default()
-                            },
-                            remote_content: remote,
-                            local_path: local_path.unwrap_or_default(),
-                            download_target: target,
-                            identical,
-                            gist_id: gist_file.as_ref().map(|file| file.gist_id.clone()),
-                            gist_filename: gist_file.map(|file| file.filename),
-                        })),
-                    );
-                    // A pin diff that turns out identical confirms both sides are in sync:
-                    // refresh the Sync baseline for free from the content already in hand,
-                    // so the Pins list stays correct even if either side changed since the
-                    // last real sync. The local side hashes the file's raw bytes (not the
-                    // normalized `identical` comparison), matching compute_pin_sync_status;
-                    // the remote side is the gist content as fetched (issue #466).
-                    if identical {
-                        let pin = state.diff().and_then(|d| {
-                            Some((
-                                d.gist_id.clone()?,
-                                d.gist_filename.clone()?,
-                                d.local_path.clone(),
-                                d.remote_content.clone(),
-                            ))
-                        });
-                        if let Some((gid, fname, local_abs, remote)) = pin {
-                            record_pin_sync(
-                                state,
-                                &local_abs,
-                                &gid,
-                                &fname,
-                                &local_content,
-                                &remote,
-                                None,
-                            );
-                        }
-                    }
-                }
+                        file,
+                        pin_context,
+                    },
+                ),
                 Err(error) => state.set_status(format!("read failed: {error}")),
             }
         }
@@ -383,26 +414,21 @@ pub(crate) fn on_download_selected(
         Ok(remote) => {
             if target.exists() {
                 match crate::domain::read_text_file_capped(&target) {
-                    Ok(local_content) => {
-                        let policy = state.settings.sync_policy();
-                        let diff = policy.diff(&local_label, &local_content, &gist_label, &remote);
-                        let identical = policy.identical(&local_content, &remote);
-                        state.open_deferred(
-                            entry,
-                            crate::tui::Screen::Diff(Box::new(crate::tui::DiffState {
-                                body: crate::tui::ScrollBody {
-                                    text: diff,
-                                    ..crate::tui::ScrollBody::default()
-                                },
-                                remote_content: remote,
-                                local_path: target.clone(),
-                                download_target: target,
-                                identical,
-                                gist_id: Some(file.gist_id),
-                                gist_filename: Some(file.filename),
-                            })),
-                        );
-                    }
+                    Ok(local_content) => open_sync_diff(
+                        state,
+                        entry,
+                        SyncDiff {
+                            local_path: target.clone(),
+                            local_content,
+                            remote,
+                            local_label,
+                            gist_label,
+                            download_target: target,
+                            upload_orientation: false,
+                            file,
+                            pin_context: true,
+                        },
+                    ),
                     Err(error) => state.set_status(error),
                 }
             } else {
@@ -749,7 +775,8 @@ mod tests {
             "gist".into(),
             PathBuf::from("target"),
             false,
-            None,
+            gist_file_ref("g1", "a.txt"),
+            false,
         );
 
         assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
@@ -768,7 +795,8 @@ mod tests {
             "gist".into(),
             PathBuf::from("target"),
             false,
-            None,
+            gist_file_ref("g1", "a.txt"),
+            false,
         );
 
         let diff = state.diff().expect("expected Screen::Diff");
@@ -800,7 +828,8 @@ mod tests {
                 "gist".into(),
                 local.clone(),
                 false,
-                None,
+                gist_file_ref("g1", "a.txt"),
+                false,
             );
 
             let diff = state.diff().expect("expected Screen::Diff");
@@ -851,6 +880,97 @@ mod tests {
         assert_eq!(diff.remote_content, "remote body");
         assert_eq!(diff.gist_id.as_deref(), Some("g1"));
         assert_eq!(diff.gist_filename.as_deref(), Some("a.txt"));
+    }
+
+    /// Run `f` with a config dir holding one pin of `local_file` ↔ gist `g1` / `a.txt`.
+    fn with_pinned_pair(local_file: &str, f: impl FnOnce(&mut AppState, PathBuf)) {
+        let _guard = crate::config::tests::ENV_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let dir = tempfile::tempdir().unwrap();
+        let prev = std::env::var_os("XDG_CONFIG_HOME");
+        std::env::set_var("XDG_CONFIG_HOME", dir.path());
+
+        let local_path = dir.path().join("a.txt");
+        std::fs::write(&local_path, local_file).unwrap();
+        let mapping = crate::domain::PinnedMapping {
+            local_path: local_path.clone(),
+            gist_id: "g1".into(),
+            gist_filename: "a.txt".into(),
+            direction: None,
+            last_seen_hash: None,
+            remote_blob_sha: None,
+        };
+        let mut config = crate::config::AppConfig::default();
+        config.pinned.push(mapping.clone());
+        crate::config::save_config(&crate::config::config_path().unwrap(), &config).unwrap();
+
+        let mut state = initial_state();
+        state.cwd = dir.path().to_path_buf();
+        state.pinned = vec![mapping];
+        f(&mut state, local_path);
+
+        match prev {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+    }
+
+    fn assert_baseline(state: &AppState, local: &str, remote: &str) {
+        assert_eq!(
+            state.pinned[0].last_seen_hash.as_deref(),
+            Some(crate::domain::sha256_hex(local.as_bytes()).as_str())
+        );
+        assert_eq!(
+            state.pinned[0].remote_blob_sha.as_deref(),
+            Some(crate::domain::git_blob_sha1(remote.as_bytes()).as_str())
+        );
+    }
+
+    /// Issue #492: a pin pull whose sides are identical under the Sync policy (here only a
+    /// trailing newline apart) confirms the pin is in sync, so it must not stay on Pull.
+    #[test]
+    fn identical_pin_pull_records_the_sync_baseline() {
+        with_pinned_pair("a", |state, local_path| {
+            on_download_selected(
+                state,
+                initial_state().defer_entry(),
+                Ok("a\n".into()),
+                local_path,
+                "local".into(),
+                "gist".into(),
+                gist_file_ref("g1", "a.txt"),
+            );
+
+            assert!(state.diff_identical());
+            assert_baseline(state, "a", "a\n");
+        });
+    }
+
+    /// Issues #466, #492: an identical preview diff of a pinned pair records the baseline,
+    /// wherever it was opened from; one opened outside Pins stays out of pin context.
+    #[test]
+    fn identical_preview_diff_records_the_sync_baseline() {
+        for pin_context in [true, false] {
+            with_pinned_pair("a\n", |state, local_path| {
+                on_preview_diff(
+                    state,
+                    initial_state().defer_entry(),
+                    Ok("a\n".into()),
+                    Some(local_path.clone()),
+                    "local".into(),
+                    "gist".into(),
+                    local_path,
+                    false,
+                    gist_file_ref("g1", "a.txt"),
+                    pin_context,
+                );
+
+                assert!(state.diff_identical());
+                assert_eq!(state.is_pin_diff_context(), pin_context);
+                assert_baseline(state, "a\n", "a\n");
+            });
+        }
     }
 
     #[test]
