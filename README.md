@@ -1,6 +1,7 @@
 # gistui
 
 [![CI](https://github.com/akunzai/gistui/actions/workflows/ci.yml/badge.svg)](https://github.com/akunzai/gistui/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/akunzai/gistui/graph/badge.svg)](https://codecov.io/gh/akunzai/gistui)
 [![crates.io](https://badgen.net/crates/v/gistui)](https://crates.io/crates/gistui)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 

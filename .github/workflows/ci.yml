@@ -60,3 +60,61 @@ jobs:
 
       - name: Test
         run: cargo test --locked
+
+  # Coverage and test counts for Codecov. Informational only: it never gates a
+  # merge or a release, so a failure here leaves the check suite green.
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+      id-token: write # Codecov OIDC upload, no CODECOV_TOKEN secret
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov and cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov,cargo-nextest
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # The `ci` profile in .config/nextest.toml writes the JUnit report.
+      - name: Test with coverage
+        run: |
+          cargo llvm-cov nextest --locked --profile ci --no-report
+          cargo llvm-cov report --lcov --output-path lcov.info
+
+      - name: Summarize
+        if: ${{ !cancelled() }}
+        run: |
+          junit=target/nextest/ci/junit.xml
+          attr() { sed -n "s/.*<testsuites[^>]* $1=\"\([0-9]*\)\".*/\1/p" "$junit" | head -1; }
+          lines="$(cargo llvm-cov report --json --summary-only | jq -r '.data[0].totals.lines.percent | . * 100 | round / 100')"
+          {
+            echo "| Tests | Failures | Line coverage |"
+            echo "| ---: | ---: | ---: |"
+            echo "| $(attr tests) | $(attr failures) | ${lines}% |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v7
+        with:
+          files: lcov.info
+          use_oidc: true
+
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }}
+        uses: codecov/codecov-action@v7
+        with:
+          report_type: test_results
+          files: target/nextest/ci/junit.xml
+          use_oidc: true
