@@ -6,22 +6,22 @@ this — see [CONTRIBUTING.md](CONTRIBUTING.md).
 ## How a release works
 
 A release is a `vX.Y.Z` git tag that matches `Cargo.toml`'s `version`. Pushing the tag
-triggers the full pipeline:
+triggers `.github/workflows/release.yml`, which runs these steps in order, each only if the
+one before succeeded:
 
-- `.github/workflows/release.yml` — builds and attaches the platform binaries.
-- `.github/workflows/publish.yml` — publishes the crate to
-  [crates.io](https://crates.io/crates/gistui).
+1. Checks that the tag matches `Cargo.toml`'s version and runs the `mise run check` gate on
+   the tagged commit.
+2. Builds the platform binaries and attests their build provenance (checkable with
+   `gh attestation verify <archive> --repo akunzai/gistui`).
+3. Waits for approval of the `release` environment, then creates the GitHub Release with the
+   binaries attached and updates the Homebrew formula and Scoop manifest.
+4. Waits for a second approval of the same environment, then publishes the crate to
+   [crates.io](https://crates.io/crates/gistui). If only this step fails, re-run the failed
+   job from the tag's workflow run; the release already exists.
 
-Both workflows run the `mise run check` gate first; `release.yml` then builds and attests
-every archive (build provenance, checkable with
-`gh attestation verify <archive> --repo akunzai/gistui`). Nothing is published until a
-maintainer approves the `release` environment, which admits `v*` tags only: the
-"Create GitHub Release" job and the crates.io "cargo publish" job each pause for that
-approval, after the gate and before any publish side effect.
-
-The crate is published and the `CARGO_REGISTRY_TOKEN` secret is configured, so the publish
-step runs on every tag once approved. `release.yml` also pushes the downstream package
-definitions directly — no manual bump, no waiting on a schedule:
+The crate is published only while the `CARGO_REGISTRY_TOKEN` secret is configured; without
+it the publish step skips itself and succeeds. The downstream package definitions are
+pushed directly — no manual bump, no waiting on a schedule:
 
 - [Homebrew tap](https://github.com/akunzai/homebrew-tap) — `Formula/gistui.rb` regenerated
   from the new release's per-platform checksums and pushed straight to `main`.
@@ -45,11 +45,12 @@ are kept out of the published tarball); `cargo publish --dry-run` validates the 
    `[unreleased]` at `compare/vX.Y.Z...HEAD`.
 3. Merge to `main` (CI gate green).
 4. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-5. Approve: once the gate, builds and attestation are green, the Release and Publish runs
-   each wait on the `release` environment. Approve both with "Review deployments" on each
-   run's page (`gh run list --workflow release.yml` / `--workflow publish.yml` finds them).
-   To re-run a crates.io publish by hand, dispatch it on the tag —
-   `gh workflow run publish.yml --ref vX.Y.Z`; the environment rejects a branch ref.
+5. Approve: open the tag's Release run in the Actions tab. Once the gate, builds, and
+   attestation are green, approve the `release` deployment under **Review deployments**;
+   approve it again when the crates.io job asks. Nothing leaves the repository before the
+   first approval. Only a tag matching `v*` can deploy to that environment, and the
+   publishing secrets (`HOMEBREW_BUMP_TOKEN`, `CARGO_REGISTRY_TOKEN`) belong on it as
+   environment secrets.
 6. Verify: the GitHub release has the binaries, [crates.io](https://crates.io/crates/gistui)
    shows the new version (and docs.rs built), and `Formula/gistui.rb` / `bucket/gistui.json`
    show a new `chore: bump gistui to vX.Y.Z` commit on the tap's / bucket's `main` (pushed by

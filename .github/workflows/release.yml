@@ -12,7 +12,9 @@ env:
 permissions: {}
 
 jobs:
-  # A tag on a commit that fails the gate never reaches a release.
+  # The same gate as CI, run on the tagged commit: a tag that fails it, or
+  # that does not match Cargo.toml's version, builds nothing and publishes
+  # nothing — neither the GitHub release nor the crate.
   gate:
     name: Verification gate
     runs-on: ubuntu-latest
@@ -26,6 +28,15 @@ jobs:
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Verify tag matches Cargo.toml version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          crate="$(cargo metadata --no-deps --format-version 1 | grep -o '"version":"[^"]*"' | head -1 | cut -d'"' -f4)"
+          if [ "$tag" != "$crate" ]; then
+            echo "::error::Tag v$tag does not match Cargo.toml version $crate"
+            exit 1
+          fi
 
       - name: fmt, clippy, test, check
         run: mise run check
@@ -185,3 +196,35 @@ jobs:
           HOMEBREW_BUMP_TOKEN: ${{ secrets.HOMEBREW_BUMP_TOKEN }}
           VERSION: ${{ github.ref_name }}
         run: scripts/release/update-scoop-manifest.sh
+
+  # Runs after the GitHub release so the crate never appears before the
+  # binaries its binstall metadata points at, and waits for a second approval
+  # of the `release` environment. A failure here leaves the release in place;
+  # re-run this job from the tag's workflow run.
+  publish:
+    name: Publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up toolchain (mise)
+        uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # No-ops until the CARGO_REGISTRY_TOKEN secret is set, so a tag never
+      # fails on a repository without crates.io wired up.
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "${CARGO_REGISTRY_TOKEN:-}" ]; then
+            echo "::notice::CARGO_REGISTRY_TOKEN not set — skipping crates.io publish."
+            exit 0
+          fi
+          cargo publish
