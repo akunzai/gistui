@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A pin whose local file and gist file already match (for example, only a trailing newline
+  apart) no longer stays on *Pull* after you open it: any Diff that finds the two sides
+  identical now marks the pin in sync, including a pull and a diff opened outside Pins.
 - Release archives carry a signed build-provenance attestation (`gh attestation verify
   <archive> --repo akunzai/gistui`), and a release is only built from a tag that passes the
   test gate. `install.sh`, `install.ps1`, and `gistui --upgrade` now refuse a checksum file
