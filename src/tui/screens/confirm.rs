@@ -556,7 +556,8 @@ pub(crate) fn render_confirm_vm(
 }
 
 /// `UploadPreview` outcome: stage the pending Upload action and open Confirm with the
-/// local-vs-gist diff.
+/// local-vs-gist diff — unless the two sides are already identical under the Sync policy,
+/// when there is nothing to send: stay put and confirm the pair's baseline (#493).
 pub(crate) fn on_upload_preview(
     state: &mut AppState,
     entry: crate::tui::DeferredEntry,
@@ -576,6 +577,21 @@ pub(crate) fn on_upload_preview(
                 local_label,
                 gist_label,
             ) {
+                Ok(draft)
+                    if state
+                        .settings
+                        .sync_policy()
+                        .identical(&draft.original_content, &draft.remote_content) =>
+                {
+                    state.set_status("already in sync — nothing to upload");
+                    crate::tui::bg::confirm_sync_baseline(
+                        state,
+                        &draft.local_path,
+                        &crate::domain::GistFileRef::id_name(draft.gist_id, draft.filename),
+                        &draft.original_content,
+                        &draft.remote_content,
+                    );
+                }
                 Ok(draft) => state.enter_upload_confirm(draft, Some(entry)),
                 Err(error) => {
                     state.set_status(format!(
@@ -1536,6 +1552,41 @@ mod tests {
             Some(PendingAction::Upload(d))
                 if d.gist_id == "g1" && d.filename == "a.txt"
         ));
+    }
+
+    /// Issue #493: an upload whose two sides are already identical under the Sync policy
+    /// opens no Confirm — there is nothing to send — and a pinned pair's baseline is
+    /// confirmed, as an identical Diff does (#492).
+    #[test]
+    fn an_identical_upload_opens_no_confirm_and_confirms_the_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_path = dir.path().join("a.txt");
+        std::fs::write(&local_path, "a\n").unwrap();
+        let mapping = crate::domain::PinnedMapping::fixture(local_path.clone(), "g1", "a.txt");
+        let mut state = crate::tui::test_support::state_with_stored_pin(dir.path(), mapping);
+        state.enter(Screen::Pins(Box::default()));
+        let entry = state.defer_entry();
+
+        on_upload_preview(
+            &mut state,
+            entry,
+            Ok("a".into()),
+            gist_file_ref("g1", "a.txt"),
+            local_path,
+            "local".into(),
+            "gist".into(),
+        );
+
+        assert!(state.screen.is_pins(), "stays put: {:?}", state.screen);
+        assert_eq!(
+            state.status.as_deref(),
+            Some("already in sync — nothing to upload")
+        );
+        assert_eq!(
+            state.pinned[0].baseline,
+            crate::sync_baseline::SyncBaseline::after_sync(b"a\n", b"a")
+        );
+        assert_eq!(state.pinned[0].direction, None, "a passive confirmation");
     }
 
     #[test]

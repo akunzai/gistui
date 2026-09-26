@@ -1,7 +1,7 @@
 //! `Screen::Diff` — key handling, view-model, paint, palette items, and apply handlers
 //! colocated in one file (issue #287, Phase 2; issue #383).
 
-use crate::tui::bg::{record_pin_sync, LoopFlow};
+use crate::tui::bg::{confirm_sync_baseline, LoopFlow};
 use crate::tui::gist_content::GistContentStore;
 use crate::tui::render::diff_labels;
 use crate::tui::view_model::ChromeVm;
@@ -294,13 +294,8 @@ struct SyncDiff {
     pin_context: bool,
 }
 
-/// Open the Diff for a local↔gist pair — the one place a Sync-policy verdict is shown.
-///
-/// A pinned pair that turns out identical is in sync: refresh its Sync baseline for free from
-/// the content already in hand, so the Pins list stays correct even if either side changed
-/// since the last real sync (issues #466, #492). The local side is the file's raw bytes (not
-/// the normalized `identical` comparison); the remote side is the gist content as fetched.
-/// `record_pin_sync` ignores a pair nobody pinned.
+/// Open the Diff for a local↔gist pair. An identical pair is in sync: see
+/// [`confirm_sync_baseline`].
 fn open_sync_diff(state: &mut AppState, entry: crate::tui::DeferredEntry, pair: SyncDiff) {
     let policy = state.settings.sync_policy();
     let diff = policy.preview_diff(
@@ -336,16 +331,12 @@ fn open_sync_diff(state: &mut AppState, entry: crate::tui::DeferredEntry, pair: 
     );
     // After entering the Diff, which clears the status a failed record appends to.
     if identical {
-        record_pin_sync(
+        confirm_sync_baseline(
             state,
             &pair.local_path,
-            &pair.file.gist_id,
-            &pair.file.filename,
-            &crate::sync_baseline::SyncBaseline::after_sync(
-                pair.local_content.as_bytes(),
-                pair.remote.as_bytes(),
-            ),
-            None,
+            &pair.file,
+            &pair.local_content,
+            &pair.remote,
         );
     }
 }

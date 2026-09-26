@@ -253,6 +253,7 @@ applying the stored-versus-absolute rule, saving, and describing what changed. T
   Projecting `skip_dirs` does **not** trigger a rescan — pin/unpin never touch the
   filesystem (issue #409), so a hand edit to `skip_dirs` picked up by one of these loads
   only reaches the local list at the next scan.
+- **"Identical means in sync" has one home: `bg::confirm_sync_baseline`** (issues #492, #493). Any flow that finds a local↔gist pair identical under the Sync policy — the Diff (`open_sync_diff`) and an upload preview (which then opens no Confirm) — calls it to confirm a pinned pair's baseline, passively (direction untouched).
 - **`record_pin_sync` checks `AppState::pinned` before it opens anything.** That in-memory
   gate is what keeps a download of a never-pinned file from reading `config.toml` at all,
   and therefore from reporting a config problem the user did not provoke. A `NotPinned`

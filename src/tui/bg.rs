@@ -399,6 +399,30 @@ fn spawn_pin_diff_inner(
     );
 }
 
+/// A local file and a gist file found identical under the Sync policy are in sync: if they
+/// are a pinned pair, confirm its Sync baseline from the content already in hand, so the Pins
+/// list stays correct even if either side changed since the last real sync (issues #466,
+/// #492, #493). `local` is the file's raw bytes on disk (not the normalized comparison);
+/// `remote` is the gist content as fetched. A passive confirmation: the pin's recorded
+/// direction is left alone. The one home of this rule — every flow that finds a pair
+/// identical calls it.
+pub(super) fn confirm_sync_baseline(
+    state: &mut AppState,
+    local_abs: &std::path::Path,
+    file: &crate::domain::GistFileRef,
+    local: &str,
+    remote: &str,
+) {
+    record_pin_sync(
+        state,
+        local_abs,
+        &file.gist_id,
+        &file.filename,
+        &crate::sync_baseline::SyncBaseline::after_sync(local.as_bytes(), remote.as_bytes()),
+        None,
+    );
+}
+
 /// If `pair` is a pinned pair, record `baseline` for it and project the result onto `AppState`.
 ///
 /// The in-memory check comes **first and gates the file access entirely**: a download of a
