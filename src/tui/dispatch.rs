@@ -69,7 +69,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                         target,
                         upload_orientation,
                         file,
-                        false,
+                        crate::tui::DiffOrigin::List,
                     )
                 },
             );
@@ -103,6 +103,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                         local_label,
                         gist_label,
                         file,
+                        crate::tui::DiffOrigin::List,
                     )
                 },
             );
@@ -861,6 +862,43 @@ mod tests {
         assert_eq!(
             state.compute_pin_sync_status(0),
             crate::domain::SyncStatus::InSync
+        );
+    }
+
+    /// Issue #494: `d` in a Diff opened from the List preview still records a pinned pair's
+    /// baseline — the Diff carries the gist identity whichever screen opened it.
+    #[test]
+    fn a_download_from_a_list_preview_diff_records_the_pins_baseline() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_path = dir.path().join("a.txt");
+        std::fs::write(&local_path, "old\n").unwrap();
+        let mapping = PinnedMapping::fixture(local_path.clone(), "g1", "a.txt");
+        let mut state = test_support::state_with_stored_pin(dir.path(), mapping);
+        screens::diff::on_preview_diff(
+            &mut state,
+            initial_state().defer_entry(),
+            Ok("new\n".into()),
+            Some(local_path.clone()),
+            "local".into(),
+            "gist".into(),
+            local_path.clone(),
+            false,
+            crate::domain::GistFileRef::id_name("g1", "a.txt"),
+            crate::tui::DiffOrigin::List,
+        );
+        assert!(!state.is_pin_diff_context());
+
+        route(
+            &mut state,
+            KeyOutcome::Download {
+                mode: crate::actions::DownloadMode::overwrite_after_user_confirm(),
+            },
+        );
+
+        assert_eq!(std::fs::read_to_string(&local_path).unwrap(), "new\n");
+        assert_eq!(
+            state.pinned[0].baseline,
+            crate::sync_baseline::SyncBaseline::after_sync(b"new\n", b"new\n")
         );
     }
 }
