@@ -1,6 +1,6 @@
 //! Gist revision history and per-revision file fetch/parse (issue #301).
 
-use super::{raw_url_fetch_plan, GhCommentUser};
+use super::{fetch_raw_text, GhCommentUser};
 use crate::actions::{run_command, CommandPlan, CommandRunner};
 use crate::domain::{GistRevision, GistRevisionChangeStatus};
 use anyhow::{bail, Context, Result};
@@ -78,7 +78,7 @@ fn fetch_revision_file_via_raw_url(
     runner: &dyn CommandRunner,
     url: &str,
 ) -> Result<RevisionFileContent> {
-    run_command(runner, &raw_url_fetch_plan(url)).map(RevisionFileContent::Present)
+    fetch_raw_text(runner, url).map(RevisionFileContent::Present)
 }
 
 /// Fetch one file at a gist revision SHA. Uses the revision API when it works; on HTTP
@@ -297,6 +297,6 @@ mod tests {
         );
         let calls = runner.calls();
         assert_eq!(calls[0], gist_revision_plan("g1", "sha1"));
-        assert_eq!(calls[1], raw_url_fetch_plan(&url));
+        assert_eq!(calls[1], crate::actions::test_support::raw_get(&url));
     }
 }

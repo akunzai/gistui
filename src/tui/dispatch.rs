@@ -557,6 +557,10 @@ mod tests {
             self.sent.lock().unwrap().push((plan.clone(), files));
             Ok(crate::actions::CommandOutput::ok(""))
         }
+
+        fn fetch_raw(&self, url: &str) -> anyhow::Result<Vec<u8>> {
+            anyhow::bail!("no raw fetch expected: {url}")
+        }
     }
 
     /// Issue #460: a pin push confirmed from Pins → Confirm must record the pin sync and

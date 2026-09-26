@@ -340,6 +340,6 @@ Keep focused helpers in its children: `src/tui/render/labels.rs` owns gist/file/
 ## Safety seams (rich refs)
 
 - Download overwrite gate (issue #246): `src/actions.rs` — `DownloadMode` / `OverwriteConfirmed`.
-- Injectable `gh`/`git` boundary (issue #245, #386, #419): `foo(runner)` with `CommandRunner` first; adapters `SystemRunner` / `SeqRunner`. Every command path goes through it — reads, write actions, and gist compaction (`compact_in_dir`) alike. The seam expresses spawn-and-capture only; the few paths it cannot express are named on the `CommandRunner` doc in `src/actions.rs`, and that list is the whole set. Fixtures in `tests/fixtures/gh/`.
+- Injectable `gh`/`git`/raw-fetch boundary (issue #245, #386, #419, #507): `foo(runner)` with `CommandRunner` first; adapters `SystemRunner` / `SeqRunner`. Raw gist file downloads are its second method, `fetch_raw` (in-process `ureq`, no `curl`); `SeqRunner` records them as `raw_get(url)` in the same call sequence as commands, so a test asserts the whole order. Every command path goes through it — reads, write actions, and gist compaction (`compact_in_dir`) alike. The seam expresses spawn-and-capture only; the few paths it cannot express are named on the `CommandRunner` doc in `src/actions.rs`, and that list is the whole set. Fixtures in `tests/fixtures/gh/`.
 - Gold-style TUI pure logic: each `tui` module's own `#[cfg(test)] mod tests` (no network); shared `AppState` fixtures live in `src/tui/test_support.rs`.
 - E2E frames: `scripts/demo/` (real binary + fake `gh` + fake cwd).
