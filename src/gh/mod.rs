@@ -96,11 +96,13 @@ struct GhCommentUser {
     login: String,
 }
 
-/// Plan for fetching gist file bytes from a list-response `raw_url` (no auth).
+/// Plan for fetching gist file bytes from a list-response `raw_url` (no auth). `-f` makes an
+/// HTTP error status a failed command instead of an error page returned as content (#495);
+/// `-S` keeps curl's reason on stderr, which is what a failed command reports.
 pub fn raw_url_fetch_plan(url: &str) -> CommandPlan {
     CommandPlan {
         program: "curl".into(),
-        args: vec!["-sL".into(), url.into()],
+        args: vec!["-fsSL".into(), url.into()],
     }
 }
 

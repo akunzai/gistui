@@ -198,3 +198,27 @@ fn parse_gist_comments_handles_empty_array() {
     let comments = parse_gist_comments_json("[]").unwrap();
     assert!(comments.is_empty());
 }
+
+/// Issue #495: a truncated file is fetched whole from its `raw_url` with a curl that fails
+/// on an HTTP error status, so a 404 page never comes back as the file's content.
+#[test]
+fn a_truncated_file_fetch_fails_on_an_http_error() {
+    let url = "https://gist.githubusercontent.com/u/abc123/raw/0123/big.txt";
+    let runner = FakeRunner::new(vec![
+        FakeRunner::ok(&format!(
+            r#"{{"files":{{"big.txt":{{"truncated":true,"raw_url":"{url}"}}}}}}"#
+        )),
+        FakeRunner::fail("curl: (56) The requested URL returned error: 404"),
+    ]);
+
+    let error = fetch_gist_file_content(&runner, "abc123", "big.txt", None).unwrap_err();
+
+    assert!(error.to_string().contains("error: 404"), "{error}");
+    assert_eq!(
+        runner.calls.borrow()[1],
+        CommandPlan {
+            program: "curl".into(),
+            args: vec!["-fsSL".into(), url.into()],
+        }
+    );
+}

@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A gist file too large to come back inline, or a revision file fetched from its raw URL, now
+  reports an HTTP error (such as 404) instead of treating the error page as the file's
+  content, so it can't be shown in a diff, downloaded, or recorded as a pin's baseline.
 - On the Pins screen, a long row now scrolls right far enough to read its end (gist
   description, ages, and id), not only the local path.
 - A pin whose local file and gist file already match (for example, only a trailing newline
