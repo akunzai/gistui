@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- `u` in a pin's diff uploads to the pin's own gist file even when it is named differently
+  from the local file; it used to add a second file named after the local one.
+- Downloading with `d` from a diff opened in the List now marks a pinned pair as synced, as it
+  already did from Pins and from a List download.
 - Pushing a file whose gist copy already matches it (for example, only a trailing newline
   apart) no longer opens the upload confirmation: gistui says it's already in sync, and a
   pinned pair shows as synced — from Pins `u`/`s` and from the list alike.

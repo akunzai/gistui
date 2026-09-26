@@ -290,8 +290,8 @@ struct SyncDiff {
     /// Frame the diff as an upload (gist → local) rather than a download.
     upload_orientation: bool,
     file: crate::domain::GistFileRef,
-    /// Carry `file` on the Diff, so `u` / `d` act on this pair (see `is_pin_diff_context`).
-    pin_context: bool,
+    /// Which screen opened the Diff — what `u` uploads (see `is_pin_diff_context`).
+    origin: crate::tui::DiffOrigin,
 }
 
 /// Open the Diff for a local↔gist pair. An identical pair is in sync: see
@@ -306,14 +306,6 @@ fn open_sync_diff(state: &mut AppState, entry: crate::tui::DeferredEntry, pair: 
         &pair.remote,
     );
     let identical = policy.identical(&pair.local_content, &pair.remote);
-    let (gist_id, gist_filename) = if pair.pin_context {
-        (
-            Some(pair.file.gist_id.clone()),
-            Some(pair.file.filename.clone()),
-        )
-    } else {
-        (None, None)
-    };
     state.open_deferred(
         entry,
         crate::tui::Screen::Diff(Box::new(crate::tui::DiffState {
@@ -325,8 +317,9 @@ fn open_sync_diff(state: &mut AppState, entry: crate::tui::DeferredEntry, pair: 
             local_path: pair.local_path.clone(),
             download_target: pair.download_target,
             identical,
-            gist_id,
-            gist_filename,
+            gist_id: Some(pair.file.gist_id.clone()),
+            gist_filename: Some(pair.file.filename.clone()),
+            origin: pair.origin,
         })),
     );
     // After entering the Diff, which clears the status a failed record appends to.
@@ -341,8 +334,7 @@ fn open_sync_diff(state: &mut AppState, entry: crate::tui::DeferredEntry, pair: 
     }
 }
 
-/// `PreviewDiff` outcome: build the local-vs-gist preview diff. `pin_context` is set for a
-/// diff opened from Pins.
+/// `PreviewDiff` outcome: build the local-vs-gist preview diff.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn on_preview_diff(
     state: &mut AppState,
@@ -354,7 +346,7 @@ pub(crate) fn on_preview_diff(
     target: PathBuf,
     upload_orientation: bool,
     file: crate::domain::GistFileRef,
-    pin_context: bool,
+    origin: crate::tui::DiffOrigin,
 ) -> LoopFlow {
     match result {
         Ok(remote) => {
@@ -375,7 +367,7 @@ pub(crate) fn on_preview_diff(
                         download_target: target,
                         upload_orientation,
                         file,
-                        pin_context,
+                        origin,
                     },
                 ),
                 Err(error) => state.set_status(format!("read failed: {error}")),
@@ -388,6 +380,7 @@ pub(crate) fn on_preview_diff(
 }
 
 /// `DownloadSelected` outcome: diff against an existing local file, or write a new one.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn on_download_selected(
     state: &mut AppState,
     entry: crate::tui::DeferredEntry,
@@ -396,6 +389,7 @@ pub(crate) fn on_download_selected(
     local_label: String,
     gist_label: String,
     file: crate::domain::GistFileRef,
+    origin: crate::tui::DiffOrigin,
 ) -> LoopFlow {
     match result {
         Ok(remote) => {
@@ -413,7 +407,7 @@ pub(crate) fn on_download_selected(
                             download_target: target,
                             upload_orientation: false,
                             file,
-                            pin_context: true,
+                            origin,
                         },
                     ),
                     Err(error) => state.set_status(error),
@@ -606,6 +600,36 @@ mod tests {
         ));
     }
 
+    /// Issue #494: a pin maps a local file to a gist file that may be named differently. `u`
+    /// in that pin's Diff uploads to the pin's gist file, not to one named after the local
+    /// file — which would add a second file to the gist instead.
+    #[test]
+    fn u_in_a_pin_diff_uploads_to_the_pins_gist_file() {
+        let mut state = initial_state();
+        state.gist_catalog.owned = vec![GistFile::fixture("g1", "zshrc")];
+        state.screen = Screen::Diff(Box::new(DiffState {
+            local_path: PathBuf::from("/home/u/.zshrc"),
+            download_target: PathBuf::from("/home/u/.zshrc"),
+            gist_id: Some("g1".into()),
+            gist_filename: Some("zshrc".into()),
+            origin: DiffOrigin::Pin,
+            ..DiffState::default()
+        }));
+
+        let KeyOutcome::UploadPreview {
+            local_path, file, ..
+        } = state.handle_key(KeyCode::Char('u'))
+        else {
+            panic!("expected an upload preview of the pinned gist file");
+        };
+
+        assert_eq!(local_path, PathBuf::from("/home/u/.zshrc"));
+        assert_eq!(
+            (file.gist_id.as_str(), file.filename.as_str()),
+            ("g1", "zshrc")
+        );
+    }
+
     #[test]
     fn enter_diff_sets_diff_screen() {
         let mut state = initial_state();
@@ -763,7 +787,7 @@ mod tests {
             PathBuf::from("target"),
             false,
             gist_file_ref("g1", "a.txt"),
-            false,
+            DiffOrigin::List,
         );
 
         assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
@@ -783,7 +807,7 @@ mod tests {
             PathBuf::from("target"),
             false,
             gist_file_ref("g1", "a.txt"),
-            false,
+            DiffOrigin::List,
         );
 
         let diff = state.diff().expect("expected Screen::Diff");
@@ -816,7 +840,7 @@ mod tests {
                 local.clone(),
                 false,
                 gist_file_ref("g1", "a.txt"),
-                false,
+                DiffOrigin::List,
             );
 
             let diff = state.diff().expect("expected Screen::Diff");
@@ -841,6 +865,7 @@ mod tests {
             "local".into(),
             "gist".into(),
             gist_file_ref("g1", "a.txt"),
+            DiffOrigin::List,
         );
 
         assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
@@ -861,10 +886,16 @@ mod tests {
             "local".into(),
             "gist".into(),
             gist_file_ref("g1", "a.txt"),
+            DiffOrigin::List,
         );
 
         let diff = state.diff().expect("expected Screen::Diff");
         assert_eq!(diff.remote_content, "remote body");
+        assert_eq!(
+            diff.origin,
+            DiffOrigin::List,
+            "a list download is not a pin Diff (#494)"
+        );
         assert_eq!(diff.gist_id.as_deref(), Some("g1"));
         assert_eq!(diff.gist_filename.as_deref(), Some("a.txt"));
     }
@@ -905,18 +936,21 @@ mod tests {
                 "local".into(),
                 "gist".into(),
                 gist_file_ref("g1", "a.txt"),
+                DiffOrigin::Pin,
             );
 
             assert!(state.diff_identical());
+            assert!(state.is_pin_diff_context());
             assert_baseline(state, "a", "a\n");
         });
     }
 
-    /// Issues #466, #492: an identical preview diff of a pinned pair records the baseline,
-    /// wherever it was opened from; one opened outside Pins stays out of pin context.
+    /// Issues #466, #492, #494: an identical preview diff of a pinned pair records the
+    /// baseline wherever it was opened from, and carries the gist identity either way; only
+    /// one opened from Pins is in pin context.
     #[test]
     fn identical_preview_diff_records_the_sync_baseline() {
-        for pin_context in [true, false] {
+        for origin in [DiffOrigin::Pin, DiffOrigin::List] {
             with_pinned_pair("a\n", |state, local_path| {
                 on_preview_diff(
                     state,
@@ -928,11 +962,12 @@ mod tests {
                     local_path,
                     false,
                     gist_file_ref("g1", "a.txt"),
-                    pin_context,
+                    origin,
                 );
 
                 assert!(state.diff_identical());
-                assert_eq!(state.is_pin_diff_context(), pin_context);
+                assert_eq!(state.is_pin_diff_context(), origin == DiffOrigin::Pin);
+                assert_eq!(state.download_gist_id(), Some("g1"));
                 assert_baseline(state, "a\n", "a\n");
             });
         }

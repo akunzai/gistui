@@ -331,6 +331,7 @@ pub(super) fn spawn_pin_pull(
             local_label,
             gist_label,
             file,
+            crate::tui::DiffOrigin::Pin,
         )
     });
 }
@@ -389,7 +390,7 @@ fn spawn_pin_diff_inner(
                 target,
                 false,
                 gist_file,
-                true,
+                crate::tui::DiffOrigin::Pin,
             );
             if let Some(status) = status.filter(|_| state.screen.is_diff()) {
                 state.set_status(status);

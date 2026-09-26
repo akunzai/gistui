@@ -69,6 +69,10 @@ Fields stay `pub`. No `#[serde(default)]` on the struct.
   supersession drop it without touching navigation. Preview refresh captures the current
   parent through `defer_replacement`, so refresh replaces Preview instead of stacking it.
   Diff Gist identity is built directly into `DiffState`; do not add another staging field.
+  Every local↔gist Diff carries that identity (a download records a pinned pair's baseline
+  through it), and `DiffState.origin` (`DiffOrigin::{List, Pin}`), set by whoever opens the
+  Diff, is what decides `u`'s semantics (issue #494) — never infer "pin Diff" from the
+  identity being present. A Pin-origin `u` targets the pin's `gist_filename`.
 - **`back_to_list()` is a hard reset** (clears `nav_stack`) — reserve it for paths whose only possible origin is `Screen::List` itself. Confirm-execute paths with more than one possible origin (e.g. the delete and compact Gist mutations' apply in `gist_mutation.rs`) use `leave()`/`cancel_confirm()` instead, to return to whichever screen actually launched them; pop an extra time if the popped screen is now stale (e.g. `GistDetail` for a gist just deleted).
 
 ## Key path (pure intent → impure dispatch)

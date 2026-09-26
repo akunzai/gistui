@@ -643,9 +643,24 @@ pub struct DiffState {
     pub download_target: PathBuf,
     /// True when local and remote content compare equal under config rules.
     pub identical: bool,
-    /// Optional gist file identity (pin diffs / attributed pulls).
+    /// The gist file on the other side of a local↔gist Diff (absent for revision-only
+    /// comparisons). A download records a pinned pair's baseline through it, whichever
+    /// screen opened the Diff (issue #494).
     pub gist_id: Option<String>,
     pub gist_filename: Option<String>,
+    /// Which screen opened the Diff, deciding what `u` uploads (issue #494).
+    pub origin: DiffOrigin,
+}
+
+/// Where a local↔gist [`DiffState`] was opened from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DiffOrigin {
+    /// The List panes: `u` uploads the selected pair under the local file's name.
+    #[default]
+    List,
+    /// The Pins screen: `u` uploads to the pin's own gist file, whose name may differ from
+    /// the local file's.
+    Pin,
 }
 
 /// Confirm modal — carried on [`Screen::Confirm`] (issue #242).
@@ -1572,12 +1587,11 @@ impl AppState {
     /// Upload intent shared by the list and the diff screen: requires a selected local file
     /// and gist, then branches on whether the gist already holds a file of the local name
     /// (case C: preview + confirm overwrite) or not (case B: add directly).
-    /// True when we're in the diff screen launched from a Pins context (pin diff or pin pull).
-    /// In this state DiffState holds the pin's local path and gist identity, so upload/download
-    /// should use those instead of the Files-view selection which may point elsewhere.
+    /// True when we're in a Diff the Pins screen opened (pin diff or pin pull). Upload then
+    /// uses the Diff's own pair — the pin's local path and gist file — instead of the List
+    /// selection, which may point elsewhere.
     pub fn is_pin_diff_context(&self) -> bool {
-        self.diff()
-            .is_some_and(|d| !d.local_path.as_os_str().is_empty() && d.gist_id.is_some())
+        self.diff().is_some_and(|d| d.origin == DiffOrigin::Pin)
     }
 
     fn upload_intent(&mut self) -> KeyOutcome {
@@ -1597,23 +1611,28 @@ impl AppState {
                 return KeyOutcome::None;
             };
             let gist_id = self.download_gist_id().unwrap_or_default().to_string();
-            let raw_url = self.gist_file_raw_url(&gist_id, &local_filename);
-            let has_same_name = self
+            // The pin's gist file, which may be named differently from the local file (#494).
+            let filename = self
+                .download_gist_filename()
+                .map(String::from)
+                .unwrap_or(local_filename);
+            let raw_url = self.gist_file_raw_url(&gist_id, &filename);
+            let exists = self
                 .gist_catalog
                 .owned
                 .iter()
-                .any(|g| g.gist_id == gist_id && g.filename == local_filename);
-            return if has_same_name {
+                .any(|g| g.gist_id == gist_id && g.filename == filename);
+            return if exists {
                 KeyOutcome::UploadPreview {
                     entry: self.defer_entry(),
                     local_path,
-                    file: GistFileRef::new(gist_id, local_filename, raw_url),
+                    file: GistFileRef::new(gist_id, filename, raw_url),
                 }
             } else {
                 KeyOutcome::UploadAdd {
                     local_path,
                     gist_id,
-                    filename: local_filename,
+                    filename,
                 }
             };
         }
@@ -1721,6 +1740,7 @@ impl AppState {
             identical: false,
             gist_id: None,
             gist_filename: None,
+            origin: DiffOrigin::List,
         })));
     }
 
