@@ -132,8 +132,7 @@ mod revisions;
 pub use revisions::{
     build_gist_revision_raw_url, fetch_gist_commits_json, fetch_gist_revision_json,
     fetch_revision_file, fetch_revision_file_text, fetch_revision_file_text_optional,
-    gist_commits_plan, gist_revision_plan, parse_gist_commits_json, revision_file_content,
-    RevisionFileContent,
+    gist_commits_plan, gist_revision_plan, parse_gist_commits_json, RevisionFileContent,
 };
 
 mod stars;

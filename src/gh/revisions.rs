@@ -198,24 +198,6 @@ pub fn parse_gist_commits_json(raw: &str) -> Result<Vec<GistRevision>> {
         .collect())
 }
 
-/// Extract one file's text from a revision snapshot (`GET /gists/{id}/{sha}`).
-pub fn revision_file_content(raw: &str, filename: &str) -> Result<RevisionFileContent> {
-    let root: serde_json::Value =
-        serde_json::from_str(raw).context("parse gh gist revision JSON")?;
-    let Some(files) = root.get("files").and_then(|f| f.as_object()) else {
-        return Ok(RevisionFileContent::Absent);
-    };
-    if let Some(entry) = files.get(filename) {
-        return classify_revision_file(entry);
-    }
-    for entry in files.values() {
-        if entry.get("filename").and_then(|f| f.as_str()) == Some(filename) {
-            return classify_revision_file(entry);
-        }
-    }
-    Ok(RevisionFileContent::Absent)
-}
-
 fn classify_revision_file(entry: &serde_json::Value) -> Result<RevisionFileContent> {
     if entry.get("truncated").and_then(|t| t.as_bool()) == Some(true) {
         return Ok(RevisionFileContent::Truncated);
@@ -242,22 +224,37 @@ mod tests {
         assert_eq!(revisions[1].committed_at, "2026-06-01T08:00:00Z");
     }
 
+    /// The one live way to read a revision's file (#513): a present file, a truncated one
+    /// with no `raw_url` fetched whole from the canonical URL, and a missing one.
     #[test]
-    fn revision_file_content_reads_present_and_truncated() {
+    fn fetch_revision_file_reads_present_truncated_and_missing() {
+        use crate::actions::test_support::{raw_get, SeqRunner};
+        use crate::actions::CommandOutput;
+
         let raw = include_str!("../../tests/fixtures/gh/gist-revision.json");
-        match revision_file_content(raw, "settings.json").unwrap() {
-            RevisionFileContent::Present(content) => {
-                assert!(content.contains("\"old\": true"));
-            }
+        let runner = SeqRunner::new(vec![CommandOutput::ok(raw)]);
+        match fetch_revision_file(&runner, "g1", "v1", "settings.json", "alice").unwrap() {
+            RevisionFileContent::Present(content) => assert!(content.contains("\"old\": true")),
             other => panic!("expected Present, got {other:?}"),
         }
+
         let truncated = r#"{"files":{"a.txt":{"filename":"a.txt","truncated":true}}}"#;
+        let runner = SeqRunner::new(vec![
+            CommandOutput::ok(truncated),
+            CommandOutput::ok("whole\n"),
+        ]);
         assert_eq!(
-            revision_file_content(truncated, "a.txt").unwrap(),
-            RevisionFileContent::Truncated
+            fetch_revision_file(&runner, "g1", "v1", "a.txt", "alice").unwrap(),
+            RevisionFileContent::Present("whole\n".into())
         );
         assert_eq!(
-            revision_file_content(truncated, "missing.txt").unwrap(),
+            runner.calls()[1],
+            raw_get(&build_gist_revision_raw_url("alice", "g1", "v1", "a.txt"))
+        );
+
+        let runner = SeqRunner::new(vec![CommandOutput::ok(truncated)]);
+        assert_eq!(
+            fetch_revision_file(&runner, "g1", "v1", "missing.txt", "alice").unwrap(),
             RevisionFileContent::Absent
         );
     }
