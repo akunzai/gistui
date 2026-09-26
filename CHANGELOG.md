@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Release archives carry a signed build-provenance attestation (`gh attestation verify
+  <archive> --repo akunzai/gistui`), and a release is only built from a tag that passes the
+  test gate. `install.sh`, `install.ps1`, and `gistui --upgrade` now refuse a checksum file
+  that is malformed or names a different archive, instead of reading only its first word.
+
 ## [0.22.0] — 2026-09-25
 
 - Changing a setting or a pin no longer rewrites `config.toml` from scratch: comments, key
