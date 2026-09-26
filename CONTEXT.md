@@ -25,5 +25,5 @@ The content rules for syncing a local file with a gist file: which bytes an uplo
 _Avoid_: normalization helper, line-ending logic
 
 **Sync baseline**:
-What a pin remembers of its last sync, one value per side: the local file's bytes on disk (SHA-256) and the gist file's content (its git blob SHA, the one in its `raw_url`). Comparing both sides with now tells whether the local file changed, the gist changed, or both (a conflict).
+What a pin remembers of its last sync, one value per side: the local file's bytes on disk (SHA-256) and the gist file's content (its git blob SHA, the one in its `raw_url`). Comparing both sides with now tells whether the local file changed, the gist changed, or both (a conflict). A pin recorded before the gist side existed carries only the local side; it is judged by modification times until its next sync fills in the rest.
 _Avoid_: last seen hash, sync timestamp

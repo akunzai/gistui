@@ -409,7 +409,10 @@ pub(crate) mod tests {
         let config = AppConfig {
             pinned: vec![PinnedMapping {
                 direction: Some(SyncDirection::Upload),
-                last_seen_hash: Some("hash".into()),
+                baseline: crate::sync_baseline::SyncBaseline {
+                    local_sha256: Some("hash".into()),
+                    ..Default::default()
+                },
                 ..PinnedMapping::fixture("/tmp/settings.json", "abc123", "settings.json")
             }],
             skip_dirs: default_skip_dirs(),
@@ -552,7 +555,7 @@ gist_id = \"def\"
 gist_filename = \"old.txt\"
 ";
         let saved = edit(existing, |c| {
-            c.pinned[0].last_seen_hash = Some("h".into());
+            c.pinned[0].baseline.local_sha256 = Some("h".into());
             c.pinned.remove(1);
             c.pinned
                 .push(PinnedMapping::fixture("new.txt", "ghi", "new.txt"));

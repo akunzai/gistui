@@ -315,17 +315,18 @@ pub(crate) fn on_upload_replace(
     apply(state, result, "upload", |state| {
         state.leave();
         state.gist_content_store.invalidate_file(&file);
-        // The gist file's blob sha is now that of the bytes sent. Patch it into the in-memory
-        // catalog so the pin reads as in sync before the refresh this upload triggers lands
-        // (issue #466); the refresh then publishes the same sha.
-        let sha = crate::domain::git_blob_sha1(sent_content.as_bytes());
+        // The gist file's blob sha is now that of the bytes sent. Patch the baseline's remote
+        // side into the in-memory catalog so the pin reads as in sync before the refresh this
+        // upload triggers lands (issue #466); the refresh then publishes the same sha.
+        let baseline = crate::sync_baseline::SyncBaseline::after_sync(
+            local_content.as_bytes(),
+            sent_content.as_bytes(),
+        );
         for g in state.gist_catalog.owned.iter_mut() {
             if g.gist_id == file.gist_id && g.filename == file.filename {
-                if let Some(url) = g
-                    .raw_url
-                    .as_deref()
-                    .and_then(|u| crate::domain::raw_url_with_blob_sha(u, &sha))
-                {
+                if let Some(url) = g.raw_url.as_deref().and_then(|u| {
+                    crate::domain::raw_url_with_blob_sha(u, baseline.remote_blob_sha.as_deref()?)
+                }) {
                     g.raw_url = Some(url);
                 }
             }
@@ -335,8 +336,7 @@ pub(crate) fn on_upload_replace(
             local_path,
             &file.gist_id,
             &file.filename,
-            local_content,
-            sent_content,
+            &baseline,
             Some(crate::domain::SyncDirection::Upload),
         );
         format!("Uploaded {} to gist {}", file.filename, file.gist_id)
@@ -871,14 +871,14 @@ mod tests {
         ));
         assert_eq!(state.pinned[0].direction, Some(SyncDirection::Upload));
         assert_eq!(
-            state.pinned[0].last_seen_hash.as_deref(),
+            state.pinned[0].baseline.local_sha256.as_deref(),
             Some(crate::domain::sha256_hex(b"hello").as_str())
         );
         // Issue #466: the remote baseline is the blob sha of the bytes sent, and the catalog
         // already shows it, so the pin reads as in sync before the refresh lands.
         let sent_sha = crate::domain::git_blob_sha1(b"hello\n");
         assert_eq!(
-            state.pinned[0].remote_blob_sha.as_deref(),
+            state.pinned[0].baseline.remote_blob_sha.as_deref(),
             Some(sent_sha.as_str())
         );
         assert_eq!(

@@ -14,14 +14,10 @@ pub struct PinnedMapping {
     #[serde(default)]
     pub gist_filename: String,
     pub direction: Option<SyncDirection>,
-    /// Local side of the Sync baseline: SHA-256 of the local file's bytes on disk at the last
-    /// sync.
-    pub last_seen_hash: Option<String>,
-    /// Remote side of the Sync baseline: git blob SHA-1 of the gist file's content at the last
-    /// sync — the same sha a gist file's `raw_url` carries (issue #466). Absent on pins
-    /// recorded before it existed; the next sync fills it in.
-    #[serde(default)]
-    pub remote_blob_sha: Option<String>,
+    /// What the pin remembers of its last sync, stored as the flat `last_seen_hash` /
+    /// `remote_blob_sha` keys.
+    #[serde(flatten)]
+    pub baseline: crate::sync_baseline::SyncBaseline,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -31,8 +27,8 @@ pub enum SyncDirection {
     Download,
 }
 
-/// Suggested sync action for a pinned pair: from the Sync baseline when the pin has one
-/// ([`baseline_status`]), otherwise by comparing modification times ([`sync_status`]).
+/// Suggested sync action for a pinned pair, decided by
+/// [`SyncBaseline::status`](crate::sync_baseline::SyncBaseline::status).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncStatus {
     /// Both sides carry the same modification time.
@@ -60,30 +56,6 @@ impl SyncStatus {
             SyncStatus::Missing => "✕",
             SyncStatus::Unknown => "?",
         }
-    }
-}
-
-/// Pure decision: which side is newer? `local_ts`/`remote_ts` are Unix seconds;
-/// `None` means the timestamp was unavailable. A missing `local_ts` always means
-/// `Missing`, regardless of `remote_ts` — that's a stronger, more actionable fact
-/// than "remote timestamp unknown" (which stays `Unknown`).
-pub fn sync_status(local_ts: Option<u64>, remote_ts: Option<u64>) -> SyncStatus {
-    match (local_ts, remote_ts) {
-        (None, _) => SyncStatus::Missing,
-        (Some(l), Some(r)) if l > r => SyncStatus::Push,
-        (Some(l), Some(r)) if r > l => SyncStatus::Pull,
-        (Some(_), Some(_)) => SyncStatus::InSync,
-        (Some(_), None) => SyncStatus::Unknown,
-    }
-}
-
-/// Pure decision from the Sync baseline: which sides changed since the last sync?
-pub fn baseline_status(local_changed: bool, remote_changed: bool) -> SyncStatus {
-    match (local_changed, remote_changed) {
-        (false, false) => SyncStatus::InSync,
-        (true, false) => SyncStatus::Push,
-        (false, true) => SyncStatus::Pull,
-        (true, true) => SyncStatus::Conflict,
     }
 }
 
@@ -452,8 +424,8 @@ pub struct GistComment {
     pub body: String,
 }
 
-/// Lowercase hex SHA-256 of `bytes`. Used as the stable, content-only digest
-/// persisted in `PinnedMapping.last_seen_hash` (the config never stores content).
+/// Lowercase hex SHA-256 of `bytes`: the local side of a Sync baseline
+/// (`crate::sync_baseline`), and the release checksums.
 pub fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -589,14 +561,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn baseline_status_table() {
-        assert_eq!(baseline_status(false, false), SyncStatus::InSync);
-        assert_eq!(baseline_status(true, false), SyncStatus::Push);
-        assert_eq!(baseline_status(false, true), SyncStatus::Pull);
-        assert_eq!(baseline_status(true, true), SyncStatus::Conflict);
-    }
-
     use super::*;
 
     #[test]
@@ -632,24 +596,6 @@ mod tests {
                 raw_url: url,
                 ..GistFile::fixture("g1", "a.txt")
             }
-        );
-    }
-
-    #[test]
-    fn sync_status_from_mtime() {
-        assert_eq!(sync_status(Some(20), Some(10)), SyncStatus::Push); // local newer
-        assert_eq!(sync_status(Some(10), Some(20)), SyncStatus::Pull); // remote newer
-        assert_eq!(sync_status(Some(15), Some(15)), SyncStatus::InSync);
-        assert_eq!(
-            sync_status(None, Some(10)),
-            SyncStatus::Missing,
-            "local file is gone (or unreadable) even though the gist has a known mtime"
-        );
-        assert_eq!(sync_status(Some(10), None), SyncStatus::Unknown); // local exists, remote mtime unknown
-        assert_eq!(
-            sync_status(None, None),
-            SyncStatus::Missing,
-            "local missing takes priority even when remote mtime is also unknown"
         );
     }
 

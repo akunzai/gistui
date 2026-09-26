@@ -718,7 +718,7 @@ mod tests {
         assert_eq!(state.status.as_deref(), Some("Uploaded a.txt to gist g1"));
         assert_eq!(state.pinned[0].direction, Some(SyncDirection::Upload));
         assert_eq!(
-            state.pinned[0].last_seen_hash.as_deref(),
+            state.pinned[0].baseline.local_sha256.as_deref(),
             Some(crate::domain::sha256_hex(b"a\r\nb\r\n").as_str())
         );
         assert!(state.screen.is_pins(), "landed on {:?}", state.screen);
@@ -774,8 +774,10 @@ mod tests {
         std::fs::write(&local, "edited").unwrap();
         let mut state = initial_state();
         state.pinned = vec![PinnedMapping {
-            last_seen_hash: Some(crate::domain::sha256_hex(b"synced")),
-            remote_blob_sha: Some("1111111111111111111111111111111111111111".into()),
+            baseline: crate::sync_baseline::SyncBaseline {
+                local_sha256: Some(crate::domain::sha256_hex(b"synced")),
+                remote_blob_sha: Some("1111111111111111111111111111111111111111".into()),
+            },
             ..PinnedMapping::fixture(local, "g1", "a.txt")
         }];
         state.gist_catalog.owned = vec![GistFile {

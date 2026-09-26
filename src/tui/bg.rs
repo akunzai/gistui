@@ -396,7 +396,7 @@ fn spawn_pin_diff_inner(
     );
 }
 
-/// If `pair` is a pinned pair, record the sync result and project it onto `AppState`.
+/// If `pair` is a pinned pair, record `baseline` for it and project the result onto `AppState`.
 ///
 /// The in-memory check comes **first and gates the file access entirely**: a download of a
 /// file nobody pinned must not read the config, and so cannot report a config problem the
@@ -406,18 +406,15 @@ pub(super) fn record_pin_sync(
     local_abs: &std::path::Path,
     gist_id: &str,
     filename: &str,
-    local_content: &str,
-    remote_content: &str,
+    baseline: &crate::sync_baseline::SyncBaseline,
     direction: Option<crate::domain::SyncDirection>,
 ) {
     let pair = crate::pins::PinKey::new(local_abs, gist_id, filename);
     if crate::pins::find_by_resolved_path(&state.pinned, &state.cwd, pair).is_none() {
         return;
     }
-    let remote_blob_sha = crate::domain::git_blob_sha1(remote_content.as_bytes());
-    let result = crate::pin_store::PinStore::in_default_location().and_then(|store| {
-        store.record_sync(&state.cwd, pair, local_content, &remote_blob_sha, direction)
-    });
+    let result = crate::pin_store::PinStore::in_default_location()
+        .and_then(|store| store.record_sync(&state.cwd, pair, baseline, direction));
     apply_pin_sync(state, result);
 }
 
@@ -585,8 +582,7 @@ pub(super) fn write_download(
             target,
             &pin.gist_id,
             &pin.filename,
-            &written,
-            remote,
+            &crate::sync_baseline::SyncBaseline::after_sync(written.as_bytes(), remote.as_bytes()),
             Some(crate::domain::SyncDirection::Download),
         );
     }
@@ -1328,8 +1324,7 @@ mod tests {
             std::path::Path::new("/cwd/a.txt"),
             "g1",
             "a.txt",
-            "body",
-            "body",
+            &crate::sync_baseline::SyncBaseline::after_sync(b"body", b"body"),
             Some(crate::domain::SyncDirection::Download),
         );
 

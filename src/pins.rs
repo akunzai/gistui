@@ -57,8 +57,7 @@ impl PinnedMapping {
             gist_id: gist_id.into(),
             gist_filename: gist_filename.into(),
             direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
+            baseline: Default::default(),
         }
     }
 
@@ -99,8 +98,7 @@ pub fn upsert(pinned: &mut Vec<PinnedMapping>, key: PinKey<'_>) {
         gist_id: key.gist_id.to_string(),
         gist_filename: key.gist_filename.to_string(),
         direction: None,
-        last_seen_hash: None,
-        remote_blob_sha: None,
+        baseline: Default::default(),
     });
 }
 
@@ -278,7 +276,10 @@ mod tests {
     fn upsert_of_an_existing_pin_leaves_it_completely_alone() {
         let mut pinned = vec![PinnedMapping {
             direction: Some(SyncDirection::Upload),
-            last_seen_hash: Some("known".into()),
+            baseline: crate::sync_baseline::SyncBaseline {
+                local_sha256: Some("known".into()),
+                ..Default::default()
+            },
             ..mapping("/a.txt", "g1", "a.txt")
         }];
 
@@ -286,7 +287,7 @@ mod tests {
 
         assert_eq!(pinned.len(), 1);
         assert_eq!(pinned[0].direction, Some(SyncDirection::Upload));
-        assert_eq!(pinned[0].last_seen_hash.as_deref(), Some("known"));
+        assert_eq!(pinned[0].baseline.local_sha256.as_deref(), Some("known"));
     }
 
     // ---- is_pinned ------------------------------------------------------
@@ -335,11 +336,17 @@ mod tests {
         // Degenerate input a hand-edited config.toml can produce; documented, not repaired.
         let mut pinned = vec![
             PinnedMapping {
-                last_seen_hash: Some("first".into()),
+                baseline: crate::sync_baseline::SyncBaseline {
+                    local_sha256: Some("first".into()),
+                    ..Default::default()
+                },
                 ..mapping("/a.txt", "g1", "a.txt")
             },
             PinnedMapping {
-                last_seen_hash: Some("second".into()),
+                baseline: crate::sync_baseline::SyncBaseline {
+                    local_sha256: Some("second".into()),
+                    ..Default::default()
+                },
                 ..mapping("/a.txt", "g1", "a.txt")
             },
         ];
@@ -347,6 +354,6 @@ mod tests {
         assert!(remove(&mut pinned, key(Path::new("/a.txt"), "g1", "a.txt")));
 
         assert_eq!(pinned.len(), 1);
-        assert_eq!(pinned[0].last_seen_hash.as_deref(), Some("second"));
+        assert_eq!(pinned[0].baseline.local_sha256.as_deref(), Some("second"));
     }
 }

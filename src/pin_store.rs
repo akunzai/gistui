@@ -17,6 +17,7 @@
 use crate::config::{load_config, save_config, AppConfig};
 use crate::domain::{PinnedMapping, SyncDirection};
 use crate::pins::{self, PinKey};
+use crate::sync_baseline::SyncBaseline;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 
@@ -100,22 +101,17 @@ impl PinStore {
         Ok((config.into(), outcome))
     }
 
-    /// Record the Sync baseline for `pair`: `local_content` is the local file's bytes on disk
-    /// and `remote_blob_sha` the gist file's blob sha, now known to be in sync (issue #466).
+    /// Record `baseline` for `pair`, whose two sides are now known to be in sync (issue #466).
     ///
     /// `pair.local_path` is an absolute path the app resolved for itself; the stored entry
     /// may be relative, so the pin is *found* by its resolved form and *written* by its
     /// stored form. `direction: None` means the match was passively confirmed (a diff
     /// turned out identical) and leaves the recorded direction alone.
-    ///
-    /// Local hashing lives here because `last_seen_hash` being a hex SHA-256 is a fact about
-    /// this file format, not something each caller should know.
     pub fn record_sync(
         &self,
         cwd: &Path,
         pair: PinKey<'_>,
-        local_content: &str,
-        remote_blob_sha: &str,
+        baseline: &SyncBaseline,
         direction: Option<SyncDirection>,
     ) -> Result<(PinChange, SyncRecord)> {
         let mut config = load_config(&self.config_path)?;
@@ -123,8 +119,7 @@ impl PinStore {
             return Ok((config.into(), SyncRecord::NotPinned));
         };
         let mapping = &mut config.pinned[index];
-        mapping.last_seen_hash = Some(crate::domain::sha256_hex(local_content.as_bytes()));
-        mapping.remote_blob_sha = Some(remote_blob_sha.to_string());
+        mapping.baseline = baseline.clone();
         if let Some(direction) = direction {
             mapping.direction = Some(direction);
         }
@@ -167,6 +162,14 @@ mod tests {
         let mut config = load_config(&f.path).expect("load");
         config.pinned = pinned;
         save_config(&f.path, &config).expect("seed");
+    }
+
+    /// A baseline whose local side is `local`'s hash and whose remote side is `remote_blob_sha`.
+    fn baseline(local: &str, remote_blob_sha: &str) -> SyncBaseline {
+        SyncBaseline {
+            local_sha256: Some(sha256_hex(local.as_bytes())),
+            remote_blob_sha: Some(remote_blob_sha.into()),
+        }
     }
 
     fn mapping(local: &str, gist_id: &str, filename: &str) -> PinnedMapping {
@@ -221,7 +224,10 @@ mod tests {
             &f,
             vec![PinnedMapping {
                 direction: Some(SyncDirection::Upload),
-                last_seen_hash: Some("known".into()),
+                baseline: crate::sync_baseline::SyncBaseline {
+                    local_sha256: Some("known".into()),
+                    ..Default::default()
+                },
                 ..mapping("/abs/a.txt", "g1", "a.txt")
             }],
         );
@@ -233,7 +239,7 @@ mod tests {
         let stored = stored(&f);
         assert_eq!(stored.len(), 1);
         assert_eq!(stored[0].direction, Some(SyncDirection::Upload));
-        assert_eq!(stored[0].last_seen_hash.as_deref(), Some("known"));
+        assert_eq!(stored[0].baseline.local_sha256.as_deref(), Some("known"));
     }
 
     // ---- unpin -----------------------------------------------------------
@@ -296,8 +302,7 @@ mod tests {
             .record_sync(
                 Path::new("/cwd"),
                 key(Path::new("/abs/a.txt"), "g1", "a.txt"),
-                "body\n",
-                "0123456789abcdef0123456789abcdef01234567",
+                &baseline("body\n", "0123456789abcdef0123456789abcdef01234567"),
                 Some(SyncDirection::Upload),
             )
             .expect("record");
@@ -305,7 +310,7 @@ mod tests {
         assert_eq!(outcome, SyncRecord::Recorded);
         let stored = stored(&f);
         assert_eq!(
-            stored[0].last_seen_hash.as_deref(),
+            stored[0].baseline.local_sha256.as_deref(),
             Some(sha256_hex(b"body\n").as_str()),
             "the hash is computed here, not by the caller"
         );
@@ -321,7 +326,10 @@ mod tests {
             &f,
             vec![PinnedMapping {
                 direction: Some(SyncDirection::Download),
-                last_seen_hash: Some("stale".into()),
+                baseline: crate::sync_baseline::SyncBaseline {
+                    local_sha256: Some("stale".into()),
+                    ..Default::default()
+                },
                 ..mapping("/abs/a.txt", "g1", "a.txt")
             }],
         );
@@ -330,15 +338,14 @@ mod tests {
             .record_sync(
                 Path::new("/cwd"),
                 key(Path::new("/abs/a.txt"), "g1", "a.txt"),
-                "fresh\n",
-                "0123456789abcdef0123456789abcdef01234567",
+                &baseline("fresh\n", "0123456789abcdef0123456789abcdef01234567"),
                 None,
             )
             .expect("record");
 
         let stored = stored(&f);
         assert_eq!(
-            stored[0].last_seen_hash.as_deref(),
+            stored[0].baseline.local_sha256.as_deref(),
             Some(sha256_hex(b"fresh\n").as_str())
         );
         assert_eq!(stored[0].direction, Some(SyncDirection::Download));
@@ -353,8 +360,7 @@ mod tests {
             .record_sync(
                 Path::new("/cwd"),
                 key(Path::new("/abs/a.txt"), "g1", "a.txt"),
-                "body\n",
-                "0123456789abcdef0123456789abcdef01234567",
+                &baseline("body\n", "0123456789abcdef0123456789abcdef01234567"),
                 Some(SyncDirection::Upload),
             )
             .expect("record");
@@ -377,8 +383,7 @@ mod tests {
             .record_sync(
                 Path::new("/cwd"),
                 key(Path::new("/cwd/a.txt"), "g1", "a.txt"),
-                "body\n",
-                "0123456789abcdef0123456789abcdef01234567",
+                &baseline("body\n", "0123456789abcdef0123456789abcdef01234567"),
                 Some(SyncDirection::Upload),
             )
             .expect("record");
@@ -391,7 +396,7 @@ mod tests {
             PathBuf::from("a.txt"),
             "a portable relative path is not rewritten"
         );
-        assert!(stored[0].last_seen_hash.is_some());
+        assert!(stored[0].baseline.local_sha256.is_some());
     }
 
     // ---- the projection --------------------------------------------------
@@ -414,8 +419,7 @@ mod tests {
             .record_sync(
                 Path::new("/cwd"),
                 key(local, "g1", "a.txt"),
-                "x",
-                "sha",
+                &baseline("x", "sha"),
                 None,
             )
             .expect("record");
@@ -448,8 +452,7 @@ mod tests {
             .record_sync(
                 Path::new("/cwd"),
                 key(Path::new("/abs/a.txt"), "g1", "a.txt"),
-                "x",
-                "0123456789abcdef0123456789abcdef01234567",
+                &baseline("x", "0123456789abcdef0123456789abcdef01234567"),
                 None
             )
             .is_err());
