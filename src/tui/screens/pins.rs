@@ -141,6 +141,18 @@ impl AppState {
         KeyOutcome::None
     }
 
+    /// Highest horizontal-scroll offset for the Pins screen: the selected row as painted.
+    fn pins_hscroll_max(&self) -> u16 {
+        let idx = self.pins().map(|p| p.cursor.index).unwrap_or(0);
+        self.visible_pin_indices()
+            .get(idx)
+            .map(|&i| {
+                let row = pin_row_text(self, i, crate::tui::render::unix_now() as i64);
+                crate::tui::text::hscroll_max_for_text(&row)
+            })
+            .unwrap_or(0)
+    }
+
     /// Arrow / hjkl / page-key navigation for `Screen::Pins`'s list cursor. Precomputes
     /// len/hmax with `&self`, then mutates the cursor (issue #274: cannot hold
     /// `&mut PinsState` from `match &mut self.screen` while calling helpers).
@@ -202,6 +214,32 @@ pub(crate) fn pin_row_label(params: PinLabelParams<'_>) -> String {
     )
 }
 
+/// The Pins row for `state.pinned[index]` as painted, with ages measured at `now`. The view
+/// model paints it and the scroll cap measures it, so the two cannot disagree (#496).
+fn pin_row_text(state: &AppState, index: usize, now: i64) -> String {
+    let m = &state.pinned[index];
+    let entry = state.cached_pin_sync_entry(index);
+    let age = |ts: Option<u64>| {
+        ts.map(|t| crate::domain::humanize_age(now - t as i64))
+            .unwrap_or_else(|| "?".to_string())
+    };
+    let local_age = if entry.status == crate::domain::SyncStatus::Missing {
+        "missing".to_string()
+    } else {
+        age(entry.local_ts)
+    };
+    let gist_description = state.group_by_id(&m.gist_id).map(|g| g.description);
+    pin_row_label(PinLabelParams {
+        icon: entry.status.icon(),
+        local_path: &m.local_path,
+        gist_id: &m.gist_id,
+        gist_description: gist_description.as_deref(),
+        gist_filename: &m.gist_filename,
+        local_age: &local_age,
+        gist_age: &age(entry.remote_ts),
+    })
+}
+
 /// Pins body only — usable under Palette-over-Pins as well.
 pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
     let pins = state.pins().cloned().unwrap_or_default();
@@ -218,10 +256,7 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
     };
 
     let visible = state.visible_pin_indices();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+    let now = crate::tui::render::unix_now() as i64;
 
     let (empty, empty_message, rows) = if state.pinned.is_empty() {
         (
@@ -239,30 +274,9 @@ pub(crate) fn build_pins_vm(state: &AppState) -> PinsVm {
         let rows = visible
             .iter()
             .map(|&i| {
-                let m = &state.pinned[i];
-                let entry = state.cached_pin_sync_entry(i);
-                let status = entry.status;
-                let age = |ts: Option<u64>| {
-                    ts.map(|t| crate::domain::humanize_age(now - t as i64))
-                        .unwrap_or_else(|| "?".to_string())
-                };
-                let local_age = if status == crate::domain::SyncStatus::Missing {
-                    "missing".to_string()
-                } else {
-                    age(entry.local_ts)
-                };
-                let gist_description = state.group_by_id(&m.gist_id).map(|g| g.description);
-                let label = pin_row_label(PinLabelParams {
-                    icon: status.icon(),
-                    local_path: &m.local_path,
-                    gist_id: &m.gist_id,
-                    gist_description: gist_description.as_deref(),
-                    gist_filename: &m.gist_filename,
-                    local_age: &local_age,
-                    gist_age: &age(entry.remote_ts),
-                });
+                let status = state.cached_pin_sync_entry(i).status;
                 RowVm {
-                    label,
+                    label: pin_row_text(state, i, now),
                     emphasis: if matches!(
                         status,
                         crate::domain::SyncStatus::Missing | crate::domain::SyncStatus::Conflict
@@ -487,6 +501,30 @@ mod tests {
             "scroll must clamp at its max"
         );
         assert!(clamped > 0, "a long path must be scrollable");
+    }
+
+    /// Issue #496: the scroll cap is measured on the row as painted — description, filename,
+    /// ages, id — not just the local path, so a long gist description can be scrolled to its
+    /// end.
+    #[test]
+    fn pins_scroll_cap_is_the_painted_row() {
+        let mut state = initial_state();
+        state.screen = Screen::Pins(Box::default());
+        state.pinned = vec![PinnedMapping::fixture("/tmp/a.txt", "g1", "a.txt")];
+        state.gist_catalog.owned = vec![GistFile {
+            description: "a gist description long enough to run past any terminal width".repeat(3),
+            ..GistFile::fixture("g1", "a.txt")
+        }];
+        state.refresh_pin_sync_cache();
+        for _ in 0..1000 {
+            state.handle_key(KeyCode::Right);
+        }
+
+        let painted = &build_pins_vm(&state).pane.rows[0].label;
+        assert_eq!(
+            pins_ref(&state).cursor.hscroll,
+            crate::tui::text::hscroll_max_for_text(painted)
+        );
     }
 
     #[test]
