@@ -7,7 +7,7 @@
 //!
 //! Every read and write of `AppConfig::pinned` goes through [`PinKey`] and the operations
 //! below, so the invariant is stated once here instead of being re-derived per call site.
-//! `crate::pin_store` owns persistence; this module stays pure.
+//! `crate::config_store` owns persistence; this module stays pure.
 //!
 //! Exactly-duplicate triples are degenerate input — `config.toml` is user-editable and
 //! `crate::config::load_config` deliberately stays a parser rather than a silent rewriter.
@@ -87,7 +87,7 @@ fn find_mut<'a>(pinned: &'a mut [PinnedMapping], key: PinKey<'_>) -> Option<&'a 
 /// different gist file are left alone.
 ///
 /// An existing pin is left **completely** untouched: pinning is not how a sync direction or
-/// hash gets recorded (that is `crate::pin_store::PinStore::record_sync`), so re-pinning
+/// hash gets recorded (that is `crate::config_store::ConfigStore::record_sync`), so re-pinning
 /// must never erase what an earlier sync learned.
 pub fn upsert(pinned: &mut Vec<PinnedMapping>, key: PinKey<'_>) {
     if find_mut(pinned, key).is_some() {

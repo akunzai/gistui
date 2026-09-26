@@ -1,12 +1,12 @@
 pub mod actions;
 pub mod cache;
 pub mod config;
+pub mod config_store;
 pub mod diff;
 pub mod domain;
 pub mod gh;
 pub mod local;
 pub(crate) mod lru;
-pub mod pin_store;
 pub mod pins;
 pub mod ranking;
 pub mod sync_baseline;

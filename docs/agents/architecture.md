@@ -6,7 +6,7 @@ Index: [`AGENTS.md`](../../AGENTS.md). Source of truth for types lives in the mo
 
 | Kind | Modules | Testing |
 | --- | --- | --- |
-| **Pure** (unit-tested) | `domain`, `config`, `ranking`, `local`, `diff`, `pins`, actions **plan/guard**, `tui::view_model`, `tui::list_ranking`, `tui::settings`, `tui::gist_content`, `tui::local_scan`, `pin_store` (file IO, but fully unit-tested over `tempfile` — same as `config`) | In-crate unit tests |
+| **Pure** (unit-tested) | `domain`, `config`, `ranking`, `local`, `diff`, `pins`, actions **plan/guard**, `tui::view_model`, `tui::list_ranking`, `tui::settings`, `tui::gist_content`, `tui::local_scan`, `config_store` (file IO, but fully unit-tested over `tempfile` — same as `config`) | In-crate unit tests |
 | **Impure** (thin IO) | `gh`, actions **execute**, `tui::run_loop` / `tui::bg` / `tui::gist_refresh` / `tui::gist_revision` / `tui::pin_sync` | No live `gh`. Spawn/absorb is thin IO; action-job `on_*` apply handlers (screen modules / `gist_mutation.rs`) are unit-tested (#298, #383) |
 
 `build_view_model` (`src/tui/view_model.rs`): `AppState` + pin-sync cache → presentation facts. Paint helpers apply theme/layout only — no business rules, FS, or network.
@@ -133,7 +133,7 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
 - `run_loop` only **polls** `jobs.absorb`.
 - **Action jobs carry their apply** (issue #375, ADR-0002's async-response half): `spawn_action(spec, run, apply)` runs `run` off-thread and boxes `apply(value)` for the event-loop tick. There is no `BgTaskOutcome` enum. `ActionApply` is `FnOnce(&mut AppState) -> LoopFlow`. `on_action_outcome` is a generation-guard shell that calls the closure. `KeyOutcome` / `dispatch_outcome` stay plain data (ADR-0002).
 - **`on_*` is the apply seam** (#298, #375, #383): named handlers are the apply bodies and the unit-test surface. They do not live on `Jobs`. `dispatch_outcome` / `route_outcome` sit on the spawn side, not the apply side, so neither is one. A new action is a spawn site plus an `on_*` when the apply is worth testing.
-- **A pin's key is three-part** (issue #424): `(local_path, gist_id, gist_filename)`, owned by `src/pins.rs` (`PinKey`, `PinKey::matches`, `PinnedMapping::key()`, `is_pinned` / `upsert` / `remove` / `resolve_against` / `find_by_resolved_path`). One local file pinned to several gist files is a legitimate state, not corruption — `docs/agents/design.md` defines a pin as a local-file to gist-*file* mapping, and `gist_id` alone cannot name a file inside a gist. Never re-derive the key at a call site, and pass `PinnedMapping::key()` when you already hold the mapping. `upsert` never modifies an existing pin; `PinStore::record_sync` deliberately does not use it, because confirming a sync must never create a pin. Exactly-duplicate triples are degenerate input from a hand-edited `config.toml`: the operations take the first match, and `crate::config::load_config` stays a parser, not a silent rewriter.
+- **A pin's key is three-part** (issue #424): `(local_path, gist_id, gist_filename)`, owned by `src/pins.rs` (`PinKey`, `PinKey::matches`, `PinnedMapping::key()`, `is_pinned` / `upsert` / `remove` / `resolve_against` / `find_by_resolved_path`). One local file pinned to several gist files is a legitimate state, not corruption — `docs/agents/design.md` defines a pin as a local-file to gist-*file* mapping, and `gist_id` alone cannot name a file inside a gist. Never re-derive the key at a call site, and pass `PinnedMapping::key()` when you already hold the mapping. `upsert` never modifies an existing pin; `ConfigStore::record_sync` deliberately does not use it, because confirming a sync must never create a pin. Exactly-duplicate triples are degenerate input from a hand-edited `config.toml`: the operations take the first match, and `crate::config::load_config` stays a parser, not a silent rewriter.
 - **Shared spawn payload** (#375): a value both `run` and `apply` need is part of `run`'s return, unpacked by `apply`. That is how identity (`gist_id`, `fetch_id`, labels) crosses the thread boundary without a second clone.
 
 ## Gist mutation workflow (`src/tui/gist_mutation.rs`)
@@ -198,23 +198,31 @@ runs). The real `ScratchDir` is used, not a filesystem seam. Do not layer duplic
 implementation-detail assertions beneath this seam: parser and command-plan tests stay in
 `gh` / `actions`, screen intent and presentation tests stay on their screens.
 
-## Pinned mapping persistence (`src/pin_store.rs`, issue #432)
+## `config.toml` persistence (`src/config_store.rs`, issues #432, #509)
 
-`PinStore` is the one interface that writes pins to `config.toml`. `src/pins.rs` stays
-**pure** — it defines what a pin *is* and the list operations; `PinStore` owns everything
-around that: resolving the config path, loading, applying the stored-versus-absolute rule,
-hashing sync content, saving, and describing what changed. The `pin_mapping` /
-`unpin_mapping` / `record_sync` wrappers in `src/actions.rs` are gone.
+`ConfigStore` is the one interface that reads and writes `config.toml`: the startup `load`,
+pins, sync baselines, and `save_preferences`. `src/pins.rs` stays **pure** — it defines what
+a pin *is* and the list operations; `ConfigStore` owns everything around that: loading,
+applying the stored-versus-absolute rule, saving, and describing what changed. The
+`pin_mapping` / `unpin_mapping` / `record_sync` wrappers in `src/actions.rs` are gone.
 
-- **Three operations, named not enumerated**: `pin`, `unpin` (by `PinKey`), `record_sync`.
+- **One store, held by `AppState` (`config_store`), built once** (issue #509). Only
+  `load_startup_state` points it at the real file; `initial_state()` holds
+  `ConfigStore::unconfigured()`, whose every read and write fails with "config location not
+  set". No TUI path resolves the config location itself, and a test that writes the config
+  sets `state.config_store = ConfigStore::at(tempdir)` (see
+  `test_support::state_with_stored_pin`) — never `XDG_CONFIG_HOME`, which only
+  `config::config_path`'s own tests may touch.
+- **Pin operations, named not enumerated**: `pin`, `unpin` (by `PinKey`), `record_sync`.
   This path is synchronous — no job, no generation, no apply closure — so a plain-data
   request enum would be built and destructured on the spot. `KeyOutcome::Pin` / `Unpin` /
   `UnpinAtPin` / `SyncSelectedPair` keep their shapes; ADR-0002 is untouched.
-- **Every operation is a full load → mutate → save.** `PinStore` holds no `AppConfig`:
+- **Every operation is a full load → mutate → save.** `ConfigStore` holds no `AppConfig`:
   `config.toml` is hand-editable, and writing from a cached copy would clobber an edit made
-  between two pin operations. Same shape as `persist_settings`.
-- **Two constructors, no filesystem seam**: `PinStore::at(path)` for tests (a `tempfile`
-  directory) and `in_default_location()` for production.
+  between two pin operations. `save_preferences` does the same.
+- **Three constructors, no filesystem seam**: `ConfigStore::at(path)` for tests (a
+  `tempfile` directory), `in_default_location()` for production, `unconfigured()` for
+  everything else.
 - **Results are narrow.** Each operation returns the shared projection
   `PinChange { pinned, skip_dirs }` plus its *own* outcome — `Unpinned::{Removed, NotFound}`,
   `SyncRecord::{Recorded, NotPinned}`. There is deliberately no shared outcome enum: `pin`
@@ -239,7 +247,7 @@ hashing sync content, saving, and describing what changed. The `pin_mapping` /
 - **The TUI keeps presentation**: status wording (`pin_pair_label`'s `display_path`
   abbreviation), the Pins cursor clamp, `mark_pin_sync_cache_dirty`, and resolving a
   Pins-screen row index into a `PinKey` before calling `unpin`. A row index is a
-  filtered-view concept and never reaches `PinStore`. `apply_pin_change` / `apply_unpin` /
+  filtered-view concept and never reaches `ConfigStore`. `apply_pin_change` / `apply_unpin` /
   `apply_pin_sync` (`src/tui/bg.rs`) are that projection, and the unit-test surface for it.
   Projecting `skip_dirs` does **not** trigger a rescan — pin/unpin never touch the
   filesystem (issue #409), so a hand edit to `skip_dirs` picked up by one of these loads
@@ -247,10 +255,10 @@ hashing sync content, saving, and describing what changed. The `pin_mapping` /
 - **`record_pin_sync` checks `AppState::pinned` before it opens anything.** That in-memory
   gate is what keeps a download of a never-pinned file from reading `config.toml` at all,
   and therefore from reporting a config problem the user did not provoke. A `NotPinned`
-  answer from `PinStore` means the stored file disagrees with this session (a hand edit in
+  answer from `ConfigStore` means the stored file disagrees with this session (a hand edit in
   between): nothing was persisted, so nothing is projected and nothing is said.
 - **`upsert` leaves an existing pin completely alone** and takes no direction or hash.
-  Recording a sync is `PinStore::record_sync`'s job; pinning must never be what writes one.
+  Recording a sync is `ConfigStore::record_sync`'s job; pinning must never be what writes one.
 - **A `record_sync` failure appends, never substitutes** (`Downloaded a.txt; pin sync not
   recorded: …`), reusing `refresh_locals`' rule. Before #432 all three of its failure modes
   — config-path resolution, load, and write — vanished into nested `if let Ok(...)` arms
@@ -261,7 +269,7 @@ hashing sync content, saving, and describing what changed. The `pin_mapping` /
 
 - `refresh_pin_sync_cache` is **impure** (stat/read/hash); fills `AppState::pin_sync_cache`.
 - Refresh on: enter/return Pins, pin-list change, successful pin-sync absorb, dirty flag / length mismatch — **not** every frame, **not** from the pure VM builder.
-- **Status comes from the Sync baseline** (`src/sync_baseline.rs`, issues #466, #499). `SyncBaseline` is the one place that hashes or compares either side: `after_sync` builds it from the local bytes on disk and the gist content, `status` classifies it against the local file now, the catalog's `raw_url` blob sha, and both mtimes — hashes when both sides are recorded and the catalog has a sha, otherwise the mtime + local-hash fallback. `compute_pin_sync_status` only does the IO; `PinStore::record_sync` only stores a built baseline. Its tests are tables over bytes and shas; `pin_sync.rs` tests only the IO wiring. The remote side is hashed from the exact content `gh::fetch_gist_file_content` returns (the API record — not `gh gist view --raw`, which appends a `\n`, #471). A successful upload builds one baseline and patches its remote sha into the catalog's `raw_url` in memory, so the pin reads in sync before the refresh lands.
+- **Status comes from the Sync baseline** (`src/sync_baseline.rs`, issues #466, #499). `SyncBaseline` is the one place that hashes or compares either side: `after_sync` builds it from the local bytes on disk and the gist content, `status` classifies it against the local file now, the catalog's `raw_url` blob sha, and both mtimes — hashes when both sides are recorded and the catalog has a sha, otherwise the mtime + local-hash fallback. `compute_pin_sync_status` only does the IO; `ConfigStore::record_sync` only stores a built baseline. Its tests are tables over bytes and shas; `pin_sync.rs` tests only the IO wiring. The remote side is hashed from the exact content `gh::fetch_gist_file_content` returns (the API record — not `gh gist view --raw`, which appends a `\n`, #471). A successful upload builds one baseline and patches its remote sha into the catalog's `raw_url` in memory, so the pin reads in sync before the refresh lands.
 - Action dispatch may call `compute_pin_sync_status` one-shot; paint uses `cached_pin_sync_status` / the VM only.
 - No mtime watch: staying on Pins after an external editor edit can leave badges stale until the next refresh.
 

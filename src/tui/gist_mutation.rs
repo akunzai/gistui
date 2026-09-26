@@ -822,24 +822,13 @@ mod tests {
 
     #[test]
     fn on_upload_replace_ok_records_pin_and_marks_list_stale() {
-        let _guard = crate::config::tests::ENV_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = tempfile::tempdir().unwrap();
-        let prev = std::env::var_os("XDG_CONFIG_HOME");
-        std::env::set_var("XDG_CONFIG_HOME", dir.path());
 
         let local_path = dir.path().join("a.txt");
         std::fs::write(&local_path, "hello").unwrap();
         let mapping = PinnedMapping::fixture(local_path.clone(), "g1", "a.txt");
-        let mut config = crate::config::AppConfig::default();
-        config.pinned.push(mapping.clone());
-        let path = crate::config::config_path().unwrap();
-        crate::config::save_config(&path, &config).unwrap();
 
-        let mut state = initial_state();
-        state.cwd = dir.path().to_path_buf();
-        state.pinned = vec![mapping];
+        let mut state = crate::tui::test_support::state_with_stored_pin(dir.path(), mapping);
         let file = crate::domain::GistFileRef::id_name("g1", "a.txt");
         state.gist_content_store.insert(&file, "stale".into());
         state.gist_catalog.owned = vec![crate::domain::GistFile {
@@ -889,11 +878,6 @@ mod tests {
             state.compute_pin_sync_status(0),
             crate::domain::SyncStatus::InSync
         );
-
-        match prev {
-            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
-        }
     }
 
     #[test]
