@@ -301,14 +301,11 @@ mod tests {
         };
         let settings = RuntimeSettings::from_config(&source, false, false);
         let mut target = AppConfig::default();
-        target.pinned.push(crate::domain::PinnedMapping {
-            local_path: "/tmp/keep".into(),
-            gist_id: "g1".into(),
-            gist_filename: "a.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        });
+        target.pinned.push(crate::domain::PinnedMapping::fixture(
+            "/tmp/keep",
+            "g1",
+            "a.txt",
+        ));
         target.skip_dirs = vec!["keep-me".into()];
         settings.apply_to_config(&mut target);
         assert_eq!(

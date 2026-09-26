@@ -374,16 +374,13 @@ mod tests {
     fn render_screen_vm_pins_row_marks_clipped_path() {
         let mut state = initial_state();
         state.screen = Screen::Pins(Box::default());
-        state.pinned = vec![crate::domain::PinnedMapping {
-            local_path: std::path::PathBuf::from(
+        state.pinned = vec![crate::domain::PinnedMapping::fixture(
+            std::path::PathBuf::from(
                 "/cwd/very/deeply/nested/project/with/a/long/path/config.json",
             ),
-            gist_id: "abc123def456".into(),
-            gist_filename: "config.json".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+            "abc123def456",
+            "config.json",
+        )];
         let text = render_state_size(&state, 50, 16);
         assert!(
             text.contains('…'),

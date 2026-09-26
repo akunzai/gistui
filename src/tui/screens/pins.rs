@@ -417,14 +417,7 @@ mod tests {
     fn pins_screen_sync_keys_emit_outcomes() {
         let mut state = initial_state();
         state.screen = Screen::Pins(Box::default());
-        state.pinned = vec![PinnedMapping {
-            local_path: PathBuf::from("/tmp/a.txt"),
-            gist_id: "g1".into(),
-            gist_filename: "a.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        state.pinned = vec![PinnedMapping::fixture("/tmp/a.txt", "g1", "a.txt")];
         assert!(matches!(
             state.handle_key(KeyCode::Char('s')),
             KeyOutcome::SyncPinAuto { .. }
@@ -447,14 +440,7 @@ mod tests {
     fn pins_screen_enter_emits_preview_pin_diff() {
         let mut state = initial_state();
         state.screen = Screen::Pins(Box::default());
-        state.pinned = vec![PinnedMapping {
-            local_path: PathBuf::from("/tmp/a.txt"),
-            gist_id: "g1".into(),
-            gist_filename: "a.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        state.pinned = vec![PinnedMapping::fixture("/tmp/a.txt", "g1", "a.txt")];
         let KeyOutcome::PreviewPinDiff { entry, .. } = state.handle_key(KeyCode::Enter) else {
             panic!("expected deferred pin diff");
         };
@@ -469,14 +455,7 @@ mod tests {
         // `pins_guard`, so the key press is blocked the same way the palette already was.
         let mut state = initial_state();
         state.screen = Screen::Pins(Box::default());
-        state.pinned = vec![PinnedMapping {
-            local_path: PathBuf::from("/tmp/logo.png"),
-            gist_id: "g1".into(),
-            gist_filename: "logo.png".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        state.pinned = vec![PinnedMapping::fixture("/tmp/logo.png", "g1", "logo.png")];
         assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
     }
 
@@ -522,14 +501,9 @@ mod tests {
     #[test]
     fn pins_hscroll_resets_when_selection_moves() {
         let mut state = pins_state_with_long_home_path();
-        state.pinned.push(PinnedMapping {
-            local_path: PathBuf::from("/tmp/b.txt"),
-            gist_id: "g2".into(),
-            gist_filename: "b.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        });
+        state
+            .pinned
+            .push(PinnedMapping::fixture("/tmp/b.txt", "g2", "b.txt"));
         state.handle_key(KeyCode::Right);
         assert!(pins_ref(&state).cursor.hscroll > 0);
         state.handle_key(KeyCode::Down);
@@ -546,14 +520,7 @@ mod tests {
         state.screen = Screen::Pins(Box::default());
         state.pinned = rows
             .iter()
-            .map(|(lp, id, fname)| PinnedMapping {
-                local_path: PathBuf::from(lp),
-                gist_id: (*id).into(),
-                gist_filename: (*fname).into(),
-                direction: None,
-                last_seen_hash: None,
-                remote_blob_sha: None,
-            })
+            .map(|(lp, id, fname)| PinnedMapping::fixture(PathBuf::from(lp), *id, *fname))
             .collect();
         state
     }
@@ -638,13 +605,12 @@ mod tests {
         let mut state = initial_state();
         state.screen = Screen::Pins(Box::default());
         state.pinned = (0..12)
-            .map(|i| PinnedMapping {
-                local_path: PathBuf::from(format!("/cwd/p{i}.txt")),
-                gist_id: format!("g{i}"),
-                gist_filename: format!("f{i}.txt"),
-                direction: None,
-                last_seen_hash: None,
-                remote_blob_sha: None,
+            .map(|i| {
+                PinnedMapping::fixture(
+                    PathBuf::from(format!("/cwd/p{i}.txt")),
+                    format!("g{i}"),
+                    format!("f{i}.txt"),
+                )
             })
             .collect();
         state.handle_key_with(KeyCode::Char('f'), KeyModifiers::CONTROL);
@@ -778,14 +744,7 @@ mod tests {
     fn pins_vm_reads_cache_not_requiring_disk_for_status() {
         let mut state = initial_state();
         state.screen = Screen::Pins(Box::default());
-        state.pinned = vec![PinnedMapping {
-            local_path: PathBuf::from("notes.txt"),
-            gist_id: "g1".into(),
-            gist_filename: "notes.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        state.pinned = vec![PinnedMapping::fixture("notes.txt", "g1", "notes.txt")];
         // Hand-populate cache — builder must not need a real file.
         state.pin_sync_cache = vec![crate::tui::PinSyncCacheEntry {
             status: SyncStatus::InSync,
@@ -806,14 +765,7 @@ mod tests {
     fn pins_vm_unknown_when_cache_missing() {
         let mut state = initial_state();
         state.screen = Screen::Pins(Box::default());
-        state.pinned = vec![PinnedMapping {
-            local_path: PathBuf::from("a.txt"),
-            gist_id: "g1".into(),
-            gist_filename: "a.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        state.pinned = vec![PinnedMapping::fixture("a.txt", "g1", "a.txt")];
         state.pin_sync_cache.clear();
         let pins = build_pins_vm(&state);
         assert_eq!(pins.pane.rows[0].emphasis, RowEmphasis::None);
@@ -827,14 +779,7 @@ mod tests {
         let pins = build_pins_vm(&state);
         assert_eq!(pins.pane.empty, ListPaneEmpty::NoItems);
 
-        state.pinned = vec![PinnedMapping {
-            local_path: PathBuf::from("a.txt"),
-            gist_id: "g1".into(),
-            gist_filename: "a.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        state.pinned = vec![PinnedMapping::fixture("a.txt", "g1", "a.txt")];
         if let Some(p) = state.pins_mut() {
             p.filter_query = crate::tui::TextInput::from("zzz-no-match");
         }

@@ -50,6 +50,8 @@ Three constructors, not one:
 
 Fields stay `pub`. No `#[serde(default)]` on the struct.
 
+`PinnedMapping` follows the same split (`src/pins.rs`, issue #498): `pins::upsert` lists every field, tests build pins from `PinnedMapping::fixture(local_path, gist_id, gist_filename)`.
+
 ## Screen state machine
 
 - **`screens::lookup`** (`src/tui/screens/mod.rs`, issues #377, #388) is the exhaustive match for the per-screen columns: help topic, wheel step, key guard, VM builder, key handler, navigation, and click selection. It first borrows `self.screen`, then calls an `fn(&mut AppState, …)` pointer: that two-phase pattern is #274's borrow rule. `render_screen_vm` matches `ScreenVm`, not `Screen`. `keymap::for_screen` stays in `keymap.rs` (bindings live there; putting them on the lookup would cycle `screens` ↔ `keymap`). No `ScreenModule` trait: the screen files already are the adapters.

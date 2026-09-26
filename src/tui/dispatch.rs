@@ -478,14 +478,7 @@ mod tests {
     ) -> AppState {
         let mut state = initial_state();
         state.cwd = cwd;
-        state.pinned = vec![PinnedMapping {
-            local_path: PathBuf::from("a.txt"),
-            gist_id: "g1".into(),
-            gist_filename: "a.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        state.pinned = vec![PinnedMapping::fixture("a.txt", "g1", "a.txt")];
         if let Some(modified) = local_mtime {
             state.locals = vec![LocalCandidate {
                 path: PathBuf::from("a.txt"),
@@ -687,14 +680,7 @@ mod tests {
 
         let local_path = dir.path().join("a.txt");
         std::fs::write(&local_path, "a\r\nb\r\n").unwrap();
-        let mapping = PinnedMapping {
-            local_path: local_path.clone(),
-            gist_id: "g1".into(),
-            gist_filename: "a.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        };
+        let mapping = PinnedMapping::fixture(local_path.clone(), "g1", "a.txt");
         let mut config = crate::config::AppConfig::default();
         config.pinned.push(mapping.clone());
         crate::config::save_config(&crate::config::config_path().unwrap(), &config).unwrap();
@@ -788,12 +774,9 @@ mod tests {
         std::fs::write(&local, "edited").unwrap();
         let mut state = initial_state();
         state.pinned = vec![PinnedMapping {
-            local_path: local,
-            gist_id: "g1".into(),
-            gist_filename: "a.txt".into(),
-            direction: None,
             last_seen_hash: Some(crate::domain::sha256_hex(b"synced")),
             remote_blob_sha: Some("1111111111111111111111111111111111111111".into()),
+            ..PinnedMapping::fixture(local, "g1", "a.txt")
         }];
         state.gist_catalog.owned = vec![GistFile {
             raw_url: Some(

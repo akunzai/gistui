@@ -1216,14 +1216,7 @@ mod tests {
     #[test]
     fn apply_unpin_projects_both_config_fields() {
         let mut state = crate::tui::initial_state();
-        let mapping = crate::domain::PinnedMapping {
-            local_path: PathBuf::from("/b.txt"),
-            gist_id: "g2".into(),
-            gist_filename: "b.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        };
+        let mapping = crate::domain::PinnedMapping::fixture("/b.txt", "g2", "b.txt");
 
         apply_unpin(
             &mut state,
@@ -1259,14 +1252,9 @@ mod tests {
     #[test]
     fn apply_unpin_surfaces_a_failure_without_touching_the_pins() {
         let mut state = crate::tui::initial_state();
-        state.pinned = vec![crate::domain::PinnedMapping {
-            local_path: PathBuf::from("/a.txt"),
-            gist_id: "g1".into(),
-            gist_filename: "a.txt".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        state.pinned = vec![crate::domain::PinnedMapping::fixture(
+            "/a.txt", "g1", "a.txt",
+        )];
 
         apply_unpin(
             &mut state,
@@ -1312,14 +1300,11 @@ mod tests {
         apply_pin_sync(
             &mut state,
             Ok((
-                change(vec![crate::domain::PinnedMapping {
-                    local_path: PathBuf::from("/ignored.txt"),
-                    gist_id: "g9".into(),
-                    gist_filename: "ignored.txt".into(),
-                    direction: None,
-                    last_seen_hash: None,
-                    remote_blob_sha: None,
-                }]),
+                change(vec![crate::domain::PinnedMapping::fixture(
+                    "/ignored.txt",
+                    "g9",
+                    "ignored.txt",
+                )]),
                 crate::pin_store::SyncRecord::NotPinned,
             )),
         );

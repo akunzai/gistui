@@ -154,14 +154,7 @@ mod tests {
             gist("a", "exact filename", "settings.json"),
             gist("b", "old pinned", "other.json"),
         ];
-        let pinned = vec![PinnedMapping {
-            local_path: local.clone(),
-            gist_id: "b".into(),
-            gist_filename: "other.json".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        let pinned = vec![PinnedMapping::fixture(local.clone(), "b", "other.json")];
 
         let ranked = rank_gist_files(&local, &files, &pinned);
         assert_eq!(ranked[0].file.gist_id, "b");
@@ -228,14 +221,11 @@ mod tests {
         let target = gist("b", "notes", "todo.md");
         let pinned_local = local("/Users/me/work/scratch.txt");
         let locals = vec![local("/Users/me/work/todo.md"), pinned_local.clone()];
-        let pinned = vec![PinnedMapping {
-            local_path: pinned_local.path.clone(),
-            gist_id: "b".into(),
-            gist_filename: "todo.md".into(),
-            direction: None,
-            last_seen_hash: None,
-            remote_blob_sha: None,
-        }];
+        let pinned = vec![PinnedMapping::fixture(
+            pinned_local.path.clone(),
+            "b",
+            "todo.md",
+        )];
 
         let ranked = rank_local_files(&target, &locals, &pinned);
         assert_eq!(ranked[0].candidate.path, pinned_local.path);
