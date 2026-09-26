@@ -813,4 +813,54 @@ mod tests {
             Some(3)
         );
     }
+
+    /// Issue #493: smart-sync on a pin that reads Push, whose sides turn out identical once
+    /// fetched, opens no upload Confirm; the pin reads in sync.
+    #[test]
+    fn smart_sync_of_an_identical_push_confirms_the_pin_without_uploading() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_path = dir.path().join("a.txt");
+        std::fs::write(&local_path, "a\n").unwrap();
+        let synced = crate::sync_baseline::SyncBaseline::after_sync(b"a", b"a");
+        let mapping = PinnedMapping {
+            baseline: synced.clone(),
+            ..PinnedMapping::fixture(local_path, "g1", "a.txt")
+        };
+        let mut state = test_support::state_with_stored_pin(dir.path(), mapping);
+        state.gist_catalog.owned = vec![GistFile {
+            raw_url: Some(format!(
+                "https://gist.githubusercontent.com/u/g1/raw/{}/a.txt",
+                synced.remote_blob_sha.as_deref().unwrap()
+            )),
+            ..GistFile::fixture("g1", "a.txt")
+        }];
+        assert_eq!(
+            state.compute_pin_sync_status(0),
+            crate::domain::SyncStatus::Push
+        );
+        state.enter(Screen::Pins(Box::default()));
+        let runner = scripted(vec![CommandOutput::ok(
+            r#"{"files":{"a.txt":{"content":"a"}}}"#,
+        )]);
+        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
+        let entry = state.defer_entry();
+
+        route_outcome(
+            KeyOutcome::SyncPinAuto { entry, index: 0 },
+            &mut state,
+            &mut jobs,
+        );
+        jobs.on_action_outcome(&mut state);
+
+        assert_eq!(runner.calls(), vec![crate::gh::gist_get_plan("g1")]);
+        assert!(state.screen.is_pins(), "no Confirm: {:?}", state.screen);
+        assert_eq!(
+            state.status.as_deref(),
+            Some("already in sync — nothing to upload")
+        );
+        assert_eq!(
+            state.compute_pin_sync_status(0),
+            crate::domain::SyncStatus::InSync
+        );
+    }
 }

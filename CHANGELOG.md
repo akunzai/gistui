@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Pushing a file whose gist copy already matches it (for example, only a trailing newline
+  apart) no longer opens the upload confirmation: gistui says it's already in sync, and a
+  pinned pair shows as synced — from Pins `u`/`s` and from the list alike.
 - gistui no longer needs `curl`: a gist file too large to come back inline, and a revision
   file fetched from its raw URL, are now downloaded by gistui itself, so they work on Windows
   versions that don't ship `curl.exe`. Such a download now gives up after 30 seconds, and a
