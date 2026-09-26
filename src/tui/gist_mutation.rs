@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 /// One gist mutation, as plain data captured when the user acted.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum MutationRequest {
+pub enum MutationRequest {
     /// Upload the draft's content to its gist file (replacing it, or adding it when the
     /// catalog has no such file yet).
     Upload(Box<UploadDraft>),
@@ -405,7 +405,7 @@ pub(crate) fn on_remove_file(
     })
 }
 
-/// `ApplyDescription` outcome. Success ends editing; a failure keeps the editor open with
+/// `MutationRequest::Description` outcome. Success ends editing; a failure keeps the editor open with
 /// the typed text (#476).
 pub(crate) fn on_apply_description(
     state: &mut AppState,

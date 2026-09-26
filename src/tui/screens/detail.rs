@@ -3,6 +3,7 @@
 
 use crate::domain::GistComment;
 use crate::tui::bg::LoopFlow;
+use crate::tui::gist_mutation::MutationRequest;
 use crate::tui::keys::NavAction;
 use crate::tui::text::comment_lines_count;
 use crate::tui::view_model::ChromeVm;
@@ -170,10 +171,10 @@ impl AppState {
                     else {
                         return KeyOutcome::None;
                     };
-                    return KeyOutcome::ApplyDescription {
+                    return KeyOutcome::Mutation(MutationRequest::Description {
                         gist_id,
                         description: self.description_input.to_string(),
-                    };
+                    });
                 }
                 _ => {
                     self.description_input.apply_edit(code);
@@ -324,7 +325,7 @@ impl AppState {
             self.set_status("already yours — no fork needed");
             KeyOutcome::None
         } else {
-            KeyOutcome::ForkGist { gist_id }
+            KeyOutcome::Mutation(MutationRequest::Fork { gist_id })
         }
     }
 
@@ -1296,10 +1297,14 @@ mod tests {
         let mut state = state_with_gists();
         state.screen = Screen::GistDetail(Box::default());
         detail_mut(&mut state).gist_id = Some("g1".into());
-        assert!(matches!(
+        let starring = !state.gist_is_starred("g1");
+        assert_eq!(
             state.handle_key(KeyCode::Char('*')),
-            KeyOutcome::ToggleGistStar { .. }
-        ));
+            KeyOutcome::Mutation(MutationRequest::Star {
+                gist_id: "g1".into(),
+                starring
+            })
+        );
     }
 
     #[test]
@@ -1321,10 +1326,13 @@ mod tests {
         assert_eq!(state.description_input, "My Ghostty config");
         state.handle_key(KeyCode::Char('!'));
         assert_eq!(state.description_input, "My Ghostty config!");
-        assert!(matches!(
+        assert_eq!(
             state.handle_key(KeyCode::Enter),
-            KeyOutcome::ApplyDescription { .. }
-        ));
+            KeyOutcome::Mutation(MutationRequest::Description {
+                gist_id: "a".into(),
+                description: "My Ghostty config!".into(),
+            })
+        );
     }
 
     #[test]
@@ -1401,10 +1409,12 @@ mod tests {
             owner_login: "other".into(),
             ..GistFile::fixture("foreign", "a.txt")
         }];
-        assert!(matches!(
+        assert_eq!(
             state.handle_key(KeyCode::Char('F')),
-            KeyOutcome::ForkGist { .. }
-        ));
+            KeyOutcome::Mutation(MutationRequest::Fork {
+                gist_id: "foreign".into()
+            })
+        );
     }
 
     #[test]

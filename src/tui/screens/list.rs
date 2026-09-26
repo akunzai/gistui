@@ -2299,10 +2299,13 @@ mod tests {
             ..GistFile::fixture("g1", "a.txt")
         }];
         state.gist_cursor.index = 0;
-        assert!(matches!(
+        assert_eq!(
             state.handle_key(KeyCode::Char('*')),
-            KeyOutcome::ToggleGistStar { .. }
-        ));
+            KeyOutcome::Mutation(crate::tui::gist_mutation::MutationRequest::Star {
+                gist_id: "g1".into(),
+                starring: true
+            })
+        );
     }
 
     /// Divider drag (#395) — geometry first: percent is the stored fact, cells are derived.

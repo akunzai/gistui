@@ -515,7 +515,7 @@ impl AppState {
             return KeyOutcome::None;
         };
         let starring = !self.gist_is_starred(&gist_id);
-        KeyOutcome::ToggleGistStar { gist_id, starring }
+        KeyOutcome::Mutation(crate::tui::gist_mutation::MutationRequest::Star { gist_id, starring })
     }
 }
 

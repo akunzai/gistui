@@ -3,6 +3,7 @@
 
 use crate::tui::bg::LoopFlow;
 use crate::tui::gist_content::{ContentLookup, FetchPolicy};
+use crate::tui::gist_mutation::MutationRequest;
 use crate::tui::render::{gist_info_line, unix_now};
 use crate::tui::screens::diff::DiffVm;
 use crate::tui::{
@@ -173,7 +174,7 @@ impl AppState {
                 KeyCode::Char('y') if draft.watching => {
                     self.set_status("editor still open — finish editing first");
                 }
-                KeyCode::Char('y') => return KeyOutcome::Upload,
+                KeyCode::Char('y') => return KeyOutcome::Mutation(MutationRequest::Upload(draft)),
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     // Return to wherever the upload was initiated from (List, or Pins for
                     // a pin push). The draft goes with Confirm; a still-running editor watch
@@ -211,32 +212,55 @@ impl AppState {
                     self.description_input.apply_edit(code);
                 }
             },
-            Some(PendingAction::Create { .. }) => match code {
-                // Step 2: choose visibility (the description is kept in description_input).
-                KeyCode::Char('s') => return KeyOutcome::Create(false),
-                KeyCode::Char('p') => return KeyOutcome::Create(true),
+            Some(PendingAction::Create { local_path }) => match code {
+                // Step 2: choose visibility. The description typed in step 1 stays in
+                // description_input, so a failed create can be retried as typed (#476).
+                KeyCode::Char(key @ ('s' | 'p')) => {
+                    return KeyOutcome::Mutation(MutationRequest::Create {
+                        local_path,
+                        public: key == 'p',
+                        description: self.description_input.to_string(),
+                    });
+                }
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     self.description_input.clear();
                     self.back_to_list();
                 }
                 _ => {}
             },
-            Some(PendingAction::Delete { .. }) => match code {
-                KeyCode::Char('y') => return KeyOutcome::ExecuteDelete,
+            Some(PendingAction::Delete { gist_id, .. }) => match code {
+                KeyCode::Char('y') => {
+                    return KeyOutcome::Mutation(MutationRequest::Delete { gist_id });
+                }
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     self.cancel_confirm();
                 }
                 _ => {}
             },
-            Some(PendingAction::RemoveFile { .. }) => match code {
-                KeyCode::Char('y') => return KeyOutcome::ExecuteRemoveFile,
+            Some(PendingAction::RemoveFile {
+                gist_id, filename, ..
+            }) => match code {
+                KeyCode::Char('y') => {
+                    let file = crate::domain::GistFileRef::id_name(gist_id, filename);
+                    return KeyOutcome::Mutation(MutationRequest::RemoveFile { file });
+                }
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     self.back_to_list();
                 }
                 _ => {}
             },
-            Some(PendingAction::CompactGist { .. }) => match code {
-                KeyCode::Char('y') => return KeyOutcome::ExecuteCompactGist,
+            Some(PendingAction::CompactGist {
+                gist_id,
+                label,
+                count,
+            }) => match code {
+                KeyCode::Char('y') => {
+                    return KeyOutcome::Mutation(MutationRequest::Compact {
+                        gist_id,
+                        label,
+                        count,
+                    });
+                }
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
                     // Return to whichever screen launched the compaction (Gists or GistDetail).
                     self.cancel_confirm();
@@ -1197,7 +1221,11 @@ mod tests {
                 PathBuf::from("/tmp/settings.json"),
             ))),
         );
-        assert_eq!(state.handle_key(KeyCode::Char('y')), KeyOutcome::Upload);
+        let draft = state.upload_draft().cloned().unwrap();
+        assert_eq!(
+            state.handle_key(KeyCode::Char('y')),
+            KeyOutcome::Mutation(MutationRequest::Upload(Box::new(draft)))
+        );
     }
 
     #[test]
@@ -1279,7 +1307,7 @@ mod tests {
     }
 
     #[test]
-    fn remove_file_confirm_y_returns_execute_remove_file() {
+    fn remove_file_confirm_y_requests_the_removal() {
         let mut state = initial_state();
         set_pending(
             &mut state,
@@ -1291,12 +1319,14 @@ mod tests {
         );
         assert_eq!(
             state.handle_key(KeyCode::Char('y')),
-            KeyOutcome::ExecuteRemoveFile
+            KeyOutcome::Mutation(MutationRequest::RemoveFile {
+                file: crate::domain::GistFileRef::id_name("abc123", "a.md"),
+            })
         );
     }
 
     #[test]
-    fn delete_confirm_y_returns_execute_delete() {
+    fn delete_confirm_y_requests_the_delete() {
         let mut state = initial_state();
         set_pending(
             &mut state,
@@ -1307,7 +1337,9 @@ mod tests {
         );
         assert_eq!(
             state.handle_key(KeyCode::Char('y')),
-            KeyOutcome::ExecuteDelete
+            KeyOutcome::Mutation(MutationRequest::Delete {
+                gist_id: "abc123".into()
+            })
         );
     }
 
@@ -1323,7 +1355,9 @@ mod tests {
         );
         assert_eq!(
             state.handle_key(KeyCode::Char('y')),
-            KeyOutcome::ExecuteDelete
+            KeyOutcome::Mutation(MutationRequest::Delete {
+                gist_id: "abc123".into()
+            })
         );
         state.cancel_confirm_after_delete();
         assert_eq!(state.screen, Screen::List);
@@ -1344,7 +1378,9 @@ mod tests {
         );
         assert_eq!(
             state.handle_key(KeyCode::Char('y')),
-            KeyOutcome::ExecuteDelete
+            KeyOutcome::Mutation(MutationRequest::Delete {
+                gist_id: "abc123".into()
+            })
         );
         state.cancel_confirm_after_delete();
         assert!(state.screen.is_gists());
@@ -1365,7 +1401,9 @@ mod tests {
         );
         assert_eq!(
             state.handle_key(KeyCode::Char('y')),
-            KeyOutcome::ExecuteDelete
+            KeyOutcome::Mutation(MutationRequest::Delete {
+                gist_id: "abc123".into()
+            })
         );
         state.cancel_confirm_after_delete();
         assert!(state.screen.is_pins());
@@ -1405,7 +1443,11 @@ mod tests {
         );
         assert_eq!(
             state.handle_key(KeyCode::Char('s')),
-            KeyOutcome::Create(false)
+            KeyOutcome::Mutation(MutationRequest::Create {
+                local_path: PathBuf::from("/tmp/config.toml"),
+                public: false,
+                description: String::new(),
+            })
         );
 
         set_pending(
@@ -1416,7 +1458,11 @@ mod tests {
         );
         assert_eq!(
             state.handle_key(KeyCode::Char('p')),
-            KeyOutcome::Create(true)
+            KeyOutcome::Mutation(MutationRequest::Create {
+                local_path: PathBuf::from("/tmp/config.toml"),
+                public: true,
+                description: String::new(),
+            })
         );
     }
 
@@ -1444,10 +1490,15 @@ mod tests {
         assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
         assert!(!state.editing_description);
         assert_eq!(state.description_input, "hi");
-        // Now s/p choose visibility and trigger the create.
+        // Now s/p choose visibility and trigger the create, carrying the description as
+        // typed — nothing reads it after the key.
         assert_eq!(
             state.handle_key(KeyCode::Char('s')),
-            KeyOutcome::Create(false)
+            KeyOutcome::Mutation(MutationRequest::Create {
+                local_path: PathBuf::from("/tmp/config.toml"),
+                public: false,
+                description: "hi".into(),
+            })
         );
     }
 

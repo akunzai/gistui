@@ -466,9 +466,6 @@ pub enum KeyOutcome {
         local_path: PathBuf,
         file: GistFileRef,
     },
-    /// Confirm-owned upload execute.
-    Upload,
-    Create(bool),
     PreviewContent {
         entry: DeferredEntry,
         file: GistFileRef,
@@ -480,8 +477,6 @@ pub enum KeyOutcome {
         path: PathBuf,
     },
     EditUpload,
-    ExecuteDelete,
-    ExecuteRemoveFile,
     OpenGistDetail {
         gist_id: String,
     },
@@ -496,11 +491,6 @@ pub enum KeyOutcome {
         entry: DeferredEntry,
         gist_id: String,
         label: String,
-    },
-    ExecuteCompactGist,
-    ApplyDescription {
-        gist_id: String,
-        description: String,
     },
     RefreshLocals,
     OpenRepoUrl {
@@ -547,14 +537,11 @@ pub enum KeyOutcome {
     /// restore execution — as one plain-data request (issue #430). The workflow module
     /// (`src/tui/gist_revision.rs`) is the only thing that reads it.
     Revision(gist_revision::RevisionRequest),
-    ToggleGistStar {
-        gist_id: String,
-        /// True when the next action should star (currently unstarred).
-        starring: bool,
-    },
-    ForkGist {
-        gist_id: String,
-    },
+    /// Every Gist mutation — upload, create, delete, remove a file, compact, description,
+    /// star, fork — as one plain-data request built when the key is pressed (issue #503), so
+    /// dispatch never reads Confirm afterwards. `src/tui/gist_mutation.rs` is the only thing
+    /// that reads it.
+    Mutation(gist_mutation::MutationRequest),
 }
 
 /// One-shot return path for a screen opened by background work.

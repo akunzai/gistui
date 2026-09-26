@@ -68,7 +68,7 @@ Fields stay `pub`. No `#[serde(default)]` on the struct.
   supersession drop it without touching navigation. Preview refresh captures the current
   parent through `defer_replacement`, so refresh replaces Preview instead of stacking it.
   Diff Gist identity is built directly into `DiffState`; do not add another staging field.
-- **`back_to_list()` is a hard reset** (clears `nav_stack`) — reserve it for paths whose only possible origin is `Screen::List` itself. Confirm-execute paths with more than one possible origin (e.g. `ExecuteDelete`, `ExecuteCompactGist` in `dispatch.rs`) use `leave()`/`cancel_confirm()` instead, to return to whichever screen actually launched them; pop an extra time if the popped screen is now stale (e.g. `GistDetail` for a gist just deleted).
+- **`back_to_list()` is a hard reset** (clears `nav_stack`) — reserve it for paths whose only possible origin is `Screen::List` itself. Confirm-execute paths with more than one possible origin (e.g. the delete and compact Gist mutations' apply in `gist_mutation.rs`) use `leave()`/`cancel_confirm()` instead, to return to whichever screen actually launched them; pop an extra time if the popped screen is now stale (e.g. `GistDetail` for a gist just deleted).
 
 ## Key path (pure intent → impure dispatch)
 
@@ -90,6 +90,7 @@ label, and gist-fetch payload without executing the worker closure (issue #422).
 - New key logic → `AppState::handle_key` (testable).
 - New IO → `dispatch` / `bg` helpers, not `handle_key`.
 - IO-bearing `KeyOutcome` variants carry payloads (issue #244): `src/tui/mod.rs` (`KeyOutcome`), `src/tui/dispatch.rs`.
+- A workflow gets one request variant, built complete in the key handler: `KeyOutcome::Revision(RevisionRequest)` (#430) and `KeyOutcome::Mutation(MutationRequest)` (#503). `route_outcome` hands it on and never reads Confirm or an input buffer to fill it in; eligibility guards stay with the key that builds it.
 - Diff/Confirm/Preview scroll keys go through `scroll_body_mut` (issue #385), not per-axis `AppState` methods.
 
 ## Keymap (`src/tui/keymap.rs`)
