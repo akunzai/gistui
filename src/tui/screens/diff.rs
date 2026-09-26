@@ -304,9 +304,9 @@ struct SyncDiff {
 ///
 /// A pinned pair that turns out identical is in sync: refresh its Sync baseline for free from
 /// the content already in hand, so the Pins list stays correct even if either side changed
-/// since the last real sync (issues #466, #492). The local side hashes the file's raw bytes
-/// (not the normalized `identical` comparison), matching compute_pin_sync_status; the remote
-/// side is the gist content as fetched. `record_pin_sync` ignores a pair nobody pinned.
+/// since the last real sync (issues #466, #492). The local side is the file's raw bytes (not
+/// the normalized `identical` comparison); the remote side is the gist content as fetched.
+/// `record_pin_sync` ignores a pair nobody pinned.
 fn open_sync_diff(state: &mut AppState, entry: crate::tui::DeferredEntry, pair: SyncDiff) {
     let policy = state.settings.sync_policy();
     let diff = policy.preview_diff(
@@ -347,8 +347,10 @@ fn open_sync_diff(state: &mut AppState, entry: crate::tui::DeferredEntry, pair: 
             &pair.local_path,
             &pair.file.gist_id,
             &pair.file.filename,
-            &pair.local_content,
-            &pair.remote,
+            &crate::sync_baseline::SyncBaseline::after_sync(
+                pair.local_content.as_bytes(),
+                pair.remote.as_bytes(),
+            ),
             None,
         );
     }
@@ -911,11 +913,11 @@ mod tests {
 
     fn assert_baseline(state: &AppState, local: &str, remote: &str) {
         assert_eq!(
-            state.pinned[0].last_seen_hash.as_deref(),
+            state.pinned[0].baseline.local_sha256.as_deref(),
             Some(crate::domain::sha256_hex(local.as_bytes()).as_str())
         );
         assert_eq!(
-            state.pinned[0].remote_blob_sha.as_deref(),
+            state.pinned[0].baseline.remote_blob_sha.as_deref(),
             Some(crate::domain::git_blob_sha1(remote.as_bytes()).as_str())
         );
     }

@@ -9,6 +9,7 @@ pub(crate) mod lru;
 pub mod pin_store;
 pub mod pins;
 pub mod ranking;
+pub mod sync_baseline;
 pub mod sync_content;
 pub mod temp_dir;
 pub mod tui;

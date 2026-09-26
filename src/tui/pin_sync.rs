@@ -67,52 +67,30 @@ impl AppState {
             .and_then(crate::domain::raw_url_blob_sha)
     }
 
-    /// Impure single-pin status. With a full Sync baseline and a catalog blob sha, it compares
-    /// both sides against the baseline (issue #466): local SHA-256 of the file on disk, remote
-    /// blob sha from the catalog — no timestamps. Otherwise (a pin recorded before #466, or a
-    /// file the catalog has no sha for) it falls back to in-memory mtimes plus a local
-    /// content-hash check when timestamps disagree (`Push`/`Pull`).
+    /// Impure single-pin status: read the local file, look up the gist file's blob sha and
+    /// both timestamps, and let the pin's Sync baseline decide
+    /// ([`SyncBaseline::status`](crate::sync_baseline::SyncBaseline::status)).
     /// Used by [`Self::refresh_pin_sync_cache`] and by action dispatch (smart-sync); **not**
     /// for paint — presentation reads [`Self::cached_pin_sync_status`] (issue #241).
     pub(crate) fn compute_pin_sync_status(&self, index: usize) -> crate::domain::SyncStatus {
+        use crate::sync_baseline::{LocalFile, Observed};
+
         let Some(m) = self.pinned.get(index) else {
             return crate::domain::SyncStatus::Unknown;
         };
-        let local_abs = m.resolve_against(&self.cwd);
-        if let (Some(local_base), Some(remote_base), Some(remote_now)) = (
-            m.last_seen_hash.as_deref(),
-            m.remote_blob_sha.as_deref(),
-            self.catalog_blob_sha(&m.gist_id, &m.gist_filename),
-        ) {
-            return match std::fs::read(&local_abs) {
-                Ok(bytes) => crate::domain::baseline_status(
-                    crate::domain::sha256_hex(&bytes) != local_base,
-                    remote_now != remote_base,
-                ),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    crate::domain::SyncStatus::Missing
-                }
-                Err(_) => crate::domain::SyncStatus::Unknown,
-            };
-        }
-
-        let (local_ts, remote_ts) = self.pin_mtimes(index);
-        let status = crate::domain::sync_status(local_ts, remote_ts);
-        if !matches!(
-            status,
-            crate::domain::SyncStatus::Push | crate::domain::SyncStatus::Pull
-        ) {
-            return status;
-        }
-        let Some(baseline) = m.last_seen_hash.as_deref() else {
-            return status;
+        let read = std::fs::read(m.resolve_against(&self.cwd));
+        let local = match &read {
+            Ok(bytes) => LocalFile::Bytes(bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => LocalFile::Missing,
+            Err(_) => LocalFile::Unreadable,
         };
-        match std::fs::read(&local_abs) {
-            Ok(bytes) if crate::domain::sha256_hex(&bytes) == baseline => {
-                crate::domain::SyncStatus::InSync
-            }
-            _ => status,
-        }
+        let (local_ts, remote_ts) = self.pin_mtimes(index);
+        m.baseline.status(Observed {
+            local,
+            remote_blob_sha: self.catalog_blob_sha(&m.gist_id, &m.gist_filename),
+            local_ts,
+            remote_ts,
+        })
     }
 
     /// Rebuild [`Self::pin_sync_cache`] for every pin (may stat / read local files). Clears
@@ -212,72 +190,9 @@ mod tests {
     }
 
     #[test]
-    fn pin_sync_status_upgrades_to_in_sync_when_content_hash_matches_baseline() {
-        // Timestamps disagree (forcing Push), but the content hash still matches what was
-        // last recorded as synced — the Pins list should show synced (✓), not a misleading
-        // push arrow, since nothing has actually changed content-wise.
-        let dir = tempfile::tempdir().unwrap();
-        let local = dir.path().join("settings.json");
-        let content = b"{\"key\":\"value\"}";
-        std::fs::write(&local, content).unwrap();
-        let hash = crate::domain::sha256_hex(content);
-
-        let mut state = initial_state();
-        state.locals.clear();
-        state.pinned = vec![crate::domain::PinnedMapping {
-            last_seen_hash: Some(hash),
-            ..crate::domain::PinnedMapping::fixture(local, "g1", "settings.json")
-        }];
-        state.gist_catalog.owned = vec![GistFile {
-            // Far in the past, so the just-written local file (mtime ~ now) reads as newer —
-            // sync_status(Some(local_ts), Some(remote_ts)) would normally resolve to Push.
-            updated_at: "2020-01-01T00:00:00Z".into(),
-            ..GistFile::fixture("g1", "settings.json")
-        }];
-
-        assert_eq!(
-            {
-                state.refresh_pin_sync_cache();
-                state.cached_pin_sync_status(0)
-            },
-            crate::domain::SyncStatus::InSync,
-            "a matching content hash must override a stale-timestamp Push into InSync"
-        );
-    }
-
-    #[test]
-    fn pin_sync_status_keeps_push_when_content_hash_does_not_match_baseline() {
-        // Same timestamp setup as above, but the recorded baseline hash doesn't match the
-        // file's actual current content — a real, unrecorded local change. Must stay Push.
-        let dir = tempfile::tempdir().unwrap();
-        let local = dir.path().join("settings.json");
-        std::fs::write(&local, b"{\"key\":\"value\"}").unwrap();
-
-        let mut state = initial_state();
-        state.locals.clear();
-        state.pinned = vec![crate::domain::PinnedMapping {
-            last_seen_hash: Some("does-not-match-anything".into()),
-            ..crate::domain::PinnedMapping::fixture(local, "g1", "settings.json")
-        }];
-        state.gist_catalog.owned = vec![GistFile {
-            updated_at: "2020-01-01T00:00:00Z".into(),
-            ..GistFile::fixture("g1", "settings.json")
-        }];
-
-        assert_eq!(
-            {
-                state.refresh_pin_sync_cache();
-                state.cached_pin_sync_status(0)
-            },
-            crate::domain::SyncStatus::Push,
-            "a non-matching baseline hash must not mask a real content change"
-        );
-    }
-
-    #[test]
-    fn pin_sync_status_keeps_push_when_no_baseline_hash_recorded() {
-        // Regression guard: a pin that was never synced (no baseline hash at all) must fall
-        // back to the plain timestamp-based status, not attempt a hash comparison.
+    fn pin_sync_status_reads_the_timestamps_without_a_baseline() {
+        // A pin that was never synced is classified by timestamps: the local file's mtime
+        // (just written) against the catalog's `updated_at` (far in the past).
         let dir = tempfile::tempdir().unwrap();
         let local = dir.path().join("settings.json");
         std::fs::write(&local, b"{\"key\":\"value\"}").unwrap();
@@ -305,8 +220,8 @@ mod tests {
     const NEW_SHA: &str = "2222222222222222222222222222222222222222";
 
     /// A pin with a full Sync baseline over `a.txt` = "synced", and a catalog whose `raw_url`
-    /// carries `catalog_sha`. `updated_at` is far in the future, so the timestamp path would
-    /// always say Pull — the baseline path must not look at it (issue #466).
+    /// carries `catalog_sha`. `updated_at` is far in the future, so a status other than Pull
+    /// shows the file and the catalog sha were read. The rules are `sync_baseline`'s tests.
     fn baseline_state(
         local_content: Option<&str>,
         catalog_sha: &str,
@@ -319,8 +234,10 @@ mod tests {
         let mut state = initial_state();
         state.locals.clear();
         state.pinned = vec![crate::domain::PinnedMapping {
-            last_seen_hash: Some(crate::domain::sha256_hex(b"synced")),
-            remote_blob_sha: Some(OLD_SHA.into()),
+            baseline: crate::sync_baseline::SyncBaseline {
+                local_sha256: Some(crate::domain::sha256_hex(b"synced")),
+                remote_blob_sha: Some(OLD_SHA.into()),
+            },
             ..crate::domain::PinnedMapping::fixture(local, "g1", "a.txt")
         }];
         state.gist_catalog.owned = vec![GistFile {
@@ -334,13 +251,12 @@ mod tests {
     }
 
     #[test]
-    fn pin_sync_status_from_the_sync_baseline() {
+    fn pin_sync_status_reads_the_file_and_the_catalog_sha() {
         use crate::domain::SyncStatus::*;
         for (local, catalog_sha, expected) in [
             (Some("synced"), OLD_SHA, InSync),
             (Some("edited"), OLD_SHA, Push),
             (Some("synced"), NEW_SHA, Pull),
-            (Some("edited"), NEW_SHA, Conflict),
             (None, OLD_SHA, Missing),
         ] {
             let (_dir, state) = baseline_state(local, catalog_sha);
@@ -350,16 +266,5 @@ mod tests {
                 "local={local:?} catalog_sha={catalog_sha}"
             );
         }
-    }
-
-    #[test]
-    fn pin_sync_status_without_a_remote_baseline_falls_back_to_timestamps() {
-        let (_dir, mut state) = baseline_state(Some("edited"), OLD_SHA);
-        state.pinned[0].remote_blob_sha = None;
-        // Timestamps: the gist's updated_at is newer, and the local hash moved → Pull.
-        assert_eq!(
-            state.compute_pin_sync_status(0),
-            crate::domain::SyncStatus::Pull
-        );
     }
 }
