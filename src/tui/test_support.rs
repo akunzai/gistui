@@ -205,6 +205,21 @@ pub(super) fn state_with_selection() -> AppState {
     state
 }
 
+/// A state rooted at `dir` whose pins, in memory and in `dir/config.toml` (its
+/// [`crate::config_store::ConfigStore`]), are just `mapping` — for tests of a path that writes
+/// the config (issue #509).
+pub(super) fn state_with_stored_pin(dir: &std::path::Path, mapping: PinnedMapping) -> AppState {
+    let path = dir.join("config.toml");
+    let mut config = crate::config::AppConfig::default();
+    config.pinned.push(mapping.clone());
+    crate::config::save_config(&path, &config).unwrap();
+    let mut state = initial_state();
+    state.cwd = dir.to_path_buf();
+    state.pinned = vec![mapping];
+    state.config_store = crate::config_store::ConfigStore::at(path);
+    state
+}
+
 pub(super) fn state_ready_to_create() -> AppState {
     let mut state = initial_state();
     state.locals = vec![LocalCandidate {

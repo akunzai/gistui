@@ -139,8 +139,9 @@ impl RuntimeSettings {
 
     /// Write every runtime-owned preference back into `config`, leaving pins, skip
     /// directories, and anything else in it alone.
-    pub fn apply_to_config(&self, config: &mut AppConfig) {
-        config.prefs = self.prefs.clone();
+    /// The preferences as they stand, for [`crate::config_store::ConfigStore::save_preferences`].
+    pub fn preferences(&self) -> &crate::config::Preferences {
+        &self.prefs
     }
 
     pub fn field_value(&self, field: ConfigField) -> String {
@@ -226,8 +227,10 @@ mod tests {
             );
             let changed = settings.field_value(field);
 
-            let mut config = AppConfig::default();
-            settings.apply_to_config(&mut config);
+            let config = AppConfig {
+                prefs: settings.preferences().clone(),
+                ..AppConfig::default()
+            };
             crate::config::save_config(&path, &config).unwrap();
             let reloaded = RuntimeSettings::from_config(
                 &crate::config::load_config(&path).unwrap(),
@@ -250,8 +253,10 @@ mod tests {
         let settings = RuntimeSettings::from_config(&config, true, true);
         assert!(!settings.mouse_enabled());
         assert!(!settings.update_check_enabled());
-        let mut saved = AppConfig::default();
-        settings.apply_to_config(&mut saved);
+        let saved = AppConfig {
+            prefs: settings.preferences().clone(),
+            ..AppConfig::default()
+        };
         assert!(saved.prefs.mouse);
         assert!(saved.prefs.check_updates);
     }
@@ -271,7 +276,7 @@ mod tests {
         assert!(settings.adjust(ConfigField::DiffContext, false).is_none());
         assert!(settings.adjust(ConfigField::ScanDepth, false).is_some());
         assert_eq!(settings.scan_depth(), 19);
-        settings.apply_to_config(&mut config);
+        config.prefs = settings.preferences().clone();
         assert_eq!(config.prefs.diff_context, 0);
     }
 
@@ -307,7 +312,7 @@ mod tests {
             "a.txt",
         ));
         target.skip_dirs = vec!["keep-me".into()];
-        settings.apply_to_config(&mut target);
+        target.prefs = settings.preferences().clone();
         assert_eq!(
             target,
             AppConfig {

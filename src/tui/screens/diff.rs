@@ -886,29 +886,14 @@ mod tests {
 
     /// Run `f` with a config dir holding one pin of `local_file` ↔ gist `g1` / `a.txt`.
     fn with_pinned_pair(local_file: &str, f: impl FnOnce(&mut AppState, PathBuf)) {
-        let _guard = crate::config::tests::ENV_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = tempfile::tempdir().unwrap();
-        let prev = std::env::var_os("XDG_CONFIG_HOME");
-        std::env::set_var("XDG_CONFIG_HOME", dir.path());
 
         let local_path = dir.path().join("a.txt");
         std::fs::write(&local_path, local_file).unwrap();
         let mapping = crate::domain::PinnedMapping::fixture(local_path.clone(), "g1", "a.txt");
-        let mut config = crate::config::AppConfig::default();
-        config.pinned.push(mapping.clone());
-        crate::config::save_config(&crate::config::config_path().unwrap(), &config).unwrap();
 
-        let mut state = initial_state();
-        state.cwd = dir.path().to_path_buf();
-        state.pinned = vec![mapping];
+        let mut state = crate::tui::test_support::state_with_stored_pin(dir.path(), mapping);
         f(&mut state, local_path);
-
-        match prev {
-            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
-        }
     }
 
     fn assert_baseline(state: &AppState, local: &str, remote: &str) {

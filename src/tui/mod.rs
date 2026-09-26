@@ -713,6 +713,10 @@ pub struct AppState {
     pub locals: Vec<LocalCandidate>,
     pub gist_catalog: GistCatalog,
     pub pinned: Vec<PinnedMapping>,
+    /// The one `config.toml` every pin, sync-baseline, and preference write goes through
+    /// (issue #509). Startup points it at the real file; [`initial_state`] leaves it
+    /// unconfigured, so nothing writes a file unless it was given one.
+    pub config_store: crate::config_store::ConfigStore,
     pub focus: FocusPane,
     /// The pane that DRIVES the match ranking, decoupled from `focus`: the anchored pane
     /// shows natural order; the other pane is always ranked against the anchor's selection.
@@ -1785,6 +1789,7 @@ pub fn initial_state() -> AppState {
         locals: Vec::new(),
         gist_catalog: GistCatalog::default(),
         pinned: Vec::new(),
+        config_store: crate::config_store::ConfigStore::unconfigured(),
         focus: FocusPane::Local,
         anchor: FocusPane::Local,
         local_cursor: ListCursor::default(),
@@ -1829,8 +1834,9 @@ pub fn initial_state() -> AppState {
 
 pub fn load_startup_state(no_mouse: bool, no_update_check: bool) -> Result<AppState> {
     let mut state = initial_state();
-    let config_path = crate::config::config_path()?;
-    let config = crate::config::load_config(&config_path)?;
+    let config_store = crate::config_store::ConfigStore::in_default_location()?;
+    let config = config_store.load()?;
+    state.config_store = config_store;
     let cwd = std::env::current_dir()?;
 
     state.settings = RuntimeSettings::from_config(&config, no_mouse, no_update_check);

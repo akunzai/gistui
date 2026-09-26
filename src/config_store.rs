@@ -1,5 +1,9 @@
-//! Pinned-mapping **persistence** (issue #432): the one interface that owns a complete
-//! read-modify-write of the pins stored in `config.toml`.
+//! `config.toml` **persistence** (issues #432, #509): the one interface that reads the file and
+//! owns every complete read-modify-write of it — pins, sync baselines, and preferences.
+//!
+//! The app holds one [`ConfigStore`], built once: startup points it at the user's real file,
+//! tests at a temporary directory, and anything else gets [`ConfigStore::unconfigured`],
+//! which refuses to touch a file at all. No caller resolves the config location itself.
 //!
 //! [`crate::pins`] stays pure — it defines what a pin *is* (the three-part key) and the
 //! list operations. This module owns everything around that: resolving the config path,
@@ -18,7 +22,7 @@ use crate::config::{load_config, save_config, AppConfig};
 use crate::domain::{PinnedMapping, SyncDirection};
 use crate::pins::{self, PinKey};
 use crate::sync_baseline::SyncBaseline;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 
 /// The config fields a successful operation leaves behind, for the caller to project.
@@ -40,7 +44,7 @@ impl From<AppConfig> for PinChange {
     }
 }
 
-/// What [`PinStore::unpin`] found. The status line already distinguishes these two, so
+/// What [`ConfigStore::unpin`] found. The status line already distinguishes these two, so
 /// the fact travels as a value rather than a discarded `bool`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Unpinned {
@@ -49,7 +53,7 @@ pub enum Unpinned {
     NotFound,
 }
 
-/// What [`PinStore::record_sync`] did. Confirming a sync must never *create* a pin, so an
+/// What [`ConfigStore::record_sync`] did. Confirming a sync must never *create* a pin, so an
 /// unpinned pair is a normal outcome, not a failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncRecord {
@@ -57,12 +61,13 @@ pub enum SyncRecord {
     NotPinned,
 }
 
-/// The pins stored in one `config.toml`.
-pub struct PinStore {
-    config_path: PathBuf,
+/// One `config.toml`, or none ([`Self::unconfigured`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfigStore {
+    config_path: Option<PathBuf>,
 }
 
-impl PinStore {
+impl ConfigStore {
     /// The user's real config file.
     pub fn in_default_location() -> Result<Self> {
         Ok(Self::at(crate::config::config_path()?))
@@ -72,8 +77,34 @@ impl PinStore {
     /// why no filesystem seam is needed.
     pub fn at(config_path: impl Into<PathBuf>) -> Self {
         Self {
-            config_path: config_path.into(),
+            config_path: Some(config_path.into()),
         }
+    }
+
+    /// No file: every read and write fails. What an `AppState` holds until startup gives it
+    /// the real file, so a test that forgets to supply one can never write the user's config.
+    pub fn unconfigured() -> Self {
+        Self::default()
+    }
+
+    fn path(&self) -> Result<&Path> {
+        self.config_path
+            .as_deref()
+            .ok_or_else(|| anyhow!("config location not set"))
+    }
+
+    /// The whole config, as the file holds it now (defaults when it doesn't exist yet).
+    pub fn load(&self) -> Result<AppConfig> {
+        load_config(self.path()?)
+    }
+
+    /// Store `prefs` as the preference keys, leaving pins and everything else as the file
+    /// has them. Only a changed value is written (see [`save_config`]).
+    pub fn save_preferences(&self, prefs: &crate::config::Preferences) -> Result<()> {
+        let path = self.path()?;
+        let mut config = load_config(path)?;
+        config.prefs = prefs.clone();
+        save_config(path, &config)
     }
 
     /// Pin the pair named by `key`, or leave an existing pin alone. Siblings sharing the
@@ -82,18 +113,20 @@ impl PinStore {
     /// The stored `local_path` is exactly what `key` carries: this is a parser-and-writer
     /// of the user's file, not a normaliser of it.
     pub fn pin(&self, key: PinKey<'_>) -> Result<PinChange> {
-        let mut config = load_config(&self.config_path)?;
+        let path = self.path()?;
+        let mut config = load_config(path)?;
         pins::upsert(&mut config.pinned, key);
-        save_config(&self.config_path, &config)?;
+        save_config(path, &config)?;
         Ok(config.into())
     }
 
     /// Remove the one pin named by `key`. Persists only when something was removed, so an
     /// unmatched key does not rewrite the file.
     pub fn unpin(&self, key: PinKey<'_>) -> Result<(PinChange, Unpinned)> {
-        let mut config = load_config(&self.config_path)?;
+        let path = self.path()?;
+        let mut config = load_config(path)?;
         let outcome = if pins::remove(&mut config.pinned, key) {
-            save_config(&self.config_path, &config)?;
+            save_config(path, &config)?;
             Unpinned::Removed
         } else {
             Unpinned::NotFound
@@ -114,7 +147,8 @@ impl PinStore {
         baseline: &SyncBaseline,
         direction: Option<SyncDirection>,
     ) -> Result<(PinChange, SyncRecord)> {
-        let mut config = load_config(&self.config_path)?;
+        let path = self.path()?;
+        let mut config = load_config(path)?;
         let Some(index) = pins::find_by_resolved_path(&config.pinned, cwd, pair) else {
             return Ok((config.into(), SyncRecord::NotPinned));
         };
@@ -123,7 +157,7 @@ impl PinStore {
         if let Some(direction) = direction {
             mapping.direction = Some(direction);
         }
-        save_config(&self.config_path, &config)?;
+        save_config(path, &config)?;
         Ok((config.into(), SyncRecord::Recorded))
     }
 }
@@ -136,7 +170,7 @@ mod tests {
 
     struct Fixture {
         _dir: tempfile::TempDir,
-        store: PinStore,
+        store: ConfigStore,
         path: PathBuf,
     }
 
@@ -145,7 +179,7 @@ mod tests {
         let path = dir.path().join("config.toml");
         Fixture {
             _dir: dir,
-            store: PinStore::at(&path),
+            store: ConfigStore::at(&path),
             path,
         }
     }
@@ -156,6 +190,47 @@ mod tests {
 
     fn key<'a>(local: &'a Path, gist_id: &'a str, filename: &'a str) -> PinKey<'a> {
         PinKey::new(local, gist_id, filename)
+    }
+
+    // ---- the store itself (issue #509) -------------------------------------
+
+    /// A store with no file refuses every read and write, so an `AppState` that was never
+    /// given one cannot touch the user's config.
+    #[test]
+    fn an_unconfigured_store_refuses_to_touch_a_file() {
+        let store = ConfigStore::unconfigured();
+        let pair = key(Path::new("/abs/a.txt"), "g1", "a.txt");
+        let errors = [
+            store.load().map(|_| ()).unwrap_err(),
+            store.pin(pair).map(|_| ()).unwrap_err(),
+            store.unpin(pair).map(|_| ()).unwrap_err(),
+            store
+                .record_sync(Path::new("/cwd"), pair, &SyncBaseline::default(), None)
+                .map(|_| ())
+                .unwrap_err(),
+            store
+                .save_preferences(&crate::config::Preferences::default())
+                .unwrap_err(),
+        ];
+        for error in errors {
+            assert_eq!(error.to_string(), "config location not set");
+        }
+    }
+
+    #[test]
+    fn save_preferences_keeps_the_pins_and_load_reads_both() {
+        let f = fixture();
+        seed(&f, vec![mapping("/abs/a.txt", "g1", "a.txt")]);
+        let prefs = crate::config::Preferences {
+            scan_depth: 7,
+            ..Default::default()
+        };
+
+        f.store.save_preferences(&prefs).expect("save");
+
+        let config = f.store.load().expect("load");
+        assert_eq!(config.prefs, prefs);
+        assert_eq!(config.pinned, vec![mapping("/abs/a.txt", "g1", "a.txt")]);
     }
 
     fn seed(f: &Fixture, pinned: Vec<PinnedMapping>) {
@@ -467,7 +542,7 @@ mod tests {
         // in `save_config` cannot succeed.
         let blocker = dir.path().join("not-a-dir");
         std::fs::write(&blocker, b"x").expect("write blocker");
-        let store = PinStore::at(blocker.join("config.toml"));
+        let store = ConfigStore::at(blocker.join("config.toml"));
 
         assert!(store
             .pin(key(Path::new("/abs/a.txt"), "g1", "a.txt"))

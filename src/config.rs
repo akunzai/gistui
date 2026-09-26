@@ -240,7 +240,8 @@ fn to_saved_toml(config: &AppConfig) -> Result<String> {
 /// `existing` with only what differs between it and `config` changed.
 fn edit_saved_toml(existing: &str, config: &AppConfig) -> Result<String> {
     let mut doc: toml_edit::DocumentMut = existing.parse()?;
-    let before = toml::Table::try_from(parse_config(existing)?)?;
+    let stored = parse_config(existing)?;
+    let before = toml::Table::try_from(&stored)?;
     let after = toml::Table::try_from(config)?;
     let defaults = toml::Table::try_from(AppConfig::default())?;
 
@@ -255,7 +256,7 @@ fn edit_saved_toml(existing: &str, config: &AppConfig) -> Result<String> {
         }
     }
     if before.get("pinned") != after.get("pinned") {
-        edit_pins(&mut doc, &parse_config(existing)?.pinned, &config.pinned)?;
+        edit_pins(&mut doc, &stored.pinned, &config.pinned)?;
     }
     // `toml_edit` writes LF; a CRLF file (the norm on Windows) stays CRLF.
     let text = doc.to_string();
@@ -315,13 +316,6 @@ fn edit_pins(
     old: &[PinnedMapping],
     new: &[PinnedMapping],
 ) -> Result<()> {
-    let identity = |p: &PinnedMapping| {
-        (
-            p.local_path.clone(),
-            p.gist_id.clone(),
-            p.gist_filename.clone(),
-        )
-    };
     let mut existing: Vec<Option<toml_edit::Table>> = match doc.get("pinned") {
         Some(toml_edit::Item::ArrayOfTables(tables)) => tables.iter().cloned().map(Some).collect(),
         _ => Vec::new(),
@@ -332,7 +326,7 @@ fn edit_pins(
         let reused = old
             .iter()
             .zip(existing.iter_mut())
-            .find(|(o, t)| t.is_some() && identity(o) == identity(pin))
+            .find(|(o, t)| t.is_some() && o.key() == pin.key())
             .and_then(|(o, t)| Some((o, t.take()?)));
         let table = match reused {
             Some((old_pin, mut table)) => {

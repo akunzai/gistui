@@ -413,8 +413,9 @@ pub(super) fn record_pin_sync(
     if crate::pins::find_by_resolved_path(&state.pinned, &state.cwd, pair).is_none() {
         return;
     }
-    let result = crate::pin_store::PinStore::in_default_location()
-        .and_then(|store| store.record_sync(&state.cwd, pair, baseline, direction));
+    let result = state
+        .config_store
+        .record_sync(&state.cwd, pair, baseline, direction);
     apply_pin_sync(state, result);
 }
 
@@ -430,18 +431,21 @@ pub(super) fn record_pin_sync(
 /// nothing is said.
 fn apply_pin_sync(
     state: &mut AppState,
-    result: anyhow::Result<(crate::pin_store::PinChange, crate::pin_store::SyncRecord)>,
+    result: anyhow::Result<(
+        crate::config_store::PinChange,
+        crate::config_store::SyncRecord,
+    )>,
 ) {
     match result {
-        Ok((change, crate::pin_store::SyncRecord::Recorded)) => apply_pin_change(state, change),
-        Ok((_, crate::pin_store::SyncRecord::NotPinned)) => {}
+        Ok((change, crate::config_store::SyncRecord::Recorded)) => apply_pin_change(state, change),
+        Ok((_, crate::config_store::SyncRecord::NotPinned)) => {}
         Err(error) => append_status(state, format!("pin sync not recorded: {error}")),
     }
 }
 
 /// Project a completed persistence operation onto `AppState`. Both fields travel together
 /// because "what was just read" is the correct value for both, even after a hand edit.
-fn apply_pin_change(state: &mut AppState, change: crate::pin_store::PinChange) {
+fn apply_pin_change(state: &mut AppState, change: crate::config_store::PinChange) {
     state.pinned = change.pinned;
     state.skip_dirs = change.skip_dirs;
     state.mark_pin_sync_cache_dirty();
@@ -624,12 +628,9 @@ fn append_status(state: &mut AppState, message: impl Into<String>) {
 /// Persist Settings-screen fields after a user change (issue #227). Creates config.toml
 /// only when a value actually changed (opening Config never calls this).
 pub(super) fn persist_settings(state: &mut AppState, success_message: String) {
-    let result = crate::config::config_path().and_then(|path| {
-        let mut config = crate::config::load_config(&path)?;
-        state.settings.apply_to_config(&mut config);
-        crate::config::save_config(&path, &config)?;
-        Ok(())
-    });
+    let result = state
+        .config_store
+        .save_preferences(state.settings.preferences());
     match result {
         Ok(()) => state.set_status(success_message),
         Err(error) => state.set_status(format!("save config failed: {error}")),
@@ -676,8 +677,9 @@ pub(super) fn pin_paths(
     gist_id: &str,
     filename: &str,
 ) {
-    let result = crate::pin_store::PinStore::in_default_location()
-        .and_then(|store| store.pin(crate::pins::PinKey::new(local_path, gist_id, filename)));
+    let result = state
+        .config_store
+        .pin(crate::pins::PinKey::new(local_path, gist_id, filename));
     match result {
         Ok(change) => {
             apply_pin_change(state, change);
@@ -693,8 +695,9 @@ pub(super) fn unpin_path(
     gist_id: &str,
     filename: &str,
 ) {
-    let result = crate::pin_store::PinStore::in_default_location()
-        .and_then(|store| store.unpin(crate::pins::PinKey::new(local_path, gist_id, filename)));
+    let result = state
+        .config_store
+        .unpin(crate::pins::PinKey::new(local_path, gist_id, filename));
     apply_unpin(state, result, pin_pair_label(local_path, filename));
 }
 
@@ -702,15 +705,18 @@ pub(super) fn unpin_path(
 /// that pair, so the status must not claim one was removed (issue #424).
 fn apply_unpin(
     state: &mut AppState,
-    result: anyhow::Result<(crate::pin_store::PinChange, crate::pin_store::Unpinned)>,
+    result: anyhow::Result<(
+        crate::config_store::PinChange,
+        crate::config_store::Unpinned,
+    )>,
     label: String,
 ) {
     match result {
         Ok((change, outcome)) => {
             apply_pin_change(state, change);
             state.set_status(match outcome {
-                crate::pin_store::Unpinned::Removed => format!("Unpinned {label}"),
-                crate::pin_store::Unpinned::NotFound => format!("{label} is not pinned"),
+                crate::config_store::Unpinned::Removed => format!("Unpinned {label}"),
+                crate::config_store::Unpinned::NotFound => format!("{label} is not pinned"),
             });
         }
         Err(error) => state.set_status(format!("unpin failed: {error}")),
@@ -725,8 +731,7 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
     // persistence interface never sees one (issue #432).
     let mapping = state.pinned[idx].clone();
     let label = pin_pair_label(&mapping.local_path, &mapping.gist_filename);
-    let result = crate::pin_store::PinStore::in_default_location()
-        .and_then(|store| store.unpin(mapping.key()));
+    let result = state.config_store.unpin(mapping.key());
     let ok = result.is_ok();
     apply_unpin(state, result, label);
     if ok {
@@ -1187,8 +1192,8 @@ mod tests {
 
     // ---- unpin absorb ---------------------------------------------------
 
-    fn change(pinned: Vec<crate::domain::PinnedMapping>) -> crate::pin_store::PinChange {
-        crate::pin_store::PinChange {
+    fn change(pinned: Vec<crate::domain::PinnedMapping>) -> crate::config_store::PinChange {
+        crate::config_store::PinChange {
             pinned,
             skip_dirs: vec!["node_modules".into()],
         }
@@ -1200,7 +1205,7 @@ mod tests {
 
         apply_unpin(
             &mut state,
-            Ok((change(Vec::new()), crate::pin_store::Unpinned::Removed)),
+            Ok((change(Vec::new()), crate::config_store::Unpinned::Removed)),
             "~/a.txt <-> a.txt".into(),
         );
 
@@ -1218,7 +1223,7 @@ mod tests {
             &mut state,
             Ok((
                 change(vec![mapping.clone()]),
-                crate::pin_store::Unpinned::Removed,
+                crate::config_store::Unpinned::Removed,
             )),
             "~/a.txt <-> a.txt".into(),
         );
@@ -1235,7 +1240,7 @@ mod tests {
 
         apply_unpin(
             &mut state,
-            Ok((change(Vec::new()), crate::pin_store::Unpinned::NotFound)),
+            Ok((change(Vec::new()), crate::config_store::Unpinned::NotFound)),
             "~/a.txt <-> a.txt".into(),
         );
 
@@ -1301,7 +1306,7 @@ mod tests {
                     "g9",
                     "ignored.txt",
                 )]),
-                crate::pin_store::SyncRecord::NotPinned,
+                crate::config_store::SyncRecord::NotPinned,
             )),
         );
 
@@ -1339,7 +1344,10 @@ mod tests {
 
         apply_pin_sync(
             &mut state,
-            Ok((change(Vec::new()), crate::pin_store::SyncRecord::Recorded)),
+            Ok((
+                change(Vec::new()),
+                crate::config_store::SyncRecord::Recorded,
+            )),
         );
 
         assert_eq!(state.skip_dirs, vec!["node_modules".to_string()]);

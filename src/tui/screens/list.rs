@@ -1340,19 +1340,10 @@ mod tests {
 
     #[test]
     fn open_config_does_not_write_config_file() {
-        // Point config_path() at a throwaway XDG dir and assert the *real* path stays absent
-        // after open_config() — not an unrelated tempfile the app never uses.
-        let _guard = crate::config::tests::ENV_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let dir = tempfile::tempdir().unwrap();
-        let prev = std::env::var_os("XDG_CONFIG_HOME");
-        std::env::set_var("XDG_CONFIG_HOME", dir.path());
-        let path = crate::config::config_path().unwrap();
-        assert_eq!(path, dir.path().join("gistui").join("config.toml"));
-        assert!(!path.exists());
-
+        let path = dir.path().join("config.toml");
         let mut state = initial_state();
+        state.config_store = crate::config_store::ConfigStore::at(&path);
         state.screen = Screen::List;
         state.open_config();
         assert!(state.screen.is_config());
@@ -1362,11 +1353,6 @@ mod tests {
             "open_config must not create {}",
             path.display()
         );
-
-        match prev {
-            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
-            None => std::env::remove_var("XDG_CONFIG_HOME"),
-        }
     }
 
     #[test]
