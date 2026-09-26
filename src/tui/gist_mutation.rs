@@ -302,7 +302,7 @@ fn apply(
 
 /// `UploadReplace` outcome: commit the pin-sync record for the local file's bytes on disk
 /// (the pin baseline, #465 — not the possibly redacted / transformed bytes sent), leave
-/// Confirm for wherever the upload was opened from (List, or Pins for a pin push), then
+/// Confirm and any Diff it was opened from for the screen behind them (List, or Pins), then
 /// re-fetch the gist list. A failure stays on Confirm with the draft intact (#476).
 pub(crate) fn on_upload_replace(
     state: &mut AppState,
@@ -314,6 +314,11 @@ pub(crate) fn on_upload_replace(
 ) -> LoopFlow {
     apply(state, result, "upload", |state| {
         state.leave();
+        // A Diff the upload was confirmed from now shows stale changes; skip past it, as a
+        // download from the Diff does (issue #520).
+        if state.screen.is_diff() {
+            state.leave();
+        }
         state.gist_content_store.invalidate_file(&file);
         // The gist file's blob sha is now that of the bytes sent. Patch the baseline's remote
         // side into the in-memory catalog so the pin reads as in sync before the refresh this
@@ -772,6 +777,38 @@ mod tests {
                 "{name}: {:?}",
                 state.status
             );
+        }
+    }
+
+    /// Issue #520: an upload confirmed from a Diff skips past that now-stale Diff to the
+    /// screen that opened it, as a download from the Diff does.
+    #[test]
+    fn upload_success_from_a_diff_lands_behind_the_diff() {
+        type Opener = fn(&mut AppState);
+        type Landed = fn(&AppState) -> bool;
+        let cases: [(&str, Opener, Landed); 2] = [
+            ("list", |_| {}, |s| s.screen == Screen::List),
+            (
+                "pins",
+                |s| s.enter(Screen::Pins(Box::default())),
+                |s| s.screen.is_pins(),
+            ),
+        ];
+        for (name, open, landed) in cases {
+            let mut state = initial_state();
+            open(&mut state);
+            state.enter_diff(
+                "-a\n+b\n".into(),
+                "a\n".into(),
+                "/tmp/a.txt".into(),
+                "/tmp/a.txt".into(),
+            );
+            state.enter_upload_confirm(UploadDraft::fixture("g1", "a.txt", "/tmp/a.txt"), None);
+            let request = MutationRequest::Upload(Box::new(state.upload_draft().cloned().unwrap()));
+
+            run(&mut state, &ok_runner(1), request);
+
+            assert!(landed(&state), "{name}: landed on {:?}", state.screen);
         }
     }
 

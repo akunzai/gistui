@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A successful upload with `u` from a diff now returns to the List or Pins screen that opened
+  the diff, as a download does, instead of to the diff's out-of-date changes.
+
 ## [0.23.0] — 2026-09-27
 
 - `u` in a pin's diff uploads to the pin's own gist file even when it is named differently
