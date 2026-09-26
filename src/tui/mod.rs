@@ -1343,55 +1343,6 @@ impl AppState {
         self.visible_gist_groups().into_iter().nth(idx)
     }
 
-    /// Highest horizontal-scroll offset for the gist-level view, based on its selected
-    /// visible row (mirrors `focused_hscroll_max` for the main panes; issue #341).
-    fn gists_hscroll_max(&self) -> u16 {
-        let sort = self.gist_manager().map(|g| g.sort).unwrap_or_default();
-        let idx = self.gist_manager().map(|g| g.cursor.index).unwrap_or(0);
-        self.visible_gist_groups()
-            .get(idx)
-            .map(|g| {
-                gist_group_row_label(
-                    g,
-                    unix_now(),
-                    sort,
-                    (
-                        self.gist_catalog
-                            .comment_counts
-                            .get(&g.id)
-                            .copied()
-                            .unwrap_or(0),
-                        self.gist_catalog
-                            .star_counts
-                            .get(&g.id)
-                            .copied()
-                            .unwrap_or(0),
-                        self.gist_catalog
-                            .fork_counts
-                            .get(&g.id)
-                            .copied()
-                            .unwrap_or(0),
-                    ),
-                    self.gist_is_starred(&g.id),
-                    self.gist_catalog.user_login.as_deref(),
-                )
-            })
-            .map(|t| hscroll_max_for_text(&t))
-            .unwrap_or(0)
-    }
-
-    /// Highest horizontal-scroll offset for the Pins screen, bounded by the selected
-    /// row's displayed local path (the only variable-length, overflow-prone field).
-    /// Pure helper modeled on `gists_hscroll_max`.
-    fn pins_hscroll_max(&self) -> u16 {
-        let idx = self.pins().map(|p| p.cursor.index).unwrap_or(0);
-        self.visible_pin_indices()
-            .get(idx)
-            .and_then(|&i| self.pinned.get(i))
-            .map(|m| hscroll_max_for_text(&crate::config::display_path(&m.local_path)))
-            .unwrap_or(0)
-    }
-
     /// Indices into `self.pinned` that match the Pins-screen text filter, in sort order.
     /// Empty query → every index. Matched against the cwd/home-shortened local path plus
     /// the gist filename (the meaningful, visible parts of the row).

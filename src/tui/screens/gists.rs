@@ -124,6 +124,19 @@ impl AppState {
         KeyOutcome::None
     }
 
+    /// Highest horizontal-scroll offset for the Gist manager: the selected row as painted
+    /// (issue #341 caps to the selected row, not the longest).
+    fn gists_hscroll_max(&self) -> u16 {
+        let idx = self.gist_manager().map(|g| g.cursor.index).unwrap_or(0);
+        self.visible_gist_groups()
+            .get(idx)
+            .map(|g| {
+                let row = gist_group_row_text(self, g, crate::tui::render::unix_now());
+                crate::tui::text::hscroll_max_for_text(&row)
+            })
+            .unwrap_or(0)
+    }
+
     /// Arrow / hjkl / page-key navigation for `Screen::Gists`'s list cursor. Precomputes
     /// len/hmax with `&self`, then mutates the cursor (issue #274: cannot hold
     /// `&mut GistsManagerState` from `match &mut self.screen` while calling helpers).
@@ -152,6 +165,19 @@ impl AppState {
 }
 
 /// Gists manager body — usable under Palette-over-Gists as well.
+/// The Gist manager row for `g` as painted, with its age measured at `now`. The view model
+/// paints it and the scroll cap measures it, so the two cannot disagree (#496).
+fn gist_group_row_text(state: &AppState, g: &crate::domain::GistGroup, now: u64) -> String {
+    crate::tui::render::gist_group_row_label(
+        g,
+        now,
+        state.gist_manager().map(|gm| gm.sort).unwrap_or_default(),
+        state.gist_counts(&g.id),
+        state.gist_is_starred(&g.id),
+        state.gist_catalog.user_login.as_deref(),
+    )
+}
+
 pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
     let gm = state.gist_manager().cloned().unwrap_or_default();
     let (footer_title, footer, footer_colored) = if gm.filtering {
@@ -189,33 +215,7 @@ pub(crate) fn build_gists_vm(state: &AppState) -> GistsVm {
             .iter()
             .map(|g| RowVm {
                 emphasis: RowEmphasis::None,
-                label: crate::tui::render::gist_group_row_label(
-                    g,
-                    now,
-                    gm.sort,
-                    (
-                        state
-                            .gist_catalog
-                            .comment_counts
-                            .get(&g.id)
-                            .copied()
-                            .unwrap_or(0),
-                        state
-                            .gist_catalog
-                            .star_counts
-                            .get(&g.id)
-                            .copied()
-                            .unwrap_or(0),
-                        state
-                            .gist_catalog
-                            .fork_counts
-                            .get(&g.id)
-                            .copied()
-                            .unwrap_or(0),
-                    ),
-                    state.gist_is_starred(&g.id),
-                    state.gist_catalog.user_login.as_deref(),
-                ),
+                label: gist_group_row_text(state, g, now),
             })
             .collect();
         (ListPaneEmpty::HasRows, None, rows)
@@ -329,6 +329,29 @@ mod tests {
 
     fn gists_ref(state: &AppState) -> &GistsManagerState {
         state.gist_manager().expect("expected Screen::Gists")
+    }
+
+    /// Issue #496: the scroll cap is measured on the row as painted, counts and all.
+    #[test]
+    fn gists_scroll_cap_is_the_painted_row() {
+        let mut state = initial_state();
+        state.gist_catalog.owned = vec![GistFile {
+            description: "a gist description long enough to run past any terminal width".repeat(3),
+            ..GistFile::fixture("g1", "a.txt")
+        }];
+        state.gist_catalog.comment_counts.insert("g1".into(), 12);
+        state.gist_catalog.star_counts.insert("g1".into(), 345);
+        state.screen = Screen::Gists(Box::default());
+        for _ in 0..1000 {
+            state.handle_key(KeyCode::Right);
+        }
+
+        let painted = &build_gists_vm(&state).pane.rows[0].label;
+        assert!(painted.contains("345"), "{painted}");
+        assert_eq!(
+            gists_ref(&state).cursor.hscroll,
+            crate::tui::text::hscroll_max_for_text(painted)
+        );
     }
 
     #[test]
