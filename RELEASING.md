@@ -12,18 +12,25 @@ triggers the full pipeline:
 - `.github/workflows/publish.yml` — publishes the crate to
   [crates.io](https://crates.io/crates/gistui).
 
+Both workflows run the `mise run check` gate first; `release.yml` then builds and attests
+every archive (build provenance, checkable with
+`gh attestation verify <archive> --repo akunzai/gistui`). Nothing is published until a
+maintainer approves the `release` environment, which admits `v*` tags only: the
+"Create GitHub Release" job and the crates.io "cargo publish" job each pause for that
+approval, after the gate and before any publish side effect.
+
 The crate is published and the `CARGO_REGISTRY_TOKEN` secret is configured, so the publish
-step runs automatically on tag. `release.yml` also pushes the downstream package definitions
-directly — no manual bump, no waiting on a schedule:
+step runs on every tag once approved. `release.yml` also pushes the downstream package
+definitions directly — no manual bump, no waiting on a schedule:
 
 - [Homebrew tap](https://github.com/akunzai/homebrew-tap) — `Formula/gistui.rb` regenerated
   from the new release's per-platform checksums and pushed straight to `main`.
 - [Scoop bucket](https://github.com/akunzai/scoop-bucket) — `bucket/gistui.json` patched with
   the new version/URL/hash and pushed straight to `main`.
 
-Both pushes require the `HOMEBREW_BUMP_TOKEN` repository secret (a PAT scoped to those two
-repos); if it's unset, the corresponding step skips itself and logs a message instead of
-failing the release.
+Both pushes require the `HOMEBREW_BUMP_TOKEN` secret, a PAT scoped to those two repos, stored
+as a repository or `release` environment secret; if it's unset, the corresponding step skips
+itself and logs a message instead of failing the release.
 
 Packaging stays lean via `Cargo.toml` `exclude` (the demo harness, site assets and CI config
 are kept out of the published tarball); `cargo publish --dry-run` validates the tarball.
@@ -38,7 +45,12 @@ are kept out of the published tarball); `cargo publish --dry-run` validates the 
    `[unreleased]` at `compare/vX.Y.Z...HEAD`.
 3. Merge to `main` (CI gate green).
 4. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-5. Verify: the GitHub release has the binaries, [crates.io](https://crates.io/crates/gistui)
+5. Approve: once the gate, builds and attestation are green, the Release and Publish runs
+   each wait on the `release` environment. Approve both with "Review deployments" on each
+   run's page (`gh run list --workflow release.yml` / `--workflow publish.yml` finds them).
+   To re-run a crates.io publish by hand, dispatch it on the tag —
+   `gh workflow run publish.yml --ref vX.Y.Z`; the environment rejects a branch ref.
+6. Verify: the GitHub release has the binaries, [crates.io](https://crates.io/crates/gistui)
    shows the new version (and docs.rs built), and `Formula/gistui.rb` / `bucket/gistui.json`
    show a new `chore: bump gistui to vX.Y.Z` commit on the tap's / bucket's `main` (pushed by
    `release.yml` within the same run — if either is missing, check that run's "Update Homebrew

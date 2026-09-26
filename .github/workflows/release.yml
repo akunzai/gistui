@@ -147,10 +147,14 @@ jobs:
             artifacts/*.tar.gz
             artifacts/*.zip
 
+  # The `release` environment pauses here for a maintainer's approval (and
+  # only admits v* tags), after the gate, build and attestation have passed
+  # and before any publish side effect: the GitHub release, Homebrew, Scoop.
   release:
     name: Create GitHub Release
     needs: [build, attest]
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
     steps:
