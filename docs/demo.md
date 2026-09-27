@@ -49,7 +49,9 @@ the keystrokes, so:
 
 The recording is isolated: a temp `$GISTUI_DEMO_HOME` holds the store, the
 working dir, and a fresh `XDG_CONFIG_HOME` (so persisted pins never leak between
-runs), and it is deleted on exit.
+runs), and it is deleted on exit. It is also the recording's `HOME`: on macOS the
+gist-list cache lives under `$HOME/Library/Caches` whatever `XDG_CACHE_HOME` says,
+so without it a recording would replace the user's real cache with fake gists.
 
 ## Storyboard
 

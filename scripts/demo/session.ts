@@ -40,6 +40,10 @@ export async function prepare(t: any, demoHome: string) {
   await t.run(`export PATH="$GISTUI_DEMO_HOME/bin:${rootDir}/target/release:$PATH"`);
   await t.run("unset NO_COLOR");
   await t.run(`python3 "${rootDir}/scripts/demo/seed.py"`);
+  // The gist-list cache follows `dirs::cache_dir()`, which is `$HOME/Library/Caches` on
+  // macOS and ignores XDG_CACHE_HOME there, so only a scratch HOME keeps the fake catalog
+  // out of the user's real cache. Set last: the steps above may need the real HOME.
+  await t.run(`export HOME="$GISTUI_DEMO_HOME"`);
   await t.run(`cd "$GISTUI_DEMO_HOME/work"`);
   await t.clear();
 }

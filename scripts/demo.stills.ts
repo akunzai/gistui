@@ -27,7 +27,9 @@ export default defineVideo(
     await t.hide(async () => {
       await prepare(t, demoHome);
       await t.type("gistui --no-update-check .\n");
-      await t.wait(/aliases\.sh/, { scope: "screen" });
+      // Wait for the gist pane, not just the local one: with no cache yet, `H` pressed
+      // before the list lands has no gist file to show history for.
+      await t.wait(/Gists \([1-9]/, { scope: "screen" });
     });
 
     // Revision history of the pair under the cursor, so the footer still names
