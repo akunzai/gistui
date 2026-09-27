@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Confirming an upload no longer overwrites a gist file that appeared since the preview showed
+  it as a new file. If the gist changed after the preview, the upload stops and asks you to
+  preview it again.
+
 ## [0.23.1] — 2026-09-27
 
 - A successful upload with `u` from a diff now returns to the List or Pins screen that opened

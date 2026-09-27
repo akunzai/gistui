@@ -228,6 +228,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                 String::new(),
                 local_label,
                 "(new file)".to_string(),
+                false,
             ) {
                 Ok(draft) => state.enter_upload_confirm(draft, None),
                 Err(error) => {
@@ -432,6 +433,27 @@ mod tests {
 
     fn route(state: &mut AppState, outcome: KeyOutcome) -> LoopFlow {
         route_outcome(outcome, state, &mut idle_jobs())
+    }
+
+    /// Issue #523: an upload previewed as a file new to the gist is recorded as an add, so a
+    /// refresh that lands before the user confirms can't turn it into a replace.
+    #[test]
+    fn upload_add_records_the_draft_as_an_add() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_path = dir.path().join("a.txt");
+        std::fs::write(&local_path, "a\n").unwrap();
+        let mut state = initial_state();
+
+        route(
+            &mut state,
+            KeyOutcome::UploadAdd {
+                local_path,
+                gist_id: "g1".into(),
+                filename: "a.txt".into(),
+            },
+        );
+
+        assert!(state.upload_draft().is_some_and(|d| !d.replaces));
     }
 
     #[test]
