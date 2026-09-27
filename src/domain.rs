@@ -340,6 +340,15 @@ impl GistFile {
         }
     }
 
+    /// This row's identity, for a fetch or a sync.
+    pub fn file_ref(&self) -> GistFileRef {
+        GistFileRef::new(
+            self.gist_id.clone(),
+            self.filename.clone(),
+            self.raw_url.clone(),
+        )
+    }
+
     pub fn is_owned_by(&self, login: &str) -> bool {
         !login.is_empty() && self.owner_login == login
     }

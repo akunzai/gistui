@@ -420,15 +420,6 @@ impl GistTypeFilter {
 pub enum KeyOutcome {
     None,
     Quit,
-    /// List-originated local↔gist diff.
-    PreviewDiff {
-        entry: DeferredEntry,
-        local_path: Option<PathBuf>,
-        file: GistFileRef,
-        target: PathBuf,
-        /// When true, unified diff is oriented local→gist (local focus).
-        upload_orientation: bool,
-    },
     /// Download using the open Diff payload (no re-resolve).
     /// `mode` is [`DownloadMode::CreateNew`] when the target is missing, or
     /// [`DownloadMode::overwrite_after_user_confirm`] after Confirm `y` (issue #246).
@@ -440,12 +431,6 @@ pub enum KeyOutcome {
     DownloadRequested {
         target: PathBuf,
     },
-    /// Download/fetch a selected gist file (may land on Diff/Confirm).
-    DownloadGist {
-        entry: DeferredEntry,
-        file: GistFileRef,
-        target: PathBuf,
-    },
     Pin {
         local_path: PathBuf,
         gist_id: String,
@@ -455,16 +440,6 @@ pub enum KeyOutcome {
         local_path: PathBuf,
         gist_id: String,
         filename: String,
-    },
-    UploadAdd {
-        local_path: PathBuf,
-        gist_id: String,
-        filename: String,
-    },
-    UploadPreview {
-        entry: DeferredEntry,
-        local_path: PathBuf,
-        file: GistFileRef,
     },
     PreviewContent {
         entry: DeferredEntry,
@@ -503,28 +478,6 @@ pub enum KeyOutcome {
     UnpinAtPin {
         index: usize,
     },
-    SyncPinAuto {
-        entry: DeferredEntry,
-        index: usize,
-    },
-    SyncPinPush {
-        entry: DeferredEntry,
-        index: usize,
-    },
-    SyncPinPull {
-        entry: DeferredEntry,
-        index: usize,
-    },
-    SyncSelectedPair {
-        entry: DeferredEntry,
-        local_path: PathBuf,
-        gist_id: String,
-        filename: String,
-    },
-    PreviewPinDiff {
-        entry: DeferredEntry,
-        index: usize,
-    },
     CopyGistUrl {
         gist_id: String,
     },
@@ -542,6 +495,9 @@ pub enum KeyOutcome {
     /// dispatch never reads Confirm afterwards. `src/tui/gist_mutation.rs` is the only thing
     /// that reads it.
     Mutation(gist_mutation::MutationRequest),
+    /// Every compare, pull, and push of one Sync pair — List or Pins — as one plain-data
+    /// request (issue #525), handed to the sync workflow (`src/tui/sync.rs`).
+    Sync(sync::SyncRequest),
 }
 
 /// One-shot return path for a screen opened by background work.
@@ -1604,27 +1560,12 @@ impl AppState {
                 }
             }
         };
-        let crate::domain::SyncPair { local, gist } = pair;
-        let exists = self
-            .gist_catalog
-            .owned
-            .iter()
-            .any(|g| g.gist_id == gist.gist_id && g.filename == gist.filename);
-        if exists {
-            // The raw URL of the file this uploads to, not of the one selected (#524).
-            let raw_url = self.gist_file_raw_url(&gist.gist_id, &gist.filename);
-            KeyOutcome::UploadPreview {
-                entry: self.defer_entry(),
-                local_path: local,
-                file: GistFileRef::new(gist.gist_id, gist.filename, raw_url),
-            }
-        } else {
-            KeyOutcome::UploadAdd {
-                local_path: local,
-                gist_id: gist.gist_id,
-                filename: gist.filename,
-            }
-        }
+        let replaces = sync::gist_has_file(self, &pair);
+        KeyOutcome::Sync(sync::SyncRequest {
+            entry: self.defer_entry(),
+            pair,
+            intent: sync::SyncIntent::Push { replaces },
+        })
     }
 
     /// Highest horizontal-scroll offset for the focused pane's **selected** row
@@ -1846,6 +1787,7 @@ use palette::PaletteState;
 mod render;
 use render::*;
 mod gist_mutation;
+mod sync;
 mod upload_draft;
 pub(crate) use upload_draft::UploadDraft;
 mod screens;
