@@ -567,10 +567,10 @@ mod tests {
     #[test]
     fn q_in_confirm_cancels_without_quitting() {
         let mut state = initial_state();
-        state.enter_diff(
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
             "d".into(),
             "r".into(),
-            PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
         set_pending(&mut state, PendingAction::Download);
@@ -690,10 +690,10 @@ mod tests {
     fn scroll_down_moves_content_three_lines() {
         // Set up a Diff screen with enough lines that wheel-down can reach 3.
         let mut state = state_with_selection();
-        state.enter_diff(
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
             "line1\nline2\nline3\nline4\nline5".into(),
             "remote".into(),
-            std::path::PathBuf::from("/tmp/x"),
             std::path::PathBuf::from("/tmp/cwd/x"),
         );
         assert!(state.screen.is_diff());
@@ -705,10 +705,10 @@ mod tests {
     #[test]
     fn scroll_up_moves_content_three_lines() {
         let mut state = state_with_selection();
-        state.enter_diff(
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
             "line1\nline2\nline3\nline4\nline5".into(),
             "remote".into(),
-            std::path::PathBuf::from("/tmp/x"),
             std::path::PathBuf::from("/tmp/cwd/x"),
         );
         set_diff_scroll(&mut state, 3);

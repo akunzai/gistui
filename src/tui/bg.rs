@@ -327,11 +327,12 @@ pub(super) fn spawn_pin_pull(
             state,
             entry,
             result,
-            target,
+            crate::domain::SyncPair {
+                local: target,
+                gist: file,
+            },
             local_label,
             gist_label,
-            file,
-            crate::tui::DiffOrigin::Pin,
         )
     });
 }
@@ -390,7 +391,6 @@ fn spawn_pin_diff_inner(
                 target,
                 false,
                 gist_file,
-                crate::tui::DiffOrigin::Pin,
             );
             if let Some(status) = status.filter(|_| state.screen.is_diff()) {
                 state.set_status(status);
@@ -557,15 +557,13 @@ pub(super) fn write_scratch_file(
 }
 
 pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode) {
-    let target = state.download_target();
-    let content = state.preview_remote().to_string();
-    let pin = state
-        .diff()
-        .and_then(|d| match (&d.gist_id, &d.gist_filename) {
-            (Some(g), Some(f)) => Some(crate::domain::GistFileRef::id_name(g, f)),
-            _ => None,
-        });
-    match write_download(state, &target, &content, mode, pin.as_ref()) {
+    let Some((pair, content)) = state.diff().and_then(|d| match &d.kind {
+        crate::tui::DiffKind::Sync { pair, remote } => Some((pair.clone(), remote.clone())),
+        crate::tui::DiffKind::Revision => None,
+    }) else {
+        return;
+    };
+    match write_download(state, &pair.local, &content, mode, Some(&pair.gist)) {
         Ok(()) => {
             // Skip past the download overwrite gate's Confirm (if any) and its parked Diff to
             // land on whatever was behind them.

@@ -586,9 +586,14 @@ mod tests {
     }
 
     #[test]
-    fn diff_palette_items_enable_sync_by_default() {
+    fn diff_palette_items_enable_sync_in_a_sync_diff() {
         let mut state = initial_state();
-        state.screen = Screen::Diff(Box::default());
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
+            String::new(),
+            String::new(),
+            "a.txt".into(),
+        );
         let items = menu_items(&state);
         assert_eq!(
             item_tuples(&items),
@@ -605,10 +610,13 @@ mod tests {
     #[test]
     fn diff_palette_items_disable_sync_when_identical() {
         let mut state = initial_state();
-        state.screen = Screen::Diff(Box::new(DiffState {
-            identical: true,
-            ..DiffState::default()
-        }));
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
+            String::new(),
+            String::new(),
+            "a.txt".into(),
+        );
+        state.diff_mut().unwrap().identical = true;
         let items = menu_items(&state);
         assert!(!enabled_for(&items, "Download"));
         assert!(!enabled_for(&items, "Upload"));

@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- In a diff opened from the List, `d` and `u` now write the two files the diff compares. For
+  a local `a.txt` diffed against a gist's `b.txt`, `d` overwrites `a.txt` (after the usual
+  overwrite confirmation) and `u` replaces `b.txt`. They used to write a local `b.txt` and
+  a gist file `a.txt` instead. `d` and `u` on the List panes, with no diff open, are unchanged.
 - Confirming an upload no longer overwrites a gist file that appeared since the preview showed
   it as a new file. If the gist changed after the preview, the upload stops and asks you to
   press `u` to preview it again.

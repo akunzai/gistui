@@ -568,7 +568,6 @@ mod tests {
     };
     use crate::tui::*;
     use crossterm::event::KeyCode;
-    use std::path::PathBuf;
 
     fn revision_mut(state: &mut AppState) -> &mut RevisionState {
         if !state.screen.is_revisions() {
@@ -708,7 +707,7 @@ mod tests {
     fn revision_diff_omits_download_upload() {
         let mut state = initial_state();
         state.screen = Screen::Revisions(Box::default());
-        state.enter_diff("diff".into(), String::new(), PathBuf::new(), PathBuf::new());
+        crate::tui::test_support::enter_revision_diff(&mut state, "diff".into());
         let footer = diff_footer(&state);
         assert!(!footer.contains("download"));
         assert!(!footer.contains("upload"));

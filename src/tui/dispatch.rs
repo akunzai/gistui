@@ -51,6 +51,9 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             target,
             upload_orientation,
         } => {
+            // The Diff must show what its `d` / `u` write (#524): with no local file selected,
+            // that is the file a download would land on, when one is already there.
+            let local_path = local_path.or_else(|| target.exists().then(|| target.clone()));
             let (file, local_label, gist_label) =
                 screens::diff::stage_preview_diff(state, local_path.clone(), file);
 
@@ -69,7 +72,6 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                         target,
                         upload_orientation,
                         file,
-                        crate::tui::DiffOrigin::List,
                     )
                 },
             );
@@ -99,11 +101,12 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                         state,
                         entry,
                         result,
-                        target,
+                        crate::domain::SyncPair {
+                            local: target,
+                            gist: file,
+                        },
                         local_label,
                         gist_label,
-                        file,
-                        crate::tui::DiffOrigin::List,
                     )
                 },
             );
@@ -640,6 +643,72 @@ mod tests {
         assert_eq!(state.nav_stack.len(), 1);
     }
 
+    /// Issue #524, end to end: the List Diff of local `a.txt` against gist `b.txt` shows those
+    /// two files, and `u` / `d` from it write exactly them.
+    #[test]
+    fn a_list_diff_writes_the_two_files_it_compares() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_path = dir.path().join("a.txt");
+        std::fs::write(&local_path, "local\n").unwrap();
+        let mut state = initial_state();
+        state.cwd = dir.path().to_path_buf();
+        state.locals = vec![LocalCandidate {
+            path: local_path.clone(),
+            modified: None,
+        }];
+        state.gist_catalog.owned = vec![GistFile::fixture("g1", "b.txt")];
+        state.focus = crate::tui::FocusPane::Gist;
+        let runner = std::sync::Arc::new(SeqRunner::new(vec![CommandOutput::ok(
+            r#"{"files":{"b.txt":{"content":"remote\n"}}}"#,
+        )]));
+        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner);
+
+        let enter = state.handle_key(KeyCode::Enter);
+        route_outcome(enter, &mut state, &mut jobs);
+        jobs.on_action_outcome(&mut state);
+
+        assert!(state.screen.is_diff(), "on {:?}", state.screen);
+        let KeyOutcome::UploadPreview {
+            local_path: uploaded,
+            file,
+            ..
+        } = state.handle_key(KeyCode::Char('u'))
+        else {
+            panic!("expected an upload preview");
+        };
+        assert_eq!(
+            (uploaded, file.filename.as_str()),
+            (local_path.clone(), "b.txt")
+        );
+        assert_eq!(
+            state.handle_key(KeyCode::Char('d')),
+            KeyOutcome::DownloadRequested { target: local_path }
+        );
+    }
+
+    /// Issue #524: with no local file selected, the Diff is against the file its `d` would
+    /// overwrite when one is already there — not against nothing.
+    #[test]
+    fn a_list_diff_without_a_local_selection_shows_the_file_d_would_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("b.txt"), "remote\n").unwrap();
+        let mut state = initial_state();
+        state.cwd = dir.path().to_path_buf();
+        state.gist_catalog.owned = vec![GistFile::fixture("g1", "b.txt")];
+        state.focus = crate::tui::FocusPane::Gist;
+        let runner = std::sync::Arc::new(SeqRunner::new(vec![CommandOutput::ok(
+            r#"{"files":{"b.txt":{"content":"remote\n"}}}"#,
+        )]));
+        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner);
+
+        let enter = state.handle_key(KeyCode::Enter);
+        route_outcome(enter, &mut state, &mut jobs);
+        jobs.on_action_outcome(&mut state);
+
+        assert!(state.screen.is_diff(), "on {:?}", state.screen);
+        assert!(state.diff_identical(), "the Diff read the file on disk");
+    }
+
     /// Issue #465: create sends the bytes the Sync policy dictates — a normalized scratch copy
     /// under the same filename when normalization rewrites the file, the file itself otherwise.
     #[test]
@@ -888,7 +957,7 @@ mod tests {
     }
 
     /// Issue #494: `d` in a Diff opened from the List preview still records a pinned pair's
-    /// baseline — the Diff carries the gist identity whichever screen opened it.
+    /// baseline — the Diff carries its Sync pair whichever screen opened it.
     #[test]
     fn a_download_from_a_list_preview_diff_records_the_pins_baseline() {
         let dir = tempfile::tempdir().unwrap();
@@ -906,9 +975,7 @@ mod tests {
             local_path.clone(),
             false,
             crate::domain::GistFileRef::id_name("g1", "a.txt"),
-            crate::tui::DiffOrigin::List,
         );
-        assert!(!state.is_pin_diff_context());
 
         route(
             &mut state,

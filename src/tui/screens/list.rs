@@ -359,11 +359,11 @@ impl AppState {
                     .get(self.local_cursor.index)
                     .map(|r| r.candidate.path.clone());
                 let filename = gist.file.filename.clone();
+                // The Diff's `d` writes the local file it shows (#524); a gist file new to
+                // this directory lands under its own name.
                 let target = local_path
-                    .as_deref()
-                    .and_then(std::path::Path::parent)
-                    .unwrap_or(&self.cwd)
-                    .join(&filename);
+                    .clone()
+                    .unwrap_or_else(|| self.cwd.join(&filename));
                 return KeyOutcome::PreviewDiff {
                     entry: self.defer_entry(),
                     local_path,
@@ -1004,28 +1004,26 @@ mod tests {
     #[test]
     fn back_to_list_clears_preview() {
         let mut state = initial_state();
-        state.enter_diff(
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
             "d".into(),
             "r".into(),
-            PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
         state.back_to_list();
         assert_eq!(state.screen, Screen::List);
         assert!(!state.diff_previewed());
         assert!(state.scroll_body().is_none());
-        assert!(state.preview_remote().is_empty());
-        assert_eq!(state.preview_local(), PathBuf::new());
-        assert_eq!(state.download_target(), PathBuf::new());
+        assert!(state.sync_pair().is_none());
     }
 
     #[test]
     fn identical_diff_disables_download_and_upload() {
         let mut state = initial_state();
-        state.enter_diff(
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
             "d".into(),
             "r".into(),
-            PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
         if let Some(d) = state.diff_mut() {
@@ -1041,10 +1039,10 @@ mod tests {
     #[test]
     fn esc_in_diff_returns_to_list() {
         let mut state = initial_state();
-        state.enter_diff(
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
             "d".into(),
             "r".into(),
-            PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
         assert_eq!(state.handle_key(KeyCode::Esc), KeyOutcome::None);
@@ -1055,10 +1053,10 @@ mod tests {
     #[test]
     fn q_in_diff_returns_to_list() {
         let mut state = initial_state();
-        state.enter_diff(
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
             "d".into(),
             "r".into(),
-            PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
         assert_eq!(state.handle_key(KeyCode::Char('q')), KeyOutcome::None);
@@ -1893,6 +1891,27 @@ mod tests {
 
         assert_eq!(local_path, Some(PathBuf::from("/tmp/nested/settings.json")));
         assert_eq!(target, PathBuf::from("/tmp/nested/settings.json"));
+    }
+
+    /// Issue #524: the Diff of a local file against a differently named gist file writes
+    /// those two files — `d` targets the local file itself, not one named after the gist
+    /// file. With no local file selected, a download lands under the gist file's name.
+    #[test]
+    fn enter_pairs_the_selected_local_file_whatever_the_gist_file_is_named() {
+        let mut state = state_with_selection();
+        state.cwd = PathBuf::from("/tmp");
+        state.locals[0].path = PathBuf::from("/tmp/a.txt");
+        let KeyOutcome::PreviewDiff { target, file, .. } = state.handle_key(KeyCode::Enter) else {
+            panic!("expected PreviewDiff");
+        };
+        assert_ne!(file.filename, "a.txt");
+        assert_eq!(target, PathBuf::from("/tmp/a.txt"));
+
+        state.locals.clear();
+        let KeyOutcome::PreviewDiff { target, file, .. } = state.handle_key(KeyCode::Enter) else {
+            panic!("expected PreviewDiff");
+        };
+        assert_eq!(target, PathBuf::from("/tmp").join(&file.filename));
     }
 
     #[test]
