@@ -12,9 +12,7 @@
 //! the Gist revision workflow's (`gist_revision`), not this module's. Eligibility guards
 //! (ownership, what is selected) stay with the screens that build the request.
 
-use super::bg::{
-    record_pin_sync, write_scratch_file, ActionJobKind, ActionJobSpec, Jobs, LoopFlow,
-};
+use super::bg::{write_scratch_file, ActionJobKind, ActionJobSpec, Jobs, LoopFlow};
 use super::{AppState, UploadDraft};
 use crate::domain::GistFileRef;
 use std::path::PathBuf;
@@ -315,10 +313,12 @@ fn apply(
     LoopFlow::Proceed
 }
 
-/// `UploadReplace` outcome: commit the pin-sync record for the local file's bytes on disk
-/// (the pin baseline, #465 — not the possibly redacted / transformed bytes sent), leave
-/// Confirm and any Diff it was opened from for the screen behind them (List, or Pins), then
-/// re-fetch the gist list. A failure stays on Confirm with the draft intact (#476).
+/// `UploadReplace` outcome: invalidate the uploaded file's content-store entry (this module's
+/// job — it applies to every file mutation, not just a push) and hand the rest to sync's one
+/// after-push follow-up ([`sync::on_push_done`](super::sync::on_push_done)): the pin baseline,
+/// the catalog's blob sha, the pin-sync cache flag, and leaving Confirm and any stale Diff for
+/// the screen behind them (List, or Pins). A failure stays on Confirm with the draft intact
+/// (#476).
 pub(crate) fn on_upload_replace(
     state: &mut AppState,
     result: Result<(), String>,
@@ -328,37 +328,8 @@ pub(crate) fn on_upload_replace(
     sent_content: &str,
 ) -> LoopFlow {
     apply(state, result, "upload", |state| {
-        state.leave();
-        // A Diff the upload was confirmed from now shows stale changes; skip past it, as a
-        // download from the Diff does (issue #520).
-        if state.screen.is_diff() {
-            state.leave();
-        }
         state.gist_content_store.invalidate_file(&file);
-        // The gist file's blob sha is now that of the bytes sent. Patch the baseline's remote
-        // side into the in-memory catalog so the pin reads as in sync before the refresh this
-        // upload triggers lands (issue #466); the refresh then publishes the same sha.
-        let baseline = crate::sync_baseline::SyncBaseline::after_sync(
-            local_content.as_bytes(),
-            sent_content.as_bytes(),
-        );
-        for g in state.gist_catalog.owned.iter_mut() {
-            if g.gist_id == file.gist_id && g.filename == file.filename {
-                if let Some(url) = g.raw_url.as_deref().and_then(|u| {
-                    crate::domain::raw_url_with_blob_sha(u, baseline.remote_blob_sha.as_deref()?)
-                }) {
-                    g.raw_url = Some(url);
-                }
-            }
-        }
-        record_pin_sync(
-            state,
-            local_path,
-            &file.gist_id,
-            &file.filename,
-            &baseline,
-            Some(crate::domain::SyncDirection::Upload),
-        );
+        super::sync::on_push_done(state, &file, local_path, local_content, sent_content);
         format!("Uploaded {} to gist {}", file.filename, file.gist_id)
     })
 }
@@ -484,7 +455,7 @@ pub(crate) fn on_fork_gist(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{PinnedMapping, SyncDirection};
+    use crate::domain::PinnedMapping;
     use crate::tui::test_support::gist_file_ref;
     use crate::tui::*;
     use std::sync::Arc;
@@ -920,32 +891,23 @@ mod tests {
         assert!(!state.gist_list_stale);
     }
 
+    /// This module's own share of an upload's success: invalidate the uploaded file's
+    /// content-store entry (it applies to every file mutation, not just a push) and mark the
+    /// list stale. What a pin ends up believing, and where the user lands, are sync's
+    /// (`sync::on_push_done`) — asserted on its own test surface (`src/tui/sync.rs`).
     #[test]
-    fn on_upload_replace_ok_records_pin_and_marks_list_stale() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let local_path = dir.path().join("a.txt");
-        std::fs::write(&local_path, "hello").unwrap();
-        let mapping = PinnedMapping::fixture(local_path.clone(), "g1", "a.txt");
-
-        let mut state = crate::tui::test_support::state_with_stored_pin(dir.path(), mapping);
+    fn on_upload_replace_ok_invalidates_content_and_marks_list_stale() {
+        let mut state = initial_state();
         let file = crate::domain::GistFileRef::id_name("g1", "a.txt");
         state.gist_content_store.insert(&file, "stale".into());
-        state.gist_catalog.owned = vec![crate::domain::GistFile {
-            raw_url: Some(
-                "https://gist.githubusercontent.com/u/g1/raw/1111111111111111111111111111111111111111/a.txt"
-                    .into(),
-            ),
-            ..crate::domain::GistFile::fixture("g1", "a.txt")
-        }];
-        // The local file is CRLF on disk; the upload sent LF.
+
         on_upload_replace(
             &mut state,
             Ok(()),
             gist_file_ref("g1", "a.txt"),
-            &local_path,
+            std::path::Path::new("/tmp/a.txt"),
             "hello",
-            "hello\n",
+            "hello",
         );
 
         assert!(state.gist_list_stale);
@@ -954,26 +916,81 @@ mod tests {
             state.gist_content_store.lookup(&state.gist_catalog, file),
             crate::tui::gist_content::ContentLookup::Miss(_)
         ));
-        assert_eq!(state.pinned[0].direction, Some(SyncDirection::Upload));
-        assert_eq!(
-            state.pinned[0].baseline.local_sha256.as_deref(),
-            Some(crate::domain::sha256_hex(b"hello").as_str())
+    }
+
+    /// Issue #526: a push of a pinned pair, run end to end through the mutation workflow
+    /// (`Jobs::inline` + `SeqRunner`), leaves the pin reading in sync and lands the user off
+    /// both Confirm and the Diff it was confirmed from — sync's landing rule, the same a
+    /// download uses.
+    #[test]
+    fn push_of_a_pinned_pair_leaves_it_in_sync_and_lands_off_confirm_and_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_path = dir.path().join("a.txt");
+        std::fs::write(&local_path, "hello").unwrap();
+        let mapping = PinnedMapping::fixture(local_path.clone(), "g1", "a.txt");
+        let mut state = crate::tui::test_support::state_with_stored_pin(dir.path(), mapping);
+        state.gist_catalog.owned = vec![crate::domain::GistFile {
+            raw_url: Some(
+                "https://gist.githubusercontent.com/u/g1/raw/1111111111111111111111111111111111111111/a.txt"
+                    .into(),
+            ),
+            ..crate::domain::GistFile::fixture("g1", "a.txt")
+        }];
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
+            "-old\n+hello\n".into(),
+            "old\n".into(),
+            local_path.clone(),
         );
-        // Issue #466: the remote baseline is the blob sha of the bytes sent, and the catalog
-        // already shows it, so the pin reads as in sync before the refresh lands.
-        let sent_sha = crate::domain::git_blob_sha1(b"hello\n");
-        assert_eq!(
-            state.pinned[0].baseline.remote_blob_sha.as_deref(),
-            Some(sent_sha.as_str())
+        state.enter_upload_confirm(
+            UploadDraft {
+                original_content: "hello".into(),
+                replaces: true,
+                ..UploadDraft::fixture("g1", "a.txt", &local_path)
+            },
+            None,
         );
-        assert_eq!(
-            state.catalog_blob_sha("g1", "a.txt"),
-            Some(sent_sha.as_str())
+        let draft = state.upload_draft().cloned().unwrap();
+
+        run(
+            &mut state,
+            &ok_runner(1),
+            MutationRequest::Upload(Box::new(draft)),
         );
+
+        assert_eq!(state.screen, Screen::List, "off Confirm and the Diff");
         assert_eq!(
             state.compute_pin_sync_status(0),
             crate::domain::SyncStatus::InSync
         );
+    }
+
+    /// A push of an unpinned pair touches no config: `record_pin_sync`'s in-memory gate
+    /// (`sync.rs`) keeps it from ever reaching `ConfigStore`, so an unconfigured store
+    /// (`initial_state`'s default) is no obstacle.
+    #[test]
+    fn push_of_an_unpinned_pair_touches_no_config() {
+        let mut state = initial_state();
+        state.gist_catalog.owned = vec![crate::domain::GistFile::fixture("g1", "a.txt")];
+        state.enter_upload_confirm(
+            UploadDraft {
+                original_content: "hello\n".into(),
+                replaces: true,
+                ..UploadDraft::fixture("g1", "a.txt", "/tmp/a.txt")
+            },
+            None,
+        );
+        let draft = state.upload_draft().cloned().unwrap();
+
+        run(
+            &mut state,
+            &ok_runner(1),
+            MutationRequest::Upload(Box::new(draft)),
+        );
+
+        assert_eq!(state.screen, Screen::List);
+        assert_eq!(state.status.as_deref(), Some("Uploaded a.txt to gist g1"));
+        assert!(state.pinned.is_empty());
     }
 
     #[test]
