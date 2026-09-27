@@ -440,6 +440,7 @@ pub(crate) fn confirm_key_rows(
 /// modal can never be one row short of what it draws.
 fn confirm_modal_body(
     prompt: &crate::tui::screens::confirm::ConfirmPromptVm,
+    status: Option<&str>,
     inner_width: u16,
     border: Color,
     theme: &Theme,
@@ -454,6 +455,7 @@ fn confirm_modal_body(
             Style::default().fg(theme.dim),
         )));
     }
+    rows = rows.saturating_add(push_confirm_status(&mut lines, status, inner_width, theme));
     let key_rows = confirm_key_rows(&prompt.keys, &prompt.options, inner_width, border);
     if !key_rows.is_empty() {
         // One blank row separates the question from the answer.
@@ -462,6 +464,25 @@ fn confirm_modal_body(
         lines.extend(key_rows);
     }
     (lines, rows)
+}
+
+/// A status set while Confirm is up (a failed gist change, a refused key): one blank row, then
+/// the message in the deletion colour — the user's `y` did not happen. Returns the rows added.
+fn push_confirm_status(
+    lines: &mut Vec<Line<'static>>,
+    status: Option<&str>,
+    inner_width: u16,
+    theme: &Theme,
+) -> u16 {
+    let Some(status) = status else {
+        return 0;
+    };
+    lines.push(Line::from(String::new()));
+    lines.push(Line::from(Span::styled(
+        status.to_string(),
+        Style::default().fg(theme.del_color),
+    )));
+    1 + wrap_line_count(status, inner_width)
 }
 
 /// Centered modal rect for a confirm body of `body_rows` laid-out rows. Width follows
@@ -495,12 +516,13 @@ pub(crate) fn render_confirm_modal(
     frame: &mut Frame,
     title: &str,
     prompt: &crate::tui::screens::confirm::ConfirmPromptVm,
+    status: Option<&str>,
     border: Color,
     theme: &Theme,
 ) -> Rect {
     let area = frame.area();
     let inner_width = confirm_modal_width(area).saturating_sub(CONFIRM_MODAL_CHROME);
-    let (lines, rows) = confirm_modal_body(prompt, inner_width, border, theme);
+    let (lines, rows) = confirm_modal_body(prompt, status, inner_width, border, theme);
     let rect = centered_confirm_rect(area, rows);
     frame.render_widget(Clear, rect);
     frame.render_widget(

@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Confirming an upload no longer overwrites a gist file that appeared since the preview showed
   it as a new file. If the gist changed after the preview, the upload stops and asks you to
   press `u` to preview it again.
+- When an upload, delete, file removal, compaction, or revision restore fails, its confirmation
+  now shows the error; it used to stay open with no sign that anything had gone wrong. A key
+  refused there (such as `y` while the editor is still open) says why the same way.
 
 ## [0.23.1] — 2026-09-27
 
