@@ -30,6 +30,9 @@ pub(crate) struct ConfirmVm {
     pub border: Color,
     pub kind: ConfirmModalKind,
     pub background: ConfirmBackgroundVm,
+    /// A status set while Confirm is open — a failed gist change (#476) or a refused key.
+    /// Painted by the prompt modal only: a failed create leaves the description editor.
+    pub status: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -325,9 +328,10 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
             border: theme.notice_color,
             kind: ConfirmModalKind::Prompt(ConfirmPromptVm::default()),
             background: ConfirmBackgroundVm::Empty,
+            status: None,
         };
     };
-    match action {
+    let mut vm = match action {
         PendingAction::Download => ConfirmVm {
             title: "Overwrite",
             border: theme.del_color,
@@ -341,12 +345,14 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
                 options: Vec::new(),
             }),
             background: diff_background(state),
+            status: None,
         },
         PendingAction::Upload(draft) => ConfirmVm {
             title: "Upload",
             border: theme.notice_color,
             kind: ConfirmModalKind::Prompt(upload_prompt(state, draft)),
             background: diff_background(state),
+            status: None,
         },
         // Two steps, one row: the description editor first, then the visibility choice.
         PendingAction::Create { .. } if state.editing_description => ConfirmVm {
@@ -358,6 +364,7 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
                 keys: description_input_keys(),
             },
             background: diff_background(state),
+            status: None,
         },
         PendingAction::Create { local_path } => ConfirmVm {
             title: "Create gist",
@@ -380,6 +387,7 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
                 options: Vec::new(),
             }),
             background: diff_background(state),
+            status: None,
         },
         PendingAction::Delete { gist_id, label } => ConfirmVm {
             title: "Delete",
@@ -391,6 +399,7 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
                 options: Vec::new(),
             }),
             background: diff_background(state),
+            status: None,
         },
         PendingAction::RemoveFile {
             gist_id, filename, ..
@@ -404,6 +413,7 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
                 options: Vec::new(),
             }),
             background: diff_background(state),
+            status: None,
         },
         PendingAction::CompactGist {
             gist_id,
@@ -423,6 +433,7 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
                 Some(bg) => ConfirmBackgroundVm::CompactGist(bg),
                 None => ConfirmBackgroundVm::Empty,
             },
+            status: None,
         },
         PendingAction::RestoreRevision {
             filename,
@@ -438,8 +449,13 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
                 options: Vec::new(),
             }),
             background: diff_background(state),
+            status: None,
         },
-    }
+    };
+    // A key refused, or a gist change that failed, reports while Confirm is still up (#476):
+    // paint it in the modal, where the user is looking.
+    vm.status = state.status.clone();
+    vm
 }
 
 /// The upload question: a spinner while the external editor is still open, otherwise the
@@ -497,9 +513,10 @@ fn on_off(flag: bool) -> &'static str {
 
 /// `Screen::Confirm`: the diff fills the screen as context behind a centered prompt modal,
 /// keeping the overwrite gate's diff visible while the question is asked front-and-centre.
-/// #72 audit: this modal intentionally does not surface `state.status`. It is a transient y/n
-/// gate — confirming executes the action and transitions to `List`/`Gists`, where the result
-/// status is shown; cancelling returns to the launching screen without setting a status here.
+/// A successful action leaves Confirm and reports on the screen it lands on; cancelling sets no
+/// status. What stays is a status set while Confirm is up — a gist change that failed (#476
+/// keeps the user here, input intact) or a refused key — and the modal paints it (`status`),
+/// since Confirm has no footer. This replaces #72's "never surface a status here".
 pub(crate) fn render_confirm_vm(
     frame: &mut Frame,
     state: &AppState,
@@ -544,6 +561,7 @@ pub(crate) fn render_confirm_vm(
             frame,
             confirm.title,
             prompt,
+            confirm.status.as_deref(),
             confirm.border,
             &state.settings.theme(),
         ),
@@ -959,6 +977,31 @@ mod tests {
             prompt.keys.iter().map(|k| k.key).collect::<Vec<_>>(),
             ["n"],
             "upload and edit are unavailable while the editor is open"
+        );
+    }
+
+    /// Confirm has no footer, so a status set while it is up — here a refused `y` — is part
+    /// of the modal. A status from before Confirm opened is not.
+    #[test]
+    fn confirm_vm_shows_only_a_status_set_while_confirm_is_up() {
+        let mut state = initial_state();
+        state.set_status("Downloaded a.txt");
+        set_pending(
+            &mut state,
+            PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "a",
+                "notes.txt",
+                PathBuf::from("/tmp/notes.txt"),
+            ))),
+        );
+        assert_eq!(confirm_vm(&state).status, None);
+
+        state.upload_draft_mut().unwrap().watching = true;
+        state.handle_key(KeyCode::Char('y'));
+
+        assert_eq!(
+            confirm_vm(&state).status.as_deref(),
+            Some("editor still open — finish editing first")
         );
     }
 

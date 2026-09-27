@@ -833,6 +833,12 @@ mod tests {
                 "{name}: {:?}",
                 state.status
             );
+            // Confirm has no footer: the modal itself says why `y` didn't happen.
+            let shown = crate::tui::screens::confirm::build_confirm_vm(&state).status;
+            assert!(
+                shown.as_deref().is_some_and(|s| s.contains("HTTP 502")),
+                "{name}: modal shows {shown:?}"
+            );
         }
     }
 
