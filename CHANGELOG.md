@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] — 2026-09-27
+
 - On the Pins screen, `u` on a pin whose gist file is gone from the gist now offers to add it
   back, as `u` on the List does, instead of failing to fetch it. `Enter` on a pin whose local
   file is missing opens the diff against an empty file instead of reporting a read error.
@@ -367,7 +369,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.23.1...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.24.0...HEAD
+[0.24.0]: https://github.com/akunzai/gistui/releases/tag/v0.24.0
 [0.23.1]: https://github.com/akunzai/gistui/releases/tag/v0.23.1
 [0.23.0]: https://github.com/akunzai/gistui/releases/tag/v0.23.0
 [0.22.0]: https://github.com/akunzai/gistui/releases/tag/v0.22.0
