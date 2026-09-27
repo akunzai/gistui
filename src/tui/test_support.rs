@@ -86,6 +86,48 @@ pub(super) fn set_diff_body(state: &mut AppState, text: impl Into<String>) {
     }));
 }
 
+/// Open a sync Diff as production does (#524): `local` against gist `g1`'s file of the same
+/// name, `remote` being the fetched gist side.
+pub(super) fn enter_sync_diff(
+    state: &mut AppState,
+    text: String,
+    remote: String,
+    local: std::path::PathBuf,
+) {
+    let filename = local
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_string();
+    state.status = None;
+    state.enter(Screen::Diff(Box::new(DiffState {
+        body: ScrollBody {
+            text,
+            ..ScrollBody::default()
+        },
+        identical: false,
+        kind: crate::tui::DiffKind::Sync {
+            pair: crate::domain::SyncPair {
+                local,
+                gist: crate::domain::GistFileRef::id_name("g1", filename),
+            },
+            remote,
+        },
+    })));
+}
+
+/// Open a read-only revision Diff, as the Revisions screen does.
+pub(super) fn enter_revision_diff(state: &mut AppState, text: String) {
+    state.status = None;
+    state.enter(Screen::Diff(Box::new(DiffState {
+        body: ScrollBody {
+            text,
+            ..ScrollBody::default()
+        },
+        ..DiffState::default()
+    })));
+}
+
 pub(super) fn set_diff_scroll(state: &mut AppState, scroll: u16) {
     if matches!(state.screen, Screen::Diff(_) | Screen::Confirm(_)) {
         if let Some(body) = state.scroll_body_mut() {

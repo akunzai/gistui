@@ -630,37 +630,29 @@ pub struct PreviewState {
 }
 
 /// Unified-diff view — carried on [`Screen::Diff`] (issue #242).
-/// Owns body, scroll, pairing paths, and optional pin gist identity so inactive Diff
-/// state cannot linger on the root (including while parked under Confirm).
+/// Owns body, scroll, and what kind of comparison it is, so inactive Diff state cannot linger
+/// on the root (including while parked under Confirm).
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DiffState {
     pub body: ScrollBody,
-    /// Remote file body (download source content).
-    pub remote_content: String,
-    /// Local path paired in the diff (empty for revision-only comparisons).
-    pub local_path: PathBuf,
-    /// Path a download would write to.
-    pub download_target: PathBuf,
-    /// True when local and remote content compare equal under config rules.
+    /// True when the two sides compare equal under the Sync policy.
     pub identical: bool,
-    /// The gist file on the other side of a local↔gist Diff (absent for revision-only
-    /// comparisons). A download records a pinned pair's baseline through it, whichever
-    /// screen opened the Diff (issue #494).
-    pub gist_id: Option<String>,
-    pub gist_filename: Option<String>,
-    /// Which screen opened the Diff, deciding what `u` uploads (issue #494).
-    pub origin: DiffOrigin,
+    pub kind: DiffKind,
 }
 
-/// Where a local↔gist [`DiffState`] was opened from.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum DiffOrigin {
-    /// The List panes: `u` uploads the selected pair under the local file's name.
+/// What a Diff compares (issue #524). Only a sync Diff offers `d` / `u`, and they write
+/// exactly the two files it shows — whichever screen opened it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum DiffKind {
+    /// Two revisions of one gist file: read-only.
     #[default]
-    List,
-    /// The Pins screen: `u` uploads to the pin's own gist file, whose name may differ from
-    /// the local file's.
-    Pin,
+    Revision,
+    /// A local file against a gist file. `remote` is the gist side as fetched — what `d`
+    /// writes without fetching again.
+    Sync {
+        pair: crate::domain::SyncPair,
+        remote: String,
+    },
 }
 
 /// Confirm modal — carried on [`Screen::Confirm`] (issue #242).
@@ -1541,15 +1533,6 @@ impl AppState {
         true
     }
 
-    /// True when the diff view supports local↔gist download/upload (`d`/`u`). Revision-history
-    /// diffs (returning to `Screen::Revisions`) are read-only comparisons. Checks the top of
-    /// `nav_stack` directly (not [`Self::diff`]'s deep search) — this only makes sense while
-    /// Diff is the live screen, so it's the immediate parent, not wherever else Diff might be
-    /// parked.
-    pub fn diff_allows_sync(&self) -> bool {
-        !self.nav_stack.last().is_some_and(Screen::is_revisions)
-    }
-
     pub fn group_by_id(&self, gist_id: &str) -> Option<GistGroup> {
         let files: Vec<GistFile> = self
             .all_gist_files()
@@ -1584,90 +1567,62 @@ impl AppState {
         }
     }
 
-    /// Upload intent shared by the list and the diff screen: requires a selected local file
-    /// and gist, then branches on whether the gist already holds a file of the local name
-    /// (case C: preview + confirm overwrite) or not (case B: add directly).
-    /// True when we're in a Diff the Pins screen opened (pin diff or pin pull). Upload then
-    /// uses the Diff's own pair — the pin's local path and gist file — instead of the List
-    /// selection, which may point elsewhere.
-    pub fn is_pin_diff_context(&self) -> bool {
-        self.diff().is_some_and(|d| d.origin == DiffOrigin::Pin)
-    }
-
+    /// Upload intent shared by the list and the diff screen. In a sync Diff it uploads to the
+    /// Diff's own gist file — the one it shows (#524). On the List it needs a selected local
+    /// file and gist, and uploads under the local file's name. Either way it branches on
+    /// whether the gist already holds that file (preview + confirm overwrite) or not (add).
     fn upload_intent(&mut self) -> KeyOutcome {
-        if let Some(gist) = self.selected_gist() {
-            if self.block_if_foreign_gist(&gist.file.gist_id, false) {
+        let target_gist = match self.sync_pair() {
+            Some(pair) => Some(pair.gist.gist_id.clone()),
+            None => self.selected_gist().map(|gist| gist.file.gist_id.clone()),
+        };
+        if let Some(gist_id) = target_gist {
+            if self.block_if_foreign_gist(&gist_id, false) {
                 return KeyOutcome::None;
             }
         }
-        if self.is_pin_diff_context() {
-            let local_path = self.preview_local();
-            let Some(local_filename) = local_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(String::from)
-            else {
-                self.status = Some("local file has no name".into());
-                return KeyOutcome::None;
-            };
-            let gist_id = self.download_gist_id().unwrap_or_default().to_string();
-            // The pin's gist file, which may be named differently from the local file (#494).
-            let filename = self
-                .download_gist_filename()
-                .map(String::from)
-                .unwrap_or(local_filename);
-            let raw_url = self.gist_file_raw_url(&gist_id, &filename);
-            let exists = self
-                .gist_catalog
-                .owned
-                .iter()
-                .any(|g| g.gist_id == gist_id && g.filename == filename);
-            return if exists {
-                KeyOutcome::UploadPreview {
-                    entry: self.defer_entry(),
-                    local_path,
-                    file: GistFileRef::new(gist_id, filename, raw_url),
+        let pair = match self.sync_pair().cloned() {
+            Some(pair) => pair,
+            None => {
+                let (Some(local), Some(gist)) = self.selected_pair() else {
+                    self.status = Some("select a local file and a gist to upload".into());
+                    return KeyOutcome::None;
+                };
+                let Some(local_filename) = local
+                    .path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(String::from)
+                else {
+                    self.status = Some("local file has no name".into());
+                    return KeyOutcome::None;
+                };
+                // On the List panes `u` uploads under the local file's name.
+                crate::domain::SyncPair {
+                    local: local.path.clone(),
+                    gist: GistFileRef::id_name(gist.file.gist_id.clone(), local_filename),
                 }
-            } else {
-                KeyOutcome::UploadAdd {
-                    local_path,
-                    gist_id,
-                    filename,
-                }
-            };
-        }
-        let (Some(local), Some(gist)) = self.selected_pair() else {
-            self.status = Some("select a local file and a gist to upload".into());
-            return KeyOutcome::None;
+            }
         };
-        let Some(local_filename) = local
-            .path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(String::from)
-        else {
-            self.status = Some("local file has no name".into());
-            return KeyOutcome::None;
-        };
-        let local_path = local.path.clone();
-        let gist_id = gist.file.gist_id.clone();
-        let raw_url = gist.file.raw_url.clone();
-        let has_same_name = self
+        let crate::domain::SyncPair { local, gist } = pair;
+        let exists = self
             .gist_catalog
             .owned
             .iter()
-            .any(|g| g.gist_id == gist_id && g.filename == local_filename);
-        if has_same_name {
+            .any(|g| g.gist_id == gist.gist_id && g.filename == gist.filename);
+        if exists {
+            // The raw URL of the file this uploads to, not of the one selected (#524).
+            let raw_url = self.gist_file_raw_url(&gist.gist_id, &gist.filename);
             KeyOutcome::UploadPreview {
                 entry: self.defer_entry(),
-                local_path,
-                file: GistFileRef::new(gist_id, local_filename, raw_url),
+                local_path: local,
+                file: GistFileRef::new(gist.gist_id, gist.filename, raw_url),
             }
         } else {
             KeyOutcome::UploadAdd {
-                local_path,
-                gist_id,
-                filename: local_filename,
+                local_path: local,
+                gist_id: gist.gist_id,
+                filename: gist.filename,
             }
         }
     }
@@ -1721,29 +1676,6 @@ impl AppState {
         }
     }
 
-    pub fn enter_diff(
-        &mut self,
-        diff_text: String,
-        remote: String,
-        local: PathBuf,
-        target: PathBuf,
-    ) {
-        self.status = None;
-        self.enter(Screen::Diff(Box::new(DiffState {
-            body: ScrollBody {
-                text: diff_text,
-                ..ScrollBody::default()
-            },
-            remote_content: remote,
-            local_path: local,
-            download_target: target,
-            identical: false,
-            gist_id: None,
-            gist_filename: None,
-            origin: DiffOrigin::List,
-        })));
-    }
-
     /// True while a Diff payload is live (active Diff or parked under Confirm).
     pub fn diff_previewed(&self) -> bool {
         self.diff().is_some()
@@ -1754,28 +1686,12 @@ impl AppState {
         self.diff().is_some_and(|d| d.identical)
     }
 
-    pub fn download_target(&self) -> PathBuf {
-        self.diff()
-            .map(|d| d.download_target.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn preview_local(&self) -> PathBuf {
-        self.diff()
-            .map(|d| d.local_path.clone())
-            .unwrap_or_default()
-    }
-
-    pub fn preview_remote(&self) -> &str {
-        self.diff().map(|d| d.remote_content.as_str()).unwrap_or("")
-    }
-
-    pub fn download_gist_id(&self) -> Option<&str> {
-        self.diff().and_then(|d| d.gist_id.as_deref())
-    }
-
-    pub fn download_gist_filename(&self) -> Option<&str> {
-        self.diff().and_then(|d| d.gist_filename.as_deref())
+    /// The Sync pair of the open (or parked) Diff; `None` for a revision Diff.
+    pub fn sync_pair(&self) -> Option<&crate::domain::SyncPair> {
+        match &self.diff()?.kind {
+            DiffKind::Sync { pair, .. } => Some(pair),
+            DiffKind::Revision => None,
+        }
     }
 
     pub fn back_to_list(&mut self) {

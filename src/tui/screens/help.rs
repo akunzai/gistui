@@ -420,7 +420,8 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
   PageUp/Dn  scroll the diff by 10 lines (also Ctrl+b / Ctrl+f)
   w          toggle soft line wrapping (remembered for the session)
   c          toggle context: configured radius <-> full file (remembered)
-  d / u      download / upload from the diff
+  d / u      download over the local file / upload to the gist file the diff shows
+             (not offered in a revision diff)
   syntax     unchanged context lines are syntax-highlighted by file type
   newline    a file-final-newline-only difference counts as identical
              (set ignore_trailing_newline = false for byte-exact diffs)

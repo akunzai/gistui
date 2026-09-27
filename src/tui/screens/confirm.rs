@@ -338,7 +338,12 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
             kind: ConfirmModalKind::Prompt(ConfirmPromptVm {
                 question: format!(
                     "Overwrite {}?",
-                    crate::config::display_path(&state.download_target())
+                    crate::config::display_path(
+                        &state
+                            .sync_pair()
+                            .map(|p| p.local.clone())
+                            .unwrap_or_default()
+                    )
                 ),
                 detail: Some("The local file is replaced with the gist's content.".to_string()),
                 keys: vec![cancel(), ConfirmKeyVm::new("y", "overwrite")],
@@ -487,8 +492,17 @@ fn upload_prompt(state: &AppState, draft: &crate::tui::UploadDraft) -> ConfirmPr
     } else {
         Vec::new()
     };
+    // A pair may name its two files differently (a pin, or a List Diff — #524): then say
+    // which local file goes into which gist file.
+    let local_name = draft.local_path.file_name().and_then(|n| n.to_str());
+    let question = match local_name {
+        Some(local) if local != filename => {
+            format!("Upload {local} to gist {gist_id} as {filename}?")
+        }
+        _ => format!("Upload {filename} to gist {gist_id}?"),
+    };
     ConfirmPromptVm {
-        question: format!("Upload {filename} to gist {gist_id}?"),
+        question,
         detail: None,
         keys: vec![
             ConfirmKeyVm::new("y", "upload"),
@@ -758,10 +772,10 @@ mod tests {
                 .collect::<Vec<_>>()
         };
 
-        state.enter_diff(
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
             String::new(),
             String::new(),
-            PathBuf::new(),
             PathBuf::from("notes.txt"),
         );
         state.enter_confirm_from_diff(PendingAction::Download);
@@ -806,6 +820,27 @@ mod tests {
         );
         let prompt = prompt_vm(&state);
         assert_eq!(prompt.question, "Upload main.rs to gist g1?");
+        // A pair naming its files differently (#524) says which goes into which.
+        set_pending(
+            &mut state,
+            PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "g1",
+                "zshrc",
+                PathBuf::from("/home/u/.zshrc"),
+            ))),
+        );
+        assert_eq!(
+            prompt_vm(&state).question,
+            "Upload .zshrc to gist g1 as zshrc?"
+        );
+        set_pending(
+            &mut state,
+            PendingAction::Upload(Box::new(crate::tui::UploadDraft::fixture(
+                "g1",
+                "main.rs",
+                PathBuf::from("main.rs"),
+            ))),
+        );
         // Not destructive: the action's own verb leads, and a non-JSON file offers no toggles.
         assert_eq!(keys(&state), ["y upload", "n cancel", "e edit first"]);
         assert!(prompt.options.is_empty());
@@ -1221,10 +1256,10 @@ mod tests {
     #[test]
     fn confirm_y_returns_download() {
         let mut state = initial_state();
-        state.enter_diff(
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
             "d".into(),
             "r".into(),
-            PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
         set_pending(&mut state, PendingAction::Download);
@@ -1239,10 +1274,10 @@ mod tests {
     #[test]
     fn confirm_n_returns_to_diff() {
         let mut state = initial_state();
-        state.enter_diff(
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
             "d".into(),
             "r".into(),
-            PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
         set_pending(&mut state, PendingAction::Download);
@@ -1253,10 +1288,10 @@ mod tests {
     #[test]
     fn confirm_esc_returns_to_diff() {
         let mut state = initial_state();
-        state.enter_diff(
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
             "d".into(),
             "r".into(),
-            PathBuf::from("/tmp/x"),
             PathBuf::from("/tmp/x"),
         );
         set_pending(&mut state, PendingAction::Download);
@@ -1798,10 +1833,10 @@ mod tests {
     #[test]
     fn confirm_vm_overwrite_download() {
         let mut state = initial_state();
-        state.enter_diff(
+        crate::tui::test_support::enter_sync_diff(
+            &mut state,
             String::new(),
             String::new(),
-            PathBuf::new(),
             PathBuf::from("notes.txt"),
         );
         state.enter_confirm_from_diff(PendingAction::Download);

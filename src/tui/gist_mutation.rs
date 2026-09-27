@@ -860,10 +860,10 @@ mod tests {
             let mut state = initial_state();
             state.gist_catalog.owned = vec![GistFile::fixture("g1", "a.txt")];
             open(&mut state);
-            state.enter_diff(
+            crate::tui::test_support::enter_sync_diff(
+                &mut state,
                 "-a\n+b\n".into(),
                 "a\n".into(),
-                "/tmp/a.txt".into(),
                 "/tmp/a.txt".into(),
             );
             state.enter_upload_confirm(UploadDraft::fixture("g1", "a.txt", "/tmp/a.txt"), None);
