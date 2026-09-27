@@ -576,6 +576,7 @@ pub(crate) fn on_upload_preview(
                 remote,
                 local_label,
                 gist_label,
+                true,
             ) {
                 Ok(draft)
                     if state
@@ -1550,7 +1551,7 @@ mod tests {
         assert!(matches!(
             state.pending_action(),
             Some(PendingAction::Upload(d))
-                if d.gist_id == "g1" && d.filename == "a.txt"
+                if d.gist_id == "g1" && d.filename == "a.txt" && d.replaces
         ));
     }
 

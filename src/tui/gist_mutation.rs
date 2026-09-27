@@ -22,8 +22,8 @@ use std::path::PathBuf;
 /// One gist mutation, as plain data captured when the user acted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MutationRequest {
-    /// Upload the draft's content to its gist file (replacing it, or adding it when the
-    /// catalog has no such file yet).
+    /// Upload the draft's content to its gist file: replace it, or add it as new, as the
+    /// preview decided (`UploadDraft::replaces`).
     Upload(Box<UploadDraft>),
     /// Create a gist from a local file.
     Create {
@@ -104,10 +104,25 @@ struct Staged {
     apply: Apply,
 }
 
+/// Status when the gist no longer matches what an upload's preview showed (#523).
+pub(crate) const GIST_CHANGED_SINCE_PREVIEW: &str =
+    "gist changed since the preview — press n, then u to preview again";
+
 fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
     use crate::actions::*;
     let staged = match request.clone() {
         MutationRequest::Upload(draft) => {
+            // A catalog refresh may have landed since the preview (#523). Send only what the
+            // user saw: a replace of the file they diffed, or an add of a file new to the gist.
+            let has_same_name = state
+                .gist_catalog
+                .owned
+                .iter()
+                .any(|g| g.gist_id == draft.gist_id && g.filename == draft.filename);
+            if has_same_name != draft.replaces {
+                state.set_status(GIST_CHANGED_SINCE_PREVIEW);
+                return None;
+            }
             let sent = draft.content(&state.settings);
             // The pin baseline is the local file on disk, not the bytes sent (#465).
             let local_content = draft.original_content.clone();
@@ -118,13 +133,8 @@ fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
                 "temp file",
                 sent.as_bytes(),
             )?;
-            let has_same_name = state
-                .gist_catalog
-                .owned
-                .iter()
-                .any(|g| g.gist_id == draft.gist_id && g.filename == draft.filename);
             let file = GistFileRef::id_name(draft.gist_id.clone(), draft.filename.clone());
-            let plan = if has_same_name {
+            let plan = if draft.replaces {
                 upload_command(&path, &file.to_gist_file())
             } else {
                 upload_add_command(&path, &file.gist_id)
@@ -603,6 +613,7 @@ mod tests {
         state.enter_upload_confirm(
             UploadDraft {
                 original_content: "hello\n".into(),
+                replaces: false,
                 ..UploadDraft::fixture("g1", "new.txt", "/tmp/new.txt")
             },
             None,
@@ -625,6 +636,44 @@ mod tests {
             calls[0].args
         );
         assert!(calls[0].args.last().unwrap().ends_with("new.txt"));
+    }
+
+    /// Issue #523: a catalog refresh can land while the upload Confirm is open. If the gist
+    /// no longer matches what the preview showed — a "new file" that now exists, or a file
+    /// to replace that is now gone — nothing is sent, and the user stays on the Confirm.
+    #[test]
+    fn upload_stops_when_the_gist_changed_since_the_preview() {
+        for (replaces, owned) in [
+            (false, vec![GistFile::fixture("g1", "a.txt")]),
+            (true, vec![]),
+        ] {
+            let mut state = initial_state();
+            state.gist_catalog.owned = owned;
+            state.enter_upload_confirm(
+                UploadDraft {
+                    original_content: "hello\n".into(),
+                    replaces,
+                    ..UploadDraft::fixture("g1", "a.txt", "/tmp/a.txt")
+                },
+                None,
+            );
+            let draft = state.upload_draft().cloned().unwrap();
+            let runner = ok_runner(0);
+
+            run(
+                &mut state,
+                &runner,
+                MutationRequest::Upload(Box::new(draft)),
+            );
+
+            assert!(runner.calls().is_empty(), "replaces={replaces}");
+            assert!(state.screen.is_confirm(), "replaces={replaces}");
+            assert_eq!(
+                state.status.as_deref(),
+                Some(GIST_CHANGED_SINCE_PREVIEW),
+                "replaces={replaces}"
+            );
+        }
     }
 
     /// Issue #477: a non-UTF-8 file name can't reach `gh` (plans are text) or GitHub, so the
@@ -673,6 +722,7 @@ mod tests {
     #[test]
     fn success_leaves_and_failure_stays_where_the_user_confirmed() {
         fn upload(state: &mut AppState) -> MutationRequest {
+            state.gist_catalog.owned = vec![GistFile::fixture("g1", "a.txt")];
             state.enter(Screen::Pins(Box::default()));
             state.enter_upload_confirm(
                 UploadDraft {
@@ -796,6 +846,7 @@ mod tests {
         ];
         for (name, open, landed) in cases {
             let mut state = initial_state();
+            state.gist_catalog.owned = vec![GistFile::fixture("g1", "a.txt")];
             open(&mut state);
             state.enter_diff(
                 "-a\n+b\n".into(),

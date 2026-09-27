@@ -24,6 +24,11 @@ pub struct UploadDraft {
     pub remote_content: String,
     pub local_label: String,
     pub gist_label: String,
+    /// Whether this upload replaces a gist file the preview showed (`true`) or adds a file
+    /// new to the gist (`false`), fixed when the upload was previewed. Confirming must send
+    /// what the user saw: if the gist changed since, the upload stops instead of switching
+    /// (#523).
+    pub replaces: bool,
     /// True while a GUI-editor background watch (see `bg::spawn_upload_edit_watch`) is
     /// live-updating the diff. Gates `y`/`e` on Confirm: the upload can't be confirmed, and a
     /// second editor instance can't be spawned, until the editor closes.
@@ -41,6 +46,7 @@ impl UploadDraft {
         remote_content: String,
         local_label: String,
         gist_label: String,
+        replaces: bool,
     ) -> std::io::Result<Self> {
         // Cap before buffering: multi-GB locals must not be read into the redact buffer.
         crate::domain::ensure_text_size(remote_content.len() as u64)
@@ -58,6 +64,7 @@ impl UploadDraft {
             remote_content,
             local_label,
             gist_label,
+            replaces,
             watching: false,
         })
     }
@@ -107,6 +114,7 @@ impl UploadDraft {
             remote_content: String::new(),
             local_label: String::new(),
             gist_label: String::new(),
+            replaces: true,
             watching: false,
         }
     }
@@ -184,6 +192,7 @@ mod tests {
             String::new(),
             "local".into(),
             "gist".into(),
+            true,
         );
         assert!(result.is_err());
     }
