@@ -207,7 +207,7 @@ impl AppState {
 
     /// Translate a classified mouse intent into a state change, reusing existing keyboard
     /// logic. Pure (no IO, no clock); returns a `KeyOutcome` so `run_loop` can perform any
-    /// follow-up IO (e.g. `PreviewDiff` on double-click).
+    /// follow-up IO (e.g. a sync compare on double-click).
     pub fn handle_mouse(&mut self, input: MouseInput, layout: &MouseFrame) -> KeyOutcome {
         if input == MouseInput::Release {
             self.mouse_session.interrupt();

@@ -2,7 +2,6 @@
 //! one file (issue #287, Phase 2; issue #383).
 
 use crate::tui::bg::LoopFlow;
-use crate::tui::gist_content::GistContentStore;
 use crate::tui::gist_mutation::MutationRequest;
 use crate::tui::render::{gist_info_line, unix_now};
 use crate::tui::screens::diff::DiffVm;
@@ -12,7 +11,6 @@ use crate::tui::{
 use crossterm::event::KeyCode;
 use ratatui::style::Color;
 use ratatui::Frame;
-use std::path::PathBuf;
 
 /// Compact-gist confirm background (info + file list).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -137,18 +135,6 @@ pub(crate) fn help_topic() -> HelpTopic {
 
 pub(crate) fn wheel_step() -> usize {
     3
-}
-
-/// Stage an upload preview before dispatch fetches the current gist content.
-pub(crate) fn stage_upload_preview(
-    state: &mut AppState,
-    local_path: PathBuf,
-    file: crate::domain::GistFileRef,
-) -> (crate::domain::GistFileRef, String, String) {
-    let gist_file = state.gist_file_for_diff(&file);
-    let (local_label, gist_label) = crate::tui::render::diff_labels(Some(&local_path), &gist_file);
-    let file = GistContentStore::fetch_target(&state.gist_catalog, file);
-    (file, local_label, gist_label)
 }
 
 impl AppState {
@@ -587,59 +573,6 @@ pub(crate) fn render_confirm_vm(
     }
 }
 
-/// `UploadPreview` outcome: stage the pending Upload action and open Confirm with the
-/// local-vs-gist diff — unless the two sides are already identical under the Sync policy,
-/// when there is nothing to send: stay put and confirm the pair's baseline (#493).
-pub(crate) fn on_upload_preview(
-    state: &mut AppState,
-    entry: crate::tui::DeferredEntry,
-    result: std::result::Result<String, String>,
-    file: crate::domain::GistFileRef,
-    local_path: PathBuf,
-    local_label: String,
-    gist_label: String,
-) -> LoopFlow {
-    match result {
-        Ok(remote) => {
-            match crate::tui::UploadDraft::read(
-                file.gist_id,
-                file.filename,
-                local_path.clone(),
-                remote,
-                local_label,
-                gist_label,
-                true,
-            ) {
-                Ok(draft)
-                    if state
-                        .settings
-                        .sync_policy()
-                        .identical(&draft.original_content, &draft.remote_content) =>
-                {
-                    state.set_status("already in sync — nothing to upload");
-                    crate::tui::bg::confirm_sync_baseline(
-                        state,
-                        &draft.local_path,
-                        &crate::domain::GistFileRef::id_name(draft.gist_id, draft.filename),
-                        &draft.original_content,
-                        &draft.remote_content,
-                    );
-                }
-                Ok(draft) => state.enter_upload_confirm(draft, Some(entry)),
-                Err(error) => {
-                    state.set_status(format!(
-                        "cannot read {}: {error}",
-                        crate::config::display_path(&local_path)
-                    ));
-                }
-            }
-        }
-        Err(error) => state.set_status(format!("fetch failed: {error}")),
-    }
-
-    LoopFlow::Proceed
-}
-
 /// `CompactAnalyze` outcome: a single-revision gist has nothing to compact; otherwise open
 /// the Confirm warning before compacting.
 pub(crate) fn on_compact_analyze(
@@ -733,8 +666,8 @@ pub(crate) fn on_restore_revision_ready(
 mod tests {
     use super::*;
     use crate::tui::test_support::{
-        detail_mut, gist_file_ref, gists_mut, pins_mut, set_diff_body, set_pending,
-        state_ready_to_create, state_with_gists,
+        detail_mut, gists_mut, pins_mut, set_diff_body, set_pending, state_ready_to_create,
+        state_with_gists,
     };
     use crate::tui::*;
     use crossterm::event::KeyCode;
@@ -1056,20 +989,6 @@ mod tests {
             prompt.keys.iter().map(|k| k.key).collect::<Vec<_>>(),
             ["s", "p", "Esc"]
         );
-    }
-
-    #[test]
-    fn stage_upload_preview_falls_back_to_list_raw_url() {
-        let mut state = state_with_gists();
-        state.gist_catalog.owned[0].raw_url = Some("https://example.test/a.txt".into());
-        let file = gist_file_ref("g1", "a.txt");
-
-        let (file, local_label, gist_label) =
-            stage_upload_preview(&mut state, PathBuf::from("/tmp/a.txt"), file);
-
-        assert_eq!(file.raw_url.as_deref(), Some("https://example.test/a.txt"));
-        assert!(local_label.starts_with("local: a.txt"));
-        assert!(gist_label.starts_with("gist g1 / a.txt"));
     }
 
     fn upload_pending(gist_id: &str, filename: &str) -> PendingAction {
@@ -1589,83 +1508,6 @@ mod tests {
                 description: "hi".into(),
             })
         );
-    }
-
-    #[test]
-    fn on_upload_preview_err_sets_status() {
-        let mut state = initial_state();
-
-        on_upload_preview(
-            &mut state,
-            initial_state().defer_entry(),
-            Err("boom".into()),
-            gist_file_ref("g1", "a.txt"),
-            PathBuf::from("a.txt"),
-            "local".into(),
-            "gist".into(),
-        );
-
-        assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
-    }
-
-    #[test]
-    fn on_upload_preview_ok_enters_confirm() {
-        let dir = tempfile::tempdir().unwrap();
-        let local_path = dir.path().join("a.txt");
-        std::fs::write(&local_path, "local body").unwrap();
-        let mut state = initial_state();
-
-        on_upload_preview(
-            &mut state,
-            initial_state().defer_entry(),
-            Ok("remote body".into()),
-            gist_file_ref("g1", "a.txt"),
-            local_path.clone(),
-            "local".into(),
-            "gist".into(),
-        );
-
-        assert!(state.screen.is_confirm());
-        assert!(matches!(
-            state.pending_action(),
-            Some(PendingAction::Upload(d))
-                if d.gist_id == "g1" && d.filename == "a.txt" && d.replaces
-        ));
-    }
-
-    /// Issue #493: an upload whose two sides are already identical under the Sync policy
-    /// opens no Confirm — there is nothing to send — and a pinned pair's baseline is
-    /// confirmed, as an identical Diff does (#492).
-    #[test]
-    fn an_identical_upload_opens_no_confirm_and_confirms_the_baseline() {
-        let dir = tempfile::tempdir().unwrap();
-        let local_path = dir.path().join("a.txt");
-        std::fs::write(&local_path, "a\n").unwrap();
-        let mapping = crate::domain::PinnedMapping::fixture(local_path.clone(), "g1", "a.txt");
-        let mut state = crate::tui::test_support::state_with_stored_pin(dir.path(), mapping);
-        state.enter(Screen::Pins(Box::default()));
-        let entry = state.defer_entry();
-
-        on_upload_preview(
-            &mut state,
-            entry,
-            Ok("a".into()),
-            gist_file_ref("g1", "a.txt"),
-            local_path,
-            "local".into(),
-            "gist".into(),
-        );
-
-        assert!(state.screen.is_pins(), "stays put: {:?}", state.screen);
-        assert_eq!(
-            state.status.as_deref(),
-            Some("already in sync — nothing to upload")
-        );
-        assert_eq!(
-            state.pinned[0].baseline,
-            crate::sync_baseline::SyncBaseline::after_sync(b"a\n", b"a")
-        );
-        assert_eq!(state.pinned[0].direction, None, "a passive confirmation");
     }
 
     #[test]

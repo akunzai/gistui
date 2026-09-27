@@ -96,7 +96,7 @@ label, and gist-fetch payload without executing the worker closure (issue #422).
 - New key logic → `AppState::handle_key` (testable).
 - New IO → `dispatch` / `bg` helpers, not `handle_key`.
 - IO-bearing `KeyOutcome` variants carry payloads (issue #244): `src/tui/mod.rs` (`KeyOutcome`), `src/tui/dispatch.rs`.
-- A workflow gets one request variant, built complete in the key handler: `KeyOutcome::Revision(RevisionRequest)` (#430) and `KeyOutcome::Mutation(MutationRequest)` (#503). `route_outcome` hands it on and never reads Confirm or an input buffer to fill it in; eligibility guards stay with the key that builds it.
+- A workflow gets one request variant, built complete in the key handler: `KeyOutcome::Revision(RevisionRequest)` (#430), `KeyOutcome::Mutation(MutationRequest)` (#503), and `KeyOutcome::Sync(SyncRequest)` (#525). `route_outcome` hands it on and never reads Confirm or an input buffer to fill it in; eligibility guards stay with the key that builds it.
 - Diff/Confirm/Preview scroll keys go through `scroll_body_mut` (issue #385), not per-axis `AppState` methods.
 
 ## Keymap (`src/tui/keymap.rs`)
@@ -141,6 +141,25 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
 - **`on_*` is the apply seam** (#298, #375, #383): named handlers are the apply bodies and the unit-test surface. They do not live on `Jobs`. `dispatch_outcome` / `route_outcome` sit on the spawn side, not the apply side, so neither is one. A new action is a spawn site plus an `on_*` when the apply is worth testing.
 - **A pin's key is three-part** (issue #424): `(local_path, gist_id, gist_filename)`, owned by `src/pins.rs` (`PinKey`, `PinKey::matches`, `PinnedMapping::key()`, `is_pinned` / `upsert` / `remove` / `resolve_against` / `find_by_resolved_path`). One local file pinned to several gist files is a legitimate state, not corruption — `docs/agents/design.md` defines a pin as a local-file to gist-*file* mapping, and `gist_id` alone cannot name a file inside a gist. Never re-derive the key at a call site, and pass `PinnedMapping::key()` when you already hold the mapping. `upsert` never modifies an existing pin; `ConfigStore::record_sync` deliberately does not use it, because confirming a sync must never create a pin. Exactly-duplicate triples are degenerate input from a hand-edited `config.toml`: the operations take the first match, and `crate::config::load_config` stays a parser, not a silent rewriter.
 - **Shared spawn payload** (#375): a value both `run` and `apply` need is part of `run`'s return, unpacked by `apply`. That is how identity (`gist_id`, `fetch_id`, labels) crosses the thread boundary without a second clone.
+
+## Sync workflow (`src/tui/sync.rs`, issue #525)
+
+- **One entry for every compare, pull, and push of a Sync pair**, from the List or Pins:
+  `sync::dispatch(jobs, state, SyncRequest)`. The key builds the request complete — the
+  `SyncPair`, the intent (`Compare` / `Pull` / `Push { replaces }` / `Auto`), and the
+  `DeferredEntry` — and the workflow never reads the List selection or the Pins cursor
+  afterwards. `Push`'s replace-or-add is fixed then too (#523). Eligibility guards stay with
+  the keys: List `S` refuses an unpinned pair before any request exists.
+- The workflow owns fetching the gist side, reading the local side, the diff labels, the
+  Sync policy's identical check with the baseline confirmation it triggers, and opening the
+  Diff or the upload Confirm or writing a new download. `Auto` computes `SyncStatus` at
+  dispatch (it stats files) and routes to the others; Conflict opens the Diff with its hint.
+  Its apply handlers are the workflow's own (`on_compare`, `on_pull`, `on_push`): a sync's
+  outcome belongs to no single screen.
+- The confirmed upload is a Gist mutation, not a sync; `d` in an open Diff writes the bytes
+  already fetched (`bg::download`), with no request.
+- Tests drive it through `sync::dispatch` + `Jobs::inline` + `SeqRunner`, as a table over
+  intent × identical × pinned, plus `Auto`'s arms and List-to-Diff paths end to end.
 
 ## Gist mutation workflow (`src/tui/gist_mutation.rs`)
 
@@ -222,7 +241,7 @@ applying the stored-versus-absolute rule, saving, and describing what changed. T
 - **Pin operations, named not enumerated**: `pin`, `unpin` (by `PinKey`), `record_sync`.
   This path is synchronous — no job, no generation, no apply closure — so a plain-data
   request enum would be built and destructured on the spot. `KeyOutcome::Pin` / `Unpin` /
-  `UnpinAtPin` / `SyncSelectedPair` keep their shapes; ADR-0002 is untouched.
+  `UnpinAtPin` keep their shapes; ADR-0002 is untouched.
 - **Every operation is a full load → mutate → save.** `ConfigStore` holds no `AppConfig`:
   `config.toml` is hand-editable, and writing from a cached copy would clobber an edit made
   between two pin operations. `save_preferences` does the same.

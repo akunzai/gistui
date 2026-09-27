@@ -8,6 +8,7 @@ use crate::tui::render::list_pane::{
     MIN_PANE_CELLS,
 };
 use crate::tui::render::text_fit::PaneTitleVm;
+use crate::tui::sync::SyncIntent;
 use crate::tui::view_model::ChromeVm;
 use crate::tui::{
     AppState, FocusPane, GistView, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneTarget,
@@ -268,19 +269,22 @@ impl AppState {
             KeyCode::Char('P') => self.open_pins(),
             KeyCode::Char('C') => self.open_config(),
             // Not gated through `list_guard`: unlike the palette's "Smart-sync pinned pair"
-            // item, this key isn't restricted to an already-pinned pair — the IO dispatcher
-            // (`dispatch.rs`) checks pin membership downstream and reports "pair is not
-            // pinned" there. `list_guard`'s `S` case (used by the palette) is stricter.
+            // item, this key answers an unpinned pair with why, instead of doing nothing.
             KeyCode::Char('S') => {
                 let (Some(local), Some(gist)) = self.selected_pair() else {
                     return KeyOutcome::None;
                 };
-                return KeyOutcome::SyncSelectedPair {
-                    entry: self.defer_entry(),
-                    local_path: local.path.clone(),
-                    gist_id: gist.file.gist_id.clone(),
-                    filename: gist.file.filename.clone(),
+                let pair = crate::domain::SyncPair {
+                    local: self.cwd.join(&local.path),
+                    gist: gist.file.file_ref(),
                 };
+                let key =
+                    crate::pins::PinKey::new(&pair.local, &pair.gist.gist_id, &pair.gist.filename);
+                if crate::pins::find_by_resolved_path(&self.pinned, &self.cwd, key).is_none() {
+                    self.set_status("pair is not pinned — press p to pin first");
+                    return KeyOutcome::None;
+                }
+                return self.sync_request(pair, SyncIntent::Auto);
             }
             KeyCode::Char('g') => self.open_gist_manager(),
             KeyCode::Char('H') if list_guard(self, code) => {
@@ -335,16 +339,11 @@ impl AppState {
             KeyCode::Char('d') if list_guard(self, code) => {
                 let (_, ranked) = self.list_pane_snapshots();
                 if let Some(gist) = ranked.get(self.gist_cursor.index) {
-                    let filename = gist.file.filename.clone();
-                    return KeyOutcome::DownloadGist {
-                        entry: self.defer_entry(),
-                        file: crate::domain::GistFileRef::new(
-                            gist.file.gist_id.clone(),
-                            filename.clone(),
-                            gist.file.raw_url.clone(),
-                        ),
-                        target: self.cwd.join(&filename),
+                    let pair = crate::domain::SyncPair {
+                        local: self.cwd.join(&gist.file.filename),
+                        gist: gist.file.file_ref(),
                     };
+                    return self.sync_request(pair, SyncIntent::Pull);
                 }
             }
             // Enter works from either pane: it diffs the selected local file against the
@@ -358,26 +357,17 @@ impl AppState {
                 let local_path = locals
                     .get(self.local_cursor.index)
                     .map(|r| r.candidate.path.clone());
-                let filename = gist.file.filename.clone();
                 // The Diff's `d` writes the local file it shows (#524); a gist file new to
                 // this directory lands under its own name.
-                let target = local_path
-                    .clone()
-                    .unwrap_or_else(|| self.cwd.join(&filename));
-                return KeyOutcome::PreviewDiff {
-                    entry: self.defer_entry(),
-                    local_path,
-                    file: crate::domain::GistFileRef::new(
-                        gist.file.gist_id.clone(),
-                        filename.clone(),
-                        gist.file.raw_url.clone(),
-                    ),
-                    target,
-                    upload_orientation: self.focus == FocusPane::Local,
+                let pair = crate::domain::SyncPair {
+                    local: local_path.unwrap_or_else(|| self.cwd.join(&gist.file.filename)),
+                    gist: gist.file.file_ref(),
                 };
+                let upload_orientation = self.focus == FocusPane::Local;
+                return self.sync_request(pair, SyncIntent::Compare { upload_orientation });
             }
             // has_gist but non-diffable (`list_guard` above didn't match) — replay the same
-            // check `PreviewDiff` would use, so the user gets the precise "cannot preview: …"
+            // check a sync compare would use, so the user gets the precise "cannot preview: …"
             // message instead of a silent no-op.
             KeyCode::Enter => {
                 let (locals, ranked) = self.list_pane_snapshots();
@@ -1280,7 +1270,13 @@ mod tests {
         let out = state.handle_mouse(MouseInput::DoubleClick { col: 25, row: 1 }, &layout);
         assert_eq!(state.focus, FocusPane::Gist);
         assert_eq!(state.gist_cursor.index, 0);
-        assert!(matches!(out, KeyOutcome::PreviewDiff { .. }));
+        assert!(matches!(
+            out,
+            KeyOutcome::Sync(crate::tui::sync::SyncRequest {
+                intent: crate::tui::sync::SyncIntent::Compare { .. },
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -1845,7 +1841,10 @@ mod tests {
         assert!(state.locals.is_empty());
         assert!(matches!(
             state.handle_key(KeyCode::Enter),
-            KeyOutcome::PreviewDiff { .. }
+            KeyOutcome::Sync(crate::tui::sync::SyncRequest {
+                intent: crate::tui::sync::SyncIntent::Compare { .. },
+                ..
+            })
         ));
     }
 
@@ -1872,7 +1871,10 @@ mod tests {
         let mut state = state_with_selection();
         assert!(matches!(
             state.handle_key(KeyCode::Enter),
-            KeyOutcome::PreviewDiff { .. }
+            KeyOutcome::Sync(crate::tui::sync::SyncRequest {
+                intent: crate::tui::sync::SyncIntent::Compare { .. },
+                ..
+            })
         ));
     }
 
@@ -1882,15 +1884,14 @@ mod tests {
         state.cwd = PathBuf::from("/tmp");
         state.locals[0].path = PathBuf::from("/tmp/nested/settings.json");
 
-        let KeyOutcome::PreviewDiff {
-            local_path, target, ..
-        } = state.handle_key(KeyCode::Enter)
-        else {
-            panic!("expected PreviewDiff");
+        let KeyOutcome::Sync(request) = state.handle_key(KeyCode::Enter) else {
+            panic!("expected a sync compare");
         };
 
-        assert_eq!(local_path, Some(PathBuf::from("/tmp/nested/settings.json")));
-        assert_eq!(target, PathBuf::from("/tmp/nested/settings.json"));
+        assert_eq!(
+            request.pair.local,
+            PathBuf::from("/tmp/nested/settings.json")
+        );
     }
 
     /// Issue #524: the Diff of a local file against a differently named gist file writes
@@ -1901,17 +1902,20 @@ mod tests {
         let mut state = state_with_selection();
         state.cwd = PathBuf::from("/tmp");
         state.locals[0].path = PathBuf::from("/tmp/a.txt");
-        let KeyOutcome::PreviewDiff { target, file, .. } = state.handle_key(KeyCode::Enter) else {
-            panic!("expected PreviewDiff");
+        let KeyOutcome::Sync(request) = state.handle_key(KeyCode::Enter) else {
+            panic!("expected a sync compare");
         };
-        assert_ne!(file.filename, "a.txt");
-        assert_eq!(target, PathBuf::from("/tmp/a.txt"));
+        assert_ne!(request.pair.gist.filename, "a.txt");
+        assert_eq!(request.pair.local, PathBuf::from("/tmp/a.txt"));
 
         state.locals.clear();
-        let KeyOutcome::PreviewDiff { target, file, .. } = state.handle_key(KeyCode::Enter) else {
-            panic!("expected PreviewDiff");
+        let KeyOutcome::Sync(request) = state.handle_key(KeyCode::Enter) else {
+            panic!("expected a sync compare");
         };
-        assert_eq!(target, PathBuf::from("/tmp").join(&file.filename));
+        assert_eq!(
+            request.pair.local,
+            PathBuf::from("/tmp").join(&request.pair.gist.filename)
+        );
     }
 
     #[test]
@@ -1920,7 +1924,10 @@ mod tests {
         state.focus = FocusPane::Local;
         assert!(matches!(
             state.handle_key(KeyCode::Enter),
-            KeyOutcome::PreviewDiff { .. }
+            KeyOutcome::Sync(crate::tui::sync::SyncRequest {
+                intent: crate::tui::sync::SyncIntent::Compare { .. },
+                ..
+            })
         ));
     }
 
@@ -1940,7 +1947,10 @@ mod tests {
         let mut state = state_with_selection();
         assert!(matches!(
             state.handle_key(KeyCode::Char('d')),
-            KeyOutcome::DownloadGist { .. }
+            KeyOutcome::Sync(crate::tui::sync::SyncRequest {
+                intent: crate::tui::sync::SyncIntent::Pull,
+                ..
+            })
         ));
     }
 
@@ -2013,7 +2023,10 @@ mod tests {
         state.focus = FocusPane::Gist;
         assert!(matches!(
             state.handle_key(KeyCode::Char('u')),
-            KeyOutcome::UploadAdd { .. }
+            KeyOutcome::Sync(crate::tui::sync::SyncRequest {
+                intent: crate::tui::sync::SyncIntent::Push { replaces: false },
+                ..
+            })
         ));
     }
 
@@ -2033,7 +2046,10 @@ mod tests {
         state.focus = FocusPane::Gist;
         assert!(matches!(
             state.handle_key(KeyCode::Char('u')),
-            KeyOutcome::UploadPreview { .. }
+            KeyOutcome::Sync(crate::tui::sync::SyncRequest {
+                intent: crate::tui::sync::SyncIntent::Push { replaces: true },
+                ..
+            })
         ));
     }
 
@@ -2118,11 +2134,21 @@ mod tests {
             modified: None,
         }];
         state.gist_catalog.owned = vec![GistFile::fixture("g1", "a.txt")];
-        let KeyOutcome::SyncSelectedPair { entry, .. } = state.handle_key(KeyCode::Char('S'))
-        else {
-            panic!("expected deferred pair sync");
+        // An unpinned pair says why instead of syncing (#525: refused at key time).
+        assert_eq!(state.handle_key(KeyCode::Char('S')), KeyOutcome::None);
+        assert_eq!(
+            state.status.as_deref(),
+            Some("pair is not pinned — press p to pin first")
+        );
+
+        state.pinned = vec![crate::domain::PinnedMapping::fixture(
+            "a.txt", "g1", "a.txt",
+        )];
+        let KeyOutcome::Sync(request) = state.handle_key(KeyCode::Char('S')) else {
+            panic!("expected a pinned pair's sync");
         };
-        assert!(matches!(entry.return_to, Screen::List));
+        assert_eq!(request.intent, SyncIntent::Auto);
+        assert!(matches!(request.entry.return_to, Screen::List));
     }
 
     #[test]

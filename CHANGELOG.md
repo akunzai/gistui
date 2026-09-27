@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- On the Pins screen, `u` on a pin whose gist file is gone from the gist now offers to add it
+  back, as `u` on the List does, instead of failing to fetch it. `Enter` on a pin whose local
+  file is missing opens the diff against an empty file instead of reporting a read error.
 - In a diff opened from the List, `d` and `u` now write the two files the diff compares. For
   a local `a.txt` diffed against a gist's `b.txt`, `d` overwrites `a.txt` (after the usual
   overwrite confirmation) and `u` replaces `b.txt`. They used to write a local `b.txt` and

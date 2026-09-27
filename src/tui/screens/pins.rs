@@ -6,6 +6,7 @@ use crate::tui::render::list_pane::{
     render_list_pane, ListPaneEmpty, ListPaneVm, RowEmphasis, RowVm,
 };
 use crate::tui::render::text_fit::PaneTitleVm;
+use crate::tui::sync::SyncIntent;
 use crate::tui::view_model::ChromeVm;
 use crate::tui::{
     AppState, HelpTopic, HitTarget, KeyOutcome, MouseFrame, PaneTarget, RowTarget, Screen,
@@ -62,6 +63,23 @@ pub(crate) fn pins_guard(state: &AppState, code: KeyCode) -> bool {
 }
 
 impl AppState {
+    /// The Sync pair of pin `index`: its local file resolved against the working directory,
+    /// and its gist file.
+    fn pin_pair(&self, index: usize) -> Option<crate::domain::SyncPair> {
+        let m = self.pinned.get(index)?;
+        Some(crate::domain::SyncPair {
+            local: m.resolve_against(&self.cwd),
+            gist: crate::domain::GistFileRef::id_name(&m.gist_id, &m.gist_filename),
+        })
+    }
+
+    fn pin_sync_request(&mut self, index: usize, intent: SyncIntent) -> KeyOutcome {
+        match self.pin_pair(index) {
+            Some(pair) => self.sync_request(pair, intent),
+            None => KeyOutcome::None,
+        }
+    }
+
     pub(crate) fn handle_key_pins(&mut self, code: KeyCode) -> KeyOutcome {
         // One-shot: any key dismisses a lingering sync status; the run_loop IO helper for this
         // key may set a fresh one afterwards (e.g. "already in sync").
@@ -91,10 +109,12 @@ impl AppState {
                 let Some(index) = self.selected_pin_index() else {
                     return KeyOutcome::None;
                 };
-                return KeyOutcome::PreviewPinDiff {
-                    entry: self.defer_entry(),
+                return self.pin_sync_request(
                     index,
-                };
+                    SyncIntent::Compare {
+                        upload_orientation: false,
+                    },
+                );
             }
             KeyCode::Char('x') if pins_guard(self, code) => {
                 let Some(index) = self.selected_pin_index() else {
@@ -106,28 +126,23 @@ impl AppState {
                 let Some(index) = self.selected_pin_index() else {
                     return KeyOutcome::None;
                 };
-                return KeyOutcome::SyncPinAuto {
-                    entry: self.defer_entry(),
-                    index,
-                };
+                return self.pin_sync_request(index, SyncIntent::Auto);
             }
             KeyCode::Char('u') if pins_guard(self, code) => {
                 let Some(index) = self.selected_pin_index() else {
                     return KeyOutcome::None;
                 };
-                return KeyOutcome::SyncPinPush {
-                    entry: self.defer_entry(),
-                    index,
+                let Some(pair) = self.pin_pair(index) else {
+                    return KeyOutcome::None;
                 };
+                let replaces = crate::tui::sync::gist_has_file(self, &pair);
+                return self.sync_request(pair, SyncIntent::Push { replaces });
             }
             KeyCode::Char('d') if pins_guard(self, code) => {
                 let Some(index) = self.selected_pin_index() else {
                     return KeyOutcome::None;
                 };
-                return KeyOutcome::SyncPinPull {
-                    entry: self.defer_entry(),
-                    index,
-                };
+                return self.pin_sync_request(index, SyncIntent::Pull);
             }
             KeyCode::Char('o') => {
                 if let Some(pins) = self.pins_mut() {
@@ -434,15 +449,24 @@ mod tests {
         state.pinned = vec![PinnedMapping::fixture("/tmp/a.txt", "g1", "a.txt")];
         assert!(matches!(
             state.handle_key(KeyCode::Char('s')),
-            KeyOutcome::SyncPinAuto { .. }
+            KeyOutcome::Sync(crate::tui::sync::SyncRequest {
+                intent: crate::tui::sync::SyncIntent::Auto,
+                ..
+            })
         ));
         assert!(matches!(
             state.handle_key(KeyCode::Char('u')),
-            KeyOutcome::SyncPinPush { .. }
+            KeyOutcome::Sync(crate::tui::sync::SyncRequest {
+                intent: crate::tui::sync::SyncIntent::Push { .. },
+                ..
+            })
         ));
         assert!(matches!(
             state.handle_key(KeyCode::Char('d')),
-            KeyOutcome::SyncPinPull { .. }
+            KeyOutcome::Sync(crate::tui::sync::SyncRequest {
+                intent: crate::tui::sync::SyncIntent::Pull,
+                ..
+            })
         ));
         assert!(matches!(
             state.handle_key(KeyCode::Char('x')),
@@ -455,10 +479,17 @@ mod tests {
         let mut state = initial_state();
         state.screen = Screen::Pins(Box::default());
         state.pinned = vec![PinnedMapping::fixture("/tmp/a.txt", "g1", "a.txt")];
-        let KeyOutcome::PreviewPinDiff { entry, .. } = state.handle_key(KeyCode::Enter) else {
+        let KeyOutcome::Sync(request) = state.handle_key(KeyCode::Enter) else {
             panic!("expected deferred pin diff");
         };
-        assert!(entry.return_to.is_pins());
+        assert!(request.entry.return_to.is_pins());
+        assert_eq!(
+            request.intent,
+            SyncIntent::Compare {
+                upload_orientation: false
+            }
+        );
+        assert_eq!(request.pair.local, std::path::PathBuf::from("/tmp/a.txt"));
     }
 
     #[test]

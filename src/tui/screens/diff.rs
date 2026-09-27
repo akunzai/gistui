@@ -1,9 +1,7 @@
 //! `Screen::Diff` — key handling, view-model, paint, palette items, and apply handlers
 //! colocated in one file (issue #287, Phase 2; issue #383).
 
-use crate::tui::bg::{confirm_sync_baseline, LoopFlow};
-use crate::tui::gist_content::GistContentStore;
-use crate::tui::render::diff_labels;
+use crate::tui::bg::LoopFlow;
 use crate::tui::view_model::ChromeVm;
 use crate::tui::{AppState, ConfigField, HelpTopic, HitTarget, KeyOutcome, PendingAction};
 use crossterm::event::KeyCode;
@@ -11,7 +9,6 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     Frame,
 };
-use std::path::PathBuf;
 
 /// Diff screen / confirm background pane facts (#250). Highlighting still applied at paint time
 /// with the live theme (body text + ext are pure).
@@ -37,35 +34,6 @@ pub(crate) fn help_topic() -> HelpTopic {
 
 pub(crate) fn wheel_step() -> usize {
     3
-}
-
-/// Stage a gist-vs-local diff before dispatch starts its fetch.
-pub(crate) fn stage_preview_diff(
-    state: &mut AppState,
-    local_path: Option<PathBuf>,
-    file: crate::domain::GistFileRef,
-) -> (crate::domain::GistFileRef, String, String) {
-    stage_gist_diff_fetch(state, local_path.as_deref(), file)
-}
-
-/// Stage labels for downloading a gist file before dispatch starts its fetch.
-pub(crate) fn stage_download_gist(
-    state: &mut AppState,
-    target: PathBuf,
-    file: crate::domain::GistFileRef,
-) -> (crate::domain::GistFileRef, String, String) {
-    stage_gist_diff_fetch(state, Some(&target), file)
-}
-
-fn stage_gist_diff_fetch(
-    state: &mut AppState,
-    local_path: Option<&std::path::Path>,
-    file: crate::domain::GistFileRef,
-) -> (crate::domain::GistFileRef, String, String) {
-    let gist = state.gist_file_for_diff(&file);
-    let file = GistContentStore::fetch_target(&state.gist_catalog, file);
-    let (local_label, gist_label) = diff_labels(local_path, &gist);
-    (file, local_label, gist_label)
 }
 
 /// Shared "would this key actually do something" predicate for `Screen::Diff`, mirrored by
@@ -271,145 +239,6 @@ pub(crate) fn render_diff_vm(
     }
 }
 
-/// One Sync pair about to be shown as a Diff: both sides as read, and how to frame them.
-struct SyncDiff {
-    pair: crate::domain::SyncPair,
-    local_content: String,
-    remote: String,
-    local_label: String,
-    gist_label: String,
-    /// Frame the diff as an upload (gist → local) rather than a download.
-    upload_orientation: bool,
-}
-
-/// Open the Diff for a Sync pair. An identical pair is in sync: see
-/// [`confirm_sync_baseline`].
-fn open_sync_diff(state: &mut AppState, entry: crate::tui::DeferredEntry, sync: SyncDiff) {
-    let policy = state.settings.sync_policy();
-    let text = policy.preview_diff(
-        sync.upload_orientation,
-        &sync.local_label,
-        &sync.local_content,
-        &sync.gist_label,
-        &sync.remote,
-    );
-    let identical = policy.identical(&sync.local_content, &sync.remote);
-    let pair = sync.pair.clone();
-    state.open_deferred(
-        entry,
-        crate::tui::Screen::Diff(Box::new(crate::tui::DiffState {
-            body: crate::tui::ScrollBody {
-                text,
-                ..crate::tui::ScrollBody::default()
-            },
-            identical,
-            kind: crate::tui::DiffKind::Sync {
-                pair: sync.pair,
-                remote: sync.remote.clone(),
-            },
-        })),
-    );
-    // After entering the Diff, which clears the status a failed record appends to.
-    if identical {
-        confirm_sync_baseline(
-            state,
-            &pair.local,
-            &pair.gist,
-            &sync.local_content,
-            &sync.remote,
-        );
-    }
-}
-
-/// `PreviewDiff` outcome: diff the pair's local file (`local_path`, when one is selected)
-/// against the fetched gist file. `d` / `u` from the Diff then write the pair — `target` and
-/// `file` — and nothing else (#524).
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn on_preview_diff(
-    state: &mut AppState,
-    entry: crate::tui::DeferredEntry,
-    result: std::result::Result<String, String>,
-    local_path: Option<PathBuf>,
-    local_label: String,
-    gist_label: String,
-    target: PathBuf,
-    upload_orientation: bool,
-    file: crate::domain::GistFileRef,
-) -> LoopFlow {
-    match result {
-        Ok(remote) => {
-            match local_path
-                .as_ref()
-                .map(|p| crate::domain::read_text_file_capped(p))
-                .transpose()
-            {
-                Ok(local) => open_sync_diff(
-                    state,
-                    entry,
-                    SyncDiff {
-                        pair: crate::domain::SyncPair {
-                            local: target,
-                            gist: file,
-                        },
-                        local_content: local.unwrap_or_default(),
-                        remote,
-                        local_label,
-                        gist_label,
-                        upload_orientation,
-                    },
-                ),
-                Err(error) => state.set_status(format!("read failed: {error}")),
-            }
-        }
-        Err(error) => state.set_status(format!("fetch failed: {error}")),
-    }
-
-    LoopFlow::Proceed
-}
-
-/// `DownloadSelected` outcome: diff against an existing local file, or write a new one.
-pub(crate) fn on_download_selected(
-    state: &mut AppState,
-    entry: crate::tui::DeferredEntry,
-    result: std::result::Result<String, String>,
-    pair: crate::domain::SyncPair,
-    local_label: String,
-    gist_label: String,
-) -> LoopFlow {
-    match result {
-        Ok(remote) => {
-            if pair.local.exists() {
-                match crate::domain::read_text_file_capped(&pair.local) {
-                    Ok(local_content) => open_sync_diff(
-                        state,
-                        entry,
-                        SyncDiff {
-                            pair,
-                            local_content,
-                            remote,
-                            local_label,
-                            gist_label,
-                            upload_orientation: false,
-                        },
-                    ),
-                    Err(error) => state.set_status(error),
-                }
-            } else {
-                let _ = crate::tui::bg::write_download(
-                    state,
-                    &pair.local,
-                    &remote,
-                    crate::actions::DownloadMode::CreateNew,
-                    Some(&pair.gist),
-                );
-            }
-        }
-        Err(error) => state.set_status(format!("fetch failed: {error}")),
-    }
-
-    LoopFlow::Proceed
-}
-
 /// `RevisionDiff` outcome: diff two historical revisions of the same file.
 pub(crate) fn on_revision_diff(
     state: &mut AppState,
@@ -453,36 +282,10 @@ pub(crate) fn on_revision_diff(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::test_support::{
-        gist_file_ref, set_diff_body, set_diff_scroll, set_pending, state_with_gists,
-    };
+    use crate::tui::test_support::{set_diff_body, set_diff_scroll, set_pending};
     use crate::tui::*;
     use crossterm::event::KeyCode;
     use std::path::PathBuf;
-
-    #[test]
-    fn stage_preview_diff_builds_labels() {
-        let mut state = state_with_gists();
-        let file = gist_file_ref("g1", "a.txt");
-
-        let (_, local_label, gist_label) =
-            stage_preview_diff(&mut state, Some(PathBuf::from("/tmp/a.txt")), file);
-
-        assert!(local_label.starts_with("local: a.txt"));
-        assert!(gist_label.starts_with("gist g1 / a.txt"));
-    }
-
-    #[test]
-    fn stage_download_gist_builds_labels() {
-        let mut state = state_with_gists();
-        let file = gist_file_ref("g1", "a.txt");
-
-        let (_, local_label, gist_label) =
-            stage_download_gist(&mut state, PathBuf::from("/tmp/a.txt"), file);
-
-        assert!(local_label.starts_with("local: a.txt"));
-        assert!(gist_label.starts_with("gist g1 / a.txt"));
-    }
 
     #[test]
     fn diff_w_toggles_wrap_and_resets_hscroll() {
@@ -573,13 +376,14 @@ mod tests {
             String::new(),
             PathBuf::from("/tmp/config"),
         );
+        let KeyOutcome::Sync(request) = state.handle_key(KeyCode::Char('u')) else {
+            panic!("expected an upload");
+        };
+        assert_eq!(request.pair.local, PathBuf::from("/tmp/config"));
+        assert_eq!(request.pair.gist.filename, "config");
         assert_eq!(
-            state.handle_key(KeyCode::Char('u')),
-            KeyOutcome::UploadAdd {
-                local_path: PathBuf::from("/tmp/config"),
-                gist_id: "g1".into(),
-                filename: "config".into(),
-            }
+            request.intent,
+            crate::tui::sync::SyncIntent::Push { replaces: false }
         );
 
         let mut state = initial_state();
@@ -605,16 +409,20 @@ mod tests {
             ..DiffState::default()
         }));
 
-        let KeyOutcome::UploadPreview {
-            local_path, file, ..
-        } = state.handle_key(KeyCode::Char('u'))
-        else {
+        let KeyOutcome::Sync(request) = state.handle_key(KeyCode::Char('u')) else {
             panic!("expected an upload preview of the compared gist file");
         };
-        assert_eq!(local_path, PathBuf::from("/home/u/.zshrc"));
+        assert_eq!(request.pair.local, PathBuf::from("/home/u/.zshrc"));
         assert_eq!(
-            (file.gist_id.as_str(), file.filename.as_str()),
+            (
+                request.pair.gist.gist_id.as_str(),
+                request.pair.gist.filename.as_str()
+            ),
             ("g1", "zshrc")
+        );
+        assert_eq!(
+            request.intent,
+            crate::tui::sync::SyncIntent::Push { replaces: true }
         );
 
         assert_eq!(
@@ -754,209 +562,6 @@ mod tests {
             home.join("notes.txt"),
         );
         assert_eq!(diff_title(&state), "Diff → ~/notes.txt");
-    }
-
-    #[test]
-    fn on_preview_diff_err_sets_status() {
-        let mut state = initial_state();
-
-        on_preview_diff(
-            &mut state,
-            initial_state().defer_entry(),
-            Err("boom".into()),
-            None,
-            "local".into(),
-            "gist".into(),
-            PathBuf::from("target"),
-            false,
-            gist_file_ref("g1", "a.txt"),
-        );
-
-        assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
-    }
-
-    #[test]
-    fn on_preview_diff_ok_without_local_enters_diff() {
-        let mut state = initial_state();
-
-        on_preview_diff(
-            &mut state,
-            initial_state().defer_entry(),
-            Ok("remote body".into()),
-            None,
-            "local".into(),
-            "gist".into(),
-            PathBuf::from("target"),
-            false,
-            gist_file_ref("g1", "a.txt"),
-        );
-
-        let diff = state.diff().expect("expected Screen::Diff");
-        assert!(matches!(
-            &diff.kind,
-            crate::tui::DiffKind::Sync { pair, remote }
-                if remote == "remote body" && pair.local == std::path::Path::new("target")
-        ));
-        assert!(!diff.identical);
-    }
-
-    /// Issue #465: a CRLF gist against an LF local file is identical (nothing to sync) with
-    /// normalization on; with it off the difference is real, so `d` / `u` stay available.
-    #[test]
-    fn on_preview_diff_line_endings_only_follows_the_setting() {
-        let dir = tempfile::tempdir().unwrap();
-        let local = dir.path().join("a.txt");
-        std::fs::write(&local, "a\nb\n").unwrap();
-
-        for normalize in [true, false] {
-            let mut state = initial_state();
-            if !normalize {
-                state
-                    .settings
-                    .adjust(crate::tui::ConfigField::NormalizeLineEndings, true);
-            }
-            on_preview_diff(
-                &mut state,
-                initial_state().defer_entry(),
-                Ok("a\r\nb\r\n".into()),
-                Some(local.clone()),
-                "local".into(),
-                "gist".into(),
-                local.clone(),
-                false,
-                gist_file_ref("g1", "a.txt"),
-            );
-
-            let diff = state.diff().expect("expected Screen::Diff");
-            assert_eq!(diff.identical, normalize, "normalize={normalize}");
-            assert_eq!(
-                diff.body.text.contains("line endings differ"),
-                !normalize,
-                "normalize={normalize}"
-            );
-        }
-    }
-
-    #[test]
-    fn on_download_selected_err_sets_status() {
-        let mut state = initial_state();
-
-        on_download_selected(
-            &mut state,
-            initial_state().defer_entry(),
-            Err("boom".into()),
-            crate::domain::SyncPair {
-                local: PathBuf::from("target"),
-                gist: gist_file_ref("g1", "a.txt"),
-            },
-            "local".into(),
-            "gist".into(),
-        );
-
-        assert_eq!(state.status.as_deref(), Some("fetch failed: boom"));
-    }
-
-    #[test]
-    fn on_download_selected_ok_existing_target_enters_diff() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("a.txt");
-        std::fs::write(&target, "local body").unwrap();
-        let mut state = initial_state();
-
-        on_download_selected(
-            &mut state,
-            initial_state().defer_entry(),
-            Ok("remote body".into()),
-            crate::domain::SyncPair {
-                local: target.clone(),
-                gist: gist_file_ref("g1", "a.txt"),
-            },
-            "local".into(),
-            "gist".into(),
-        );
-
-        let diff = state.diff().expect("expected Screen::Diff");
-        assert!(
-            matches!(&diff.kind, crate::tui::DiffKind::Sync { remote, .. } if remote == "remote body")
-        );
-        assert_eq!(
-            state.sync_pair(),
-            Some(&crate::domain::SyncPair {
-                local: target,
-                gist: gist_file_ref("g1", "a.txt"),
-            })
-        );
-    }
-
-    /// Run `f` with a config dir holding one pin of `local_file` ↔ gist `g1` / `a.txt`.
-    fn with_pinned_pair(local_file: &str, f: impl FnOnce(&mut AppState, PathBuf)) {
-        let dir = tempfile::tempdir().unwrap();
-
-        let local_path = dir.path().join("a.txt");
-        std::fs::write(&local_path, local_file).unwrap();
-        let mapping = crate::domain::PinnedMapping::fixture(local_path.clone(), "g1", "a.txt");
-
-        let mut state = crate::tui::test_support::state_with_stored_pin(dir.path(), mapping);
-        f(&mut state, local_path);
-    }
-
-    fn assert_baseline(state: &AppState, local: &str, remote: &str) {
-        assert_eq!(
-            state.pinned[0].baseline.local_sha256.as_deref(),
-            Some(crate::domain::sha256_hex(local.as_bytes()).as_str())
-        );
-        assert_eq!(
-            state.pinned[0].baseline.remote_blob_sha.as_deref(),
-            Some(crate::domain::git_blob_sha1(remote.as_bytes()).as_str())
-        );
-    }
-
-    /// Issue #492: a pin pull whose sides are identical under the Sync policy (here only a
-    /// trailing newline apart) confirms the pin is in sync, so it must not stay on Pull.
-    #[test]
-    fn identical_pin_pull_records_the_sync_baseline() {
-        with_pinned_pair("a", |state, local_path| {
-            on_download_selected(
-                state,
-                initial_state().defer_entry(),
-                Ok("a\n".into()),
-                crate::domain::SyncPair {
-                    local: local_path,
-                    gist: gist_file_ref("g1", "a.txt"),
-                },
-                "local".into(),
-                "gist".into(),
-            );
-
-            assert!(state.diff_identical());
-            assert_baseline(state, "a", "a\n");
-        });
-    }
-
-    /// Issues #466, #492, #494: an identical preview diff of a pinned pair records the
-    /// baseline, wherever it was opened from.
-    #[test]
-    fn identical_preview_diff_records_the_sync_baseline() {
-        with_pinned_pair("a\n", |state, local_path| {
-            on_preview_diff(
-                state,
-                initial_state().defer_entry(),
-                Ok("a\n".into()),
-                Some(local_path.clone()),
-                "local".into(),
-                "gist".into(),
-                local_path,
-                false,
-                gist_file_ref("g1", "a.txt"),
-            );
-
-            assert!(state.diff_identical());
-            assert_eq!(
-                state.sync_pair().map(|p| p.gist.gist_id.as_str()),
-                Some("g1")
-            );
-            assert_baseline(state, "a\n", "a\n");
-        });
     }
 
     #[test]

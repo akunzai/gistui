@@ -44,38 +44,6 @@ pub(super) fn dispatch_outcome(
 fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> LoopFlow {
     match outcome {
         KeyOutcome::Quit => return LoopFlow::Quit,
-        KeyOutcome::PreviewDiff {
-            entry,
-            local_path,
-            file,
-            target,
-            upload_orientation,
-        } => {
-            // The Diff must show what its `d` / `u` write (#524): with no local file selected,
-            // that is the file a download would land on, when one is already there.
-            let local_path = local_path.or_else(|| target.exists().then(|| target.clone()));
-            let (file, local_label, gist_label) =
-                screens::diff::stage_preview_diff(state, local_path.clone(), file);
-
-            jobs.spawn_gist_fetch_action(
-                state,
-                "Loading diff…",
-                file,
-                move |result, file, state| {
-                    screens::diff::on_preview_diff(
-                        state,
-                        entry,
-                        result,
-                        local_path,
-                        local_label,
-                        gist_label,
-                        target,
-                        upload_orientation,
-                        file,
-                    )
-                },
-            );
-        }
         KeyOutcome::Download { mode } => download(state, mode),
         KeyOutcome::DownloadRequested { target } => {
             if target.exists() {
@@ -83,33 +51,6 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             } else {
                 download(state, crate::actions::DownloadMode::CreateNew);
             }
-        }
-        KeyOutcome::DownloadGist {
-            entry,
-            file,
-            target,
-        } => {
-            let (file, local_label, gist_label) =
-                screens::diff::stage_download_gist(state, target.clone(), file);
-
-            jobs.spawn_gist_fetch_action(
-                state,
-                "Downloading…",
-                file,
-                move |result, file, state| {
-                    screens::diff::on_download_selected(
-                        state,
-                        entry,
-                        result,
-                        crate::domain::SyncPair {
-                            local: target,
-                            gist: file,
-                        },
-                        local_label,
-                        gist_label,
-                    )
-                },
-            );
         }
         KeyOutcome::OpenGistDetail { gist_id } => {
             state.enter(Screen::GistDetail(Box::new(DetailState {
@@ -218,55 +159,6 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             gist_id,
             filename,
         } => unpin_path(state, &local_path, &gist_id, &filename),
-        KeyOutcome::UploadAdd {
-            local_path,
-            gist_id,
-            filename,
-        } => {
-            let local_label = format!("local: {}", crate::config::display_path(&local_path));
-            match UploadDraft::read(
-                gist_id,
-                filename,
-                local_path.clone(),
-                String::new(),
-                local_label,
-                "(new file)".to_string(),
-                false,
-            ) {
-                Ok(draft) => state.enter_upload_confirm(draft, None),
-                Err(error) => {
-                    state.set_status(format!(
-                        "cannot read {}: {error}",
-                        crate::config::display_path(&local_path)
-                    ));
-                }
-            }
-        }
-        KeyOutcome::UploadPreview {
-            entry,
-            local_path,
-            file,
-        } => {
-            let (file, local_label, gist_label) =
-                screens::confirm::stage_upload_preview(state, local_path.clone(), file);
-
-            jobs.spawn_gist_fetch_action(
-                state,
-                "Loading diff…",
-                file,
-                move |result, file, state| {
-                    screens::confirm::on_upload_preview(
-                        state,
-                        entry,
-                        result,
-                        file,
-                        local_path,
-                        local_label,
-                        gist_label,
-                    )
-                },
-            );
-        }
         KeyOutcome::PreviewContent { entry, file } => {
             if let Some((file, preview_title)) =
                 screens::preview::stage_preview_content(state, file)
@@ -308,50 +200,9 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             jobs.request_local_scan(state);
         }
         KeyOutcome::UnpinAtPin { index } => unpin_at_pin_index(state, index),
-        KeyOutcome::SyncSelectedPair {
-            entry,
-            local_path,
-            gist_id,
-            filename,
-        } => {
-            let local_abs = state.cwd.join(&local_path);
-            let idx = crate::pins::find_by_resolved_path(
-                &state.pinned,
-                &state.cwd,
-                crate::pins::PinKey::new(&local_abs, &gist_id, &filename),
-            );
-            let Some(idx) = idx else {
-                state.set_status("pair is not pinned — press p to pin first");
-                return LoopFlow::Proceed;
-            };
-            let m = state.pinned[idx].clone();
-            let status = state.compute_pin_sync_status(idx);
-            apply_sync_status(state, jobs, &m, status, entry);
-        }
-        KeyOutcome::SyncPinPush { entry, index } => {
-            if let Some(m) = state.pinned.get(index).cloned() {
-                spawn_pin_push(state, jobs, &m, entry);
-            }
-        }
-        KeyOutcome::SyncPinPull { entry, index } => {
-            if let Some(m) = state.pinned.get(index).cloned() {
-                spawn_pin_pull(state, jobs, &m, entry);
-            }
-        }
-        KeyOutcome::SyncPinAuto { entry, index } => {
-            let Some(m) = state.pinned.get(index).cloned() else {
-                return LoopFlow::Proceed;
-            };
-            let status = state.compute_pin_sync_status(index);
-            apply_sync_status(state, jobs, &m, status, entry);
-        }
-        KeyOutcome::PreviewPinDiff { entry, index } => {
-            if let Some(m) = state.pinned.get(index).cloned() {
-                spawn_pin_diff(state, jobs, &m, entry);
-            }
-        }
         KeyOutcome::Revision(request) => gist_revision::dispatch(jobs, state, request),
         KeyOutcome::Mutation(request) => gist_mutation::dispatch(jobs, state, request),
+        KeyOutcome::Sync(request) => crate::tui::sync::dispatch(jobs, state, request),
         KeyOutcome::None => {}
         // Handled by `dispatch_outcome`'s shell above, so unreachable here. Listed
         // rather than wildcarded to guard the forward direction: a *new* variant nobody
@@ -370,93 +221,18 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
     LoopFlow::Proceed
 }
 
-/// What to do for each [`crate::domain::SyncStatus`] arm of a pinned mapping (issue #320):
-/// push/pull the resolved side, or report why neither applies. Shared by
-/// `SyncSelectedPair` and `SyncPinAuto`, which only differ in how they resolve `m`.
-fn apply_sync_status(
-    state: &mut AppState,
-    jobs: &mut Jobs,
-    m: &crate::domain::PinnedMapping,
-    status: crate::domain::SyncStatus,
-    entry: DeferredEntry,
-) {
-    match status {
-        crate::domain::SyncStatus::Push => spawn_pin_push(state, jobs, m, entry),
-        crate::domain::SyncStatus::Pull => spawn_pin_pull(state, jobs, m, entry),
-        crate::domain::SyncStatus::InSync => state.set_status("already in sync"),
-        crate::domain::SyncStatus::Missing => {
-            state.set_status("local file is missing — use d to pull it back")
-        }
-        crate::domain::SyncStatus::Unknown => {
-            state.set_status("can't tell which side is newer — use u to push or d to pull")
-        }
-        // Both sides changed: show the diff and let the user pick d or u (issue #466).
-        crate::domain::SyncStatus::Conflict => {
-            spawn_pin_diff_then(state, jobs, m, entry, "both sides changed — press d or u")
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::actions::test_support::SeqRunner;
     use crate::actions::CommandOutput;
-    use crate::domain::{GistFile, LocalCandidate, PinnedMapping};
+    use crate::domain::{GistFile, PinnedMapping};
     use crate::tui::gist_mutation::MutationRequest;
     use crate::tui::test_support::{idle_jobs, recording_jobs};
     use crossterm::event::KeyCode;
-    use std::path::PathBuf;
-
-    /// A pinned `/cwd/a.txt` ↔ `g1:a.txt` pair. `local_mtime` and `remote_updated_at`
-    /// are the only inputs `compute_pin_sync_status` reads for a hash-less mapping, so
-    /// varying them alone walks `apply_sync_status` through its non-spawning arms.
-    fn state_with_one_pin(
-        cwd: PathBuf,
-        local_mtime: Option<u64>,
-        remote_updated_at: Option<&str>,
-    ) -> AppState {
-        let mut state = initial_state();
-        state.cwd = cwd;
-        state.pinned = vec![PinnedMapping::fixture("a.txt", "g1", "a.txt")];
-        if let Some(modified) = local_mtime {
-            state.locals = vec![LocalCandidate {
-                path: PathBuf::from("a.txt"),
-                modified: Some(modified),
-            }];
-        }
-        if let Some(updated_at) = remote_updated_at {
-            state.gist_catalog.owned = vec![GistFile {
-                updated_at: updated_at.into(),
-                ..GistFile::fixture("g1", "a.txt")
-            }];
-        }
-        state
-    }
 
     fn route(state: &mut AppState, outcome: KeyOutcome) -> LoopFlow {
         route_outcome(outcome, state, &mut idle_jobs())
-    }
-
-    /// Issue #523: an upload previewed as a file new to the gist is recorded as an add, so a
-    /// refresh that lands before the user confirms can't turn it into a replace.
-    #[test]
-    fn upload_add_records_the_draft_as_an_add() {
-        let dir = tempfile::tempdir().unwrap();
-        let local_path = dir.path().join("a.txt");
-        std::fs::write(&local_path, "a\n").unwrap();
-        let mut state = initial_state();
-
-        route(
-            &mut state,
-            KeyOutcome::UploadAdd {
-                local_path,
-                gist_id: "g1".into(),
-                filename: "a.txt".into(),
-            },
-        );
-
-        assert!(state.upload_draft().is_some_and(|d| !d.replaces));
     }
 
     #[test]
@@ -507,53 +283,6 @@ mod tests {
                 "Forking…",
             )]
         );
-    }
-
-    // ---- apply_sync_status's non-spawning arms ---------------------------
-
-    #[test]
-    fn sync_pin_auto_reports_in_sync_when_both_sides_share_an_mtime() {
-        let updated_at = "2026-06-10T00:00:00Z";
-        let ts = crate::domain::parse_rfc3339_to_unix(updated_at).unwrap();
-        let mut state = state_with_one_pin(PathBuf::from("/cwd"), Some(ts), Some(updated_at));
-        let entry = state.defer_entry();
-
-        route(&mut state, KeyOutcome::SyncPinAuto { entry, index: 0 });
-
-        assert_eq!(state.status.as_deref(), Some("already in sync"));
-        assert!(state.bg_task_msg.is_none(), "InSync must not spawn");
-    }
-
-    #[test]
-    fn sync_pin_auto_reports_a_missing_local_file() {
-        // `pin_mtimes` falls back to stat-ing the path when `locals` has no match, so the
-        // cwd must really be empty rather than merely improbable — hence a temp dir.
-        let cwd = tempfile::tempdir().unwrap();
-        let mut state =
-            state_with_one_pin(cwd.path().to_path_buf(), None, Some("2026-06-10T00:00:00Z"));
-        let entry = state.defer_entry();
-
-        route(&mut state, KeyOutcome::SyncPinAuto { entry, index: 0 });
-
-        assert_eq!(
-            state.status.as_deref(),
-            Some("local file is missing — use d to pull it back")
-        );
-        assert!(state.bg_task_msg.is_none(), "Missing must not spawn");
-    }
-
-    #[test]
-    fn sync_pin_auto_reports_unknown_when_the_gist_side_is_absent() {
-        let mut state = state_with_one_pin(PathBuf::from("/cwd"), Some(1_780_000_000), None);
-        let entry = state.defer_entry();
-
-        route(&mut state, KeyOutcome::SyncPinAuto { entry, index: 0 });
-
-        assert_eq!(
-            state.status.as_deref(),
-            Some("can't tell which side is newer — use u to push or d to pull")
-        );
-        assert!(state.bg_task_msg.is_none(), "Unknown must not spawn");
     }
 
     // ---- early returns ----------------------------------------------------
@@ -643,72 +372,6 @@ mod tests {
         assert_eq!(state.nav_stack.len(), 1);
     }
 
-    /// Issue #524, end to end: the List Diff of local `a.txt` against gist `b.txt` shows those
-    /// two files, and `u` / `d` from it write exactly them.
-    #[test]
-    fn a_list_diff_writes_the_two_files_it_compares() {
-        let dir = tempfile::tempdir().unwrap();
-        let local_path = dir.path().join("a.txt");
-        std::fs::write(&local_path, "local\n").unwrap();
-        let mut state = initial_state();
-        state.cwd = dir.path().to_path_buf();
-        state.locals = vec![LocalCandidate {
-            path: local_path.clone(),
-            modified: None,
-        }];
-        state.gist_catalog.owned = vec![GistFile::fixture("g1", "b.txt")];
-        state.focus = crate::tui::FocusPane::Gist;
-        let runner = std::sync::Arc::new(SeqRunner::new(vec![CommandOutput::ok(
-            r#"{"files":{"b.txt":{"content":"remote\n"}}}"#,
-        )]));
-        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner);
-
-        let enter = state.handle_key(KeyCode::Enter);
-        route_outcome(enter, &mut state, &mut jobs);
-        jobs.on_action_outcome(&mut state);
-
-        assert!(state.screen.is_diff(), "on {:?}", state.screen);
-        let KeyOutcome::UploadPreview {
-            local_path: uploaded,
-            file,
-            ..
-        } = state.handle_key(KeyCode::Char('u'))
-        else {
-            panic!("expected an upload preview");
-        };
-        assert_eq!(
-            (uploaded, file.filename.as_str()),
-            (local_path.clone(), "b.txt")
-        );
-        assert_eq!(
-            state.handle_key(KeyCode::Char('d')),
-            KeyOutcome::DownloadRequested { target: local_path }
-        );
-    }
-
-    /// Issue #524: with no local file selected, the Diff is against the file its `d` would
-    /// overwrite when one is already there — not against nothing.
-    #[test]
-    fn a_list_diff_without_a_local_selection_shows_the_file_d_would_overwrite() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("b.txt"), "remote\n").unwrap();
-        let mut state = initial_state();
-        state.cwd = dir.path().to_path_buf();
-        state.gist_catalog.owned = vec![GistFile::fixture("g1", "b.txt")];
-        state.focus = crate::tui::FocusPane::Gist;
-        let runner = std::sync::Arc::new(SeqRunner::new(vec![CommandOutput::ok(
-            r#"{"files":{"b.txt":{"content":"remote\n"}}}"#,
-        )]));
-        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner);
-
-        let enter = state.handle_key(KeyCode::Enter);
-        route_outcome(enter, &mut state, &mut jobs);
-        jobs.on_action_outcome(&mut state);
-
-        assert!(state.screen.is_diff(), "on {:?}", state.screen);
-        assert!(state.diff_identical(), "the Diff read the file on disk");
-    }
-
     /// Issue #465: create sends the bytes the Sync policy dictates — a normalized scratch copy
     /// under the same filename when normalization rewrites the file, the file itself otherwise.
     #[test]
@@ -755,45 +418,6 @@ mod tests {
         }
     }
 
-    /// Issue #466: smart-sync on a Conflict opens the pin's diff instead of picking a side.
-    #[test]
-    fn sync_pin_auto_on_conflict_opens_the_pin_diff() {
-        let dir = tempfile::tempdir().unwrap();
-        let local = dir.path().join("a.txt");
-        std::fs::write(&local, "edited").unwrap();
-        let mut state = initial_state();
-        state.pinned = vec![PinnedMapping {
-            baseline: crate::sync_baseline::SyncBaseline {
-                local_sha256: Some(crate::domain::sha256_hex(b"synced")),
-                remote_blob_sha: Some("1111111111111111111111111111111111111111".into()),
-            },
-            ..PinnedMapping::fixture(local, "g1", "a.txt")
-        }];
-        state.gist_catalog.owned = vec![GistFile {
-            raw_url: Some(
-                "https://gist.githubusercontent.com/u/g1/raw/2222222222222222222222222222222222222222/a.txt"
-                    .into(),
-            ),
-            ..GistFile::fixture("g1", "a.txt")
-        }];
-        assert_eq!(
-            state.compute_pin_sync_status(0),
-            crate::domain::SyncStatus::Conflict
-        );
-        let entry = state.defer_entry();
-        let (mut jobs, started) = recording_jobs();
-
-        route_outcome(
-            KeyOutcome::SyncPinAuto { entry, index: 0 },
-            &mut state,
-            &mut jobs,
-        );
-
-        let started = started.take();
-        assert_eq!(started.len(), 1);
-        assert_eq!(started[0].progress, "Loading diff…");
-    }
-
     // ---- reads through the injected runner (issue #511) ------------------
 
     fn scripted(outputs: Vec<crate::actions::CommandOutput>) -> std::sync::Arc<SeqRunner> {
@@ -836,36 +460,6 @@ mod tests {
         );
     }
 
-    /// A pin pull fetches through the injected runner and lands on the Diff; identical sides
-    /// record the pin's Sync baseline (#492) end to end.
-    #[test]
-    fn a_pin_pull_fetches_through_the_runner_and_lands_on_the_diff() {
-        let dir = tempfile::tempdir().unwrap();
-        let local_path = dir.path().join("a.txt");
-        std::fs::write(&local_path, "a").unwrap();
-        let mapping = PinnedMapping::fixture(local_path, "g1", "a.txt");
-        let mut state = test_support::state_with_stored_pin(dir.path(), mapping);
-        let runner = scripted(vec![CommandOutput::ok(
-            r#"{"files":{"a.txt":{"content":"a\n"}}}"#,
-        )]);
-        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
-        let entry = state.defer_entry();
-
-        route_outcome(
-            KeyOutcome::SyncPinPull { entry, index: 0 },
-            &mut state,
-            &mut jobs,
-        );
-        jobs.on_action_outcome(&mut state);
-
-        assert_eq!(runner.calls(), vec![crate::gh::gist_get_plan("g1")]);
-        assert!(state.diff_identical());
-        assert_eq!(
-            state.pinned[0].baseline,
-            crate::sync_baseline::SyncBaseline::after_sync(b"a", b"a\n")
-        );
-    }
-
     /// The first comments load probes the total, then fetches the newest page.
     #[test]
     fn the_first_comments_load_probes_then_fetches_the_newest_page() {
@@ -903,91 +497,6 @@ mod tests {
                 .and_then(|d| d.comments.as_ref())
                 .map(Vec::len),
             Some(3)
-        );
-    }
-
-    /// Issue #493: smart-sync on a pin that reads Push, whose sides turn out identical once
-    /// fetched, opens no upload Confirm; the pin reads in sync.
-    #[test]
-    fn smart_sync_of_an_identical_push_confirms_the_pin_without_uploading() {
-        let dir = tempfile::tempdir().unwrap();
-        let local_path = dir.path().join("a.txt");
-        std::fs::write(&local_path, "a\n").unwrap();
-        let synced = crate::sync_baseline::SyncBaseline::after_sync(b"a", b"a");
-        let mapping = PinnedMapping {
-            baseline: synced.clone(),
-            ..PinnedMapping::fixture(local_path, "g1", "a.txt")
-        };
-        let mut state = test_support::state_with_stored_pin(dir.path(), mapping);
-        state.gist_catalog.owned = vec![GistFile {
-            raw_url: Some(format!(
-                "https://gist.githubusercontent.com/u/g1/raw/{}/a.txt",
-                synced.remote_blob_sha.as_deref().unwrap()
-            )),
-            ..GistFile::fixture("g1", "a.txt")
-        }];
-        assert_eq!(
-            state.compute_pin_sync_status(0),
-            crate::domain::SyncStatus::Push
-        );
-        state.enter(Screen::Pins(Box::default()));
-        let runner = scripted(vec![CommandOutput::ok(
-            r#"{"files":{"a.txt":{"content":"a"}}}"#,
-        )]);
-        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
-        let entry = state.defer_entry();
-
-        route_outcome(
-            KeyOutcome::SyncPinAuto { entry, index: 0 },
-            &mut state,
-            &mut jobs,
-        );
-        jobs.on_action_outcome(&mut state);
-
-        assert_eq!(runner.calls(), vec![crate::gh::gist_get_plan("g1")]);
-        assert!(state.screen.is_pins(), "no Confirm: {:?}", state.screen);
-        assert_eq!(
-            state.status.as_deref(),
-            Some("already in sync — nothing to upload")
-        );
-        assert_eq!(
-            state.compute_pin_sync_status(0),
-            crate::domain::SyncStatus::InSync
-        );
-    }
-
-    /// Issue #494: `d` in a Diff opened from the List preview still records a pinned pair's
-    /// baseline — the Diff carries its Sync pair whichever screen opened it.
-    #[test]
-    fn a_download_from_a_list_preview_diff_records_the_pins_baseline() {
-        let dir = tempfile::tempdir().unwrap();
-        let local_path = dir.path().join("a.txt");
-        std::fs::write(&local_path, "old\n").unwrap();
-        let mapping = PinnedMapping::fixture(local_path.clone(), "g1", "a.txt");
-        let mut state = test_support::state_with_stored_pin(dir.path(), mapping);
-        screens::diff::on_preview_diff(
-            &mut state,
-            initial_state().defer_entry(),
-            Ok("new\n".into()),
-            Some(local_path.clone()),
-            "local".into(),
-            "gist".into(),
-            local_path.clone(),
-            false,
-            crate::domain::GistFileRef::id_name("g1", "a.txt"),
-        );
-
-        route(
-            &mut state,
-            KeyOutcome::Download {
-                mode: crate::actions::DownloadMode::overwrite_after_user_confirm(),
-            },
-        );
-
-        assert_eq!(std::fs::read_to_string(&local_path).unwrap(), "new\n");
-        assert_eq!(
-            state.pinned[0].baseline,
-            crate::sync_baseline::SyncBaseline::after_sync(b"new\n", b"new\n")
         );
     }
 }
