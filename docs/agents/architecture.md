@@ -27,7 +27,7 @@ No **new** facade re-export was added for the moved types, and `src/tui/mod.rs`'
 ## Sync policy (`src/sync_content.rs`, issue #464)
 
 - **One owner for sync content rules.** `SyncPolicy` (built by `RuntimeSettings::sync_policy`) answers what an upload/create sends (`outbound`), what a download writes (`to_disk`, `write_download`), whether two sides are `identical`, and the `diff` / `preview_diff` between them. Callers never call `diff::normalize_line_endings`, `content_eq`, or `unified_diff` directly.
-- **A download is one path**: `bg::write_download` writes through the policy, records the pin baseline from the bytes it returns, reports, and rescans locals; callers only navigate. `actions::execute_download` writes exactly the bytes it is given.
+- **A download is one path**: `bg::write_download` writes through the policy, records the pin baseline (`sync::record_pin_sync`) from the bytes it returns, reports, and rescans locals; callers only navigate. `actions::execute_download` writes exactly the bytes it is given.
 
 ## Gist content store (`src/tui/gist_content.rs`, issue #406)
 
@@ -158,6 +158,14 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
   outcome belongs to no single screen.
 - The confirmed upload is a Gist mutation, not a sync; `d` in an open Diff writes the bytes
   already fetched (`bg::download`), with no request.
+- **Sync owns what a pin believes after a push, and where the user lands** (issue #526).
+  `gist_mutation::on_upload_replace` calls one follow-up, `sync::on_push_done`, once its
+  upload succeeds: it records the pair's Sync baseline (from the local file's bytes on disk,
+  not the possibly redacted/transformed bytes sent), patches the uploaded file's blob sha into
+  the in-memory catalog, marks the pin-sync cache dirty through the existing projection
+  (`apply_pin_change`), and leaves Confirm and any stale Diff — `bg::land_after_confirmed_sync`,
+  the same landing rule `bg::download` uses on success. `gist_mutation.rs` keeps only what
+  applies to every file mutation: content-store invalidation.
 - Tests drive it through `sync::dispatch` + `Jobs::inline` + `SeqRunner`, as a table over
   intent × identical × pinned, plus `Auto`'s arms and List-to-Diff paths end to end.
 
@@ -272,12 +280,13 @@ applying the stored-versus-absolute rule, saving, and describing what changed. T
 - **The TUI keeps presentation**: status wording (`pin_pair_label`'s `display_path`
   abbreviation), the Pins cursor clamp, `mark_pin_sync_cache_dirty`, and resolving a
   Pins-screen row index into a `PinKey` before calling `unpin`. A row index is a
-  filtered-view concept and never reaches `ConfigStore`. `apply_pin_change` / `apply_unpin` /
-  `apply_pin_sync` (`src/tui/bg.rs`) are that projection, and the unit-test surface for it.
+  filtered-view concept and never reaches `ConfigStore`. `apply_pin_change` / `apply_pin_sync`
+  (`src/tui/sync.rs`, issue #526) and `apply_unpin` (`src/tui/bg.rs`) are that projection, and
+  the unit-test surface for it.
   Projecting `skip_dirs` does **not** trigger a rescan — pin/unpin never touch the
   filesystem (issue #409), so a hand edit to `skip_dirs` picked up by one of these loads
   only reaches the local list at the next scan.
-- **"Identical means in sync" has one home: `bg::confirm_sync_baseline`** (issues #492, #493). Any flow that finds a local↔gist pair identical under the Sync policy — the Diff (`open_sync_diff`) and an upload preview (which then opens no Confirm) — calls it to confirm a pinned pair's baseline, passively (direction untouched).
+- **"Identical means in sync" has one home: `sync::confirm_sync_baseline`** (issues #492, #493). Any flow that finds a local↔gist pair identical under the Sync policy — the Diff (`open_sync_diff`) and an upload preview (which then opens no Confirm) — calls it to confirm a pinned pair's baseline, passively (direction untouched).
 - **`record_pin_sync` checks `AppState::pinned` before it opens anything.** That in-memory
   gate is what keeps a download of a never-pinned file from reading `config.toml` at all,
   and therefore from reporting a config problem the user did not provoke. A `NotPinned`
@@ -295,7 +304,7 @@ applying the stored-versus-absolute rule, saving, and describing what changed. T
 
 - `refresh_pin_sync_cache` is **impure** (stat/read/hash); fills `AppState::pin_sync_cache`.
 - Refresh on: enter/return Pins, pin-list change, successful pin-sync absorb, dirty flag / length mismatch — **not** every frame, **not** from the pure VM builder.
-- **Status comes from the Sync baseline** (`src/sync_baseline.rs`, issues #466, #499). `SyncBaseline` is the one place that hashes or compares either side: `after_sync` builds it from the local bytes on disk and the gist content, `status` classifies it against the local file now, the catalog's `raw_url` blob sha, and both mtimes — hashes when both sides are recorded and the catalog has a sha, otherwise the mtime + local-hash fallback. `compute_pin_sync_status` only does the IO; `ConfigStore::record_sync` only stores a built baseline. Its tests are tables over bytes and shas; `pin_sync.rs` tests only the IO wiring. The remote side is hashed from the exact content `gh::fetch_gist_file_content` returns (the API record — not `gh gist view --raw`, which appends a `\n`, #471). A successful upload builds one baseline and patches its remote sha into the catalog's `raw_url` in memory, so the pin reads in sync before the refresh lands.
+- **Status comes from the Sync baseline** (`src/sync_baseline.rs`, issues #466, #499). `SyncBaseline` is the one place that hashes or compares either side: `after_sync` builds it from the local bytes on disk and the gist content, `status` classifies it against the local file now, the catalog's `raw_url` blob sha, and both mtimes — hashes when both sides are recorded and the catalog has a sha, otherwise the mtime + local-hash fallback. `compute_pin_sync_status` only does the IO; `ConfigStore::record_sync` only stores a built baseline. Its tests are tables over bytes and shas; `pin_sync.rs` tests only the IO wiring. The remote side is hashed from the exact content `gh::fetch_gist_file_content` returns (the API record — not `gh gist view --raw`, which appends a `\n`, #471). A successful upload's `sync::on_push_done` builds one baseline and patches its remote sha into the catalog's `raw_url` in memory, so the pin reads in sync before the refresh lands.
 - Action dispatch may call `compute_pin_sync_status` one-shot; paint uses `cached_pin_sync_status` / the VM only.
 - No mtime watch: staying on Pins after an external editor edit can leave badges stale until the next refresh.
 

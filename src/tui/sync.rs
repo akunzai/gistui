@@ -8,7 +8,7 @@
 //! mutation (`gist_mutation`), not this module's. Eligibility guards (what is selected, is
 //! the pair pinned) stay with the keys that build the request.
 
-use super::bg::{confirm_sync_baseline, write_download, Jobs, LoopFlow};
+use super::bg::{append_status, land_after_confirmed_sync, write_download, Jobs, LoopFlow};
 use super::gist_content::GistContentStore;
 use super::{AppState, DeferredEntry, UploadDraft};
 use crate::domain::{SyncPair, SyncStatus};
@@ -343,6 +343,141 @@ fn open_diff(
     if identical {
         confirm_sync_baseline(state, &pair.local, &pair.gist, &local, &remote);
     }
+}
+
+// ---- settling what a pin believes after a sync (issue #526) -----------------------------
+
+/// Sync's one follow-up to a successful push, called by
+/// [`gist_mutation::on_upload_replace`](super::gist_mutation::on_upload_replace). It records
+/// the pair's Sync baseline from the local file's bytes on disk (not the possibly
+/// redacted/transformed bytes sent — #465), patches the uploaded file's blob sha into the
+/// in-memory catalog so the pin reads in sync before the refresh this upload triggers lands
+/// (#466), marks the pin-sync cache dirty through the existing projection
+/// ([`apply_pin_change`]), and leaves Confirm and any stale Diff — the same landing rule a
+/// download uses (#520). Content-store invalidation is the caller's: it applies to every
+/// file mutation, not just a push.
+pub(super) fn on_push_done(
+    state: &mut AppState,
+    file: &crate::domain::GistFileRef,
+    local_path: &std::path::Path,
+    local_content: &str,
+    sent_content: &str,
+) {
+    let baseline = crate::sync_baseline::SyncBaseline::after_sync(
+        local_content.as_bytes(),
+        sent_content.as_bytes(),
+    );
+    patch_catalog_blob_sha(state, file, baseline.remote_blob_sha.as_deref());
+    record_pin_sync(
+        state,
+        local_path,
+        &file.gist_id,
+        &file.filename,
+        &baseline,
+        Some(crate::domain::SyncDirection::Upload),
+    );
+    land_after_confirmed_sync(state);
+}
+
+/// Patch `file`'s blob sha into the in-memory catalog's `raw_url`, when both the catalog
+/// holds a raw URL to patch and a sha was recorded.
+fn patch_catalog_blob_sha(
+    state: &mut AppState,
+    file: &crate::domain::GistFileRef,
+    sha: Option<&str>,
+) {
+    let Some(sha) = sha else { return };
+    for g in state.gist_catalog.owned.iter_mut() {
+        if g.gist_id == file.gist_id && g.filename == file.filename {
+            if let Some(url) = g
+                .raw_url
+                .as_deref()
+                .and_then(|u| crate::domain::raw_url_with_blob_sha(u, sha))
+            {
+                g.raw_url = Some(url);
+            }
+        }
+    }
+}
+
+/// A local file and a gist file found identical under the Sync policy are in sync: if they
+/// are a pinned pair, confirm its Sync baseline from the content already in hand, so the Pins
+/// list stays correct even if either side changed since the last real sync (issues #466,
+/// #492, #493). `local` is the file's raw bytes on disk (not the normalized comparison);
+/// `remote` is the gist content as fetched. A passive confirmation: the pin's recorded
+/// direction is left alone. The one home of this rule — every flow that finds a pair
+/// identical calls it.
+pub(super) fn confirm_sync_baseline(
+    state: &mut AppState,
+    local_abs: &std::path::Path,
+    file: &crate::domain::GistFileRef,
+    local: &str,
+    remote: &str,
+) {
+    record_pin_sync(
+        state,
+        local_abs,
+        &file.gist_id,
+        &file.filename,
+        &crate::sync_baseline::SyncBaseline::after_sync(local.as_bytes(), remote.as_bytes()),
+        None,
+    );
+}
+
+/// If `pair` is a pinned pair, record `baseline` for it and project the result onto `AppState`.
+///
+/// The in-memory check comes **first and gates the file access entirely**: a download of a
+/// file nobody pinned must not read the config, and so cannot report a config problem the
+/// user did not provoke. Only a pair this session believes is pinned is worth the IO.
+pub(super) fn record_pin_sync(
+    state: &mut AppState,
+    local_abs: &std::path::Path,
+    gist_id: &str,
+    filename: &str,
+    baseline: &crate::sync_baseline::SyncBaseline,
+    direction: Option<crate::domain::SyncDirection>,
+) {
+    let pair = crate::pins::PinKey::new(local_abs, gist_id, filename);
+    if crate::pins::find_by_resolved_path(&state.pinned, &state.cwd, pair).is_none() {
+        return;
+    }
+    let result = state
+        .config_store
+        .record_sync(&state.cwd, pair, baseline, direction);
+    apply_pin_sync(state, result);
+}
+
+/// Absorb a `record_sync` result.
+///
+/// A failure is **appended** to whatever status the surrounding action already set — the
+/// caller has usually just reported "Downloaded a.txt", and that matters more than this
+/// does (issue #432; same rule as `refresh_locals`). Before #432 all three failure modes
+/// were discarded and the user kept a silently stale sync badge.
+///
+/// `NotPinned` here means the stored config disagrees with what this session believes
+/// (a hand edit between the two). Nothing was persisted, so nothing is projected and
+/// nothing is said.
+fn apply_pin_sync(
+    state: &mut AppState,
+    result: anyhow::Result<(
+        crate::config_store::PinChange,
+        crate::config_store::SyncRecord,
+    )>,
+) {
+    match result {
+        Ok((change, crate::config_store::SyncRecord::Recorded)) => apply_pin_change(state, change),
+        Ok((_, crate::config_store::SyncRecord::NotPinned)) => {}
+        Err(error) => append_status(state, format!("pin sync not recorded: {error}")),
+    }
+}
+
+/// Project a completed persistence operation onto `AppState`. Both fields travel together
+/// because "what was just read" is the correct value for both, even after a hand edit.
+/// `bg::pin_paths` / `bg::apply_unpin` share this same projection for pin / unpin.
+pub(super) fn apply_pin_change(state: &mut AppState, change: crate::config_store::PinChange) {
+    state.pinned = change.pinned;
+    state.skip_dirs = change.skip_dirs;
+    state.mark_pin_sync_cache_dirty();
 }
 
 #[cfg(test)]
@@ -795,5 +930,170 @@ mod tests {
             state.pinned[0].baseline,
             SyncBaseline::after_sync(b"new\n", b"new\n")
         );
+    }
+
+    // ---- settling what a pin believes after a sync (moved from bg.rs, issue #526) -------
+
+    fn change(pinned: Vec<PinnedMapping>) -> crate::config_store::PinChange {
+        crate::config_store::PinChange {
+            pinned,
+            skip_dirs: vec!["node_modules".into()],
+        }
+    }
+
+    /// A persistence failure must not erase the feedback the surrounding action already
+    /// set. Before #432 all three failure modes were discarded entirely.
+    #[test]
+    fn apply_pin_sync_appends_a_failure_to_the_existing_status() {
+        let mut state = initial_state();
+        state.set_status("Downloaded a.txt");
+
+        apply_pin_sync(&mut state, Err(anyhow::anyhow!("permission denied")));
+
+        assert_eq!(
+            state.status.as_deref(),
+            Some("Downloaded a.txt; pin sync not recorded: permission denied")
+        );
+    }
+
+    #[test]
+    fn apply_pin_sync_reports_a_failure_on_its_own_when_nothing_was_said() {
+        let mut state = initial_state();
+
+        apply_pin_sync(&mut state, Err(anyhow::anyhow!("boom")));
+
+        assert_eq!(state.status.as_deref(), Some("pin sync not recorded: boom"));
+    }
+
+    /// `NotPinned` persisted nothing, so it must project nothing and say nothing.
+    #[test]
+    fn apply_pin_sync_applies_nothing_when_the_pair_was_not_pinned() {
+        let mut state = initial_state();
+        state.set_status("Downloaded a.txt");
+        let before = state.skip_dirs.clone();
+
+        apply_pin_sync(
+            &mut state,
+            Ok((
+                change(vec![PinnedMapping::fixture(
+                    "/ignored.txt",
+                    "g9",
+                    "ignored.txt",
+                )]),
+                crate::config_store::SyncRecord::NotPinned,
+            )),
+        );
+
+        assert_eq!(state.status.as_deref(), Some("Downloaded a.txt"));
+        assert!(state.pinned.is_empty(), "nothing was persisted to project");
+        assert_eq!(state.skip_dirs, before);
+    }
+
+    /// A pair this session does not believe is pinned must not reach the filesystem at
+    /// all — otherwise a routine download of an unpinned file could report a config
+    /// problem the user never provoked.
+    #[test]
+    fn record_pin_sync_on_an_unpinned_pair_touches_nothing() {
+        let mut state = initial_state();
+        state.cwd = PathBuf::from("/cwd");
+        state.set_status("Downloaded a.txt");
+
+        record_pin_sync(
+            &mut state,
+            std::path::Path::new("/cwd/a.txt"),
+            "g1",
+            "a.txt",
+            &SyncBaseline::after_sync(b"body", b"body"),
+            Some(crate::domain::SyncDirection::Download),
+        );
+
+        assert_eq!(state.status.as_deref(), Some("Downloaded a.txt"));
+        assert!(state.pinned.is_empty());
+    }
+
+    /// `record_sync` used to project only `pinned`, unlike the pin and unpin paths.
+    #[test]
+    fn apply_pin_sync_projects_both_config_fields() {
+        let mut state = initial_state();
+
+        apply_pin_sync(
+            &mut state,
+            Ok((
+                change(Vec::new()),
+                crate::config_store::SyncRecord::Recorded,
+            )),
+        );
+
+        assert_eq!(state.skip_dirs, vec!["node_modules".to_string()]);
+    }
+
+    /// Issue #526: once an upload succeeds, `on_push_done` is the one place that settles
+    /// what the pin believes afterward — the baseline is the local file's bytes on disk (not
+    /// the possibly redacted/transformed bytes sent, #465), the catalog's blob sha is patched
+    /// so the pin reads in sync before the refresh lands (#466), and the Confirm the upload
+    /// was run from (plus any stale Diff behind it) is left, as a download would leave it
+    /// (#520).
+    #[test]
+    fn on_push_done_settles_the_pins_baseline_catalog_and_landing() {
+        let dir = tempfile::tempdir().unwrap();
+        let local_path = dir.path().join("a.txt");
+        std::fs::write(&local_path, "hello").unwrap();
+        let mapping = PinnedMapping::fixture(local_path.clone(), "g1", "a.txt");
+        let mut state = state_with_stored_pin(dir.path(), mapping);
+        let file = GistFileRef::id_name("g1", "a.txt");
+        state.gist_catalog.owned = vec![GistFile {
+            raw_url: Some(
+                "https://gist.githubusercontent.com/u/g1/raw/1111111111111111111111111111111111111111/a.txt"
+                    .into(),
+            ),
+            ..GistFile::fixture("g1", "a.txt")
+        }];
+        state.enter_upload_confirm(UploadDraft::fixture("g1", "a.txt", &local_path), None);
+
+        // The local file is CRLF on disk; the upload sent LF.
+        on_push_done(&mut state, &file, &local_path, "hello", "hello\n");
+
+        assert_eq!(state.screen, Screen::List, "left Confirm");
+        assert_eq!(
+            state.pinned[0].direction,
+            Some(crate::domain::SyncDirection::Upload)
+        );
+        assert_eq!(
+            state.pinned[0].baseline.local_sha256.as_deref(),
+            Some(crate::domain::sha256_hex(b"hello").as_str())
+        );
+        let sent_sha = crate::domain::git_blob_sha1(b"hello\n");
+        assert_eq!(
+            state.pinned[0].baseline.remote_blob_sha.as_deref(),
+            Some(sent_sha.as_str())
+        );
+        assert_eq!(
+            state.catalog_blob_sha("g1", "a.txt"),
+            Some(sent_sha.as_str())
+        );
+        assert_eq!(
+            state.compute_pin_sync_status(0),
+            crate::domain::SyncStatus::InSync
+        );
+    }
+
+    /// A push of a file nobody pinned patches no config: `record_pin_sync`'s in-memory gate
+    /// keeps it from reaching `ConfigStore` at all.
+    #[test]
+    fn on_push_done_of_an_unpinned_pair_touches_no_config() {
+        let mut state = initial_state();
+        let file = GistFileRef::id_name("g1", "a.txt");
+        state.gist_catalog.owned = vec![GistFile::fixture("g1", "a.txt")];
+
+        on_push_done(
+            &mut state,
+            &file,
+            std::path::Path::new("/tmp/a.txt"),
+            "hello",
+            "hello",
+        );
+
+        assert!(state.pinned.is_empty());
+        assert!(state.status.is_none());
     }
 }
