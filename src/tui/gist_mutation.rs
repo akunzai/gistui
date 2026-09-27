@@ -106,7 +106,7 @@ struct Staged {
 
 /// Status when the gist no longer matches what an upload's preview showed (#523).
 pub(crate) const GIST_CHANGED_SINCE_PREVIEW: &str =
-    "gist changed since the preview — press n, then u to preview again";
+    "gist changed since the preview — press u to preview again";
 
 fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
     use crate::actions::*;
@@ -119,7 +119,12 @@ fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
                 .owned
                 .iter()
                 .any(|g| g.gist_id == draft.gist_id && g.filename == draft.filename);
+            // Confirm doesn't show a status (#72), and the draft is stale anyway: go back to
+            // where `u` was pressed, which does.
             if has_same_name != draft.replaces {
+                if state.screen.is_confirm() {
+                    state.cancel_confirm();
+                }
                 state.set_status(GIST_CHANGED_SINCE_PREVIEW);
                 return None;
             }
@@ -640,7 +645,8 @@ mod tests {
 
     /// Issue #523: a catalog refresh can land while the upload Confirm is open. If the gist
     /// no longer matches what the preview showed — a "new file" that now exists, or a file
-    /// to replace that is now gone — nothing is sent, and the user stays on the Confirm.
+    /// to replace that is now gone — nothing is sent, and the user is back where they pressed
+    /// `u`, where the status is visible.
     #[test]
     fn upload_stops_when_the_gist_changed_since_the_preview() {
         for (replaces, owned) in [
@@ -667,7 +673,7 @@ mod tests {
             );
 
             assert!(runner.calls().is_empty(), "replaces={replaces}");
-            assert!(state.screen.is_confirm(), "replaces={replaces}");
+            assert_eq!(state.screen, Screen::List, "replaces={replaces}");
             assert_eq!(
                 state.status.as_deref(),
                 Some(GIST_CHANGED_SINCE_PREVIEW),
