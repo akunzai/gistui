@@ -28,7 +28,7 @@ tool makes anything effortless or magical.
 
 ## Product language
 
-Use the terms the user acts on. `CONTEXT.md` is the source of truth for domain nouns; these
+Use the terms the user acts on. `GLOSSARY.md` is the source of truth for domain nouns; these
 are the presentation-layer terms:
 
 - **Anchor** is the pane that drives match ranking. `a` flips it; it is independent of focus.

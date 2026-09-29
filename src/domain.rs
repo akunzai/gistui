@@ -399,7 +399,7 @@ impl GistFileRef {
     }
 }
 
-/// A **Sync pair** (see `CONTEXT.md`): the local file and the gist file a sync compares,
+/// A **Sync pair** (see `GLOSSARY.md`): the local file and the gist file a sync compares,
 /// pulls, or pushes. It may be a pin or just the List selection, and `local` need not exist
 /// yet — a download creates it. A pull writes `local`; a push writes `gist`.
 #[derive(Debug, Clone, PartialEq, Eq)]
