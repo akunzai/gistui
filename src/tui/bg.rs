@@ -126,35 +126,12 @@ pub(super) enum ActionJobKind {
     AnalyzeCompact {
         gist_id: String,
     },
-    Upload {
-        file: crate::domain::GistFileRef,
-    },
-    Create {
-        local_path: PathBuf,
-        public: bool,
-    },
-    DeleteGist {
-        gist_id: String,
-    },
-    RemoveFile {
-        file: crate::domain::GistFileRef,
-    },
-    CompactGist {
-        gist_id: String,
-    },
-    UpdateDescription {
-        gist_id: String,
-    },
+    /// Every Gist mutation except a revision restore; its identity is owned by the
+    /// workflow module (`src/tui/gist_mutation.rs`).
+    Mutation(super::gist_mutation::MutationJobKind),
     /// Every Gist revision job. Its semantic identity is owned by the workflow module
     /// (`src/tui/gist_revision.rs`, issue #430), not spelled out again here.
     Revision(super::gist_revision::RevisionJobKind),
-    ToggleGistStar {
-        gist_id: String,
-        starring: bool,
-    },
-    ForkGist {
-        gist_id: String,
-    },
 }
 
 impl ActionJobKind {
@@ -163,19 +140,9 @@ impl ActionJobKind {
     /// and its result always applies (#478).
     fn is_gist_mutation(&self) -> bool {
         match self {
-            Self::Upload { .. }
-            | Self::Create { .. }
-            | Self::DeleteGist { .. }
-            | Self::RemoveFile { .. }
-            | Self::CompactGist { .. }
-            | Self::UpdateDescription { .. }
-            | Self::ToggleGistStar { .. }
-            | Self::ForkGist { .. }
-            | Self::Revision(super::gist_revision::RevisionJobKind::ExecuteRestore { .. }) => true,
-            Self::GistFetch(_)
-            | Self::FetchComments { .. }
-            | Self::AnalyzeCompact { .. }
-            | Self::Revision(_) => false,
+            Self::Mutation(_) => true,
+            Self::Revision(kind) => kind.is_gist_mutation(),
+            Self::GistFetch(_) | Self::FetchComments { .. } | Self::AnalyzeCompact { .. } => false,
         }
     }
 }
@@ -916,6 +883,7 @@ impl Jobs {
 mod tests {
     use super::*;
     use crate::domain::GistCatalog;
+    use crate::tui::gist_mutation::MutationJobKind;
     use crate::tui::gist_refresh::GistRefresh;
 
     use std::path::PathBuf;
@@ -1037,9 +1005,9 @@ mod tests {
         jobs.spawn_action(
             &mut state,
             ActionJobSpec::new(
-                ActionJobKind::DeleteGist {
+                ActionJobKind::Mutation(MutationJobKind::Delete {
                     gist_id: "g1".into(),
-                },
+                }),
                 "Deleting gist…",
             ),
             || (),
