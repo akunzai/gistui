@@ -128,11 +128,19 @@ pub use gists::{
     gist_starred_list_plan, merge_gist_node_id_maps, parse_gist_list_json, parse_starred_gist_ids,
 };
 
+mod mutations;
+pub use mutations::{
+    create_command, delete_command, edit_description_command, fork_gist_command,
+    remove_file_command, star_gist_command, unstar_gist_command, upload_add_command,
+    upload_command,
+};
+
 mod revisions;
 pub use revisions::{
     build_gist_revision_raw_url, fetch_gist_commits_json, fetch_gist_revision_json,
     fetch_revision_file, fetch_revision_file_text, fetch_revision_file_text_optional,
-    gist_commits_plan, gist_revision_plan, parse_gist_commits_json, RevisionFileContent,
+    gist_commits_plan, gist_revision_count_command, gist_revision_plan, parse_gist_commits_json,
+    parse_revision_count, restore_revision_command, restore_revision_json, RevisionFileContent,
 };
 
 mod stars;
