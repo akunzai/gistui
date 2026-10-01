@@ -56,3 +56,8 @@ are kept out of the published tarball); `cargo publish --dry-run` validates the 
    show a new `chore: bump gistui to vX.Y.Z` commit on the tap's / bucket's `main` (pushed by
    `release.yml` within the same run — if either is missing, check that run's "Update Homebrew
    formula" / "Update Scoop manifest" step and confirm `HOMEBREW_BUMP_TOKEN` is still valid).
+7. Close the milestone: write the release's one-paragraph summary into the version milestone's
+   description and close it, then create the next version's milestone with a one-line
+   description (`gh api repos/{owner}/{repo}/milestones -f title=<x.y.z> -f description=...`),
+   so the first PR after the cut has somewhere to go. A PR merged after the tag belongs to the
+   next milestone.
