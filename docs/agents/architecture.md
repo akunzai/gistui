@@ -27,7 +27,7 @@ No **new** facade re-export was added for the moved types, and `src/tui/mod.rs`'
 ## Sync policy (`src/sync_content.rs`, issue #464)
 
 - **One owner for sync content rules.** `SyncPolicy` (built by `RuntimeSettings::sync_policy`) answers what an upload/create sends (`outbound`), what a download writes (`to_disk`, `write_download`), whether two sides are `identical`, and the `diff` / `preview_diff` between them. Callers never call `diff::normalize_line_endings`, `content_eq`, or `unified_diff` directly.
-- **A download is one path**: `bg::write_download` writes through the policy, records the pin baseline (`sync::record_pin_sync`) from the bytes it returns, reports, and rescans locals; callers only navigate. `actions::execute_download` writes exactly the bytes it is given.
+- **A download is one path**: `bg::write_download` writes through the policy, records the pin baseline (`pin_sync::record_pin_sync`) from the bytes it returns, reports, and rescans locals; callers only navigate. `actions::execute_download` writes exactly the bytes it is given.
 
 ## Gist content store (`src/tui/gist_content.rs`, issue #406)
 
@@ -280,9 +280,9 @@ applying the stored-versus-absolute rule, saving, and describing what changed. T
 - **The TUI keeps presentation**: status wording (`pin_pair_label`'s `display_path`
   abbreviation), the Pins cursor clamp, `mark_pin_sync_cache_dirty`, and resolving a
   Pins-screen row index into a `PinKey` before calling `unpin`. A row index is a
-  filtered-view concept and never reaches `ConfigStore`. `apply_pin_change` / `apply_pin_sync`
-  (`src/tui/sync.rs`, issue #526) and `apply_unpin` (`src/tui/bg.rs`) are that projection, and
-  the unit-test surface for it.
+  filtered-view concept and never reaches `ConfigStore`. `apply_pin_change` / `apply_pin_sync` /
+  `apply_unpin` (`src/tui/pin_sync.rs`, issues #526 and #432) are that projection, and the
+  unit-test surface for it; `unpin_at_pin_index` reports success and its caller clamps the cursor.
   Projecting `skip_dirs` does **not** trigger a rescan — pin/unpin never touch the
   filesystem (issue #409), so a hand edit to `skip_dirs` picked up by one of these loads
   only reaches the local list at the next scan.

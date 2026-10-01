@@ -407,7 +407,7 @@ pub(super) fn write_download(
             .to_string_lossy()
     ));
     if let Some(pin) = pin {
-        super::sync::record_pin_sync(
+        super::pin_sync::record_pin_sync(
             state,
             target,
             &pin.gist_id,
@@ -484,91 +484,6 @@ pub(super) fn sync_mouse_capture(
         execute!(terminal.backend_mut(), DisableMouseCapture)?;
     }
     Ok(())
-}
-
-/// One rendering of a pinned pair for the status line, so pin and unpin cannot drift apart
-/// in how they name the same thing (issue #424). `display_path` abbreviates `$HOME`; the raw
-/// `Display` would make the pin message disagree with the unpin message about one path.
-fn pin_pair_label(local_path: &std::path::Path, filename: &str) -> String {
-    format!(
-        "{} <-> {}",
-        crate::config::display_path(local_path),
-        filename
-    )
-}
-
-pub(super) fn pin_paths(
-    state: &mut AppState,
-    local_path: &std::path::Path,
-    gist_id: &str,
-    filename: &str,
-) {
-    let result = state
-        .config_store
-        .pin(crate::pins::PinKey::new(local_path, gist_id, filename));
-    match result {
-        Ok(change) => {
-            super::sync::apply_pin_change(state, change);
-            state.set_status(format!("Pinned {}", pin_pair_label(local_path, filename)));
-        }
-        Err(error) => state.set_status(format!("pin failed: {error}")),
-    }
-}
-
-pub(super) fn unpin_path(
-    state: &mut AppState,
-    local_path: &std::path::Path,
-    gist_id: &str,
-    filename: &str,
-) {
-    let result = state
-        .config_store
-        .unpin(crate::pins::PinKey::new(local_path, gist_id, filename));
-    apply_unpin(state, result, pin_pair_label(local_path, filename));
-}
-
-/// Absorb an unpin result. [`Unpinned::NotFound`] means the stored config no longer held
-/// that pair, so the status must not claim one was removed (issue #424).
-fn apply_unpin(
-    state: &mut AppState,
-    result: anyhow::Result<(
-        crate::config_store::PinChange,
-        crate::config_store::Unpinned,
-    )>,
-    label: String,
-) {
-    match result {
-        Ok((change, outcome)) => {
-            super::sync::apply_pin_change(state, change);
-            state.set_status(match outcome {
-                crate::config_store::Unpinned::Removed => format!("Unpinned {label}"),
-                crate::config_store::Unpinned::NotFound => format!("{label} is not pinned"),
-            });
-        }
-        Err(error) => state.set_status(format!("unpin failed: {error}")),
-    }
-}
-
-pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) {
-    if idx >= state.pinned.len() {
-        return;
-    }
-    // A row index is a filtered-view concept: resolve it into a `PinKey` here, so the
-    // persistence interface never sees one (issue #432).
-    let mapping = state.pinned[idx].clone();
-    let label = pin_pair_label(&mapping.local_path, &mapping.gist_filename);
-    let result = state.config_store.unpin(mapping.key());
-    let ok = result.is_ok();
-    apply_unpin(state, result, label);
-    if ok {
-        let len = state.visible_pin_indices().len();
-        if let Some(pins) = state.pins_mut() {
-            pins.cursor.clamp_len(len);
-        }
-        // No filesystem rescan: unpin never touches the filesystem, and ranking reads
-        // `PinnedMapping` directly — a forced-flat rescan here used to make the local
-        // list drift back to cwd-only even while recursive mode was active (issue #409).
-    }
 }
 
 /// Background job registry (issue #243): spawn / absorb / cancel. Apply handlers live
@@ -1038,83 +953,6 @@ mod tests {
     fn returns_none_when_slot_already_empty() {
         let mut slot: Option<mpsc::Receiver<i32>> = None;
         assert_eq!(poll_channel(&mut slot), None);
-    }
-
-    // ---- unpin absorb ---------------------------------------------------
-
-    fn change(pinned: Vec<crate::domain::PinnedMapping>) -> crate::config_store::PinChange {
-        crate::config_store::PinChange {
-            pinned,
-            skip_dirs: vec!["node_modules".into()],
-        }
-    }
-
-    #[test]
-    fn apply_unpin_reports_the_pair_it_removed() {
-        let mut state = crate::tui::initial_state();
-
-        apply_unpin(
-            &mut state,
-            Ok((change(Vec::new()), crate::config_store::Unpinned::Removed)),
-            "~/a.txt <-> a.txt".into(),
-        );
-
-        assert_eq!(state.status.as_deref(), Some("Unpinned ~/a.txt <-> a.txt"));
-    }
-
-    /// Both projected fields land, so a hand edit picked up by the load is not dropped
-    /// on the floor (issue #432).
-    #[test]
-    fn apply_unpin_projects_both_config_fields() {
-        let mut state = crate::tui::initial_state();
-        let mapping = crate::domain::PinnedMapping::fixture("/b.txt", "g2", "b.txt");
-
-        apply_unpin(
-            &mut state,
-            Ok((
-                change(vec![mapping.clone()]),
-                crate::config_store::Unpinned::Removed,
-            )),
-            "~/a.txt <-> a.txt".into(),
-        );
-
-        assert_eq!(state.pinned, vec![mapping]);
-        assert_eq!(state.skip_dirs, vec!["node_modules".to_string()]);
-    }
-
-    /// The key is exact now, so a stored config that no longer holds the pair is reachable.
-    /// Saying "Unpinned" there would be a lie (issue #424).
-    #[test]
-    fn apply_unpin_does_not_claim_a_removal_that_did_not_happen() {
-        let mut state = crate::tui::initial_state();
-
-        apply_unpin(
-            &mut state,
-            Ok((change(Vec::new()), crate::config_store::Unpinned::NotFound)),
-            "~/a.txt <-> a.txt".into(),
-        );
-
-        assert_eq!(
-            state.status.as_deref(),
-            Some("~/a.txt <-> a.txt is not pinned")
-        );
-    }
-
-    #[test]
-    fn apply_unpin_surfaces_a_failure_without_touching_the_pins() {
-        let mut state = crate::tui::initial_state();
-        state.pinned = vec![crate::domain::PinnedMapping::fixture(
-            "/a.txt", "g1", "a.txt",
-        )];
-
-        apply_unpin(
-            &mut state,
-            Err(anyhow::anyhow!("boom")),
-            "~/a.txt <-> a.txt".into(),
-        );
-
-        assert_eq!(state.status.as_deref(), Some("unpin failed: boom"));
-        assert_eq!(state.pinned.len(), 1);
     }
 
     // ---- write_scratch_file ---------------------------------------------
