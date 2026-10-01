@@ -3,7 +3,6 @@
 //! is called from `screens/pins.rs`. See `docs/agents/architecture.md`'s "Pin-sync
 //! presentation" section for the refresh-timing invariant.
 
-use super::bg::append_status;
 use crate::tui::AppState;
 
 /// One pin's presentation-derived sync facts, computed off the draw path.
@@ -281,7 +280,7 @@ fn apply_pin_sync(
     match result {
         Ok((change, crate::config_store::SyncRecord::Recorded)) => apply_pin_change(state, change),
         Ok((_, crate::config_store::SyncRecord::NotPinned)) => {}
-        Err(error) => append_status(state, format!("pin sync not recorded: {error}")),
+        Err(error) => state.append_status(format!("pin sync not recorded: {error}")),
     }
 }
 

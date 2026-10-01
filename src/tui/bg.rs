@@ -319,16 +319,6 @@ pub(super) fn write_scratch_file(
     }
 }
 
-/// Append a fact to the current status instead of overwriting it — so a synchronous
-/// local-scan failure never erases feedback a caller already set (issue #409).
-pub(super) fn append_status(state: &mut AppState, message: impl Into<String>) {
-    let message = message.into();
-    state.status = Some(match state.status.take() {
-        Some(existing) if !existing.is_empty() => format!("{existing}; {message}"),
-        _ => message,
-    });
-}
-
 /// Persist Settings-screen fields after a user change (issue #227). Creates config.toml
 /// only when a value actually changed (opening Config never calls this).
 pub(super) fn persist_settings(state: &mut AppState, success_message: String) {
