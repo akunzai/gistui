@@ -5,6 +5,7 @@ use crate::actions::{run_command, CommandPlan, CommandRunner};
 use crate::domain::{GistRevision, GistRevisionChangeStatus};
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
+use std::path::Path;
 
 /// Plan for listing every revision of a gist via the REST API.
 pub fn gist_commits_plan(gist_id: &str) -> CommandPlan {
@@ -208,6 +209,50 @@ fn classify_revision_file(entry: &serde_json::Value) -> Result<RevisionFileConte
     }
 }
 
+/// Asks the REST API for the number of revisions a gist has. `--jq` collapses the
+/// `history` array to its length so the command's stdout is just an integer.
+pub fn gist_revision_count_command(gist_id: &str) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            format!("/gists/{gist_id}"),
+            "--jq".into(),
+            ".history | length".into(),
+        ],
+    }
+}
+
+/// Parse the integer printed by [`gist_revision_count_command`].
+pub fn parse_revision_count(stdout: &str) -> Option<usize> {
+    stdout.trim().parse().ok()
+}
+
+/// JSON body for restoring a single file from an old gist revision via `PATCH /gists/{id}`.
+pub fn restore_revision_json(filename: &str, content: &str) -> String {
+    serde_json::json!({
+        "files": {
+            filename: { "content": content }
+        }
+    })
+    .to_string()
+}
+
+/// `gh api --method PATCH` plan that uploads old file content as a new gist revision.
+pub fn restore_revision_command(gist_id: &str, input_path: &Path) -> CommandPlan {
+    CommandPlan {
+        program: "gh".into(),
+        args: vec![
+            "api".into(),
+            "--method".into(),
+            "PATCH".into(),
+            format!("/gists/{gist_id}"),
+            "--input".into(),
+            input_path.display().to_string(),
+        ],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -295,5 +340,47 @@ mod tests {
         let calls = runner.calls();
         assert_eq!(calls[0], gist_revision_plan("g1", "sha1"));
         assert_eq!(calls[1], crate::actions::test_support::raw_get(&url));
+    }
+
+    #[test]
+    fn restore_revision_json_wraps_file_content() {
+        let body = restore_revision_json("config.toml", "old line\n");
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["files"]["config.toml"]["content"], "old line\n");
+    }
+
+    #[test]
+    fn restore_revision_command_patches_via_input_file() {
+        let plan = restore_revision_command("abc123", Path::new("/tmp/restore.json"));
+        assert_eq!(plan.program, "gh");
+        assert_eq!(
+            plan.args,
+            vec![
+                "api",
+                "--method",
+                "PATCH",
+                "/gists/abc123",
+                "--input",
+                "/tmp/restore.json"
+            ]
+        );
+    }
+
+    #[test]
+    fn gist_revision_count_command_uses_history_length_jq() {
+        let plan = gist_revision_count_command("abc123");
+        assert_eq!(plan.program, "gh");
+        assert_eq!(
+            plan.args,
+            vec!["api", "/gists/abc123", "--jq", ".history | length"]
+        );
+    }
+
+    #[test]
+    fn parse_revision_count_reads_trimmed_integer() {
+        assert_eq!(parse_revision_count("12\n"), Some(12));
+        assert_eq!(parse_revision_count("  1 "), Some(1));
+        assert_eq!(parse_revision_count("not a number"), None);
+        assert_eq!(parse_revision_count(""), None);
     }
 }

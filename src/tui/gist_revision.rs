@@ -268,7 +268,7 @@ pub(super) fn dispatch(jobs: &mut Jobs, state: &mut AppState, request: RevisionR
             // background job. On success the `ScratchDir` moves into the worker, whose
             // RAII drop cleans up after success, failure, or an ignored completion
             // (issue #275).
-            let body = crate::actions::restore_revision_json(target.filename(), &content);
+            let body = crate::gh::restore_revision_json(target.filename(), &content);
             let Some((scratch, json_path)) = write_scratch_file(
                 state,
                 "restore",
@@ -278,7 +278,7 @@ pub(super) fn dispatch(jobs: &mut Jobs, state: &mut AppState, request: RevisionR
             ) else {
                 return;
             };
-            let plan = crate::actions::restore_revision_command(target.gist_id(), &json_path);
+            let plan = crate::gh::restore_revision_command(target.gist_id(), &json_path);
             let runner = jobs.command_runner();
             let file = target.identity();
             let spec = job_spec(
@@ -1103,7 +1103,7 @@ mod tests {
         );
         assert_eq!(
             recorded[0].input_body.as_deref(),
-            Some(crate::actions::restore_revision_json("a.txt", "old\n").as_str()),
+            Some(crate::gh::restore_revision_json("a.txt", "old\n").as_str()),
             "the payload rewrites one file's content"
         );
 

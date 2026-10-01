@@ -136,11 +136,11 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                 move || {
                     let result = crate::actions::run_command(
                         runner.as_ref(),
-                        &crate::actions::gist_revision_count_command(&gist_id),
+                        &crate::gh::gist_revision_count_command(&gist_id),
                     )
                     .map_err(|e| e.to_string())
                     .and_then(|out| {
-                        crate::actions::parse_revision_count(&out)
+                        crate::gh::parse_revision_count(&out)
                             .ok_or_else(|| "could not parse revision count".to_string())
                     });
                     (result, gist_id, label)

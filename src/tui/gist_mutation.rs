@@ -127,7 +127,7 @@ pub(crate) const GIST_CHANGED_SINCE_PREVIEW: &str =
     "gist changed since the preview — press u to preview again";
 
 fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
-    use crate::actions::*;
+    use crate::gh::*;
     let staged = match request.clone() {
         MutationRequest::Upload(draft) => {
             // A catalog refresh may have landed since the preview (#523). Send only what the
@@ -498,6 +498,7 @@ mod tests {
     #[test]
     fn each_mutation_runs_its_gh_command_through_the_runner() {
         use crate::actions::*;
+        use crate::gh::*;
         let file = GistFileRef::id_name("g1", "a.txt");
         let cases: Vec<(MutationRequest, CommandPlan, &str)> = vec![
             (

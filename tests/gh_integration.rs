@@ -9,8 +9,9 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 
-use gistui::actions::{run_command, upload_command, CommandOutput, CommandPlan, CommandRunner};
+use gistui::actions::{run_command, CommandOutput, CommandPlan, CommandRunner};
 use gistui::domain::GistFile;
+use gistui::gh::upload_command;
 use gistui::gh::{
     auth_status_plan, check_gh_ready, fetch_gist_comments_page, fetch_gist_file_content,
     fetch_gist_list_json, gh_version_plan, gist_comments_page_plan, gist_get_plan, gist_list_plan,
