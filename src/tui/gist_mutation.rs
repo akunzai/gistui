@@ -51,6 +51,26 @@ pub enum MutationRequest {
     Fork { gist_id: String },
 }
 
+/// Semantic identity of a staged mutation job: kind and non-content payload only, so the
+/// recording action-spawner adapter can tell mutations apart without invoking `gh`
+/// (issue #422). Owned here, as `RevisionJobKind` is by its workflow; `ActionJobKind` only
+/// embeds it. Every mutation runs to completion once started, so none is cancellable (#478).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MutationJobKind {
+    Upload { file: GistFileRef },
+    Create { local_path: PathBuf, public: bool },
+    Delete { gist_id: String },
+    RemoveFile { file: GistFileRef },
+    Compact { gist_id: String },
+    Description { gist_id: String },
+    Star { gist_id: String, starring: bool },
+    Fork { gist_id: String },
+}
+
+fn job_spec(kind: MutationJobKind, progress: &str) -> ActionJobSpec {
+    ActionJobSpec::new(ActionJobKind::Mutation(kind), progress)
+}
+
 /// Stage `request` and spawn its `gh` job. A staging failure (a scratch copy that can't be
 /// written) reports and stays put.
 pub(super) fn dispatch(jobs: &mut Jobs, state: &mut AppState, request: MutationRequest) {
@@ -146,10 +166,7 @@ fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
             Staged {
                 plan: Plan::Command(plan),
                 scratch: Some(scratch),
-                spec: ActionJobSpec::new(
-                    ActionJobKind::Upload { file: file.clone() },
-                    "Uploading…",
-                ),
+                spec: job_spec(MutationJobKind::Upload { file: file.clone() }, "Uploading…"),
                 apply: Box::new(move |state, result| {
                     on_upload_replace(state, result, file, &local_path, &local_content, &sent)
                 }),
@@ -196,8 +213,8 @@ fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
             Staged {
                 plan: Plan::Command(create_command(&source, public, &description)),
                 scratch,
-                spec: ActionJobSpec::new(
-                    ActionJobKind::Create {
+                spec: job_spec(
+                    MutationJobKind::Create {
                         local_path: local_path.clone(),
                         public,
                     },
@@ -211,8 +228,8 @@ fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
         MutationRequest::Delete { gist_id } => Staged {
             plan: Plan::Command(delete_command(&gist_id)),
             scratch: None,
-            spec: ActionJobSpec::new(
-                ActionJobKind::DeleteGist {
+            spec: job_spec(
+                MutationJobKind::Delete {
                     gist_id: gist_id.clone(),
                 },
                 "Deleting gist…",
@@ -222,8 +239,8 @@ fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
         MutationRequest::RemoveFile { file } => Staged {
             plan: Plan::Command(remove_file_command(&file.gist_id, &file.filename)),
             scratch: None,
-            spec: ActionJobSpec::new(
-                ActionJobKind::RemoveFile { file: file.clone() },
+            spec: job_spec(
+                MutationJobKind::RemoveFile { file: file.clone() },
                 "Removing file…",
             ),
             apply: Box::new(move |state, result| {
@@ -239,8 +256,8 @@ fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
                 gist_id: gist_id.clone(),
             },
             scratch: None,
-            spec: ActionJobSpec::new(
-                ActionJobKind::CompactGist { gist_id },
+            spec: job_spec(
+                MutationJobKind::Compact { gist_id },
                 "Compacting revisions…",
             ),
             apply: Box::new(move |state, result| on_compact_gist(state, result, label, count)),
@@ -251,8 +268,8 @@ fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
         } => Staged {
             plan: Plan::Command(edit_description_command(&gist_id, &description)),
             scratch: None,
-            spec: ActionJobSpec::new(
-                ActionJobKind::UpdateDescription {
+            spec: job_spec(
+                MutationJobKind::Description {
                     gist_id: gist_id.clone(),
                 },
                 "Updating description…",
@@ -266,8 +283,8 @@ fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
                 unstar_gist_command(&gist_id)
             }),
             scratch: None,
-            spec: ActionJobSpec::new(
-                ActionJobKind::ToggleGistStar {
+            spec: job_spec(
+                MutationJobKind::Star {
                     gist_id: gist_id.clone(),
                     starring,
                 },
@@ -284,8 +301,8 @@ fn stage(state: &mut AppState, request: &MutationRequest) -> Option<Staged> {
         MutationRequest::Fork { gist_id } => Staged {
             plan: Plan::Command(fork_gist_command(&gist_id)),
             scratch: None,
-            spec: ActionJobSpec::new(
-                ActionJobKind::ForkGist {
+            spec: job_spec(
+                MutationJobKind::Fork {
                     gist_id: gist_id.clone(),
                 },
                 "Forking…",

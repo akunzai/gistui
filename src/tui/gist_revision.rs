@@ -110,6 +110,20 @@ pub enum RevisionJobKind {
     },
 }
 
+impl RevisionJobKind {
+    /// Whether this job writes to the gist (a restore is a new Gist revision), so it can't
+    /// be cancelled once started (#478). No `_` arm: a new job must say which it is.
+    pub(super) fn is_gist_mutation(&self) -> bool {
+        match self {
+            Self::ExecuteRestore { .. } => true,
+            Self::FetchHistory { .. }
+            | Self::DiffAdjacent { .. }
+            | Self::DiffAgainstCurrent { .. }
+            | Self::PreviewRestore { .. } => false,
+        }
+    }
+}
+
 /// What a successful restore changed, and what must be refreshed because of it. The
 /// workflow decides this policy; `screens::revisions` only applies what it describes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1339,5 +1353,33 @@ mod tests {
 
         assert_eq!(runner.calls()[1], crate::gh::gist_get_plan("g1"));
         Ok(())
+    }
+
+    /// Only a restore writes to the gist; every other revision job is a read and stays
+    /// cancellable (#478).
+    #[test]
+    fn only_a_restore_is_a_gist_mutation() {
+        let file = || GistFileRef::id_name("g1", "a.txt");
+        assert!(RevisionJobKind::ExecuteRestore { file: file() }.is_gist_mutation());
+        for read in [
+            RevisionJobKind::FetchHistory {
+                gist_id: "g1".into(),
+            },
+            RevisionJobKind::DiffAdjacent {
+                file: file(),
+                child_version: "v2".into(),
+                parent_version: None,
+            },
+            RevisionJobKind::DiffAgainstCurrent {
+                file: file(),
+                version: "v1".into(),
+            },
+            RevisionJobKind::PreviewRestore {
+                file: file(),
+                version: "v1".into(),
+            },
+        ] {
+            assert!(!read.is_gist_mutation(), "{read:?}");
+        }
     }
 }

@@ -238,6 +238,7 @@ mod tests {
     use crate::actions::test_support::SeqRunner;
     use crate::actions::CommandOutput;
     use crate::domain::{GistFile, PinnedMapping};
+    use crate::tui::gist_mutation::MutationJobKind;
     use crate::tui::gist_mutation::MutationRequest;
     use crate::tui::test_support::{idle_jobs, recording_jobs};
     use crossterm::event::KeyCode;
@@ -288,9 +289,9 @@ mod tests {
         assert_eq!(
             started.take(),
             vec![ActionJobSpec::new(
-                ActionJobKind::ForkGist {
+                ActionJobKind::Mutation(MutationJobKind::Fork {
                     gist_id: "not-owned".into(),
-                },
+                }),
                 "Forking…",
             )]
         );
