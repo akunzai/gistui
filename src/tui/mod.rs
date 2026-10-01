@@ -1646,6 +1646,16 @@ impl AppState {
         self.status = Some(message.into());
     }
 
+    /// Append a fact to the current status instead of overwriting it — so a synchronous
+    /// local-scan failure never erases feedback a caller already set (issue #409).
+    pub fn append_status(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        self.status = Some(match self.status.take() {
+            Some(existing) if !existing.is_empty() => format!("{existing}; {message}"),
+            _ => message,
+        });
+    }
+
     /// Context radius to render the diff with: `None` shows the full file, `Some(n)`
     /// collapses unchanged regions to `n` lines around each change.
     pub fn effective_diff_context(&self) -> Option<usize> {
@@ -1940,6 +1950,27 @@ mod tests {
     #[test]
     fn initial_state_enables_mouse_by_default() {
         assert!(super::initial_state().settings.mouse_enabled());
+    }
+
+    /// `append_status` keeps what a caller already reported (issue #409), and never starts a
+    /// status with a dangling separator.
+    #[test]
+    fn append_status_joins_onto_an_existing_status() {
+        let mut state = initial_state();
+
+        state.append_status("local refresh failed");
+        assert_eq!(state.status.as_deref(), Some("local refresh failed"));
+
+        state.set_status("Downloaded a.txt");
+        state.append_status("local refresh failed");
+        assert_eq!(
+            state.status.as_deref(),
+            Some("Downloaded a.txt; local refresh failed")
+        );
+
+        state.set_status("");
+        state.append_status("local refresh failed");
+        assert_eq!(state.status.as_deref(), Some("local refresh failed"));
     }
 
     #[test]

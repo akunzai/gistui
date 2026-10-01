@@ -8,7 +8,7 @@
 //! mutation (`gist_mutation`), not this module's. Eligibility guards (what is selected, is
 //! the pair pinned) stay with the keys that build the request.
 
-use super::bg::{append_status, Jobs, LoopFlow};
+use super::bg::{Jobs, LoopFlow};
 use super::gist_content::GistContentStore;
 use super::pin_sync::{confirm_sync_baseline, record_pin_sync};
 use super::{AppState, DeferredEntry, UploadDraft};
@@ -488,7 +488,7 @@ pub(super) fn refresh_locals(state: &mut AppState, target: Option<&std::path::Pa
         }
         Err(error) => {
             state.end_local_scan(generation);
-            append_status(state, format!("local refresh failed: {error}"));
+            state.append_status(format!("local refresh failed: {error}"));
         }
     }
 }
