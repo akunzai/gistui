@@ -4,6 +4,7 @@
 
 use super::bg::*;
 use super::pin_sync::{pin_paths, unpin_at_pin_index, unpin_path};
+use super::sync::download;
 use super::*;
 use editor::{edit_local_path, edit_upload_buffer};
 use ratatui::{backend::CrosstermBackend, Terminal};

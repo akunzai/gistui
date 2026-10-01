@@ -27,7 +27,7 @@ No **new** facade re-export was added for the moved types, and `src/tui/mod.rs`'
 ## Sync policy (`src/sync_content.rs`, issue #464)
 
 - **One owner for sync content rules.** `SyncPolicy` (built by `RuntimeSettings::sync_policy`) answers what an upload/create sends (`outbound`), what a download writes (`to_disk`, `write_download`), whether two sides are `identical`, and the `diff` / `preview_diff` between them. Callers never call `diff::normalize_line_endings`, `content_eq`, or `unified_diff` directly.
-- **A download is one path**: `bg::write_download` writes through the policy, records the pin baseline (`pin_sync::record_pin_sync`) from the bytes it returns, reports, and rescans locals; callers only navigate. `actions::execute_download` writes exactly the bytes it is given.
+- **A download is one path**: `sync::write_download` writes through the policy, records the pin baseline (`pin_sync::record_pin_sync`) from the bytes it returns, reports, and rescans locals; callers only navigate. `actions::execute_download` writes exactly the bytes it is given.
 
 ## Gist content store (`src/tui/gist_content.rs`, issue #406)
 
@@ -134,7 +134,7 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
   all three stay private to `Jobs`; call sites still use only `spawn_action` /
   `spawn_gist_fetch_action`. Every revision job reifies as one `ActionJobKind::Revision(…)`
   whose payload the workflow owns.
-- **Local-scan orchestration lives in `src/tui/local_scan.rs`** (issue #409), separate from filesystem walking (`crate::local`) and thread/channel IO (`Jobs`, `src/tui/bg.rs`). `ScanRequest` (cwd, pinned mappings, `ScanMode::{Flat,Recursive}`, skip dirs, max depth) is the one snapshot startup, `Jobs::request_local_scan`, and `bg::refresh_locals` all build via `AppState::local_scan_request` — `ScanMode` is a snapshot of `local_recursive`, not a live read, so an in-flight scan keeps the mode it started with. A private `LocalScan` (generation + in-flight) on `AppState` is mutated only through `begin_local_scan` / `apply_local_scan` / `end_local_scan`; a stale generation can end no in-flight state and apply no candidates. `apply_local_scan` is the one candidate-application operation background and synchronous paths share: it preserves the selected path (an explicit target — e.g. a just-downloaded file — beats whatever is selected at apply time), clears local hscroll unless that exact path survives, and re-clamps the gist cursor (index *and* hscroll) if reranking invalidated it. A current failure or channel disconnect ends in-flight state and reports it (`"local scan failed: …"` for the interactive scan, `"local refresh failed: …"` appended onto whatever status the caller already set for the synchronous post-download refresh) without touching last-known-good candidates; only success clears its own `SCANNING_STATUS` placeholder, never a newer status a later action wrote. Pin/unpin never rescans — it does not touch the filesystem, and ranking reads `PinnedMapping` directly — so `LocalCandidate.pinned` does not exist; recursive alias dedup (`crate::local::path_priority`) still prefers a pinned path by reading `PinnedMapping` itself.
+- **Local-scan orchestration lives in `src/tui/local_scan.rs`** (issue #409), separate from filesystem walking (`crate::local`) and thread/channel IO (`Jobs`, `src/tui/bg.rs`). `ScanRequest` (cwd, pinned mappings, `ScanMode::{Flat,Recursive}`, skip dirs, max depth) is the one snapshot startup, `Jobs::request_local_scan`, and `sync::refresh_locals` all build via `AppState::local_scan_request` — `ScanMode` is a snapshot of `local_recursive`, not a live read, so an in-flight scan keeps the mode it started with. A private `LocalScan` (generation + in-flight) on `AppState` is mutated only through `begin_local_scan` / `apply_local_scan` / `end_local_scan`; a stale generation can end no in-flight state and apply no candidates. `apply_local_scan` is the one candidate-application operation background and synchronous paths share: it preserves the selected path (an explicit target — e.g. a just-downloaded file — beats whatever is selected at apply time), clears local hscroll unless that exact path survives, and re-clamps the gist cursor (index *and* hscroll) if reranking invalidated it. A current failure or channel disconnect ends in-flight state and reports it (`"local scan failed: …"` for the interactive scan, `"local refresh failed: …"` appended onto whatever status the caller already set for the synchronous post-download refresh) without touching last-known-good candidates; only success clears its own `SCANNING_STATUS` placeholder, never a newer status a later action wrote. Pin/unpin never rescans — it does not touch the filesystem, and ranking reads `PinnedMapping` directly — so `LocalCandidate.pinned` does not exist; recursive alias dedup (`crate::local::path_priority`) still prefers a pinned path by reading `PinnedMapping` itself.
 - Call sites start work via `Jobs` methods (`spawn_action`, `request_local_scan`, …), `gist_revision::dispatch`, or `gist_mutation::dispatch` — do not own ad-hoc channel fields on `AppState`.
 - `run_loop` only **polls** `jobs.absorb`.
 - **Action jobs carry their apply** (issue #375, ADR-0002's async-response half): `spawn_action(spec, run, apply)` runs `run` off-thread and boxes `apply(value)` for the event-loop tick. There is no `BgTaskOutcome` enum. `ActionApply` is `FnOnce(&mut AppState) -> LoopFlow`. `on_action_outcome` is a generation-guard shell that calls the closure. `KeyOutcome` / `dispatch_outcome` stay plain data (ADR-0002).
@@ -157,14 +157,14 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
   Its apply handlers are the workflow's own (`on_compare`, `on_pull`, `on_push`): a sync's
   outcome belongs to no single screen.
 - The confirmed upload is a Gist mutation, not a sync; `d` in an open Diff writes the bytes
-  already fetched (`bg::download`), with no request.
+  already fetched (`sync::download`), with no request.
 - **Sync owns what a pin believes after a push, and where the user lands** (issue #526).
   `gist_mutation::on_upload_replace` calls one follow-up, `sync::on_push_done`, once its
   upload succeeds: it records the pair's Sync baseline (from the local file's bytes on disk,
   not the possibly redacted/transformed bytes sent), patches the uploaded file's blob sha into
   the in-memory catalog, marks the pin-sync cache dirty through the existing projection
-  (`apply_pin_change`), and leaves Confirm and any stale Diff — `bg::land_after_confirmed_sync`,
-  the same landing rule `bg::download` uses on success. `gist_mutation.rs` keeps only what
+  (`apply_pin_change`), and leaves Confirm and any stale Diff — `sync::land_after_confirmed_sync`,
+  the same landing rule `sync::download` uses on success. `gist_mutation.rs` keeps only what
   applies to every file mutation: content-store invalidation.
 - Tests drive it through `sync::dispatch` + `Jobs::inline` + `SeqRunner`, as a table over
   intent × identical × pinned, plus `Auto`'s arms and List-to-Diff paths end to end.
