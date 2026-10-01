@@ -4,7 +4,7 @@ Opening a screen after async work is recorded at intent time: `DeferredEntry` sn
 
 We decided **not** to. By the end of the 2026-09 sync work (#524–#526) every landing rule had one named, tested home:
 
-- `bg::land_after_confirmed_sync` for a download and a push: leave Confirm if on it, then a Diff the write made stale.
+- `sync::land_after_confirmed_sync` for a download and a push: leave Confirm if on it, then a Diff the write made stale.
 - `AppState::cancel_confirm_after_delete` for a gist delete: pop the deleted gist's own `GistDetail`.
 - `cancel_confirm` for compaction.
 - `back_to_list` for remove-file and create. Both are launched only from the List, which architecture.md's `back_to_list` rule requires.

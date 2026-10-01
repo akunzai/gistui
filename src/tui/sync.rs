@@ -8,7 +8,7 @@
 //! mutation (`gist_mutation`), not this module's. Eligibility guards (what is selected, is
 //! the pair pinned) stay with the keys that build the request.
 
-use super::bg::{land_after_confirmed_sync, write_download, Jobs, LoopFlow};
+use super::bg::{append_status, Jobs, LoopFlow};
 use super::gist_content::GistContentStore;
 use super::pin_sync::{confirm_sync_baseline, record_pin_sync};
 use super::{AppState, DeferredEntry, UploadDraft};
@@ -397,6 +397,98 @@ fn patch_catalog_blob_sha(
             {
                 g.raw_url = Some(url);
             }
+        }
+    }
+}
+
+// ---- the sync write path: download, landing, local rescan (moved from bg.rs) -----------
+
+pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode) {
+    let Some((pair, content)) = state.diff().and_then(|d| match &d.kind {
+        crate::tui::DiffKind::Sync { pair, remote } => Some((pair.clone(), remote.clone())),
+        crate::tui::DiffKind::Revision => None,
+    }) else {
+        return;
+    };
+    match write_download(state, &pair.local, &content, mode, Some(&pair.gist)) {
+        Ok(()) => land_after_confirmed_sync(state),
+        Err(()) => state.cancel_confirm_to_diff(),
+    }
+}
+
+/// Land off Confirm and any stale Diff — the rule a successful download and a successful
+/// push (`sync::on_push_done`) both use (issue #520): the write just made whatever comparison
+/// was on screen stale, so skip past the download overwrite gate's Confirm (if any) and a
+/// parked Diff to land on whatever was behind them.
+pub(super) fn land_after_confirmed_sync(state: &mut AppState) {
+    if state.screen.is_confirm() {
+        state.leave();
+    }
+    if state.screen.is_diff() {
+        state.leave();
+    }
+}
+
+/// Download one gist file to `target`: write it as the Sync policy dictates, record the pin
+/// baseline from the bytes actually written (when `pin` names the pair), report, and rescan
+/// locals. Navigation stays with the caller. On failure the status already says why.
+pub(super) fn write_download(
+    state: &mut AppState,
+    target: &std::path::Path,
+    remote: &str,
+    mode: crate::actions::DownloadMode,
+    pin: Option<&crate::domain::GistFileRef>,
+) -> std::result::Result<(), ()> {
+    let written = match state
+        .settings
+        .sync_policy()
+        .write_download(target, remote, mode)
+    {
+        Ok(written) => written,
+        Err(error) => {
+            state.set_status(format!("download failed: {error}"));
+            return Err(());
+        }
+    };
+    state.set_status(format!(
+        "Downloaded {}",
+        target
+            .file_name()
+            .unwrap_or(target.as_os_str())
+            .to_string_lossy()
+    ));
+    if let Some(pin) = pin {
+        super::pin_sync::record_pin_sync(
+            state,
+            target,
+            &pin.gist_id,
+            &pin.filename,
+            &crate::sync_baseline::SyncBaseline::after_sync(written.as_bytes(), remote.as_bytes()),
+            Some(crate::domain::SyncDirection::Download),
+        );
+    }
+    refresh_locals(state, Some(target));
+    Ok(())
+}
+
+/// Synchronous local re-scan after a successful download, using the active recursive mode
+/// (issue #409) so the just-downloaded file is visible immediately without waiting for an
+/// interactive scan. Supersedes any scan already in flight. On failure the last-known-good
+/// candidates and selection are kept, and the failure is appended to whatever status the
+/// caller already set — e.g. "Downloaded a.txt; local refresh failed: …" — instead of
+/// overwriting it.
+pub(super) fn refresh_locals(state: &mut AppState, target: Option<&std::path::Path>) {
+    let request = state.local_scan_request(super::local_scan::ScanMode::from_active(
+        state.local_recursive,
+    ));
+    let generation = state.begin_local_scan();
+    match request.run() {
+        Ok(candidates) => {
+            state.apply_local_scan(generation, candidates, target);
+        }
+        Err(error) => {
+            state.end_local_scan(generation);
+            append_status(state, format!("local refresh failed: {error}"));
         }
     }
 }
@@ -841,7 +933,7 @@ mod tests {
         );
         run(&mut state, &gist_serving("a.txt", "new\n"), request);
 
-        crate::tui::bg::download(
+        download(
             &mut state,
             crate::actions::DownloadMode::overwrite_after_user_confirm(),
         );
@@ -921,5 +1013,56 @@ mod tests {
 
         assert!(state.pinned.is_empty());
         assert!(state.status.is_none());
+    }
+
+    // ---- refresh_locals -------------------------------------------------
+
+    #[test]
+    fn refresh_locals_preserves_nested_selection_in_recursive_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        let target = nested.join("settings.json");
+        std::fs::write(&target, "body").unwrap();
+        let compared = nested.join("local.json");
+        std::fs::write(&compared, "local").unwrap();
+        let mut state = initial_state();
+        state.cwd = dir.path().to_path_buf();
+        state.local_recursive = true;
+        state.locals = vec![crate::domain::LocalCandidate {
+            path: compared,
+            modified: None,
+        }];
+
+        refresh_locals(&mut state, Some(&target));
+
+        assert_eq!(state.selected_local().map(|file| file.path), Some(target));
+    }
+
+    /// A failed synchronous refresh keeps last-known-good candidates and appends its own
+    /// failure onto whatever status the caller already set (issue #409).
+    #[test]
+    fn refresh_locals_failure_keeps_candidates_and_appends_to_the_existing_status() {
+        let mut state = initial_state();
+        // A cwd that cannot be scanned (never created) makes discovery fail.
+        state.cwd = tempfile::tempdir().unwrap().path().join("does-not-exist");
+        state.locals = vec![crate::domain::LocalCandidate {
+            path: PathBuf::from("kept.txt"),
+            modified: None,
+        }];
+        state.status = Some("Downloaded a.txt".into());
+
+        refresh_locals(&mut state, None);
+
+        assert_eq!(state.locals.len(), 1);
+        assert_eq!(state.locals[0].path, PathBuf::from("kept.txt"));
+        assert!(
+            state
+                .status
+                .as_deref()
+                .is_some_and(|s| s.starts_with("Downloaded a.txt; local refresh failed: ")),
+            "status was {:?}",
+            state.status
+        );
     }
 }
