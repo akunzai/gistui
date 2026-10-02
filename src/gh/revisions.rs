@@ -209,25 +209,6 @@ fn classify_revision_file(entry: &serde_json::Value) -> Result<RevisionFileConte
     }
 }
 
-/// Asks the REST API for the number of revisions a gist has. `--jq` collapses the
-/// `history` array to its length so the command's stdout is just an integer.
-pub fn gist_revision_count_command(gist_id: &str) -> CommandPlan {
-    CommandPlan {
-        program: "gh".into(),
-        args: vec![
-            "api".into(),
-            format!("/gists/{gist_id}"),
-            "--jq".into(),
-            ".history | length".into(),
-        ],
-    }
-}
-
-/// Parse the integer printed by [`gist_revision_count_command`].
-pub fn parse_revision_count(stdout: &str) -> Option<usize> {
-    stdout.trim().parse().ok()
-}
-
 /// JSON body for restoring a single file from an old gist revision via `PATCH /gists/{id}`.
 pub fn restore_revision_json(filename: &str, content: &str) -> String {
     serde_json::json!({
@@ -364,23 +345,5 @@ mod tests {
                 "/tmp/restore.json"
             ]
         );
-    }
-
-    #[test]
-    fn gist_revision_count_command_uses_history_length_jq() {
-        let plan = gist_revision_count_command("abc123");
-        assert_eq!(plan.program, "gh");
-        assert_eq!(
-            plan.args,
-            vec!["api", "/gists/abc123", "--jq", ".history | length"]
-        );
-    }
-
-    #[test]
-    fn parse_revision_count_reads_trimmed_integer() {
-        assert_eq!(parse_revision_count("12\n"), Some(12));
-        assert_eq!(parse_revision_count("  1 "), Some(1));
-        assert_eq!(parse_revision_count("not a number"), None);
-        assert_eq!(parse_revision_count(""), None);
     }
 }

@@ -93,7 +93,7 @@ pub(super) fn dispatch(jobs: &mut Jobs, state: &mut AppState, request: MutationR
                     crate::actions::run_command(runner.as_ref(), &plan).map(|_| ())
                 }
                 Plan::Compact { gist_id } => {
-                    crate::actions::execute_compact_gist(runner.as_ref(), &gist_id)
+                    crate::gh::execute_compact_gist(runner.as_ref(), &gist_id)
                 }
             }
             .map_err(|e| e.to_string());

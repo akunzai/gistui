@@ -135,15 +135,8 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
                     "Checking revisions…",
                 ),
                 move || {
-                    let result = crate::actions::run_command(
-                        runner.as_ref(),
-                        &crate::gh::gist_revision_count_command(&gist_id),
-                    )
-                    .map_err(|e| e.to_string())
-                    .and_then(|out| {
-                        crate::gh::parse_revision_count(&out)
-                            .ok_or_else(|| "could not parse revision count".to_string())
-                    });
+                    let result = crate::gh::fetch_revision_count(runner.as_ref(), &gist_id)
+                        .map_err(|e| e.to_string());
                     (result, gist_id, label)
                 },
                 move |(result, gist_id, label), state| {
