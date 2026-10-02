@@ -13,7 +13,7 @@
 //! (ownership, what is selected) stay with the screens that build the request.
 
 use super::bg::{write_scratch_file, ActionJobKind, ActionJobSpec, Jobs, LoopFlow};
-use super::{AppState, UploadDraft};
+use super::{AppState, DeferredEntry, UploadDraft};
 use crate::domain::GistFileRef;
 use std::path::PathBuf;
 
@@ -102,6 +102,38 @@ pub(super) fn dispatch(jobs: &mut Jobs, state: &mut AppState, request: MutationR
             result
         },
         move |result, state| apply(state, result),
+    );
+}
+
+/// Compaction's read-only preflight: count the gist's revisions, then let
+/// [`crate::tui::screens::confirm::on_compact_analyze`] open the Confirm (or report that a
+/// single revision has nothing to compact). It writes nothing, so unlike a mutation it stays
+/// cancellable (`ActionJobKind::AnalyzeCompact`); `y` on that Confirm is
+/// [`MutationRequest::Compact`].
+pub(super) fn analyze_compact(
+    jobs: &mut Jobs,
+    state: &mut AppState,
+    entry: DeferredEntry,
+    gist_id: String,
+    label: String,
+) {
+    let runner = jobs.command_runner();
+    jobs.spawn_action(
+        state,
+        ActionJobSpec::new(
+            ActionJobKind::AnalyzeCompact {
+                gist_id: gist_id.clone(),
+            },
+            "Checking revisions…",
+        ),
+        move || {
+            let result = crate::gh::fetch_revision_count(runner.as_ref(), &gist_id)
+                .map_err(|e| e.to_string());
+            (result, gist_id, label)
+        },
+        move |(result, gist_id, label), state| {
+            super::screens::confirm::on_compact_analyze(state, entry, result, gist_id, label)
+        },
     );
 }
 
@@ -473,7 +505,7 @@ pub(crate) fn on_fork_gist(
 mod tests {
     use super::*;
     use crate::domain::PinnedMapping;
-    use crate::tui::test_support::gist_file_ref;
+    use crate::tui::test_support::{detail_mut, gist_file_ref, state_with_gists};
     use crate::tui::*;
     use std::sync::Arc;
 
@@ -1210,5 +1242,115 @@ mod tests {
 
         assert!(state.gist_list_stale);
         assert_eq!(state.status.as_deref(), Some("forked g1 into your account"));
+    }
+
+    /// Press `c` on a GistDetail and run the revision-count preflight against `runner`.
+    fn press_compact(state: &mut AppState, jobs: &mut Jobs) {
+        state.screen = Screen::GistDetail(Box::default());
+        detail_mut(state).gist_id = Some("g1".into());
+        let KeyOutcome::CompactGist {
+            entry,
+            gist_id,
+            label,
+        } = state.handle_key(crossterm::event::KeyCode::Char('c'))
+        else {
+            panic!("c should request compaction");
+        };
+        analyze_compact(jobs, state, entry, gist_id, label);
+        jobs.on_action_outcome(state);
+    }
+
+    #[test]
+    fn compaction_counts_confirms_then_squashes_and_force_pushes() {
+        let mut state = state_with_gists();
+        let mut outputs = vec![CommandOutput::ok("3\n"), CommandOutput::ok("")];
+        outputs.push(CommandOutput::ok("main\n"));
+        outputs.extend(vec![CommandOutput::ok(""); 5]);
+        let runner = Arc::new(SeqRunner::new(outputs));
+        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
+
+        press_compact(&mut state, &mut jobs);
+        assert!(matches!(
+            state.pending_action(),
+            Some(PendingAction::CompactGist { gist_id, count: 3, .. }) if gist_id == "g1"
+        ));
+
+        let KeyOutcome::Mutation(request) = state.handle_key(crossterm::event::KeyCode::Char('y'))
+        else {
+            panic!("y should confirm the compaction");
+        };
+        dispatch(&mut jobs, &mut state, request);
+        jobs.on_action_outcome(&mut state);
+
+        // The scratch dir is a fresh temp path, so each call is reduced to its program and
+        // first two arguments after any `-C <dir>`.
+        let steps: Vec<String> = runner
+            .calls()
+            .iter()
+            .map(|c| {
+                let args = c
+                    .args
+                    .strip_prefix(&["-C".to_string()])
+                    .map_or(&c.args[..], |a| &a[1..]);
+                let n = if c.program == "gh" { args.len() } else { 2 };
+                format!("{} {}", c.program, args[..n].join(" "))
+            })
+            .collect();
+        assert_eq!(
+            steps,
+            vec![
+                "gh api /gists/g1 --jq .history | length",
+                "git clone https://gist.github.com/g1.git",
+                "git rev-parse --abbrev-ref",
+                "git checkout --orphan",
+                "git add -A",
+                "git -c user.name=gistui",
+                "git branch -M",
+                "git push --force",
+            ]
+        );
+        assert!(state.screen.is_gist_detail(), "success leaves Confirm");
+        assert!(state.gist_list_stale);
+        assert!(state
+            .status
+            .as_deref()
+            .unwrap_or_default()
+            .contains("3 → 1 revision"));
+    }
+
+    #[test]
+    fn compaction_of_a_single_revision_gist_stops_at_the_count() {
+        let mut state = state_with_gists();
+        let runner = Arc::new(SeqRunner::new(vec![CommandOutput::ok("1\n")]));
+        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
+
+        press_compact(&mut state, &mut jobs);
+
+        assert_eq!(runner.calls().len(), 1);
+        assert!(state.screen.is_gist_detail());
+        assert!(state
+            .status
+            .as_deref()
+            .unwrap_or_default()
+            .contains("nothing to compact"));
+    }
+
+    #[test]
+    fn compaction_reports_a_failed_count_without_confirming() {
+        let mut state = state_with_gists();
+        let runner = Arc::new(SeqRunner::new(vec![CommandOutput {
+            success: false,
+            stdout: String::new(),
+            stderr: "HTTP 404".into(),
+        }]));
+        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
+
+        press_compact(&mut state, &mut jobs);
+
+        assert!(state.screen.is_gist_detail());
+        assert_eq!(
+            state.status.as_deref(),
+            Some("revision check failed: HTTP 404")
+        );
     }
 }

@@ -6,7 +6,7 @@ Index: [`AGENTS.md`](../../AGENTS.md). Source of truth for types lives in the mo
 
 | Kind | Modules | Testing |
 | --- | --- | --- |
-| **Pure** (unit-tested) | `domain`, `config`, `ranking`, `local`, `diff`, `pins`, actions **plan/guard**, `gh::mutations` (gist write plans), `tui::view_model`, `tui::list_ranking`, `tui::settings`, `tui::gist_content`, `tui::local_scan`, `config_store` (file IO, but fully unit-tested over `tempfile` — same as `config`) | In-crate unit tests |
+| **Pure** (unit-tested) | `domain`, `config`, `ranking`, `local`, `diff`, `pins`, actions **plan/guard**, `gh::mutations` (gist write plans), `gh::compact` (compaction's revision count, clone/squash/force-push plans, and auth hint; its command sequence is unit-tested over `SeqRunner`), `tui::view_model`, `tui::list_ranking`, `tui::settings`, `tui::gist_content`, `tui::local_scan`, `config_store` (file IO, but fully unit-tested over `tempfile` — same as `config`) | In-crate unit tests |
 | **Impure** (thin IO) | `gh`, actions **execute**, `tui::run_loop` / `tui::bg` / `tui::gist_refresh` / `tui::gist_revision` / `tui::pin_sync` | No live `gh`. Spawn/absorb is thin IO; action-job `on_*` apply handlers (screen modules / `gist_mutation.rs`) are unit-tested (#298, #383) |
 
 `build_view_model` (`src/tui/view_model.rs`): `AppState` + pin-sync cache → presentation facts. Paint helpers apply theme/layout only — no business rules, FS, or network.
@@ -172,7 +172,8 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
 ## Gist mutation workflow (`src/tui/gist_mutation.rs`)
 
 - **One entry for every change to a gist**: `gist_mutation::dispatch(jobs, state, MutationRequest)`. `route_outcome` resolves the Confirm's `PendingAction` (or the key's payload) into the plain-data request at key time, so the workflow never reads Confirm after that (#460). Eligibility guards (fork ownership, what is selected) stay with the screens and `route_outcome`.
-- The workflow stages scratch copies, builds the `gh` plan, and runs it through `Jobs::command_runner()` — compaction included, via `execute_compact_gist(runner, …)`. Restore is the Gist revision workflow's.
+- The workflow stages scratch copies, builds the `gh` plan, and runs it through `Jobs::command_runner()` — compaction included, via `gh::execute_compact_gist(runner, …)`. Restore is the Gist revision workflow's.
+- **Compaction starts with a preflight**: GistDetail's `c` routes to `gist_mutation::analyze_compact`, which counts the gist's revisions (`gh::fetch_revision_count`) and hands the result to `confirm::on_compact_analyze` to open the Confirm. The preflight writes nothing, so it is not a mutation: its job is `ActionJobKind::AnalyzeCompact` and stays cancellable. `y` on that Confirm is `MutationRequest::Compact`.
 - **The launching screen stays up while a mutation runs** (#476): no key reaches it (the busy overlay swallows input), and a mutation is not cancellable — `Jobs::cancel_action` refuses when `ActionJobKind::is_gist_mutation` (#478; `ActionJobKind::Mutation(MutationJobKind)` is owned by `gist_mutation.rs`, and `RevisionJobKind::is_gist_mutation` says a restore counts), because cutting a write short leaves GitHub in an unknown state. Its `on_*` handler leaves the screen on success; on failure the user is still on the Confirm (or editor) they confirmed from, input intact.
 - Tests drive it like the revision workflow: `Jobs::inline` + `SeqRunner`, draining with `on_action_outcome` (not `absorb`, which would start a real list refresh).
 

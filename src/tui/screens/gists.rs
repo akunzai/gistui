@@ -321,9 +321,7 @@ pub(crate) fn render_gists_vm(
 mod tests {
     use super::*;
     use crate::tui::render::list_pane::ListPaneEmpty;
-    use crate::tui::test_support::{
-        gists_mut, set_pending, state_with_gists, state_with_two_gists,
-    };
+    use crate::tui::test_support::{gists_mut, state_with_gists, state_with_two_gists};
     use crate::tui::*;
     use crossterm::event::KeyCode;
 
@@ -381,43 +379,6 @@ mod tests {
             state.handle_key(KeyCode::Char('o')),
             KeyOutcome::OpenBrowser { .. }
         ));
-    }
-
-    #[test]
-    fn compact_confirm_y_executes_and_n_returns_to_gist_manager() {
-        let mut state = state_with_two_gists();
-        state.screen = Screen::Gists(Box::default());
-        set_pending(
-            &mut state,
-            PendingAction::CompactGist {
-                gist_id: "a".into(),
-                label: "My Ghostty config".into(),
-                count: 3,
-            },
-        );
-        assert_eq!(
-            state.handle_key(KeyCode::Char('y')),
-            KeyOutcome::Mutation(crate::tui::gist_mutation::MutationRequest::Compact {
-                gist_id: "a".into(),
-                label: "My Ghostty config".into(),
-                count: 3,
-            })
-        );
-
-        // Re-open confirm for the cancel path (y does not leave Confirm until IO runs).
-        state.screen = Screen::Gists(Box::default());
-        set_pending(
-            &mut state,
-            PendingAction::CompactGist {
-                gist_id: "a".into(),
-                label: "My Ghostty config".into(),
-                count: 3,
-            },
-        );
-        // Cancelling drops the pending action and lands back on the parked restore target.
-        state.handle_key(KeyCode::Char('n'));
-        assert!(state.screen.is_gists());
-        assert!(state.pending_action().is_none());
     }
 
     #[test]
