@@ -10,12 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-10-03
+
 - Changing line-ending or trailing-newline settings in Config now updates a parked Local/Gist
   Diff's comparison, preview and identical-state together, without altering staged content.
-
 - Reveal the selected Local/Gist hunk using the current pane dimensions in the first
   frame after opening or resizing the Diff.
-
 - Keep selected hunk text readable by using bold text and row markers without a bright background.
 - Local/Gist diffs now show aligned sides and let you stage individual hunks in either
   direction, undo them, and preview the writes before saving. Saves recheck both live
@@ -387,7 +387,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.24.1...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/akunzai/gistui/releases/tag/v0.25.0
 [0.24.1]: https://github.com/akunzai/gistui/releases/tag/v0.24.1
 [0.24.0]: https://github.com/akunzai/gistui/releases/tag/v0.24.0
 [0.23.1]: https://github.com/akunzai/gistui/releases/tag/v0.23.1
