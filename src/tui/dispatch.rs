@@ -3,7 +3,7 @@
 //! layer does not re-resolve list/detail selection.
 
 use super::bg::*;
-use super::pin_sync::{pin_paths, unpin_at_pin_index, unpin_path};
+use super::pin_sync::{pin_paths, unpin_path};
 use super::sync::{download, request_download};
 use super::*;
 use editor::{edit_local_path, edit_upload_buffer};
@@ -117,17 +117,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
         KeyOutcome::RefreshLocals => {
             jobs.request_local_scan(state);
         }
-        KeyOutcome::UnpinAtPin { index } => {
-            if unpin_at_pin_index(state, index) {
-                let len = state.visible_pin_indices().len();
-                if let Some(pins) = state.pins_mut() {
-                    pins.cursor.clamp_len(len);
-                }
-                // No filesystem rescan: unpin never touches the filesystem, and ranking reads
-                // `PinnedMapping` directly — a forced-flat rescan here used to make the local
-                // list drift back to cwd-only even while recursive mode was active (issue #409).
-            }
-        }
+        KeyOutcome::UnpinAtPin { index } => screens::pins::unpin_at(state, index),
         KeyOutcome::Revision(request) => gist_revision::dispatch(jobs, state, request),
         KeyOutcome::Mutation(request) => gist_mutation::dispatch(jobs, state, request),
         KeyOutcome::Sync(request) => crate::tui::sync::dispatch(jobs, state, request),
