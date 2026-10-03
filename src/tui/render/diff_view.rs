@@ -1,6 +1,7 @@
 //! Highlighted unified-diff painting.
 
 use super::*;
+use crate::tui::screens::diff::DiffVm;
 
 /// Word-level inline highlight for a unified-diff `-`/`+` line.
 /// `bold_tag` is the change side that gets BOLD (`Delete` for del, `Insert` for ins).
@@ -222,6 +223,10 @@ pub(crate) fn render_diff_pane_vm(
     diff: &crate::tui::screens::diff::DiffVm,
     theme: &Theme,
 ) {
+    if let Some(sides) = &diff.sides {
+        render_side_by_side(frame, area, diff, sides, theme);
+        return;
+    }
     let block = Block::default()
         .title(fit_block_title(&diff.title, area.width))
         .borders(Borders::ALL)
@@ -260,6 +265,103 @@ pub(crate) fn render_diff_pane_vm(
     if !diff.wrap {
         let total_lines = diff.body.lines().count();
         render_text_scrollbar(frame, area, total_lines, diff.scroll as usize);
+    }
+}
+
+/// Wrap each aligned row to a shared height. Scroll skips logical rows on both sides,
+/// so a long line never shifts the Gist rows away from their Local counterparts.
+fn render_side_by_side(
+    frame: &mut Frame,
+    area: Rect,
+    diff: &DiffVm,
+    sides: &crate::tui::screens::diff::SideBySideVm,
+    theme: &Theme,
+) {
+    let panes = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+    let blocks = [&sides.local_title, &sides.gist_title].map(|title| {
+        Block::default()
+            .title(fit_block_title(title, panes[0].width))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .style(theme.base_style())
+    });
+    let inners = [blocks[0].inner(panes[0]), blocks[1].inner(panes[1])];
+    let mut texts: [Vec<Line<'static>>; 2] = [Vec::new(), Vec::new()];
+    let width = inners
+        .iter()
+        .map(|r| r.width.saturating_sub(9) as usize)
+        .min()
+        .unwrap_or(0)
+        .max(1);
+    let rows = crate::tui::screens::diff::aligned_rows(&sides.rows, width, diff.wrap);
+    for row in rows
+        .iter()
+        .skip(diff.scroll as usize)
+        .take(inners[0].height as usize)
+    {
+        let values = [&row.local, &row.gist];
+        for side in 0..2 {
+            let selected = row.hunk == Some(sides.selected);
+            let changed = row.hunk.is_some() && values[side].is_some();
+            let sign = if changed {
+                if side == 0 {
+                    '-'
+                } else {
+                    '+'
+                }
+            } else {
+                ' '
+            };
+            let number = values[side]
+                .as_ref()
+                .filter(|(n, _)| *n > 0)
+                .map(|(n, _)| n.to_string())
+                .unwrap_or_default();
+            let prefix = format!("{}{:>5} {sign} ", if selected { '▶' } else { ' ' }, number);
+            let color = if changed {
+                if side == 0 {
+                    theme.del_color
+                } else {
+                    theme.ins_color
+                }
+            } else {
+                theme.base_style().fg.unwrap_or(Color::Reset)
+            };
+            let mut style = Style::default().fg(color);
+            if selected {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            let text = values[side]
+                .as_ref()
+                .map(|(_, text)| {
+                    text.chars()
+                        .skip(if diff.wrap { 0 } else { diff.hscroll as usize })
+                        .collect()
+                })
+                .unwrap_or_default();
+            let mut spans = vec![Span::styled(prefix, style)];
+            if diff.syntax_highlight && row.hunk.is_none() && row.omitted == 0 {
+                if let Some(ext) = diff.ext.as_deref() {
+                    spans.extend(
+                        crate::tui::highlight::highlight_buffer(ext, &[text], theme)
+                            .into_iter()
+                            .flatten(),
+                    );
+                } else {
+                    spans.push(Span::styled(text, style));
+                }
+            } else {
+                spans.push(Span::styled(text, style));
+            }
+            texts[side].push(Line::from(spans));
+        }
+    }
+    for (side, text) in texts.into_iter().enumerate() {
+        frame.render_widget(blocks[side].clone(), panes[side]);
+        frame.render_widget(Paragraph::new(text).style(theme.base_style()), inners[side]);
     }
 }
 

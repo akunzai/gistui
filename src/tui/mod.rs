@@ -19,6 +19,7 @@ mod gist_comments;
 mod gist_content;
 mod gist_refresh;
 mod gist_revision;
+mod hunk_sync;
 mod mouse;
 pub use mouse::{
     point_in, HitTarget, MouseFrame, MouseSession, PaneHit, PaneTarget, PressKind, RowTarget,
@@ -222,6 +223,8 @@ pub enum DetailFocus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PendingAction {
     Download,
+    SaveHunks(Box<hunk_sync::SaveRequest>),
+    LeaveHunks(hunk_sync::HunkExit),
     Upload(Box<UploadDraft>),
     Create {
         local_path: PathBuf,
@@ -419,6 +422,7 @@ impl GistTypeFilter {
 /// Not `Copy` — payloads own small strings/paths.
 #[derive(Debug, PartialEq, Eq)]
 pub enum KeyOutcome {
+    SaveHunks(Box<hunk_sync::SaveRequest>),
     None,
     Quit,
     /// Download using the open Diff payload (no re-resolve).
@@ -593,6 +597,8 @@ pub struct DiffState {
     /// True when the two sides compare equal under the Sync policy.
     pub identical: bool,
     pub kind: DiffKind,
+    pub(crate) merge: Option<crate::merge::Merge>,
+    pub(crate) merge_width: usize,
 }
 
 /// What a Diff compares (issue #524). Only a sync Diff offers `d` / `u`, and they write
@@ -1941,7 +1947,7 @@ mod tests {
         );
         assert_eq!(
             HelpTopic::for_screen(&Screen::Diff(Box::default())),
-            HelpTopic::List
+            HelpTopic::Diff
         );
     }
 

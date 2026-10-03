@@ -5,3 +5,5 @@
 __pycache__/
 *.pyc
 .playwright-cli/
+# Temporary local artifacts
+/tmp/

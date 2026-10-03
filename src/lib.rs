@@ -7,6 +7,7 @@ pub mod domain;
 pub mod gh;
 pub mod local;
 pub(crate) mod lru;
+pub(crate) mod merge;
 pub mod pins;
 pub mod ranking;
 pub mod sync_baseline;

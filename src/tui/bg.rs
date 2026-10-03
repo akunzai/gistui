@@ -119,6 +119,7 @@ impl ActionJobSpec {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum ActionJobKind {
     GistFetch(crate::domain::GistFileRef),
+    SaveHunks(crate::domain::GistFileRef),
     FetchComments {
         gist_id: String,
         page: Option<u32>,
@@ -140,7 +141,7 @@ impl ActionJobKind {
     /// and its result always applies (#478).
     fn is_gist_mutation(&self) -> bool {
         match self {
-            Self::Mutation(_) => true,
+            Self::Mutation(_) | Self::SaveHunks(_) => true,
             Self::Revision(kind) => kind.is_gist_mutation(),
             Self::GistFetch(_) | Self::FetchComments { .. } | Self::AnalyzeCompact { .. } => false,
         }

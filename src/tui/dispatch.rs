@@ -45,6 +45,7 @@ pub(super) fn dispatch_outcome(
 /// observable here without executing their closures.
 fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> LoopFlow {
     match outcome {
+        KeyOutcome::SaveHunks(request) => hunk_sync::dispatch(jobs, state, request),
         KeyOutcome::Quit => return LoopFlow::Quit,
         KeyOutcome::Download { mode } => download(state, mode),
         KeyOutcome::DownloadRequested { target } => request_download(state, &target),

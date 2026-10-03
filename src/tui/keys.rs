@@ -482,6 +482,9 @@ impl AppState {
     /// selected file row. Resets the manager's own filters first so the target is always
     /// visible. No-op (with a status hint) when there are no gists to manage.
     pub(crate) fn open_gist_manager(&mut self) {
+        if self.gate_hunk_exit(super::hunk_sync::HunkExit::Gists) {
+            return;
+        }
         if self.gist_catalog.owned.is_empty() {
             self.status = Some("no gists to manage".into());
             return;
@@ -503,6 +506,9 @@ impl AppState {
     /// Open the Pins view (`Screen::Pins`), resetting its selection/scroll so a stale
     /// filtered-in position from a previous visit never lingers.
     pub(crate) fn open_pins(&mut self) {
+        if self.gate_hunk_exit(super::hunk_sync::HunkExit::Pins) {
+            return;
+        }
         self.screen = Screen::Pins(Box::new(PinsState {
             cursor: ListCursor::default(),
             ..PinsState::default()

@@ -418,10 +418,17 @@ Mouse (on by default; disable with mouse = false in config or --no-mouse)
             "\
   Up/Down/Left/Right  scroll the diff (also j / k / h / l; Left/Right only when wrap is off)
   PageUp/Dn  scroll the diff by 10 lines (also Ctrl+b / Ctrl+f)
+  n / N      next / previous hunk in a Local (left) / Gist (right) diff
+  [ / ]      stage the selected hunk to Local / Gist; no writes yet
+  z          undo the last staged hunk
+  s          preview and save the staged sides; y save confirms
+             both live files are rechecked; an external edit stops the save
+             a partial save keeps the unfinished side staged for retry
   w          toggle soft line wrapping (remembered for the session)
   c          toggle context: configured radius <-> full file (remembered)
   d / u      download over the local file / upload to the gist file the diff shows
-             (not offered in a revision diff)
+             (not offered in a revision diff or while hunks are staged)
+  staged     Esc / q offers Save / Discard / Cancel before leaving
   syntax     unchanged context lines are syntax-highlighted by file type
   newline    a file-final-newline-only difference counts as identical
              (set ignore_trailing_newline = false for byte-exact diffs)

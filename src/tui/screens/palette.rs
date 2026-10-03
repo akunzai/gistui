@@ -181,7 +181,7 @@ impl AppState {
                     ),
                 }
             }
-            PaletteExec::Cross(CrossAction::Quit) => KeyOutcome::Quit,
+            PaletteExec::Cross(CrossAction::Quit) => self.request_hunk_quit(),
         }
     }
 }

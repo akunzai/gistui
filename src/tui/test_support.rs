@@ -105,6 +105,8 @@ pub(super) fn enter_sync_diff(
             text,
             ..ScrollBody::default()
         },
+        merge: None,
+        merge_width: 0,
         identical: false,
         kind: crate::tui::DiffKind::Sync {
             pair: crate::domain::SyncPair {
@@ -114,6 +116,20 @@ pub(super) fn enter_sync_diff(
             remote,
         },
     })));
+}
+
+/// A synthetic paired hunk diff for pure screen tests; no filesystem reads.
+pub(super) fn enter_hunk_diff(state: &mut AppState, local: &str, gist: &str) {
+    state.gist_catalog.owned = vec![GistFile::fixture("g1", "config.toml")];
+    enter_sync_diff(state, String::new(), gist.into(), "/tmp/config.toml".into());
+    let policy = state.settings.sync_policy();
+    let diff = state.diff_mut().unwrap();
+    diff.merge = Some(crate::merge::Merge::new(
+        Some(local.into()),
+        gist.into(),
+        policy,
+    ));
+    diff.refresh_merge_preview(policy);
 }
 
 /// Open a read-only revision Diff, as the Revisions screen does.
