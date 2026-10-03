@@ -4,8 +4,8 @@ Write pull request titles, descriptions, and comments in **English**. Commit mes
 English too — Conventional Commits, imperative, subject under 72 characters.
 
 [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md) is authoritative
-on structure; what follows adds what it does not say. Release-note labels, milestones, and the
-`CHANGELOG.md` rule live in [`conventions.md`](conventions.md).
+on structure; what follows adds what it does not say. Release-note labels and milestones
+live in [`conventions.md`](conventions.md).
 
 ## Preparing
 

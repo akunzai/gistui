@@ -5,6 +5,10 @@ this — see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## How a release works
 
+[GitHub Releases](https://github.com/akunzai/gistui/releases) are the version change record.
+The workflow generates release notes from merged PR titles, grouped by the labels in
+`.github/release.yml`. The release-note review procedure is below.
+
 A release is a `vX.Y.Z` git tag that matches `Cargo.toml`'s `version`. Pushing the tag
 triggers `.github/workflows/release.yml`, which runs these steps in order, each only if the
 one before succeeded:
@@ -38,26 +42,60 @@ are kept out of the published tarball); `cargo publish --dry-run` validates the 
 
 ## Cutting a release
 
-1. Bump `version` in `Cargo.toml` (and refresh `Cargo.lock`); confirm `cargo publish --dry-run`
-   is clean.
-2. In `CHANGELOG.md`, date the `## [Unreleased]` section as `## [X.Y.Z] — YYYY-MM-DD` and leave
-   a fresh, empty `## [Unreleased]` heading above it — the section is permanent, so the next
-   change has somewhere to land. At the bottom, add the release link reference and repoint
-   `[unreleased]` at `compare/vX.Y.Z...HEAD`.
-3. Merge to `main` (CI gate green).
-4. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-5. Approve: open the tag's Release run in the Actions tab. Once the gate, builds, and
+1. On a `release/X.Y.Z` branch, bump `version` in `Cargo.toml` and refresh `Cargo.lock`
+   with `cargo build` (`--locked` refuses the version change). Validate the tarball with
+   `cargo publish --dry-run --allow-dirty` before committing, or without `--allow-dirty` after.
+2. Review merged PR titles and category labels, and identify user-visible direct commits
+   that need manual release-note entries using the procedure below.
+3. Check the committed demo and stills against the recorded flows in `docs/demo.md`.
+   Re-record with `mise run demo` when a user-visible change appears in those flows;
+   skip it for changes the recordings do not show. Keep only assets whose picture changed,
+   comparing against the committed version before restoring unchanged generated files.
+   Per-change TUI verification still follows `docs/agents/verification.md`.
+4. Open a PR from `release/X.Y.Z` and merge it to `main` once the CI gate is green.
+   On the merged `main`, preview notes again before tagging.
+5. Tag and push: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+6. Approve: open the tag's Release run in the Actions tab. Once the gate, builds, and
    attestation are green, approve the `release` deployment under **Review deployments**.
    That is the only approval; nothing leaves the repository before it. `release` (with a
    required reviewer) holds `HOMEBREW_BUMP_TOKEN`; `crates-io` (no reviewer) holds
    `CARGO_REGISTRY_TOKEN`. Both admit only tags matching `v*`.
-6. Verify: the GitHub release has the binaries, [crates.io](https://crates.io/crates/gistui)
+7. Verify: the GitHub release has the binaries and expected notes; add the missing entries
+   identified during review or a highlights summary when useful. Confirm [crates.io](https://crates.io/crates/gistui)
    shows the new version (and docs.rs built), and `Formula/gistui.rb` / `bucket/gistui.json`
    show a new `chore: bump gistui to vX.Y.Z` commit on the tap's / bucket's `main` (pushed by
    `release.yml` within the same run — if either is missing, check that run's "Update Homebrew
    formula" / "Update Scoop manifest" step and confirm `HOMEBREW_BUMP_TOKEN` is still valid).
-7. Close the milestone: write the release's one-paragraph summary into the version milestone's
-   description and close it, then create the next version's milestone with a one-line
-   description (`gh api repos/{owner}/{repo}/milestones -f title=<x.y.z> -f description=...`),
-   so the first PR after the cut has somewhere to go. A PR merged after the tag belongs to the
-   next milestone.
+8. Create the next version's milestone if it does not exist, with a one-line description
+   (`gh api repos/{owner}/{repo}/milestones -f title=<x.y.z> -f description=...`). Move
+   still-open issues from the released milestone to it
+   (`gh issue list --milestone X.Y.Z --state open`). Write a concise summary of shipped
+   highlights derived from the release notes into the released milestone's description,
+   then close it. A PR merged after the tag belongs to the next milestone.
+
+## Reviewing release notes
+
+After release preparation is merged, preview notes for the proposed tag without creating
+a release. Replace `vX.Y.Z` and `vPREVIOUS` with the proposed and previous release tags:
+
+```sh
+gh api --method POST repos/{owner}/{repo}/releases/generate-notes \
+  -f tag_name=vX.Y.Z \
+  -f target_commitish=main \
+  -f previous_tag_name=vPREVIOUS \
+  --jq .body
+```
+
+The [generate-notes API](https://docs.github.com/en/rest/releases/releases#generate-release-notes-content-for-a-release)
+returns a preview without saving a release or draft; the workflow generates the final
+notes at the tag. Check that the comparison starts at the intended previous release,
+PR titles describe the user-visible changes, and labels place them in the right sections.
+`skip-changelog` excludes a PR from the notes. Correct misleading titles or labels and
+regenerate the preview before tagging.
+
+After fetching `origin`, compare the preview with
+`git log --oneline vPREVIOUS..origin/main`. Changes committed directly to `main` have no
+merged PR entry: identify missing user-visible changes before tagging, then add their
+entries to the published release notes during verification. Add a highlights summary
+when it helps readers. [Immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)
+lock the tag and assets, but still allow editing the title and release notes.
