@@ -71,7 +71,7 @@ pub(super) fn dispatch(jobs: &mut Jobs, state: &mut AppState, request: SyncReque
 /// `Auto`: resolve the pin, then compare, pull, or push as its status says.
 fn auto(jobs: &mut Jobs, state: &mut AppState, entry: DeferredEntry, pair: SyncPair) {
     let key = crate::pins::PinKey::new(&pair.local, &pair.gist.gist_id, &pair.gist.filename);
-    let Some(index) = crate::pins::find_by_resolved_path(&state.pinned, &state.cwd, key) else {
+    let Some(index) = crate::pins::position(&state.pinned, &state.cwd, key) else {
         // The key checks this; a pin removed since then lands here.
         state.set_status("pair is not pinned — press p to pin first");
         return;

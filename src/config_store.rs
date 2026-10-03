@@ -112,20 +112,20 @@ impl ConfigStore {
     ///
     /// The stored `local_path` is exactly what `key` carries: this is a parser-and-writer
     /// of the user's file, not a normaliser of it.
-    pub fn pin(&self, key: PinKey<'_>) -> Result<PinChange> {
+    pub fn pin(&self, cwd: &Path, key: PinKey<'_>) -> Result<PinChange> {
         let path = self.path()?;
         let mut config = load_config(path)?;
-        pins::upsert(&mut config.pinned, key);
+        pins::upsert(&mut config.pinned, cwd, key);
         save_config(path, &config)?;
         Ok(config.into())
     }
 
     /// Remove the one pin named by `key`. Persists only when something was removed, so an
     /// unmatched key does not rewrite the file.
-    pub fn unpin(&self, key: PinKey<'_>) -> Result<(PinChange, Unpinned)> {
+    pub fn unpin(&self, cwd: &Path, key: PinKey<'_>) -> Result<(PinChange, Unpinned)> {
         let path = self.path()?;
         let mut config = load_config(path)?;
-        let outcome = if pins::remove(&mut config.pinned, key) {
+        let outcome = if pins::remove(&mut config.pinned, cwd, key) {
             save_config(path, &config)?;
             Unpinned::Removed
         } else {
@@ -149,7 +149,7 @@ impl ConfigStore {
     ) -> Result<(PinChange, SyncRecord)> {
         let path = self.path()?;
         let mut config = load_config(path)?;
-        let Some(index) = pins::find_by_resolved_path(&config.pinned, cwd, pair) else {
+        let Some(index) = pins::position(&config.pinned, cwd, pair) else {
             return Ok((config.into(), SyncRecord::NotPinned));
         };
         let mapping = &mut config.pinned[index];
@@ -202,8 +202,11 @@ mod tests {
         let pair = key(Path::new("/abs/a.txt"), "g1", "a.txt");
         let errors = [
             store.load().map(|_| ()).unwrap_err(),
-            store.pin(pair).map(|_| ()).unwrap_err(),
-            store.unpin(pair).map(|_| ()).unwrap_err(),
+            store.pin(Path::new("/cwd"), pair).map(|_| ()).unwrap_err(),
+            store
+                .unpin(Path::new("/cwd"), pair)
+                .map(|_| ())
+                .unwrap_err(),
             store
                 .record_sync(Path::new("/cwd"), pair, &SyncBaseline::default(), None)
                 .map(|_| ())
@@ -259,11 +262,10 @@ mod tests {
 
         let change = f
             .store
-            .pin(key(
-                Path::new("/abs/settings.json"),
-                "abc123",
-                "settings.json",
-            ))
+            .pin(
+                Path::new("/cwd"),
+                key(Path::new("/abs/settings.json"), "abc123", "settings.json"),
+            )
             .expect("pin");
 
         assert_eq!(change.pinned.len(), 1);
@@ -280,8 +282,13 @@ mod tests {
         let f = fixture();
         let local = Path::new("/abs/settings.json");
 
-        f.store.pin(key(local, "abc123", "a.txt")).expect("first");
-        let change = f.store.pin(key(local, "abc123", "b.txt")).expect("second");
+        f.store
+            .pin(Path::new("/cwd"), key(local, "abc123", "a.txt"))
+            .expect("first");
+        let change = f
+            .store
+            .pin(Path::new("/cwd"), key(local, "abc123", "b.txt"))
+            .expect("second");
 
         assert_eq!(change.pinned.len(), 2);
         let stored = stored(&f);
@@ -308,7 +315,10 @@ mod tests {
         );
 
         f.store
-            .pin(key(Path::new("/abs/a.txt"), "g1", "a.txt"))
+            .pin(
+                Path::new("/cwd"),
+                key(Path::new("/abs/a.txt"), "g1", "a.txt"),
+            )
             .expect("pin");
 
         let stored = stored(&f);
@@ -323,9 +333,14 @@ mod tests {
     fn unpin_persists_the_removal_and_reports_it() {
         let f = fixture();
         let local = Path::new("/abs/a.txt");
-        f.store.pin(key(local, "g1", "a.txt")).expect("pin");
+        f.store
+            .pin(Path::new("/cwd"), key(local, "g1", "a.txt"))
+            .expect("pin");
 
-        let (change, outcome) = f.store.unpin(key(local, "g1", "a.txt")).expect("unpin");
+        let (change, outcome) = f
+            .store
+            .unpin(Path::new("/cwd"), key(local, "g1", "a.txt"))
+            .expect("unpin");
 
         assert_eq!(outcome, Unpinned::Removed);
         assert!(change.pinned.is_empty());
@@ -339,7 +354,10 @@ mod tests {
 
         let (change, outcome) = f
             .store
-            .unpin(key(Path::new("/abs/a.txt"), "g1", "b.txt"))
+            .unpin(
+                Path::new("/cwd"),
+                key(Path::new("/abs/a.txt"), "g1", "b.txt"),
+            )
             .expect("unpin");
 
         assert_eq!(outcome, Unpinned::NotFound);
@@ -355,10 +373,16 @@ mod tests {
     fn unpin_spares_siblings_on_the_same_local_path() {
         let f = fixture();
         let local = Path::new("/abs/a.txt");
-        f.store.pin(key(local, "g1", "a.txt")).expect("pin a");
-        f.store.pin(key(local, "g1", "b.txt")).expect("pin b");
+        f.store
+            .pin(Path::new("/cwd"), key(local, "g1", "a.txt"))
+            .expect("pin a");
+        f.store
+            .pin(Path::new("/cwd"), key(local, "g1", "b.txt"))
+            .expect("pin b");
 
-        f.store.unpin(key(local, "g1", "a.txt")).expect("unpin");
+        f.store
+            .unpin(Path::new("/cwd"), key(local, "g1", "a.txt"))
+            .expect("unpin");
 
         let stored = stored(&f);
         assert_eq!(stored.len(), 1);
@@ -487,8 +511,14 @@ mod tests {
         save_config(&f.path, &config).expect("seed");
         let local = Path::new("/abs/a.txt");
 
-        let pinned = f.store.pin(key(local, "g1", "b.txt")).expect("pin");
-        let (unpinned, _) = f.store.unpin(key(local, "g1", "b.txt")).expect("unpin");
+        let pinned = f
+            .store
+            .pin(Path::new("/cwd"), key(local, "g1", "b.txt"))
+            .expect("pin");
+        let (unpinned, _) = f
+            .store
+            .unpin(Path::new("/cwd"), key(local, "g1", "b.txt"))
+            .expect("unpin");
         let (synced, _) = f
             .store
             .record_sync(
@@ -516,11 +546,17 @@ mod tests {
 
         assert!(f
             .store
-            .pin(key(Path::new("/abs/a.txt"), "g1", "a.txt"))
+            .pin(
+                Path::new("/cwd"),
+                key(Path::new("/abs/a.txt"), "g1", "a.txt")
+            )
             .is_err());
         assert!(f
             .store
-            .unpin(key(Path::new("/abs/a.txt"), "g1", "a.txt"))
+            .unpin(
+                Path::new("/cwd"),
+                key(Path::new("/abs/a.txt"), "g1", "a.txt")
+            )
             .is_err());
         assert!(f
             .store
@@ -545,7 +581,10 @@ mod tests {
         let store = ConfigStore::at(blocker.join("config.toml"));
 
         assert!(store
-            .pin(key(Path::new("/abs/a.txt"), "g1", "a.txt"))
+            .pin(
+                Path::new("/cwd"),
+                key(Path::new("/abs/a.txt"), "g1", "a.txt")
+            )
             .is_err());
     }
 }

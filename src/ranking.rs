@@ -42,9 +42,11 @@ fn match_mark(
     gist_id: &str,
     gist_filename: &str,
     pinned: &[PinnedMapping],
+    cwd: &Path,
 ) -> MatchMark {
     if crate::pins::is_pinned(
         pinned,
+        cwd,
         crate::pins::PinKey::new(local_path, gist_id, gist_filename),
     ) {
         MatchMark::Pinned
@@ -63,6 +65,7 @@ pub fn rank_gist_files(
     local_path: &Path,
     gist_files: &[GistFile],
     pinned: &[PinnedMapping],
+    cwd: &Path,
 ) -> Vec<RankedGistFile> {
     let local_filename = local_path
         .file_name()
@@ -79,6 +82,7 @@ pub fn rank_gist_files(
                 &file.gist_id,
                 &file.filename,
                 pinned,
+                cwd,
             );
             RankedGistFile { file, mark }
         })
@@ -93,6 +97,7 @@ pub fn rank_local_files(
     gist: &GistFile,
     locals: &[LocalCandidate],
     pinned: &[PinnedMapping],
+    cwd: &Path,
 ) -> Vec<RankedLocal> {
     let mut ranked: Vec<_> = locals
         .iter()
@@ -109,6 +114,7 @@ pub fn rank_local_files(
                 &gist.gist_id,
                 &gist.filename,
                 pinned,
+                cwd,
             );
             RankedLocal { candidate, mark }
         })
@@ -156,7 +162,7 @@ mod tests {
         ];
         let pinned = vec![PinnedMapping::fixture(local.clone(), "b", "other.json")];
 
-        let ranked = rank_gist_files(&local, &files, &pinned);
+        let ranked = rank_gist_files(&local, &files, &pinned, Path::new("/"));
         assert_eq!(ranked[0].file.gist_id, "b");
         assert_eq!(ranked[0].mark, MatchMark::Pinned);
     }
@@ -169,7 +175,7 @@ mod tests {
             gist("b", "misc", "settings.json"),
         ];
 
-        let ranked = rank_gist_files(&local, &files, &[]);
+        let ranked = rank_gist_files(&local, &files, &[], Path::new("/"));
         assert_eq!(ranked[0].file.gist_id, "b");
         assert_eq!(ranked[0].mark, MatchMark::ExactFilename);
     }
@@ -182,7 +188,7 @@ mod tests {
             gist("b", "unrelated", "alpha.txt"),
         ];
 
-        let ranked = rank_gist_files(&local, &files, &[]);
+        let ranked = rank_gist_files(&local, &files, &[], Path::new("/"));
         assert_eq!(ranked[0].file.filename, "alpha.txt");
         assert_eq!(ranked[1].file.filename, "zeta.txt");
     }
@@ -208,7 +214,7 @@ mod tests {
             local("/Users/me/.claude/settings.json"),
         ];
 
-        let ranked = rank_local_files(&target, &locals, &[]);
+        let ranked = rank_local_files(&target, &locals, &[], Path::new("/"));
         assert_eq!(
             ranked[0].candidate.path,
             PathBuf::from("/Users/me/.claude/settings.json")
@@ -227,7 +233,7 @@ mod tests {
             "todo.md",
         )];
 
-        let ranked = rank_local_files(&target, &locals, &pinned);
+        let ranked = rank_local_files(&target, &locals, &pinned, Path::new("/"));
         assert_eq!(ranked[0].candidate.path, pinned_local.path);
         assert_eq!(ranked[0].mark, MatchMark::Pinned);
     }
