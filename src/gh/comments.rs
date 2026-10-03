@@ -118,6 +118,49 @@ pub fn fetch_gist_comments_page(
     run_command(runner, &gist_comments_page_plan(gist_id, page, per_page))
 }
 
+/// The result of the initial newest-first comment load: the newest page plus the metadata
+/// needed to page backwards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InitialComments {
+    pub comments: Vec<GistComment>,
+    pub total: u32,
+    pub oldest_page: u32,
+}
+
+/// Initial newest-first comment load: probe the total, then fetch the newest page (none when
+/// the gist has no comments).
+pub fn fetch_initial_comments(
+    runner: &dyn CommandRunner,
+    gist_id: &str,
+) -> Result<InitialComments> {
+    let probe = fetch_gist_comments_probe(runner, gist_id)?;
+    let total = comments_total_from_probe(&probe);
+    if total == 0 {
+        return Ok(InitialComments {
+            comments: Vec::new(),
+            total: 0,
+            oldest_page: 1,
+        });
+    }
+    let oldest_page = last_page(total, COMMENTS_PAGE_SIZE);
+    let raw = fetch_gist_comments_page(runner, gist_id, oldest_page, COMMENTS_PAGE_SIZE)?;
+    Ok(InitialComments {
+        comments: parse_gist_comments_json(&raw)?,
+        total,
+        oldest_page,
+    })
+}
+
+/// One older page of comments, parsed.
+pub fn fetch_older_comments(
+    runner: &dyn CommandRunner,
+    gist_id: &str,
+    page: u32,
+) -> Result<Vec<GistComment>> {
+    let raw = fetch_gist_comments_page(runner, gist_id, page, COMMENTS_PAGE_SIZE)?;
+    parse_gist_comments_json(&raw)
+}
+
 #[derive(Debug, Deserialize)]
 struct GhComment {
     #[serde(default)]

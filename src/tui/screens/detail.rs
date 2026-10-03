@@ -120,15 +120,6 @@ pub(crate) fn detail_guard(state: &AppState, code: KeyCode) -> bool {
     }
 }
 
-/// The result of the initial newest-first comment load: the newest page plus the metadata
-/// needed to page backwards.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InitialComments {
-    pub comments: Vec<GistComment>,
-    pub total: u32,
-    pub oldest_page: u32,
-}
-
 /// Stage the initial comments fetch, skipping work already represented by detail state.
 pub(crate) fn stage_fetch_comments(state: &mut AppState, gist_id: String) -> Option<String> {
     if state
@@ -499,7 +490,7 @@ impl AppState {
     pub fn apply_initial_comments(
         &mut self,
         gist_id: &str,
-        result: Result<InitialComments, String>,
+        result: Result<crate::gh::InitialComments, String>,
     ) {
         let Some(d) = self.detail_mut() else {
             return;
@@ -1050,7 +1041,7 @@ pub(crate) fn detail_focus_tabs_line(
 pub(crate) fn on_comments_initial_loaded(
     state: &mut AppState,
     gist_id: String,
-    result: Result<crate::tui::InitialComments, String>,
+    result: Result<crate::gh::InitialComments, String>,
 ) -> LoopFlow {
     state.apply_initial_comments(&gist_id, result);
 
@@ -1627,7 +1618,7 @@ mod tests {
 
     #[test]
     fn apply_initial_comments_sets_window_and_requests_bottom_scroll() {
-        use crate::tui::InitialComments;
+        use crate::gh::InitialComments;
         let mut s = crate::tui::initial_state();
         detail_mut(&mut s).gist_id = Some("g1".into());
         s.apply_initial_comments(
@@ -1647,7 +1638,7 @@ mod tests {
 
     #[test]
     fn apply_initial_comments_ignored_when_gist_changed() {
-        use crate::tui::InitialComments;
+        use crate::gh::InitialComments;
         let mut s = crate::tui::initial_state();
         detail_mut(&mut s).gist_id = Some("g2".into());
         s.apply_initial_comments(
@@ -1663,7 +1654,7 @@ mod tests {
 
     #[test]
     fn apply_older_comments_prepends_and_compensates_scroll() {
-        use crate::tui::InitialComments;
+        use crate::gh::InitialComments;
         let mut s = crate::tui::initial_state();
         detail_mut(&mut s).gist_id = Some("g1".into());
         s.apply_initial_comments(
@@ -1686,7 +1677,7 @@ mod tests {
 
     #[test]
     fn can_load_older_false_while_loading_more() {
-        use crate::tui::InitialComments;
+        use crate::gh::InitialComments;
         let mut s = crate::tui::initial_state();
         detail_mut(&mut s).gist_id = Some("g1".into());
         s.apply_initial_comments(
@@ -1703,7 +1694,7 @@ mod tests {
 
     #[test]
     fn m_key_loads_older_when_available() {
-        use crate::tui::InitialComments;
+        use crate::gh::InitialComments;
         let mut s = crate::tui::initial_state();
         s.screen = Screen::GistDetail(Box::default());
         detail_mut(&mut s).focus = DetailFocus::Comments;
@@ -1722,7 +1713,7 @@ mod tests {
 
     #[test]
     fn m_key_noop_when_at_oldest_page() {
-        use crate::tui::InitialComments;
+        use crate::gh::InitialComments;
         let mut s = crate::tui::initial_state();
         s.screen = Screen::GistDetail(Box::default());
         detail_mut(&mut s).focus = DetailFocus::Comments;
@@ -1783,7 +1774,7 @@ mod tests {
         on_comments_initial_loaded(
             &mut state,
             "g1".into(),
-            Ok(crate::tui::InitialComments {
+            Ok(crate::gh::InitialComments {
                 comments: vec![GistComment {
                     author: "alice".into(),
                     created_at: "2026-01-01T00:00:00Z".into(),

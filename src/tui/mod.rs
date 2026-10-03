@@ -15,6 +15,7 @@ use ratatui::{backend::CrosstermBackend, widgets::Clear, Terminal};
 use std::io;
 use std::path::PathBuf;
 
+mod gist_comments;
 mod gist_content;
 mod gist_refresh;
 mod gist_revision;
@@ -1802,7 +1803,6 @@ mod sync;
 mod upload_draft;
 pub(crate) use upload_draft::UploadDraft;
 mod screens;
-pub use screens::detail::InitialComments;
 mod text;
 use text::{hscroll_max_for_text, local_row_label};
 mod bg;

@@ -109,8 +109,9 @@ pub fn fetch_raw_text(runner: &dyn CommandRunner, url: &str) -> Result<String> {
 mod comments;
 pub use comments::{
     comments_total_from_probe, fetch_gist_comments_page, fetch_gist_comments_probe,
-    gist_comments_page_plan, gist_comments_probe_plan, last_page, parse_gist_comment_counts,
-    parse_gist_comments_json, parse_link_rel, COMMENTS_PAGE_SIZE,
+    fetch_initial_comments, fetch_older_comments, gist_comments_page_plan,
+    gist_comments_probe_plan, last_page, parse_gist_comment_counts, parse_gist_comments_json,
+    parse_link_rel, InitialComments, COMMENTS_PAGE_SIZE,
 };
 
 mod compact;
