@@ -119,6 +119,7 @@ pub(crate) fn list_guard(state: &AppState, code: KeyCode) -> bool {
         .is_some_and(|(local, gist)| {
             crate::pins::is_pinned(
                 &state.pinned,
+                &state.cwd,
                 crate::pins::PinKey::new(
                     &local.candidate.path,
                     &gist.file.gist_id,
@@ -280,7 +281,7 @@ impl AppState {
                 };
                 let key =
                     crate::pins::PinKey::new(&pair.local, &pair.gist.gist_id, &pair.gist.filename);
-                if crate::pins::find_by_resolved_path(&self.pinned, &self.cwd, key).is_none() {
+                if crate::pins::position(&self.pinned, &self.cwd, key).is_none() {
                     self.set_status("pair is not pinned — press p to pin first");
                     return KeyOutcome::None;
                 }
@@ -417,6 +418,7 @@ impl AppState {
         let filename = gist.file.filename.clone();
         let already = crate::pins::is_pinned(
             &self.pinned,
+            &self.cwd,
             crate::pins::PinKey::new(&local_path, &gist_id, &filename),
         );
         if already {
@@ -1995,6 +1997,26 @@ mod tests {
             "a",
             "settings.json",
         )];
+        assert!(matches!(
+            state.handle_key(KeyCode::Char('p')),
+            KeyOutcome::Unpin { .. }
+        ));
+    }
+
+    /// A hand-written relative pin names the same pair as the absolute path the scan found:
+    /// the row shows it pinned and `p` unpins it, as `S` already treats it as pinned.
+    #[test]
+    fn a_relative_pin_is_pinned_for_the_mark_and_p() {
+        let mut state = state_with_selection();
+        state.cwd = PathBuf::from("/tmp");
+        state.pinned = vec![PinnedMapping::fixture(
+            "settings.json",
+            "a",
+            "settings.json",
+        )];
+
+        let (_, ranked) = state.list_pane_snapshots();
+        assert_eq!(ranked[0].mark, crate::ranking::MatchMark::Pinned);
         assert!(matches!(
             state.handle_key(KeyCode::Char('p')),
             KeyOutcome::Unpin { .. }

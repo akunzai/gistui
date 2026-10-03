@@ -41,7 +41,7 @@ impl AppState {
     fn rank_gist_files_for(&self, local_path: Option<&std::path::Path>) -> Vec<RankedGistFile> {
         let gists = self.filtered_gist_files();
         let mut ranked = match local_path {
-            Some(path) => rank_gist_files(path, &gists, &self.pinned),
+            Some(path) => rank_gist_files(path, &gists, &self.pinned, &self.cwd),
             None => gists.into_iter().map(unranked_gist).collect(),
         };
         self.gist_sort.apply(&mut ranked);
@@ -52,7 +52,7 @@ impl AppState {
     /// call `selected_gist` / `ranked_gists`.
     fn rank_local_files_for(&self, gist: Option<&GistFile>) -> Vec<RankedLocal> {
         let mut ranked = match gist {
-            Some(file) => rank_local_files(file, &self.locals, &self.pinned),
+            Some(file) => rank_local_files(file, &self.locals, &self.pinned, &self.cwd),
             None => self.locals.iter().cloned().map(unranked_local).collect(),
         };
         let query = self.local_filter_query.to_lowercase();

@@ -139,7 +139,7 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
 - `run_loop` only **polls** `jobs.absorb`.
 - **Action jobs carry their apply** (issue #375, ADR-0002's async-response half): `spawn_action(spec, run, apply)` runs `run` off-thread and boxes `apply(value)` for the event-loop tick. There is no `BgTaskOutcome` enum. `ActionApply` is `FnOnce(&mut AppState) -> LoopFlow`. `on_action_outcome` is a generation-guard shell that calls the closure. `KeyOutcome` / `dispatch_outcome` stay plain data (ADR-0002).
 - **`on_*` is the apply seam** (#298, #375, #383): named handlers are the apply bodies and the unit-test surface. They do not live on `Jobs`. `dispatch_outcome` / `route_outcome` sit on the spawn side, not the apply side, so neither is one. A new action is a spawn site plus an `on_*` when the apply is worth testing.
-- **A pin's key is three-part** (issue #424): `(local_path, gist_id, gist_filename)`, owned by `src/pins.rs` (`PinKey`, `PinKey::matches`, `PinnedMapping::key()`, `is_pinned` / `upsert` / `remove` / `resolve_against` / `find_by_resolved_path`). One local file pinned to several gist files is a legitimate state, not corruption — `docs/agents/design.md` defines a pin as a local-file to gist-*file* mapping, and `gist_id` alone cannot name a file inside a gist. Never re-derive the key at a call site, and pass `PinnedMapping::key()` when you already hold the mapping. `upsert` never modifies an existing pin; `ConfigStore::record_sync` deliberately does not use it, because confirming a sync must never create a pin. Exactly-duplicate triples are degenerate input from a hand-edited `config.toml`: the operations take the first match, and `crate::config::load_config` stays a parser, not a silent rewriter.
+- **A pin's key is three-part** (issue #424): `(local_path, gist_id, gist_filename)`, owned by `src/pins.rs` (`PinKey`, `PinKey::matches`, `PinnedMapping::key()`, `is_pinned` / `position` / `upsert` / `remove` / `resolve_against`). One local file pinned to several gist files is a legitimate state, not corruption — `docs/agents/design.md` defines a pin as a local-file to gist-*file* mapping, and `gist_id` alone cannot name a file inside a gist. Never re-derive the key at a call site, and pass `PinnedMapping::key()` when you already hold the mapping. `upsert` never modifies an existing pin; `ConfigStore::record_sync` deliberately does not use it, because confirming a sync must never create a pin. Exactly-duplicate triples are degenerate input from a hand-edited `config.toml`: the operations take the first match, and `crate::config::load_config` stays a parser, not a silent rewriter.
 - **Shared spawn payload** (#375): a value both `run` and `apply` need is part of `run`'s return, unpacked by `apply`. That is how identity (`gist_id`, `fetch_id`, labels) crosses the thread boundary without a second clone.
 
 ## Sync workflow (`src/tui/sync.rs`, issue #525)
@@ -270,10 +270,13 @@ applying the stored-versus-absolute rule, saving, and describing what changed. T
   legitimate thing to hand-write — so a pin is *found* by its resolved form and *written*
   by its stored form; writing back the resolved form would duplicate the entry. It replaced
   three copies (`bg.rs`, `pin_sync.rs`, and an inline comparison in `dispatch.rs`).
-  `find_by_resolved_path` takes a `PinKey` whose `local_path` is already absolute and
-  returns an **index**: both callers reach back into the list they searched — one to mutate
-  that entry in place (keeping its stored path form), the other to feed the Pins screen's
-  index-keyed sync-status lookup. It is the one lookup that cannot use `PinKey::matches`.
+  `PinKey::matches` compares local paths through it, so every key operation (`is_pinned`,
+  `position`, `upsert`, `remove`) takes the `cwd` and treats a relative entry and its
+  absolute path as one pin; comparing stored forms directly once let the List show a
+  relative pin unpinned and `p` duplicate it while `S` found it. `position` returns an
+  **index**: callers reach back into the list they searched — one to mutate that entry in
+  place (keeping its stored path form), another to feed the Pins screen's index-keyed
+  sync-status lookup.
 - **Nothing is normalised on write.** Store exactly what the caller supplied. In production
   a candidate path is already absolute (`discover_local_candidates` builds it from an
   absolute cwd), so a relative entry can only come from a hand edit — and rewriting it would

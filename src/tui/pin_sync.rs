@@ -152,9 +152,10 @@ pub(super) fn pin_paths(
     gist_id: &str,
     filename: &str,
 ) {
-    let result = state
-        .config_store
-        .pin(crate::pins::PinKey::new(local_path, gist_id, filename));
+    let result = state.config_store.pin(
+        &state.cwd,
+        crate::pins::PinKey::new(local_path, gist_id, filename),
+    );
     match result {
         Ok(change) => {
             apply_pin_change(state, change);
@@ -170,9 +171,10 @@ pub(super) fn unpin_path(
     gist_id: &str,
     filename: &str,
 ) {
-    let result = state
-        .config_store
-        .unpin(crate::pins::PinKey::new(local_path, gist_id, filename));
+    let result = state.config_store.unpin(
+        &state.cwd,
+        crate::pins::PinKey::new(local_path, gist_id, filename),
+    );
     apply_unpin(state, result, pin_pair_label(local_path, filename));
 }
 
@@ -207,7 +209,7 @@ pub(super) fn unpin_at_pin_index(state: &mut AppState, idx: usize) -> bool {
     // persistence interface never sees one (issue #432).
     let mapping = state.pinned[idx].clone();
     let label = pin_pair_label(&mapping.local_path, &mapping.gist_filename);
-    let result = state.config_store.unpin(mapping.key());
+    let result = state.config_store.unpin(&state.cwd, mapping.key());
     let ok = result.is_ok();
     apply_unpin(state, result, label);
     ok
@@ -251,7 +253,7 @@ pub(super) fn record_pin_sync(
     direction: Option<crate::domain::SyncDirection>,
 ) {
     let pair = crate::pins::PinKey::new(local_abs, gist_id, filename);
-    if crate::pins::find_by_resolved_path(&state.pinned, &state.cwd, pair).is_none() {
+    if crate::pins::position(&state.pinned, &state.cwd, pair).is_none() {
         return;
     }
     let result = state

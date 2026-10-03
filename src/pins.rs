@@ -11,7 +11,7 @@
 //!
 //! Exactly-duplicate triples are degenerate input — `config.toml` is user-editable and
 //! `crate::config::load_config` deliberately stays a parser rather than a silent rewriter.
-//! [`find_mut`] and [`remove`] both act on the first match.
+//! [`position`] and [`remove`] both act on the first match.
 
 use crate::domain::PinnedMapping;
 use std::path::{Path, PathBuf};
@@ -36,10 +36,14 @@ impl<'a> PinKey<'a> {
 
     /// Whether `mapping` is the pin this key names. Use it instead of spelling the three
     /// comparisons out at a call site — that is how they drifted apart before #424.
-    pub fn matches(&self, mapping: &PinnedMapping) -> bool {
-        mapping.local_path == self.local_path
-            && mapping.gist_id == self.gist_id
+    ///
+    /// Local paths are compared after [`resolve_against`] `cwd`: a hand-written stored path
+    /// may be relative while the app's own paths are absolute, and both name one file.
+    /// Comparing the stored form directly made the List miss a relative pin that `S` found.
+    pub fn matches(&self, mapping: &PinnedMapping, cwd: &Path) -> bool {
+        mapping.gist_id == self.gist_id
             && mapping.gist_filename == self.gist_filename
+            && mapping.resolve_against(cwd) == resolve_against(self.local_path, cwd)
     }
 }
 
@@ -75,12 +79,17 @@ impl PinnedMapping {
 /// Whether the pair named by `key` is pinned. The presentation layer asks this a lot —
 /// row marks, the List `p` toggle — and each caller used to spell the three comparisons
 /// out for itself.
-pub fn is_pinned(pinned: &[PinnedMapping], key: PinKey<'_>) -> bool {
-    pinned.iter().any(|m| key.matches(m))
+pub fn is_pinned(pinned: &[PinnedMapping], cwd: &Path, key: PinKey<'_>) -> bool {
+    position(pinned, cwd, key).is_some()
 }
 
-fn find_mut<'a>(pinned: &'a mut [PinnedMapping], key: PinKey<'_>) -> Option<&'a mut PinnedMapping> {
-    pinned.iter_mut().find(|m| key.matches(m))
+/// Index of the pin that `key` names (see [`PinKey::matches`]). It returns an index rather
+/// than the mapping because callers reach back into the list they searched: one to mutate
+/// that entry in place (keeping its **stored** path form, since writing the resolved form
+/// back would duplicate the pin), another to feed the Pins screen's index-keyed sync-status
+/// lookup.
+pub fn position(pinned: &[PinnedMapping], cwd: &Path, key: PinKey<'_>) -> Option<usize> {
+    pinned.iter().position(|m| key.matches(m, cwd))
 }
 
 /// Insert `key`'s mapping if it is not already there. Siblings sharing `local_path` with a
@@ -89,8 +98,8 @@ fn find_mut<'a>(pinned: &'a mut [PinnedMapping], key: PinKey<'_>) -> Option<&'a 
 /// An existing pin is left **completely** untouched: pinning is not how a sync direction or
 /// hash gets recorded (that is `crate::config_store::ConfigStore::record_sync`), so re-pinning
 /// must never erase what an earlier sync learned.
-pub fn upsert(pinned: &mut Vec<PinnedMapping>, key: PinKey<'_>) {
-    if find_mut(pinned, key).is_some() {
+pub fn upsert(pinned: &mut Vec<PinnedMapping>, cwd: &Path, key: PinKey<'_>) {
+    if is_pinned(pinned, cwd, key) {
         return;
     }
     pinned.push(PinnedMapping {
@@ -104,8 +113,8 @@ pub fn upsert(pinned: &mut Vec<PinnedMapping>, key: PinKey<'_>) {
 
 /// Remove the first mapping matching `key`. Returns whether anything was removed, so a
 /// caller can skip persisting an unchanged config.
-pub fn remove(pinned: &mut Vec<PinnedMapping>, key: PinKey<'_>) -> bool {
-    let Some(index) = pinned.iter().position(|m| key.matches(m)) else {
+pub fn remove(pinned: &mut Vec<PinnedMapping>, cwd: &Path, key: PinKey<'_>) -> bool {
+    let Some(index) = position(pinned, cwd, key) else {
         return false;
     };
     pinned.remove(index);
@@ -131,26 +140,6 @@ impl PinnedMapping {
     pub fn resolve_against(&self, cwd: &Path) -> PathBuf {
         resolve_against(&self.local_path, cwd)
     }
-}
-
-/// Index of the pin that `pair` names, comparing local paths **after** resolution.
-///
-/// `pair.local_path` is an absolute path the app resolved for itself, while a stored entry
-/// may be relative — so this is the one lookup that cannot use [`PinKey::matches`]. It
-/// returns an index rather than the mapping because both callers need to reach back into
-/// the list they searched: one to mutate that entry in place (keeping its **stored** path
-/// form, since writing the resolved form back would duplicate the pin), the other to feed
-/// the Pins screen's index-keyed sync-status lookup.
-pub fn find_by_resolved_path(
-    pinned: &[PinnedMapping],
-    cwd: &Path,
-    pair: PinKey<'_>,
-) -> Option<usize> {
-    pinned.iter().position(|m| {
-        m.gist_id == pair.gist_id
-            && m.gist_filename == pair.gist_filename
-            && m.resolve_against(cwd) == pair.local_path
-    })
 }
 
 #[cfg(test)]
@@ -187,7 +176,7 @@ mod tests {
         );
     }
 
-    // ---- find_by_resolved_path ------------------------------------------
+    // ---- position ------------------------------------------------------
 
     /// A relative entry is reachable by the absolute path the app resolved for itself —
     /// that is the whole reason the stored form cannot be compared directly.
@@ -195,7 +184,7 @@ mod tests {
     fn a_relative_pin_is_found_by_its_resolved_absolute_path() {
         let pinned = vec![mapping("a.txt", "g1", "a.txt")];
 
-        let index = find_by_resolved_path(
+        let index = position(
             &pinned,
             Path::new("/cwd"),
             key(Path::new("/cwd/a.txt"), "g1", "a.txt"),
@@ -211,28 +200,25 @@ mod tests {
     }
 
     #[test]
-    fn find_by_resolved_path_still_needs_the_gist_file_to_agree() {
+    fn position_still_needs_the_gist_file_to_agree() {
         let pinned = vec![mapping("/cwd/a.txt", "g1", "a.txt")];
         let cwd = Path::new("/cwd");
         let abs = Path::new("/cwd/a.txt");
 
-        assert!(find_by_resolved_path(&pinned, cwd, key(abs, "g1", "a.txt")).is_some());
-        assert!(find_by_resolved_path(&pinned, cwd, key(abs, "g2", "a.txt")).is_none());
-        assert!(find_by_resolved_path(&pinned, cwd, key(abs, "g1", "b.txt")).is_none());
-        assert!(
-            find_by_resolved_path(&pinned, cwd, key(Path::new("/cwd/b.txt"), "g1", "a.txt"))
-                .is_none()
-        );
+        assert!(position(&pinned, cwd, key(abs, "g1", "a.txt")).is_some());
+        assert!(position(&pinned, cwd, key(abs, "g2", "a.txt")).is_none());
+        assert!(position(&pinned, cwd, key(abs, "g1", "b.txt")).is_none());
+        assert!(position(&pinned, cwd, key(Path::new("/cwd/b.txt"), "g1", "a.txt")).is_none());
     }
 
     #[test]
-    fn find_by_resolved_path_reports_the_index_of_a_later_match() {
+    fn position_reports_the_index_of_a_later_match() {
         let pinned = vec![
             mapping("/cwd/a.txt", "g1", "a.txt"),
             mapping("/cwd/b.txt", "g1", "b.txt"),
         ];
 
-        let index = find_by_resolved_path(
+        let index = position(
             &pinned,
             Path::new("/cwd"),
             key(Path::new("/cwd/b.txt"), "g1", "b.txt"),
@@ -247,14 +233,14 @@ mod tests {
     #[test]
     fn a_mappings_key_round_trips_to_itself() {
         let m = mapping("/a.txt", "g1", "a.txt");
-        assert!(m.key().matches(&m));
+        assert!(m.key().matches(&m, Path::new("/cwd")));
     }
 
     #[test]
     fn differing_in_the_gist_filename_alone_is_a_different_pin() {
-        let mut pinned = vec![mapping("/a.txt", "g1", "a.txt")];
+        let pinned = vec![mapping("/a.txt", "g1", "a.txt")];
         let other = key(Path::new("/a.txt"), "g1", "b.txt");
-        assert!(find_mut(&mut pinned, other).is_none());
+        assert!(position(&pinned, Path::new("/cwd"), other).is_none());
     }
 
     // ---- upsert ---------------------------------------------------------
@@ -263,7 +249,11 @@ mod tests {
     fn upsert_keeps_siblings_sharing_a_local_path() {
         let mut pinned = vec![mapping("/a.txt", "g1", "a.txt")];
 
-        upsert(&mut pinned, key(Path::new("/a.txt"), "g1", "b.txt"));
+        upsert(
+            &mut pinned,
+            Path::new("/cwd"),
+            key(Path::new("/a.txt"), "g1", "b.txt"),
+        );
 
         assert_eq!(pinned.len(), 2);
         assert_eq!(pinned[0].gist_filename, "a.txt");
@@ -283,7 +273,11 @@ mod tests {
             ..mapping("/a.txt", "g1", "a.txt")
         }];
 
-        upsert(&mut pinned, key(Path::new("/a.txt"), "g1", "a.txt"));
+        upsert(
+            &mut pinned,
+            Path::new("/cwd"),
+            key(Path::new("/a.txt"), "g1", "a.txt"),
+        );
 
         assert_eq!(pinned.len(), 1);
         assert_eq!(pinned[0].direction, Some(SyncDirection::Upload));
@@ -296,10 +290,26 @@ mod tests {
     fn is_pinned_needs_all_three_components_to_agree() {
         let pinned = vec![mapping("/a.txt", "g1", "a.txt")];
 
-        assert!(is_pinned(&pinned, key(Path::new("/a.txt"), "g1", "a.txt")));
-        assert!(!is_pinned(&pinned, key(Path::new("/b.txt"), "g1", "a.txt")));
-        assert!(!is_pinned(&pinned, key(Path::new("/a.txt"), "g2", "a.txt")));
-        assert!(!is_pinned(&pinned, key(Path::new("/a.txt"), "g1", "b.txt")));
+        assert!(is_pinned(
+            &pinned,
+            Path::new("/cwd"),
+            key(Path::new("/a.txt"), "g1", "a.txt")
+        ));
+        assert!(!is_pinned(
+            &pinned,
+            Path::new("/cwd"),
+            key(Path::new("/b.txt"), "g1", "a.txt")
+        ));
+        assert!(!is_pinned(
+            &pinned,
+            Path::new("/cwd"),
+            key(Path::new("/a.txt"), "g2", "a.txt")
+        ));
+        assert!(!is_pinned(
+            &pinned,
+            Path::new("/cwd"),
+            key(Path::new("/a.txt"), "g1", "b.txt")
+        ));
     }
 
     // ---- remove ---------------------------------------------------------
@@ -312,7 +322,11 @@ mod tests {
             mapping("/a.txt", "g2", "a.txt"),
         ];
 
-        assert!(remove(&mut pinned, key(Path::new("/a.txt"), "g1", "b.txt")));
+        assert!(remove(
+            &mut pinned,
+            Path::new("/cwd"),
+            key(Path::new("/a.txt"), "g1", "b.txt")
+        ));
 
         assert_eq!(pinned.len(), 2);
         assert_eq!(pinned[0].gist_filename, "a.txt");
@@ -325,6 +339,7 @@ mod tests {
 
         assert!(!remove(
             &mut pinned,
+            Path::new("/cwd"),
             key(Path::new("/a.txt"), "nope", "a.txt")
         ));
 
@@ -351,9 +366,41 @@ mod tests {
             },
         ];
 
-        assert!(remove(&mut pinned, key(Path::new("/a.txt"), "g1", "a.txt")));
+        assert!(remove(
+            &mut pinned,
+            Path::new("/cwd"),
+            key(Path::new("/a.txt"), "g1", "a.txt")
+        ));
 
         assert_eq!(pinned.len(), 1);
         assert_eq!(pinned[0].baseline.local_sha256.as_deref(), Some("second"));
+    }
+
+    // ---- a relative stored path -----------------------------------------
+
+    /// `config.toml` may hold a relative path while the app names the file absolutely. Every
+    /// key operation must agree that both are one pin.
+    #[test]
+    fn a_relative_pin_is_one_pin_with_its_absolute_path() {
+        let cwd = Path::new("/cwd");
+        let abs = key(Path::new("/cwd/a.txt"), "g1", "a.txt");
+        let mut pinned = vec![mapping("a.txt", "g1", "a.txt")];
+
+        assert!(is_pinned(&pinned, cwd, abs));
+
+        upsert(&mut pinned, cwd, abs);
+        assert_eq!(
+            pinned.len(),
+            1,
+            "re-pinning by the absolute path must not duplicate"
+        );
+        assert_eq!(
+            pinned[0].local_path,
+            PathBuf::from("a.txt"),
+            "stored form kept"
+        );
+
+        assert!(remove(&mut pinned, cwd, abs));
+        assert!(pinned.is_empty());
     }
 }

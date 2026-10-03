@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- A pin written in `config.toml` with a path relative to the working directory now counts as
+  pinned on the List: its row shows the pin mark, and `p` unpins it instead of adding a
+  second pin for the same file.
+
 ## [0.24.0] — 2026-09-27
 
 - On the Pins screen, `u` on a pin whose gist file is gone from the gist now offers to add it
