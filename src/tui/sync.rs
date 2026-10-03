@@ -340,10 +340,7 @@ fn open_diff(
             )),
             merge_dimensions: None,
             identical,
-            kind: crate::tui::DiffKind::Sync {
-                pair: fetched.pair,
-                remote: remote.clone(),
-            },
+            kind: crate::tui::DiffKind::Sync { pair: fetched.pair },
         })),
     );
     // After entering the Diff, which clears the status a failed record appends to.
@@ -422,7 +419,7 @@ pub(super) fn request_download(state: &mut AppState, target: &std::path::Path) {
 
 pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode) {
     let Some((pair, content)) = state.diff().and_then(|d| match &d.kind {
-        crate::tui::DiffKind::Sync { pair, remote } => Some((pair.clone(), remote.clone())),
+        crate::tui::DiffKind::Sync { pair } => Some((pair.clone(), d.saved_gist()?.to_string())),
         crate::tui::DiffKind::Revision => None,
     }) else {
         return;

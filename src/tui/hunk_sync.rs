@@ -211,7 +211,6 @@ fn on_saved(state: &mut AppState, request: &SaveRequest, saved: Saved) -> LoopFl
         state.cancel_confirm();
     }
     let local_saved = saved.local.is_some();
-    let gist_saved = saved.gist.is_some();
     if let Some(gist) = &saved.gist {
         state.gist_content_store.invalidate_file(&request.pair.gist);
         state.gist_list_stale = true;
@@ -219,17 +218,8 @@ fn on_saved(state: &mut AppState, request: &SaveRequest, saved: Saved) -> LoopFl
             crate::sync_baseline::SyncBaseline::after_sync(b"", gist.as_bytes()).remote_blob_sha;
         super::sync::patch_catalog_blob_sha(state, &request.pair.gist, sha.as_deref());
     }
-    let policy = state.settings.sync_policy();
     if let Some(diff) = state.diff_mut() {
-        if let Some(merge) = &mut diff.merge {
-            if local_saved || gist_saved {
-                merge.saved(saved.local, saved.gist);
-            }
-            if let super::DiffKind::Sync { remote, .. } = &mut diff.kind {
-                *remote = merge.baseline_gist.clone();
-            }
-        }
-        diff.refresh_merge_preview(policy);
+        diff.apply_saved(saved.local, saved.gist);
     }
     state.reveal_hunk();
     state.mark_pin_sync_cache_dirty();
@@ -356,6 +346,11 @@ mod tests {
         );
         let merge = state.diff().unwrap().merge.as_ref().unwrap();
         assert!(!merge.local_dirty() && merge.gist_dirty());
+        assert_eq!(
+            state.diff().unwrap().saved_gist(),
+            Some(GIST),
+            "failed Gist staging is not a saved snapshot"
+        );
         assert!(
             !merge.can_undo(),
             "cannot undo committed Local through a stale snapshot"
