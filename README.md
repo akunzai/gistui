@@ -50,6 +50,7 @@ changes made outside gistui stop the save. See `?` in the diff for the keys.
 
 ## Docs
 
+- [Releases](https://github.com/akunzai/gistui/releases) — version history and release notes.
 - [Keys and screens](https://akunzai.github.io/gistui/) — the keymap, and what each screen shows.
 - [Install](docs/INSTALL.md) — every install path, and self-upgrade.
 - [Safety](docs/SAFETY.md) — what confirms, and what is never overwritten silently.
