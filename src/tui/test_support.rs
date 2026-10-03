@@ -106,7 +106,7 @@ pub(super) fn enter_sync_diff(
             ..ScrollBody::default()
         },
         merge: None,
-        merge_width: 0,
+        merge_dimensions: None,
         identical: false,
         kind: crate::tui::DiffKind::Sync {
             pair: crate::domain::SyncPair {

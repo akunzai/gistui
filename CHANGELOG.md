@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Reveal the selected Local/Gist hunk using the current pane dimensions in the first
+  frame after opening or resizing the Diff.
+
 - Keep selected hunk text readable by using bold text and row markers without a bright background.
 - Local/Gist diffs now show aligned sides and let you stage individual hunks in either
   direction, undo them, and preview the writes before saving. Saves recheck both live

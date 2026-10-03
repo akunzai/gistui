@@ -338,7 +338,7 @@ fn open_diff(
                 remote.clone(),
                 policy,
             )),
-            merge_width: 0,
+            merge_dimensions: None,
             identical,
             kind: crate::tui::DiffKind::Sync {
                 pair: fetched.pair,

@@ -31,57 +31,9 @@ pub(crate) struct DiffVm {
 pub(crate) struct SideBySideVm {
     pub rows: Vec<crate::merge::Row>,
     pub selected: usize,
+    pub dimensions: Option<crate::tui::diff_geometry::Dimensions>,
     pub local_title: String,
     pub gist_title: String,
-}
-
-/// Physical rows shared by painting, scroll bounds, hunk navigation and resize feedback.
-/// Padding the shorter side keeps both sides on the same source row when one wraps.
-pub(crate) fn aligned_rows(
-    rows: &[crate::merge::Row],
-    width: usize,
-    wrap: bool,
-) -> Vec<crate::merge::Row> {
-    let mut result = Vec::new();
-    for row in rows {
-        let values = [&row.local, &row.gist];
-        let content = values.map(|value| {
-            let text = if row.omitted > 0 {
-                format!("@@ {} unchanged lines hidden @@", row.omitted)
-            } else {
-                value
-                    .as_ref()
-                    .map(|(_, s)| s.replace('\t', "    "))
-                    .unwrap_or_default()
-            };
-            if wrap {
-                crate::tui::render::wrap_hanging(&text, width.max(1))
-            } else {
-                vec![text]
-            }
-        });
-        for line in 0..content[0].len().max(content[1].len()).max(1) {
-            let side = |index: usize| {
-                (values[index].is_some() || row.omitted > 0).then(|| {
-                    (
-                        if line == 0 {
-                            values[index].as_ref().map(|(n, _)| *n).unwrap_or(0)
-                        } else {
-                            0
-                        },
-                        content[index].get(line).cloned().unwrap_or_default(),
-                    )
-                })
-            };
-            result.push(crate::merge::Row {
-                local: side(0),
-                gist: side(1),
-                hunk: row.hunk,
-                omitted: 0,
-            });
-        }
-    }
-    result
 }
 
 pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::Diff;
@@ -140,13 +92,13 @@ impl crate::tui::DiffState {
 }
 
 impl AppState {
-    pub(crate) fn sync_hunk_geometry(&mut self, width: usize) {
-        if self
-            .diff()
-            .is_some_and(|d| d.merge.is_some() && d.merge_width != width)
-        {
-            self.diff_mut().unwrap().merge_width = width;
-            self.reveal_hunk();
+    pub(crate) fn apply_diff_viewport(
+        &mut self,
+        viewport: crate::tui::diff_geometry::DiffViewport,
+    ) {
+        if let Some(diff) = self.diff_mut().filter(|d| d.merge.is_some()) {
+            diff.merge_dimensions = Some(viewport.dimensions);
+            diff.body.scroll = viewport.scroll;
         }
     }
 
@@ -155,18 +107,17 @@ impl AppState {
         let wrap = self.diff_wrap;
         if let Some(diff) = self.diff_mut() {
             if let Some(merge) = &diff.merge {
-                let rows = aligned_rows(&merge.visible_rows(radius), diff.merge_width.max(1), wrap);
-                diff.body.scroll = rows
-                    .iter()
-                    .position(|r| r.hunk == Some(merge.selected))
-                    .unwrap_or(0)
-                    .min(u16::MAX as usize) as u16;
+                diff.body.scroll = crate::tui::diff_geometry::Geometry::new(
+                    &merge.visible_rows(radius),
+                    diff.merge_dimensions.unwrap_or_default().content_width(),
+                    wrap,
+                )
+                .reveal(merge.selected);
             }
         }
     }
 
     pub(crate) fn apply_navigation_diff(&mut self, action: crate::tui::keys::NavAction) -> bool {
-        use crate::tui::keys::NavAction;
         let radius = self.effective_diff_context();
         let wrapped = self.diff_wrap;
         let Some(diff) = self.diff_mut() else {
@@ -175,51 +126,22 @@ impl AppState {
         let Some(merge) = &mut diff.merge else {
             return crate::tui::screens::scroll_navigation(self, action);
         };
-        let rows = aligned_rows(
+        let geometry = crate::tui::diff_geometry::Geometry::new(
             &merge.visible_rows(radius),
-            diff.merge_width.max(1),
+            diff.merge_dimensions.unwrap_or_default().content_width(),
             wrapped,
         );
-        let max = rows.len().saturating_sub(1).min(u16::MAX as usize) as u16;
-        match action {
-            NavAction::Up => diff.body.scroll = diff.body.scroll.saturating_sub(1),
-            NavAction::Down => diff.body.scroll = diff.body.scroll.saturating_add(1).min(max),
-            NavAction::PageUp => {
-                diff.body.scroll = diff
-                    .body
-                    .scroll
-                    .saturating_sub(crate::tui::keys::PAGE_SCROLL)
-            }
-            NavAction::PageDown => {
-                diff.body.scroll = diff
-                    .body
-                    .scroll
-                    .saturating_add(crate::tui::keys::PAGE_SCROLL)
-                    .min(max)
-            }
-            NavAction::Left => diff.body.hscroll = diff.body.hscroll.saturating_sub(1),
-            NavAction::Right if !wrapped => {
-                let hmax = rows
-                    .iter()
-                    .flat_map(|r| [&r.local, &r.gist])
-                    .filter_map(|s| s.as_ref())
-                    .map(|(_, text)| text.chars().count())
-                    .max()
-                    .unwrap_or(0)
-                    .min(u16::MAX as usize) as u16;
-                diff.body.hscroll = diff.body.hscroll.saturating_add(1).min(hmax);
-            }
-            _ => {}
-        }
-        if !matches!(action, NavAction::Left | NavAction::Right) {
-            if let Some(hunk) = rows
-                .iter()
-                .skip(diff.body.scroll as usize)
-                .find_map(|r| r.hunk)
-            {
-                merge.selected = hunk;
-            }
-        }
+        let position = geometry.navigate(
+            action,
+            crate::tui::diff_geometry::Position {
+                scroll: diff.body.scroll,
+                hscroll: diff.body.hscroll,
+                selected: merge.selected,
+            },
+        );
+        diff.body.scroll = position.scroll;
+        diff.body.hscroll = position.hscroll;
+        merge.selected = position.selected;
         true
     }
 
@@ -239,12 +161,12 @@ impl AppState {
                     }
                     _ => {}
                 }
-                let rows = aligned_rows(&merge.visible_rows(radius), diff.merge_width.max(1), wrap);
-                diff.body.scroll = rows
-                    .iter()
-                    .position(|r| r.hunk == Some(merge.selected))
-                    .unwrap_or(0)
-                    .min(u16::MAX as usize) as u16;
+                diff.body.scroll = crate::tui::diff_geometry::Geometry::new(
+                    &merge.visible_rows(radius),
+                    diff.merge_dimensions.unwrap_or_default().content_width(),
+                    wrap,
+                )
+                .reveal(merge.selected);
             }
             diff.refresh_merge_preview(policy);
         }
@@ -433,6 +355,7 @@ pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
                 .map(|(merge, pair)| SideBySideVm {
                     rows: merge.visible_rows(state.effective_diff_context()),
                     selected: merge.selected,
+                    dimensions: state.diff().unwrap().merge_dimensions,
                     local_title: format!(
                         "Local{} — {}",
                         if merge.local_dirty() { " [staged]" } else { "" },
@@ -472,11 +395,8 @@ pub(crate) fn render_diff_vm(
         .constraints([Constraint::Min(5), Constraint::Length(footer_lines)])
         .split(area);
 
-    if diff.sides.is_some() {
-        feedback.diff_content_width =
-            Some((chunks[0].width / 2).saturating_sub(11).max(1) as usize);
-    }
-    crate::tui::render_diff_pane_vm(frame, chunks[0], diff, &state.settings.theme());
+    feedback.diff_viewport =
+        crate::tui::render_diff_pane_vm(frame, chunks[0], diff, &state.settings.theme());
 
     crate::tui::render_footer(
         frame,
@@ -523,7 +443,7 @@ pub(crate) fn on_revision_diff(
                         ..crate::tui::ScrollBody::default()
                     },
                     merge: None,
-                    merge_width: 0,
+                    merge_dimensions: None,
                     identical,
                     kind: crate::tui::DiffKind::Revision,
                 })),
@@ -933,11 +853,17 @@ mod tests {
         let merge = state.diff().unwrap().merge.as_ref().unwrap();
         assert!(
             usize::from(state.diff().unwrap().body.scroll)
-                < aligned_rows(
+                < crate::tui::diff_geometry::Geometry::new(
                     &merge.visible_rows(state.effective_diff_context()),
-                    state.diff().unwrap().merge_width.max(1),
+                    state
+                        .diff()
+                        .unwrap()
+                        .merge_dimensions
+                        .unwrap_or_default()
+                        .content_width(),
                     state.diff_wrap
                 )
+                .rows()
                 .len()
         );
     }
@@ -993,16 +919,63 @@ mod tests {
         assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::Quit);
     }
     #[test]
+    fn first_frame_and_resize_reveal_the_selected_hunk_at_current_width() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut state = initial_state();
+        let middle = format!("{}\nsame\n", "unchanged ".repeat(12));
+        crate::tui::test_support::enter_hunk_diff(
+            &mut state,
+            &format!("local first\n{middle}local second\ntail\ntail\n"),
+            &format!("gist first\n{middle}gist second\ntail\ntail\n"),
+        );
+        state.handle_key(KeyCode::Char('w'));
+        state.handle_key(KeyCode::Char('n'));
+        for (width, height) in [(81, 12), (81, 8), (49, 12), (115, 12), (24, 12)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            let mut feedback = crate::tui::render::RenderFeedback::default();
+            let mut layout = crate::tui::MouseFrame::default();
+            terminal
+                .draw(|frame| {
+                    crate::tui::render::render(frame, &state, &mut layout, &mut feedback);
+                })
+                .unwrap();
+            assert_eq!(
+                terminal.backend().buffer()[(1, 2)].symbol(),
+                "▶",
+                "first frame at {width}x{height}"
+            );
+            assert_eq!(
+                terminal.backend().buffer()[(6, 2)].symbol(),
+                "4",
+                "reveal the first source row of the selected hunk"
+            );
+            let viewport = feedback.diff_viewport.unwrap();
+            // Drawing stays read-only; feedback applies the exact position that was painted.
+            state.apply_diff_viewport(viewport);
+            assert_eq!(state.diff().unwrap().body.scroll, viewport.scroll);
+            // Leave the hunk before the next resize, including the height-only resize.
+            state.handle_key(KeyCode::Down);
+        }
+    }
+
+    #[test]
     fn wrapped_rows_scroll_within_a_long_line_and_resize_keeps_the_selected_hunk() {
         let mut state = initial_state();
         let local = format!("{}END\nsame\nsecond local\n", "long ".repeat(80));
         crate::tui::test_support::enter_hunk_diff(&mut state, &local, "short\nsame\nsecond gist\n");
-        state.sync_hunk_geometry(16);
+        state.apply_diff_viewport(crate::tui::diff_geometry::DiffViewport {
+            dimensions: crate::tui::diff_geometry::Dimensions {
+                panes: [27, 27],
+                height: 12,
+            },
+            scroll: 0,
+        });
         state.handle_key(KeyCode::Char('w'));
         state.handle_key(KeyCode::PageDown);
         let merge = state.diff().unwrap().merge.as_ref().unwrap();
-        let rows = aligned_rows(&merge.visible_rows(None), 16, true);
-        let row = &rows[state.diff().unwrap().body.scroll as usize];
+        let geometry =
+            crate::tui::diff_geometry::Geometry::new(&merge.visible_rows(None), 16, true);
+        let row = &geometry.rows()[state.diff().unwrap().body.scroll as usize];
         assert_eq!(
             row.hunk,
             Some(0),
@@ -1014,7 +987,14 @@ mod tests {
             "continuation has no repeated source line number"
         );
         state.handle_key(KeyCode::Char('n'));
-        state.sync_hunk_geometry(9);
+        state.apply_diff_viewport(crate::tui::diff_geometry::DiffViewport {
+            dimensions: crate::tui::diff_geometry::Dimensions {
+                panes: [20, 20],
+                height: 12,
+            },
+            scroll: 0,
+        });
+        state.reveal_hunk();
         state.handle_key(KeyCode::Char(']'));
         let merge = state.diff().unwrap().merge.as_ref().unwrap();
         assert_eq!(merge.gist, "short\nsame\nsecond local\n");

@@ -56,8 +56,8 @@ pub(super) fn run_loop(
         pin_sync_screen_active = pins_active;
 
         terminal.draw(|frame| render(frame, &state, &mut mouse_layout, &mut render_feedback))?;
-        if let Some(width) = render_feedback.diff_content_width {
-            state.sync_hunk_geometry(width);
+        if let Some(viewport) = render_feedback.diff_viewport {
+            state.apply_diff_viewport(viewport);
         }
         if state.detail().is_some_and(|d| d.comments_scroll_to_bottom) {
             if let Some(max) = render_feedback.comments_max_scroll {
