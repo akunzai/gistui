@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] — 2026-10-03
+
 - A pin written in `config.toml` with a path relative to the working directory now counts as
   pinned on the List: its row shows the pin mark, and `p` unpins it instead of adding a
   second pin for the same file.
@@ -373,7 +375,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Off-thread loading with an on-disk cache.
 - Overwrite-confirm safety gate.
 
-[unreleased]: https://github.com/akunzai/gistui/compare/v0.24.0...HEAD
+[unreleased]: https://github.com/akunzai/gistui/compare/v0.25.0...HEAD
+[0.25.0]: https://github.com/akunzai/gistui/releases/tag/v0.25.0
 [0.24.0]: https://github.com/akunzai/gistui/releases/tag/v0.24.0
 [0.23.1]: https://github.com/akunzai/gistui/releases/tag/v0.23.1
 [0.23.0]: https://github.com/akunzai/gistui/releases/tag/v0.23.0
