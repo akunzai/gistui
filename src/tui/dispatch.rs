@@ -124,33 +124,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
             entry,
             gist_id,
             label,
-        } => {
-            let runner = jobs.command_runner();
-            jobs.spawn_action(
-                state,
-                ActionJobSpec::new(
-                    ActionJobKind::AnalyzeCompact {
-                        gist_id: gist_id.clone(),
-                    },
-                    "Checking revisions…",
-                ),
-                move || {
-                    let result = crate::actions::run_command(
-                        runner.as_ref(),
-                        &crate::gh::gist_revision_count_command(&gist_id),
-                    )
-                    .map_err(|e| e.to_string())
-                    .and_then(|out| {
-                        crate::gh::parse_revision_count(&out)
-                            .ok_or_else(|| "could not parse revision count".to_string())
-                    });
-                    (result, gist_id, label)
-                },
-                move |(result, gist_id, label), state| {
-                    screens::confirm::on_compact_analyze(state, entry, result, gist_id, label)
-                },
-            );
-        }
+        } => gist_mutation::analyze_compact(jobs, state, entry, gist_id, label),
         KeyOutcome::Pin {
             local_path,
             gist_id,

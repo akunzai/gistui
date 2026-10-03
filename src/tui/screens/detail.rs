@@ -1071,7 +1071,9 @@ pub(crate) fn on_comments_older_loaded(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tui::test_support::{detail_mut, state_with_gists, state_with_two_gists};
+    use crate::tui::test_support::{
+        detail_mut, set_pending, state_with_gists, state_with_two_gists,
+    };
     use crate::tui::*;
     use crossterm::event::KeyCode;
 
@@ -1247,6 +1249,32 @@ mod tests {
             unreachable!();
         };
         assert!(entry.return_to.is_gist_detail());
+    }
+
+    #[test]
+    fn compact_confirm_y_executes_and_n_returns_to_gist_detail() {
+        let compact = || PendingAction::CompactGist {
+            gist_id: "g1".into(),
+            label: "demo".into(),
+            count: 3,
+        };
+        let mut state = state_with_gists();
+        state.screen = Screen::GistDetail(Box::default());
+        set_pending(&mut state, compact());
+        assert_eq!(
+            state.handle_key(KeyCode::Char('y')),
+            KeyOutcome::Mutation(crate::tui::gist_mutation::MutationRequest::Compact {
+                gist_id: "g1".into(),
+                label: "demo".into(),
+                count: 3,
+            })
+        );
+
+        // y does not leave Confirm until the job runs; n drops the action and returns to the
+        // GistDetail that launched it.
+        state.handle_key(KeyCode::Char('n'));
+        assert!(state.screen.is_gist_detail());
+        assert!(state.pending_action().is_none());
     }
 
     #[test]

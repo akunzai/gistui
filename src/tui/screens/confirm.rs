@@ -245,7 +245,7 @@ impl AppState {
                     });
                 }
                 KeyCode::Char('n') | KeyCode::Char('q') | KeyCode::Esc => {
-                    // Return to whichever screen launched the compaction (Gists or GistDetail).
+                    // Return to the GistDetail that launched the compaction.
                     self.cancel_confirm();
                 }
                 _ => {}

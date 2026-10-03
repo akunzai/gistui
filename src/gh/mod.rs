@@ -113,6 +113,9 @@ pub use comments::{
     parse_gist_comments_json, parse_link_rel, COMMENTS_PAGE_SIZE,
 };
 
+mod compact;
+pub use compact::{execute_compact_gist, fetch_revision_count};
+
 mod forks;
 pub use forks::{
     apply_fork_of_ids, collect_gist_fork_counts, collect_owned_fork_of_ids,
@@ -139,8 +142,8 @@ mod revisions;
 pub use revisions::{
     build_gist_revision_raw_url, fetch_gist_commits_json, fetch_gist_revision_json,
     fetch_revision_file, fetch_revision_file_text, fetch_revision_file_text_optional,
-    gist_commits_plan, gist_revision_count_command, gist_revision_plan, parse_gist_commits_json,
-    parse_revision_count, restore_revision_command, restore_revision_json, RevisionFileContent,
+    gist_commits_plan, gist_revision_plan, parse_gist_commits_json, restore_revision_command,
+    restore_revision_json, RevisionFileContent,
 };
 
 mod stars;

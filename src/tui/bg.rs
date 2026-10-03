@@ -388,8 +388,8 @@ pub(super) struct Jobs {
     action_spawner: Box<dyn ActionSpawner>,
     /// External-command boundary handed to worker closures that need one. Production
     /// injects [`SystemRunner`]; tests inject a scripted runner (issue #430). Consumed by
-    /// the Gist revision and Gist mutation workflows; a few read-only jobs (compact
-    /// analysis, comments) still reach [`SystemRunner`] directly.
+    /// every job that runs a command (#511), compaction's revision count and comment loads
+    /// included.
     runner: SharedRunner,
 }
 
