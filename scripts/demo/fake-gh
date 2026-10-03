@@ -273,13 +273,23 @@ def main():
 
     if a[:1] == ["api"] and "--method" in a and "PATCH" in a:
         gid = a[a.index("PATCH") + 1].split("/gists/")[-1]
-        desc = a[a.index("-f") + 1].split("description=", 1)[-1] if "-f" in a else ""
         d = load()
-        if gid in d["gists"]:
-            d["gists"][gid]["description"] = desc
-            d["gists"][gid]["updated_at"] = now()
-            save(d)
-        print(json.dumps({"id": gid, "description": desc}))
+        if gid not in d["gists"]:
+            sys.stderr.write("HTTP 404: Gist not found\n")
+            return 1
+        g = d["gists"][gid]
+        if "--input" in a:
+            payload = json.loads(pathlib.Path(a[a.index("--input") + 1]).read_text())
+            for filename, change in payload.get("files", {}).items():
+                if change is None:
+                    g["files"].pop(filename, None)
+                elif "content" in change:
+                    g["files"][filename] = change["content"]
+        elif "-f" in a:
+            g["description"] = a[a.index("-f") + 1].split("description=", 1)[-1]
+        g["updated_at"] = now()
+        save(d)
+        print(json.dumps(gist_api_row(gid, g, with_content=True)))
         return 0
 
     if a[:2] == ["gist", "view"]:

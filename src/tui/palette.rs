@@ -598,6 +598,12 @@ mod tests {
         assert_eq!(
             item_tuples(&items),
             vec![
+                ("n", "Next hunk", false),
+                ("N", "Previous hunk", false),
+                ("[", "Stage hunk to Local", false),
+                ("]", "Stage hunk to Gist", false),
+                ("s", "Save staged changes", false),
+                ("z", "Undo staged hunk", false),
                 ("d", "Download", true),
                 ("u", "Upload", true),
                 ("c", "Toggle full diff context", true),

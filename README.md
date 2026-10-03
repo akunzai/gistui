@@ -43,6 +43,11 @@ downloads, `p` pins the pair, and `q` quits. Press `?` on any screen for its
 full keymap, `;` for a menu of what is valid right now, and `Ctrl+p` for the
 command palette. The mouse works by default. `gistui --help` lists the flags.
 
+When each side has changes to keep, the diff shows Local on the left and Gist
+on the right. Copy individual hunks in either direction, undo staged copies,
+then preview and save the changed sides. Unselected differences stay in place;
+changes made outside gistui stop the save. See `?` in the diff for the keys.
+
 ## Docs
 
 - [Keys and screens](https://akunzai.github.io/gistui/) — the keymap, and what each screen shows.

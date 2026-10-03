@@ -333,6 +333,12 @@ fn open_diff(
                 text,
                 ..crate::tui::ScrollBody::default()
             },
+            merge: Some(crate::merge::Merge::new(
+                fetched.pair.local.exists().then_some(local.clone()),
+                remote.clone(),
+                policy,
+            )),
+            merge_width: 0,
             identical,
             kind: crate::tui::DiffKind::Sync {
                 pair: fetched.pair,
@@ -382,7 +388,7 @@ pub(super) fn on_push_done(
 
 /// Patch `file`'s blob sha into the in-memory catalog's `raw_url`, when both the catalog
 /// holds a raw URL to patch and a sha was recorded.
-fn patch_catalog_blob_sha(
+pub(super) fn patch_catalog_blob_sha(
     state: &mut AppState,
     file: &crate::domain::GistFileRef,
     sha: Option<&str>,

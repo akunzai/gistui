@@ -28,6 +28,18 @@ Star/unstar (`*`) and fork (`F`) are remote structure writes; they do not overwr
   and is removed when editing ends — including when gistui quits with the editor still open.
 - Identical files are detected: when the two sides match, upload/download are disabled.
 
+## Staged hunk sync
+
+- Hunk copies change only the in-memory Local and Gist buffers. Undo reverses a staged copy;
+  leaving with unsaved copies offers Save, Discard, or Cancel, including Quit from the palette.
+- Save previews each changed side against its saved content and requires `y save`. Both live
+  sides are re-read before writing; if either changed, the save stops and retains the buffers.
+- Local and Gist cannot be written as one transaction. A partial failure reports which side
+  succeeded and keeps the unfinished side staged. Undo history is cleared after a write so it
+  cannot restore a snapshot of already-saved content.
+- Unselected differences remain. A pin baseline advances only when the saved pair is identical
+  under the Sync policy. Whole-file upload/download are unavailable while hunks are staged.
+
 ## Destructive remote actions
 
 Each requires a `y`/`n` confirmation:

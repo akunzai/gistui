@@ -56,6 +56,17 @@ impl SyncPolicy {
         }
     }
 
+    /// Canonical line key for hunk alignment. Only the file-final line can ignore its
+    /// terminator; all other line endings follow the same policy as `identical`.
+    pub(crate) fn comparison_line(&self, line: &str, final_line: bool) -> String {
+        let line = self.line_endings(line);
+        if final_line && self.ignore_trailing_newline {
+            strip_final_line_ending(&line).to_string()
+        } else {
+            line.into_owned()
+        }
+    }
+
     /// The unified diff from `old` to `new`. Lines are always compared with line endings
     /// normalized, since a `\r` is invisible on screen. When normalization is off and the
     /// two sides use different line endings, a note under the header says so (#465).

@@ -159,7 +159,14 @@ pub(crate) fn category_for_footer_key(bindings: &[Binding], key: &str) -> Catego
         .iter()
         .filter_map(|binding| binding.footer.map(|hint| (hint.key, binding.category)))
         .find(|(hint_key, _)| *hint_key == key)
-        .map_or(Category::Nav, |(_, category)| category)
+        .map(|(_, category)| category)
+        .or_else(|| {
+            bindings
+                .iter()
+                .find(|binding| binding.key_hint == key)
+                .map(|binding| binding.category)
+        })
+        .unwrap_or(Category::Nav)
 }
 
 use Category::{Destructive, Nav, Read, Write};
@@ -257,6 +264,12 @@ const REVISIONS: &[Binding] = &[
 ];
 
 const DIFF: &[Binding] = &[
+    Binding::action("n", KeyCode::Char('n'), "Next hunk", Nav),
+    Binding::action("N", KeyCode::Char('N'), "Previous hunk", Nav),
+    Binding::action("[", KeyCode::Char('['), "Stage hunk to Local", Write),
+    Binding::action("]", KeyCode::Char(']'), "Stage hunk to Gist", Write),
+    Binding::action("s", KeyCode::Char('s'), "Save staged changes", Write),
+    Binding::action("z", KeyCode::Char('z'), "Undo staged hunk", Nav),
     Binding::action("d", KeyCode::Char('d'), "Download", Write),
     Binding::action("u", KeyCode::Char('u'), "Upload", Write),
     Binding::always("c", KeyCode::Char('c'), "Toggle full diff context", Nav),

@@ -132,7 +132,7 @@ pub(crate) fn lookup(screen: &Screen) -> ScreenLookup {
             guard: diff::diff_guard,
             build_vm: |state| ScreenVm::Diff(diff::build_diff_vm(state)),
             handle_key: |state, code, _| state.handle_key_diff(code),
-            apply_navigation: scroll_navigation,
+            apply_navigation: AppState::apply_navigation_diff,
             click_select: no_click,
         },
         Screen::Preview(_) => ScreenLookup {

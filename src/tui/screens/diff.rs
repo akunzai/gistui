@@ -24,9 +24,67 @@ pub(crate) struct DiffVm {
     pub hscroll: u16,
     pub syntax_highlight: bool,
     pub ext: Option<String>,
+    pub sides: Option<SideBySideVm>,
 }
 
-pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::List;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SideBySideVm {
+    pub rows: Vec<crate::merge::Row>,
+    pub selected: usize,
+    pub local_title: String,
+    pub gist_title: String,
+}
+
+/// Physical rows shared by painting, scroll bounds, hunk navigation and resize feedback.
+/// Padding the shorter side keeps both sides on the same source row when one wraps.
+pub(crate) fn aligned_rows(
+    rows: &[crate::merge::Row],
+    width: usize,
+    wrap: bool,
+) -> Vec<crate::merge::Row> {
+    let mut result = Vec::new();
+    for row in rows {
+        let values = [&row.local, &row.gist];
+        let content = values.map(|value| {
+            let text = if row.omitted > 0 {
+                format!("@@ {} unchanged lines hidden @@", row.omitted)
+            } else {
+                value
+                    .as_ref()
+                    .map(|(_, s)| s.replace('\t', "    "))
+                    .unwrap_or_default()
+            };
+            if wrap {
+                crate::tui::render::wrap_hanging(&text, width.max(1))
+            } else {
+                vec![text]
+            }
+        });
+        for line in 0..content[0].len().max(content[1].len()).max(1) {
+            let side = |index: usize| {
+                (values[index].is_some() || row.omitted > 0).then(|| {
+                    (
+                        if line == 0 {
+                            values[index].as_ref().map(|(n, _)| *n).unwrap_or(0)
+                        } else {
+                            0
+                        },
+                        content[index].get(line).cloned().unwrap_or_default(),
+                    )
+                })
+            };
+            result.push(crate::merge::Row {
+                local: side(0),
+                gist: side(1),
+                hunk: row.hunk,
+                omitted: 0,
+            });
+        }
+    }
+    result
+}
+
+pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::Diff;
 
 pub(crate) fn help_topic() -> HelpTopic {
     HELP_TOPIC
@@ -41,20 +99,170 @@ pub(crate) fn wheel_step() -> usize {
 /// can never silently drift (issue #288).
 pub(crate) fn diff_guard(state: &AppState, code: KeyCode) -> bool {
     match code {
-        KeyCode::Char('d' | 'u') => state.sync_pair().is_some() && !state.diff_identical(),
+        KeyCode::Char('d' | 'u') => {
+            state.sync_pair().is_some() && !state.diff_identical() && !state.hunks_dirty()
+        }
+        KeyCode::Char('n' | 'N' | '[' | ']') => {
+            state
+                .diff()
+                .and_then(|d| d.merge.as_ref())
+                .is_some_and(|m| m.hunk_count() > 0)
+                && (code != KeyCode::Char(']')
+                    || state.sync_pair().is_some_and(|p| {
+                        state
+                            .gist_catalog
+                            .owned
+                            .iter()
+                            .any(|g| g.gist_id == p.gist.gist_id && g.filename == p.gist.filename)
+                    }))
+        }
+        KeyCode::Char('z') => state
+            .diff()
+            .and_then(|d| d.merge.as_ref())
+            .is_some_and(|m| m.can_undo()),
+        KeyCode::Char('s') => state.hunks_dirty(),
         _ => false,
     }
 }
 
+impl crate::tui::DiffState {
+    pub(crate) fn refresh_merge_preview(&mut self, policy: crate::sync_content::SyncPolicy) {
+        if let (Some(merge), crate::tui::DiffKind::Sync { pair, .. }) = (&self.merge, &self.kind) {
+            self.identical = policy.identical(&merge.local, &merge.gist);
+            self.body.text = policy.diff(
+                &format!("local: {}", crate::config::display_path(&pair.local)),
+                &merge.local,
+                &format!("gist: {} / {}", pair.gist.gist_id, pair.gist.filename),
+                &merge.gist,
+            );
+        }
+    }
+}
+
 impl AppState {
+    pub(crate) fn sync_hunk_geometry(&mut self, width: usize) {
+        if self
+            .diff()
+            .is_some_and(|d| d.merge.is_some() && d.merge_width != width)
+        {
+            self.diff_mut().unwrap().merge_width = width;
+            self.reveal_hunk();
+        }
+    }
+
+    pub(crate) fn reveal_hunk(&mut self) {
+        let radius = self.effective_diff_context();
+        let wrap = self.diff_wrap;
+        if let Some(diff) = self.diff_mut() {
+            if let Some(merge) = &diff.merge {
+                let rows = aligned_rows(&merge.visible_rows(radius), diff.merge_width.max(1), wrap);
+                diff.body.scroll = rows
+                    .iter()
+                    .position(|r| r.hunk == Some(merge.selected))
+                    .unwrap_or(0)
+                    .min(u16::MAX as usize) as u16;
+            }
+        }
+    }
+
+    pub(crate) fn apply_navigation_diff(&mut self, action: crate::tui::keys::NavAction) -> bool {
+        use crate::tui::keys::NavAction;
+        let radius = self.effective_diff_context();
+        let wrapped = self.diff_wrap;
+        let Some(diff) = self.diff_mut() else {
+            return false;
+        };
+        let Some(merge) = &mut diff.merge else {
+            return crate::tui::screens::scroll_navigation(self, action);
+        };
+        let rows = aligned_rows(
+            &merge.visible_rows(radius),
+            diff.merge_width.max(1),
+            wrapped,
+        );
+        let max = rows.len().saturating_sub(1).min(u16::MAX as usize) as u16;
+        match action {
+            NavAction::Up => diff.body.scroll = diff.body.scroll.saturating_sub(1),
+            NavAction::Down => diff.body.scroll = diff.body.scroll.saturating_add(1).min(max),
+            NavAction::PageUp => {
+                diff.body.scroll = diff
+                    .body
+                    .scroll
+                    .saturating_sub(crate::tui::keys::PAGE_SCROLL)
+            }
+            NavAction::PageDown => {
+                diff.body.scroll = diff
+                    .body
+                    .scroll
+                    .saturating_add(crate::tui::keys::PAGE_SCROLL)
+                    .min(max)
+            }
+            NavAction::Left => diff.body.hscroll = diff.body.hscroll.saturating_sub(1),
+            NavAction::Right if !wrapped => {
+                let hmax = rows
+                    .iter()
+                    .flat_map(|r| [&r.local, &r.gist])
+                    .filter_map(|s| s.as_ref())
+                    .map(|(_, text)| text.chars().count())
+                    .max()
+                    .unwrap_or(0)
+                    .min(u16::MAX as usize) as u16;
+                diff.body.hscroll = diff.body.hscroll.saturating_add(1).min(hmax);
+            }
+            _ => {}
+        }
+        if !matches!(action, NavAction::Left | NavAction::Right) {
+            if let Some(hunk) = rows
+                .iter()
+                .skip(diff.body.scroll as usize)
+                .find_map(|r| r.hunk)
+            {
+                merge.selected = hunk;
+            }
+        }
+        true
+    }
+
+    fn change_hunk(&mut self, key: char) {
+        let radius = self.effective_diff_context();
+        let policy = self.settings.sync_policy();
+        let wrap = self.diff_wrap;
+        if let Some(diff) = self.diff_mut() {
+            if let Some(merge) = &mut diff.merge {
+                match key {
+                    'n' | 'N' => merge.jump(key == 'n'),
+                    '[' | ']' => {
+                        merge.stage(key == ']');
+                    }
+                    'z' => {
+                        merge.undo();
+                    }
+                    _ => {}
+                }
+                let rows = aligned_rows(&merge.visible_rows(radius), diff.merge_width.max(1), wrap);
+                diff.body.scroll = rows
+                    .iter()
+                    .position(|r| r.hunk == Some(merge.selected))
+                    .unwrap_or(0)
+                    .min(u16::MAX as usize) as u16;
+            }
+            diff.refresh_merge_preview(policy);
+        }
+        self.status = None;
+    }
+
     pub(crate) fn handle_key_diff(&mut self, code: KeyCode) -> KeyOutcome {
         match code {
             // In the diff, q and Esc return to wherever `enter()` recorded (List, Pins, …).
             KeyCode::Char('q') | KeyCode::Esc => {
                 // Diff pairing identity lives on the payload; leaving drops it (not a full
                 // `back_to_list()` — that would also discard the rest of `nav_stack`).
-                self.leave();
+                self.request_hunk_back();
             }
+            KeyCode::Char(key @ ('n' | 'N' | '[' | ']' | 'z')) if diff_guard(self, code) => {
+                self.change_hunk(key);
+            }
+            KeyCode::Char('s') if diff_guard(self, code) => self.confirm_hunk_save(None),
             // Identical files have nothing to sync, so download/upload are not offered.
             // Revision-history diffs are read-only (no local file pairing).
             KeyCode::Char('d') if diff_guard(self, code) => {
@@ -77,6 +285,7 @@ impl AppState {
                 if let Some(body) = self.scroll_body_mut() {
                     body.scroll = 0;
                 }
+                self.reveal_hunk();
                 return KeyOutcome::PersistSettings {
                     effect: change.effect,
                     success_message: if self.settings.diff_show_full() {
@@ -93,6 +302,7 @@ impl AppState {
                 if let Some(body) = self.scroll_body_mut() {
                     body.hscroll = 0;
                 }
+                self.reveal_hunk();
             }
             _ => {}
         }
@@ -157,6 +367,22 @@ pub(crate) fn diff_footer(state: &AppState) -> String {
         "w wrap [off]"
     };
     let back = "Esc/q back";
+    if let Some(merge) = state.diff().and_then(|d| d.merge.as_ref()) {
+        if state.diff_identical() && !merge.dirty() {
+            return format!("Files are identical — nothing to sync  ·  {scroll}  ·  {wrap}  ·  {context}  ·  {back}");
+        }
+        let hunk = if merge.hunk_count() == 0 {
+            "No remaining hunks".to_string()
+        } else {
+            format!("Hunk {}/{}", merge.selected + 1, merge.hunk_count())
+        };
+        let actions = if merge.dirty() {
+            "s save · z undo"
+        } else {
+            "d download · u upload"
+        };
+        return format!("{hunk}  ·  n/N hunks  ·  [ to Local  ·  ] to Gist  ·  {actions}  ·  {wrap}  ·  {context}  ·  {back}");
+    }
     if state.sync_pair().is_none() {
         if state.diff_identical() {
             format!("Files are identical  ·  {scroll}  ·  {wrap}  ·  {context}  ·  {back}")
@@ -197,6 +423,29 @@ pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
         hscroll,
         syntax_highlight: state.syntax_highlight,
         ext,
+        sides: if state.pending_action().is_some() {
+            None
+        } else {
+            state
+                .diff()
+                .and_then(|d| d.merge.as_ref())
+                .zip(state.sync_pair())
+                .map(|(merge, pair)| SideBySideVm {
+                    rows: merge.visible_rows(state.effective_diff_context()),
+                    selected: merge.selected,
+                    local_title: format!(
+                        "Local{} — {}",
+                        if merge.local_dirty() { " [staged]" } else { "" },
+                        crate::config::display_path(&pair.local)
+                    ),
+                    gist_title: format!(
+                        "Gist{} — {} / {}",
+                        if merge.gist_dirty() { " [staged]" } else { "" },
+                        pair.gist.gist_id,
+                        pair.gist.filename
+                    ),
+                })
+        },
     }
 }
 
@@ -206,6 +455,7 @@ pub(crate) fn render_diff_vm(
     diff: &DiffVm,
     chrome: &ChromeVm,
     layout: &mut crate::tui::MouseFrame,
+    feedback: &mut crate::tui::render::RenderFeedback,
 ) {
     let area = frame.area();
     let area = crate::tui::render_top_bar(
@@ -222,6 +472,10 @@ pub(crate) fn render_diff_vm(
         .constraints([Constraint::Min(5), Constraint::Length(footer_lines)])
         .split(area);
 
+    if diff.sides.is_some() {
+        feedback.diff_content_width =
+            Some((chunks[0].width / 2).saturating_sub(11).max(1) as usize);
+    }
     crate::tui::render_diff_pane_vm(frame, chunks[0], diff, &state.settings.theme());
 
     crate::tui::render_footer(
@@ -268,6 +522,8 @@ pub(crate) fn on_revision_diff(
                         text: diff,
                         ..crate::tui::ScrollBody::default()
                     },
+                    merge: None,
+                    merge_width: 0,
                     identical,
                     kind: crate::tui::DiffKind::Revision,
                 })),
@@ -609,5 +865,162 @@ mod tests {
         assert!(d.body.contains("+new") || d.body.contains("old"));
         assert!(d.footer.contains("scroll") || d.footer.contains("back"));
         assert_eq!(d.ext.as_deref(), Some("txt"));
+    }
+    #[test]
+    fn staging_blocks_whole_file_actions_and_revision_writes() {
+        let mut state = initial_state();
+        crate::tui::test_support::enter_hunk_diff(&mut state, "a\nsame\nb\n", "x\nsame\ny\n");
+        state.handle_key(KeyCode::Char(']'));
+        state.handle_key(KeyCode::Char('['));
+        assert!(state.hunks_dirty());
+        assert_eq!(state.handle_key(KeyCode::Char('u')), KeyOutcome::None);
+        assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::None);
+        assert!(diff_footer(&state).contains("s save"));
+        state.handle_key(KeyCode::Char('z'));
+        state.handle_key(KeyCode::Char('z'));
+        assert!(!state.hunks_dirty());
+        crate::tui::test_support::enter_revision_diff(&mut state, "-old\n+new\n".into());
+        for key in ['[', ']', 's', 'z'] {
+            assert_eq!(state.handle_key(KeyCode::Char(key)), KeyOutcome::None);
+        }
+        assert!(build_diff_vm(&state).sides.is_none());
+    }
+
+    #[test]
+    fn dirty_back_can_cancel_preview_save_or_discard() {
+        let mut state = initial_state();
+        crate::tui::test_support::enter_hunk_diff(&mut state, "local\n", "gist\n");
+        state.handle_key(KeyCode::Char(']'));
+        state.handle_key(KeyCode::Esc);
+        assert!(matches!(
+            state.pending_action(),
+            Some(PendingAction::LeaveHunks(
+                crate::tui::hunk_sync::HunkExit::Back
+            ))
+        ));
+        state.handle_key(KeyCode::Char('n'));
+        assert!(state.screen.is_diff() && state.hunks_dirty());
+        state.handle_key(KeyCode::Char('q'));
+        state.handle_key(KeyCode::Char('s'));
+        assert!(
+            matches!(state.pending_action(), Some(PendingAction::SaveHunks(request)) if request.exit == Some(crate::tui::hunk_sync::HunkExit::Back))
+        );
+        state.handle_key(KeyCode::Esc);
+        assert!(state.hunks_dirty());
+        state.handle_key(KeyCode::Esc);
+        state.handle_key(KeyCode::Char('d'));
+        assert_eq!(state.screen, Screen::List);
+    }
+
+    #[test]
+    fn hunk_selection_survives_context_wrap_and_scroll_is_bounded() {
+        let mut state = initial_state();
+        let middle = "same\n".repeat(30);
+        crate::tui::test_support::enter_hunk_diff(
+            &mut state,
+            &format!("a\n{middle}b\n"),
+            &format!("x\n{middle}y\n"),
+        );
+        state.handle_key(KeyCode::Char('n'));
+        state.handle_key(KeyCode::Char('c'));
+        state.handle_key(KeyCode::Char('w'));
+        state.handle_key(KeyCode::Char(']'));
+        let merge = state.diff().unwrap().merge.as_ref().unwrap();
+        assert_eq!(merge.gist, format!("x\n{middle}b\n"));
+        for _ in 0..10 {
+            state.handle_key(KeyCode::PageDown);
+        }
+        let merge = state.diff().unwrap().merge.as_ref().unwrap();
+        assert!(
+            usize::from(state.diff().unwrap().body.scroll)
+                < aligned_rows(
+                    &merge.visible_rows(state.effective_diff_context()),
+                    state.diff().unwrap().merge_width.max(1),
+                    state.diff_wrap
+                )
+                .len()
+        );
+    }
+
+    #[test]
+    fn staged_top_navigation_prompts_and_discard_continues_to_target() {
+        for pins in [true, false] {
+            let mut state = initial_state();
+            crate::tui::test_support::enter_hunk_diff(&mut state, "local\n", "gist\n");
+            state.handle_key(KeyCode::Char(']'));
+            if pins {
+                state.open_pins();
+            } else {
+                state.open_gist_manager();
+            }
+            assert!(state.screen.is_confirm());
+            state.handle_key(KeyCode::Char('d'));
+            if pins {
+                assert!(state.screen.is_pins());
+            } else {
+                assert!(state.screen.is_gists());
+            }
+        }
+    }
+
+    #[test]
+    fn palette_quit_preserves_staging_until_an_explicit_discard() {
+        let mut state = initial_state();
+        crate::tui::test_support::enter_hunk_diff(&mut state, "local\n", "gist\n");
+        state.handle_key(KeyCode::Char(']'));
+        state.open_palette_command();
+        let index = state
+            .palette_visible_items()
+            .iter()
+            .position(|item| {
+                matches!(
+                    item.exec,
+                    crate::tui::palette::PaletteExec::Cross(crate::tui::palette::CrossAction::Quit)
+                )
+            })
+            .unwrap();
+        state.palette_mut().unwrap().selected = index;
+        assert_eq!(state.execute_palette_selection(), KeyOutcome::None);
+        assert!(matches!(
+            state.pending_action(),
+            Some(PendingAction::LeaveHunks(
+                crate::tui::hunk_sync::HunkExit::Quit
+            ))
+        ));
+        state.handle_key(KeyCode::Char('n'));
+        assert!(state.hunks_dirty());
+        assert_eq!(state.request_hunk_quit(), KeyOutcome::None);
+        assert_eq!(state.handle_key(KeyCode::Char('d')), KeyOutcome::Quit);
+    }
+    #[test]
+    fn wrapped_rows_scroll_within_a_long_line_and_resize_keeps_the_selected_hunk() {
+        let mut state = initial_state();
+        let local = format!("{}END\nsame\nsecond local\n", "long ".repeat(80));
+        crate::tui::test_support::enter_hunk_diff(&mut state, &local, "short\nsame\nsecond gist\n");
+        state.sync_hunk_geometry(16);
+        state.handle_key(KeyCode::Char('w'));
+        state.handle_key(KeyCode::PageDown);
+        let merge = state.diff().unwrap().merge.as_ref().unwrap();
+        let rows = aligned_rows(&merge.visible_rows(None), 16, true);
+        let row = &rows[state.diff().unwrap().body.scroll as usize];
+        assert_eq!(
+            row.hunk,
+            Some(0),
+            "page scroll remains inside the wrapped first hunk"
+        );
+        assert_eq!(
+            row.local.as_ref().unwrap().0,
+            0,
+            "continuation has no repeated source line number"
+        );
+        state.handle_key(KeyCode::Char('n'));
+        state.sync_hunk_geometry(9);
+        state.handle_key(KeyCode::Char(']'));
+        let merge = state.diff().unwrap().merge.as_ref().unwrap();
+        assert_eq!(merge.gist, "short\nsame\nsecond local\n");
+        assert_eq!(
+            merge.local, local,
+            "resizing never changes the source buffer"
+        );
     }
 }

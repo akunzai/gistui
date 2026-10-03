@@ -142,6 +142,23 @@ impl AppState {
         // While typing the create flow's description, arrows drive the text cursor (handled
         // below), not the background diff scroll.
         match self.pending_action().cloned() {
+            Some(PendingAction::SaveHunks(request)) => match code {
+                KeyCode::Char('y') => return KeyOutcome::SaveHunks(request),
+                KeyCode::Esc | KeyCode::Char('n' | 'q') => self.cancel_confirm(),
+                _ => {}
+            },
+            Some(PendingAction::LeaveHunks(exit)) => match code {
+                KeyCode::Char('s') => {
+                    self.cancel_confirm();
+                    self.confirm_hunk_save(Some(exit));
+                }
+                KeyCode::Char('d') => {
+                    self.cancel_confirm();
+                    return self.finish_hunk_exit(exit);
+                }
+                KeyCode::Esc | KeyCode::Char('n' | 'q') => self.cancel_confirm(),
+                _ => {}
+            },
             Some(PendingAction::Download) => match code {
                 KeyCode::Char('y') => {
                     return KeyOutcome::Download {
@@ -318,6 +335,38 @@ pub(crate) fn build_confirm_vm(state: &AppState) -> ConfirmVm {
         };
     };
     let mut vm = match action {
+        PendingAction::SaveHunks(request) => ConfirmVm {
+            title: "Save staged changes",
+            border: theme.del_color,
+            kind: ConfirmModalKind::Prompt(ConfirmPromptVm {
+                question: format!("Save staged changes to {}?", request.sides()),
+                detail: Some(
+                    "Only staged sides are written. Local and Gist are rechecked first.".into(),
+                ),
+                keys: vec![cancel(), ConfirmKeyVm::new("y", "save")],
+                options: Vec::new(),
+            }),
+            background: diff_background(state),
+            status: None,
+        },
+        PendingAction::LeaveHunks(_) => ConfirmVm {
+            title: "Unsaved staged changes",
+            border: theme.del_color,
+            kind: ConfirmModalKind::Prompt(ConfirmPromptVm {
+                question: "Leave with unsaved staged changes?".into(),
+                detail: Some(
+                    "Discard drops the staged changes. Save previews the writes first.".into(),
+                ),
+                keys: vec![
+                    cancel(),
+                    ConfirmKeyVm::new("s", "save"),
+                    ConfirmKeyVm::new("d", "discard"),
+                ],
+                options: Vec::new(),
+            }),
+            background: diff_background(state),
+            status: None,
+        },
         PendingAction::Download => ConfirmVm {
             title: "Overwrite",
             border: theme.del_color,

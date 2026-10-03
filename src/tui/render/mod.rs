@@ -29,6 +29,7 @@ use similar::{ChangeTag, TextDiff};
 #[derive(Debug, Default)]
 pub(super) struct RenderFeedback {
     pub comments_max_scroll: Option<u16>,
+    pub diff_content_width: Option<usize>,
 }
 
 pub(super) fn render(
@@ -73,7 +74,7 @@ pub(crate) fn render_screen_vm_with_feedback(
         }
         ScreenVm::Revisions(revs) => render_revisions(frame, state, revs, chrome, layout),
         ScreenVm::Config(config) => render_config(frame, state, config, chrome, layout),
-        ScreenVm::Diff(diff) => render_diff(frame, state, diff, chrome, layout),
+        ScreenVm::Diff(diff) => render_diff(frame, state, diff, chrome, layout, feedback),
         ScreenVm::Preview(preview) => render_preview(frame, state, preview, chrome, layout),
         ScreenVm::Pins(pins) => render_pins(frame, state, pins, chrome, layout),
         ScreenVm::Confirm(confirm) => render_confirm(frame, state, confirm, chrome, layout),
