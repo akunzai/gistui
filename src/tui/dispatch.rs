@@ -4,7 +4,7 @@
 
 use super::bg::*;
 use super::pin_sync::{pin_paths, unpin_at_pin_index, unpin_path};
-use super::sync::download;
+use super::sync::{download, request_download};
 use super::*;
 use editor::{edit_local_path, edit_upload_buffer};
 use ratatui::{backend::CrosstermBackend, Terminal};
@@ -47,13 +47,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
     match outcome {
         KeyOutcome::Quit => return LoopFlow::Quit,
         KeyOutcome::Download { mode } => download(state, mode),
-        KeyOutcome::DownloadRequested { target } => {
-            if target.exists() {
-                state.enter_confirm_from_diff(PendingAction::Download);
-            } else {
-                download(state, crate::actions::DownloadMode::CreateNew);
-            }
-        }
+        KeyOutcome::DownloadRequested { target } => request_download(state, &target),
         KeyOutcome::OpenGistDetail { gist_id } => {
             state.enter(Screen::GistDetail(Box::new(DetailState {
                 gist_id: Some(gist_id),

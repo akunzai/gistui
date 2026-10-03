@@ -157,7 +157,9 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
   Its apply handlers are the workflow's own (`on_compare`, `on_pull`, `on_push`): a sync's
   outcome belongs to no single screen.
 - The confirmed upload is a Gist mutation, not a sync; `d` in an open Diff writes the bytes
-  already fetched (`sync::download`), with no request.
+  already fetched (`sync::download`), with no request. Whether that write first asks to
+  overwrite is `sync::request_download`'s call, checked when `d` is pressed; `route_outcome`
+  only hands the target on.
 - **Sync owns what a pin believes after a push, and where the user lands** (issue #526).
   `gist_mutation::on_upload_replace` calls one follow-up, `sync::on_push_done`, once its
   upload succeeds: it records the pair's Sync baseline (from the local file's bytes on disk,
