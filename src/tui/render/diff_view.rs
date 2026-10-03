@@ -222,10 +222,9 @@ pub(crate) fn render_diff_pane_vm(
     area: Rect,
     diff: &crate::tui::screens::diff::DiffVm,
     theme: &Theme,
-) {
+) -> Option<crate::tui::diff_geometry::DiffViewport> {
     if let Some(sides) = &diff.sides {
-        render_side_by_side(frame, area, diff, sides, theme);
-        return;
+        return Some(render_side_by_side(frame, area, diff, sides, theme));
     }
     let block = Block::default()
         .title(fit_block_title(&diff.title, area.width))
@@ -266,17 +265,17 @@ pub(crate) fn render_diff_pane_vm(
         let total_lines = diff.body.lines().count();
         render_text_scrollbar(frame, area, total_lines, diff.scroll as usize);
     }
+    None
 }
 
-/// Wrap each aligned row to a shared height. Scroll skips logical rows on both sides,
-/// so a long line never shifts the Gist rows away from their Local counterparts.
+/// Project actual pane dimensions before painting, then report the position painted.
 fn render_side_by_side(
     frame: &mut Frame,
     area: Rect,
     diff: &DiffVm,
     sides: &crate::tui::screens::diff::SideBySideVm,
     theme: &Theme,
-) {
+) -> crate::tui::diff_geometry::DiffViewport {
     let panes = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -290,16 +289,22 @@ fn render_side_by_side(
     });
     let inners = [blocks[0].inner(panes[0]), blocks[1].inner(panes[1])];
     let mut texts: [Vec<Line<'static>>; 2] = [Vec::new(), Vec::new()];
-    let width = inners
+    let dimensions = crate::tui::diff_geometry::Dimensions {
+        panes: [panes[0].width, panes[1].width],
+        height: area.height,
+    };
+    let width = dimensions.content_width();
+    let geometry = crate::tui::diff_geometry::Geometry::new(&sides.rows, width, diff.wrap);
+    // Opening and resize reveal in this frame, before feedback updates AppState.
+    let scroll = if Some(dimensions) != sides.dimensions {
+        geometry.reveal(sides.selected)
+    } else {
+        diff.scroll
+    };
+    for row in geometry
+        .rows()
         .iter()
-        .map(|r| r.width.saturating_sub(9) as usize)
-        .min()
-        .unwrap_or(0)
-        .max(1);
-    let rows = crate::tui::screens::diff::aligned_rows(&sides.rows, width, diff.wrap);
-    for row in rows
-        .iter()
-        .skip(diff.scroll as usize)
+        .skip(scroll as usize)
         .take(inners[0].height as usize)
     {
         let values = [&row.local, &row.gist];
@@ -320,7 +325,12 @@ fn render_side_by_side(
                 .filter(|(n, _)| *n > 0)
                 .map(|(n, _)| n.to_string())
                 .unwrap_or_default();
-            let prefix = format!("{}{:>5} {sign} ", if selected { '▶' } else { ' ' }, number);
+            let prefix = format!(
+                "{}{:>width$} {sign} ",
+                if selected { '▶' } else { ' ' },
+                number,
+                width = crate::tui::diff_geometry::NUMBER_WIDTH
+            );
             let color = if changed {
                 if side == 0 {
                     theme.del_color
@@ -363,6 +373,7 @@ fn render_side_by_side(
         frame.render_widget(blocks[side].clone(), panes[side]);
         frame.render_widget(Paragraph::new(text).style(theme.base_style()), inners[side]);
     }
+    crate::tui::diff_geometry::DiffViewport { dimensions, scroll }
 }
 
 #[cfg(test)]

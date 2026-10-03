@@ -15,6 +15,7 @@ use ratatui::{backend::CrosstermBackend, widgets::Clear, Terminal};
 use std::io;
 use std::path::PathBuf;
 
+mod diff_geometry;
 mod gist_comments;
 mod gist_content;
 mod gist_refresh;
@@ -598,7 +599,7 @@ pub struct DiffState {
     pub identical: bool,
     pub kind: DiffKind,
     pub(crate) merge: Option<crate::merge::Merge>,
-    pub(crate) merge_width: usize,
+    pub(crate) merge_dimensions: Option<crate::tui::diff_geometry::Dimensions>,
 }
 
 /// What a Diff compares (issue #524). Only a sync Diff offers `d` / `u`, and they write

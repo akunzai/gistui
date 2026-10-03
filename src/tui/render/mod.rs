@@ -29,7 +29,7 @@ use similar::{ChangeTag, TextDiff};
 #[derive(Debug, Default)]
 pub(super) struct RenderFeedback {
     pub comments_max_scroll: Option<u16>,
-    pub diff_content_width: Option<usize>,
+    pub diff_viewport: Option<crate::tui::diff_geometry::DiffViewport>,
 }
 
 pub(super) fn render(
