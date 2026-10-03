@@ -77,6 +77,7 @@ impl AppState {
             .copied()
             .unwrap_or(ConfigField::Theme);
         let change = self.settings.adjust(field, forward)?;
+        self.apply_sync_policy_to_diffs();
         Some(KeyOutcome::PersistSettings {
             effect: change.effect,
             success_message: format!("{}: {}", field.label(), self.settings.field_value(field)),

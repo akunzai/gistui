@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Changing line-ending or trailing-newline settings in Config now updates a parked Local/Gist
+  Diff's comparison, preview and identical-state together, without altering staged content.
+
 - Reveal the selected Local/Gist hunk using the current pane dimensions in the first
   frame after opening or resizing the Diff.
 

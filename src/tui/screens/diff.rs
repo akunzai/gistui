@@ -78,8 +78,11 @@ pub(crate) fn diff_guard(state: &AppState, code: KeyCode) -> bool {
 }
 
 impl crate::tui::DiffState {
-    pub(crate) fn refresh_merge_preview(&mut self, policy: crate::sync_content::SyncPolicy) {
-        if let (Some(merge), crate::tui::DiffKind::Sync { pair, .. }) = (&self.merge, &self.kind) {
+    /// The one place the unified preview and identical-state are derived: from the Merge's
+    /// staged bytes under the Merge's policy, so no caller can refresh them out of order.
+    fn refresh_derived(&mut self) {
+        if let (Some(merge), crate::tui::DiffKind::Sync { pair }) = (&self.merge, &self.kind) {
+            let policy = merge.policy();
             self.identical = policy.identical(&merge.local, &merge.gist);
             self.body.text = policy.diff(
                 &format!("local: {}", crate::config::display_path(&pair.local)),
@@ -89,9 +92,68 @@ impl crate::tui::DiffState {
             );
         }
     }
+
+    /// Install a Merge and derive every fact from it.
+    #[cfg(test)]
+    pub(crate) fn set_merge(&mut self, merge: crate::merge::Merge) {
+        self.merge = Some(merge);
+        self.refresh_derived();
+    }
+
+    /// Stage the selected hunk (`to_gist`) or undo; false when nothing changed.
+    pub(crate) fn stage(&mut self, to_gist: bool) -> bool {
+        let changed = self.merge.as_mut().is_some_and(|m| m.stage(to_gist));
+        self.refresh_derived();
+        changed
+    }
+
+    pub(crate) fn undo(&mut self) -> bool {
+        let changed = self.merge.as_mut().is_some_and(|m| m.undo());
+        self.refresh_derived();
+        changed
+    }
+
+    /// Compare under the current Sync policy without touching any bytes or undo.
+    pub(crate) fn apply_policy(&mut self, policy: crate::sync_content::SyncPolicy) {
+        if let Some(merge) = &mut self.merge {
+            merge.set_policy(policy);
+        }
+        self.refresh_derived();
+    }
+
+    /// Advance the sides that were written, with the exact bytes written.
+    pub(crate) fn apply_saved(&mut self, local: Option<String>, gist: Option<String>) {
+        if let Some(merge) = &mut self.merge {
+            if local.is_some() || gist.is_some() {
+                merge.saved(local, gist);
+            }
+        }
+        self.refresh_derived();
+    }
+
+    /// The Gist side as last saved — what `d` writes. Never an unsaved staged buffer.
+    pub(crate) fn saved_gist(&self) -> Option<&str> {
+        self.merge.as_ref().map(|m| m.baseline_gist.as_str())
+    }
 }
 
 impl AppState {
+    /// A Diff parked under Config (or any other screen) follows the current Sync policy, so
+    /// returning to it shows one comparison, preview and identical-state.
+    pub(crate) fn apply_sync_policy_to_diffs(&mut self) {
+        let policy = self.settings.sync_policy();
+        let apply = |screen: &mut crate::tui::Screen| {
+            if let crate::tui::Screen::Diff(diff) = screen {
+                diff.apply_policy(policy);
+            }
+        };
+        match &mut self.screen {
+            crate::tui::Screen::Palette(p) => apply(&mut p.origin_screen),
+            screen => apply(screen),
+        }
+        self.nav_stack.iter_mut().for_each(apply);
+    }
+
     pub(crate) fn apply_diff_viewport(
         &mut self,
         viewport: crate::tui::diff_geometry::DiffViewport,
@@ -147,20 +209,23 @@ impl AppState {
 
     fn change_hunk(&mut self, key: char) {
         let radius = self.effective_diff_context();
-        let policy = self.settings.sync_policy();
         let wrap = self.diff_wrap;
         if let Some(diff) = self.diff_mut() {
-            if let Some(merge) = &mut diff.merge {
-                match key {
-                    'n' | 'N' => merge.jump(key == 'n'),
-                    '[' | ']' => {
-                        merge.stage(key == ']');
+            match key {
+                'n' | 'N' => {
+                    if let Some(merge) = &mut diff.merge {
+                        merge.jump(key == 'n');
                     }
-                    'z' => {
-                        merge.undo();
-                    }
-                    _ => {}
                 }
+                '[' | ']' => {
+                    diff.stage(key == ']');
+                }
+                'z' => {
+                    diff.undo();
+                }
+                _ => {}
+            }
+            if let Some(merge) = &diff.merge {
                 diff.body.scroll = crate::tui::diff_geometry::Geometry::new(
                     &merge.visible_rows(radius),
                     diff.merge_dimensions.unwrap_or_default().content_width(),
@@ -168,7 +233,6 @@ impl AppState {
                 )
                 .reveal(merge.selected);
             }
-            diff.refresh_merge_preview(policy);
         }
         self.status = None;
     }
@@ -580,7 +644,6 @@ mod tests {
                     local: PathBuf::from("/home/u/.zshrc"),
                     gist: crate::domain::GistFileRef::id_name("g1", "zshrc"),
                 },
-                remote: String::new(),
             },
             ..DiffState::default()
         }));
@@ -1002,5 +1065,52 @@ mod tests {
             merge.local, local,
             "resizing never changes the source buffer"
         );
+    }
+
+    /// #552: a Config policy change reaches a Diff parked under it; bytes and undo survive.
+    #[test]
+    fn policy_change_recomputes_parked_diff_without_touching_bytes() {
+        let mut state = initial_state();
+        state
+            .settings
+            .adjust(ConfigField::NormalizeLineEndings, true); // default on → off
+        crate::tui::test_support::enter_hunk_diff(&mut state, "a\r\nb\r\n", "a\nb\n");
+        assert!(!state.diff_identical());
+        assert_eq!(
+            state.diff().unwrap().merge.as_ref().unwrap().hunk_count(),
+            1
+        );
+        state.handle_key(KeyCode::Char(']'));
+        let before = state.diff().unwrap().merge.clone().unwrap();
+        let text = state.diff().unwrap().body.text.clone();
+        // Config parks the Diff; flipping the policy while parked must still reach it.
+        state.nav_stack.push(state.screen.clone());
+        state.screen = Screen::Config(Box::default());
+        state
+            .settings
+            .adjust(ConfigField::NormalizeLineEndings, true);
+        state.apply_sync_policy_to_diffs();
+        state.leave();
+        let diff = state.diff().unwrap();
+        let merge = diff.merge.as_ref().unwrap();
+        assert!(diff.identical && merge.hunk_count() == 0);
+        assert_ne!(diff.body.text, text);
+        assert_eq!((&merge.local, &merge.gist), (&before.local, &before.gist));
+        assert_eq!(merge.can_undo(), before.can_undo());
+    }
+
+    /// #552: download is the saved Gist snapshot, never a staged buffer.
+    #[test]
+    fn download_source_is_the_saved_gist_not_staged() {
+        let mut state = initial_state();
+        crate::tui::test_support::enter_hunk_diff(&mut state, "local\n", "gist\n");
+        state.handle_key(KeyCode::Char(']'));
+        let diff = state.diff().unwrap();
+        assert_eq!(diff.merge.as_ref().unwrap().gist, "local\n");
+        assert_eq!(diff.saved_gist(), Some("gist\n"));
+        let mut diff = diff.clone();
+        diff.apply_saved(None, Some("local\n".into()));
+        assert_eq!(diff.saved_gist(), Some("local\n"));
+        assert!(diff.identical);
     }
 }

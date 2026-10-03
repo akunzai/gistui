@@ -91,7 +91,7 @@ pub(super) fn set_diff_body(state: &mut AppState, text: impl Into<String>) {
 pub(super) fn enter_sync_diff(
     state: &mut AppState,
     text: String,
-    remote: String,
+    _remote: String,
     local: std::path::PathBuf,
 ) {
     let filename = local
@@ -105,7 +105,6 @@ pub(super) fn enter_sync_diff(
             text,
             ..ScrollBody::default()
         },
-        merge: None,
         merge_dimensions: None,
         identical: false,
         kind: crate::tui::DiffKind::Sync {
@@ -113,8 +112,8 @@ pub(super) fn enter_sync_diff(
                 local,
                 gist: crate::domain::GistFileRef::id_name("g1", filename),
             },
-            remote,
         },
+        merge: None,
     })));
 }
 
@@ -124,12 +123,11 @@ pub(super) fn enter_hunk_diff(state: &mut AppState, local: &str, gist: &str) {
     enter_sync_diff(state, String::new(), gist.into(), "/tmp/config.toml".into());
     let policy = state.settings.sync_policy();
     let diff = state.diff_mut().unwrap();
-    diff.merge = Some(crate::merge::Merge::new(
+    diff.set_merge(crate::merge::Merge::new(
         Some(local.into()),
         gist.into(),
         policy,
     ));
-    diff.refresh_merge_preview(policy);
 }
 
 /// Open a read-only revision Diff, as the Revisions screen does.

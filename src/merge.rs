@@ -136,6 +136,19 @@ impl Merge {
         self.recompute();
     }
 
+    /// Compare under a new policy. Bytes, baselines and undo are untouched; only the hunks
+    /// (and so the selection bound) are recomputed.
+    pub fn set_policy(&mut self, policy: SyncPolicy) {
+        if self.policy != policy {
+            self.policy = policy;
+            self.recompute();
+        }
+    }
+
+    pub fn policy(&self) -> SyncPolicy {
+        self.policy
+    }
+
     pub fn visible_rows(&self, radius: Option<usize>) -> Vec<Row> {
         let Some(radius) = radius else {
             return self.rows.clone();

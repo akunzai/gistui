@@ -609,12 +609,9 @@ pub enum DiffKind {
     /// Two revisions of one gist file: read-only.
     #[default]
     Revision,
-    /// A local file against a gist file. `remote` is the gist side as fetched — what `d`
-    /// writes without fetching again.
-    Sync {
-        pair: crate::domain::SyncPair,
-        remote: String,
-    },
+    /// A local file against a gist file. The saved Gist side — what `d` writes without
+    /// fetching again — lives in the Merge ([`DiffState::saved_gist`]).
+    Sync { pair: crate::domain::SyncPair },
 }
 
 /// Confirm modal — carried on [`Screen::Confirm`] (issue #242).
