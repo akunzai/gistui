@@ -403,6 +403,17 @@ fn patch_catalog_blob_sha(
 
 // ---- the sync write path: download, landing, local rescan (moved from bg.rs) -----------
 
+/// `d` in a sync Diff: gate an overwrite of an existing `target` behind Confirm (its `y`
+/// comes back as [`download`] with the overwrite token), or write a new file at once. The
+/// check runs now, when the user acted, not when the Diff was opened.
+pub(super) fn request_download(state: &mut AppState, target: &std::path::Path) {
+    if target.exists() {
+        state.enter_confirm_from_diff(super::PendingAction::Download);
+    } else {
+        download(state, crate::actions::DownloadMode::CreateNew);
+    }
+}
+
 pub(super) fn download(state: &mut AppState, mode: crate::actions::DownloadMode) {
     let Some((pair, content)) = state.diff().and_then(|d| match &d.kind {
         crate::tui::DiffKind::Sync { pair, remote } => Some((pair.clone(), remote.clone())),
@@ -1064,5 +1075,41 @@ mod tests {
             "status was {:?}",
             state.status
         );
+    }
+
+    /// A sync Diff of `dir/a.txt` (local `old`) against gist content `new`, opened by a pull.
+    fn state_on_diff(dir: &Path) -> (AppState, PathBuf) {
+        let (mut state, path) = state_with_local(dir, "old\n", false);
+        let request = request(&state, pair(&path, "a.txt"), SyncIntent::Pull);
+        run(&mut state, &gist_serving("a.txt", "new\n"), request);
+        assert!(state.screen.is_diff(), "on {:?}", state.screen);
+        (state, path)
+    }
+
+    #[test]
+    fn d_over_an_existing_local_file_asks_before_overwriting() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, path) = state_on_diff(dir.path());
+
+        request_download(&mut state, &path);
+
+        assert_eq!(state.pending_action(), Some(&PendingAction::Download));
+        assert!(
+            state.sync_pair().is_some(),
+            "the Diff stays parked under Confirm"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old\n");
+    }
+
+    #[test]
+    fn d_with_the_local_file_gone_writes_it_and_leaves_the_diff() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut state, path) = state_on_diff(dir.path());
+        std::fs::remove_file(&path).unwrap();
+
+        request_download(&mut state, &path);
+
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\n");
+        assert_eq!(state.screen, Screen::List);
     }
 }

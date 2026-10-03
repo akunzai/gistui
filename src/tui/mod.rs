@@ -426,8 +426,9 @@ pub enum KeyOutcome {
     Download {
         mode: crate::actions::DownloadMode,
     },
-    /// Request a download from the open Diff payload. Dispatch checks the target immediately
-    /// before choosing either an overwrite confirmation or a new-file download.
+    /// Request a download from the open Diff payload. `sync::request_download` checks the
+    /// target immediately before choosing either an overwrite confirmation or a new-file
+    /// download.
     DownloadRequested {
         target: PathBuf,
     },
