@@ -93,9 +93,8 @@ impl AppState {
                 let Some(group) = self.selected_group() else {
                     return KeyOutcome::None;
                 };
-                return KeyOutcome::OpenGistDetail {
-                    gist_id: group.id.clone(),
-                };
+                let gist_id = group.id.clone();
+                self.open_gist_detail(gist_id);
             }
             KeyCode::Char('o') if gists_guard(self, code) => {
                 let Some(gist_id) = self.context_gist_id() else {
@@ -356,8 +355,12 @@ mod tests {
     fn enter_on_gist_opens_detail() {
         let mut state = state_with_gists();
         state.screen = Screen::Gists(Box::default());
-        let outcome = state.handle_key(KeyCode::Enter);
-        assert!(matches!(outcome, KeyOutcome::OpenGistDetail { .. }));
+        let gist_id = state.selected_group().expect("a selected gist").id;
+        assert_eq!(state.handle_key(KeyCode::Enter), KeyOutcome::None);
+        assert_eq!(
+            state.detail().and_then(|d| d.gist_id.clone()),
+            Some(gist_id)
+        );
     }
 
     #[test]
@@ -595,7 +598,8 @@ mod tests {
         let key_out = by_key.handle_key(KeyCode::Enter);
         let by_mouse = state.handle_mouse(MouseInput::DoubleClick { col: 5, row: 2 }, &layout);
         assert_eq!(by_mouse, key_out);
-        assert!(matches!(by_mouse, KeyOutcome::OpenGistDetail { .. }));
+        assert_eq!(state.screen, by_key.screen);
+        assert!(state.screen.is_gist_detail());
     }
 
     /// A click in the pane's blank area does nothing (issue #408).

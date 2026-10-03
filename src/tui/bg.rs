@@ -211,37 +211,6 @@ impl ActionSpawner for InlineActionSpawner {
     }
 }
 
-/// Initial newest-first comment load: probe the total, then fetch the newest page.
-/// Thin IO boundary (network) — not unit-tested.
-pub(super) fn load_initial_comments(
-    runner: &dyn crate::actions::CommandRunner,
-    gist_id: &str,
-) -> Result<crate::tui::InitialComments, String> {
-    let probe = crate::gh::fetch_gist_comments_probe(runner, gist_id).map_err(|e| e.to_string())?;
-    let total = crate::gh::comments_total_from_probe(&probe);
-    if total == 0 {
-        return Ok(crate::tui::InitialComments {
-            comments: Vec::new(),
-            total: 0,
-            oldest_page: 1,
-        });
-    }
-    let oldest_page = crate::gh::last_page(total, crate::gh::COMMENTS_PAGE_SIZE);
-    let raw = crate::gh::fetch_gist_comments_page(
-        runner,
-        gist_id,
-        oldest_page,
-        crate::gh::COMMENTS_PAGE_SIZE,
-    )
-    .map_err(|e| e.to_string())?;
-    let comments = crate::gh::parse_gist_comments_json(&raw).map_err(|e| e.to_string())?;
-    Ok(crate::tui::InitialComments {
-        comments,
-        total,
-        oldest_page,
-    })
-}
-
 /// Builds the `--- local` / `+++ gist` diff header labels showing each side's filename and
 /// last-modified time, plus the gist's id.
 pub(super) fn open_browser_gist(state: &mut AppState, gist_id: &str) {

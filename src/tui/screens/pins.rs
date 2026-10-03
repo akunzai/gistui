@@ -31,6 +31,20 @@ pub(crate) const HELP_TOPIC: HelpTopic = HelpTopic::Pins;
 const PINS_STATUS_LEGEND: &str =
     "✓ synced · ↑ local changed · ↓ gist changed · ↕ both changed · ✕ missing · ? unknown";
 
+/// `x`: unpin the pin at `index` and keep the cursor on a row that still exists.
+///
+/// No filesystem rescan: unpin never touches the filesystem, and ranking reads
+/// `PinnedMapping` directly — a forced-flat rescan here used to make the local list drift
+/// back to cwd-only even while recursive mode was active (issue #409).
+pub(crate) fn unpin_at(state: &mut AppState, index: usize) {
+    if crate::tui::pin_sync::unpin_at_pin_index(state, index) {
+        let len = state.visible_pin_indices().len();
+        if let Some(pins) = state.pins_mut() {
+            pins.cursor.clamp_len(len);
+        }
+    }
+}
+
 pub(crate) fn help_topic() -> HelpTopic {
     HELP_TOPIC
 }
@@ -472,6 +486,30 @@ mod tests {
             state.handle_key(KeyCode::Char('x')),
             KeyOutcome::UnpinAtPin { .. }
         ));
+    }
+
+    /// Unpinning the last row leaves the cursor on the new last row, and the config file
+    /// loses that pin.
+    #[test]
+    fn unpinning_the_last_row_moves_the_cursor_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = PinnedMapping::fixture(dir.path().join("a.txt"), "g1", "a.txt");
+        let b = PinnedMapping::fixture(dir.path().join("b.txt"), "g1", "b.txt");
+        let mut state = crate::tui::test_support::state_with_stored_pin(dir.path(), a.clone());
+        state.config_store.pin(&state.cwd, b.key()).unwrap();
+        state.pinned = vec![a.clone(), b];
+        state.screen = Screen::Pins(Box::default());
+        crate::tui::test_support::pins_mut(&mut state).cursor.index = 1;
+
+        unpin_at(&mut state, 1);
+
+        assert_eq!(state.pinned, vec![a.clone()]);
+        assert_eq!(
+            crate::tui::test_support::pins_mut(&mut state).cursor.index,
+            0
+        );
+        let stored = crate::config::load_config(&dir.path().join("config.toml")).unwrap();
+        assert_eq!(stored.pinned, vec![a]);
     }
 
     #[test]

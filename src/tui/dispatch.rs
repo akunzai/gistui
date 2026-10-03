@@ -3,7 +3,7 @@
 //! layer does not re-resolve list/detail selection.
 
 use super::bg::*;
-use super::pin_sync::{pin_paths, unpin_at_pin_index, unpin_path};
+use super::pin_sync::{pin_paths, unpin_path};
 use super::sync::{download, request_download};
 use super::*;
 use editor::{edit_local_path, edit_upload_buffer};
@@ -48,71 +48,9 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
         KeyOutcome::Quit => return LoopFlow::Quit,
         KeyOutcome::Download { mode } => download(state, mode),
         KeyOutcome::DownloadRequested { target } => request_download(state, &target),
-        KeyOutcome::OpenGistDetail { gist_id } => {
-            state.enter(Screen::GistDetail(Box::new(DetailState {
-                gist_id: Some(gist_id),
-                focus: DetailFocus::Files,
-                file_cursor: 0,
-                scroll: 0,
-                ..DetailState::default()
-            })));
-            state.reset_comment_pagination();
-        }
-        KeyOutcome::FetchComments { gist_id } => {
-            let Some(fetch_id) = screens::detail::stage_fetch_comments(state, gist_id) else {
-                return LoopFlow::Proceed;
-            };
-            let runner = jobs.command_runner();
-            jobs.spawn_action(
-                state,
-                ActionJobSpec::new(
-                    ActionJobKind::FetchComments {
-                        gist_id: fetch_id.clone(),
-                        page: None,
-                    },
-                    "Loading comments…",
-                ),
-                move || {
-                    let result = load_initial_comments(runner.as_ref(), &fetch_id);
-                    (result, fetch_id)
-                },
-                move |(result, fetch_id), state| {
-                    screens::detail::on_comments_initial_loaded(state, fetch_id, result)
-                },
-            );
-        }
+        KeyOutcome::FetchComments { gist_id } => gist_comments::load_initial(jobs, state, gist_id),
         KeyOutcome::LoadOlderComments { gist_id, page } => {
-            let Some(fetch_id) = screens::detail::stage_load_older_comments(state, gist_id, page)
-            else {
-                return LoopFlow::Proceed;
-            };
-            let runner = jobs.command_runner();
-            jobs.spawn_action(
-                state,
-                ActionJobSpec::new(
-                    ActionJobKind::FetchComments {
-                        gist_id: fetch_id.clone(),
-                        page: Some(page),
-                    },
-                    "Loading older comments…",
-                ),
-                move || {
-                    let result = crate::gh::fetch_gist_comments_page(
-                        runner.as_ref(),
-                        &fetch_id,
-                        page,
-                        crate::gh::COMMENTS_PAGE_SIZE,
-                    )
-                    .map_err(|e| e.to_string())
-                    .and_then(|raw| {
-                        crate::gh::parse_gist_comments_json(&raw).map_err(|e| e.to_string())
-                    });
-                    (result, fetch_id)
-                },
-                move |(result, fetch_id), state| {
-                    screens::detail::on_comments_older_loaded(state, fetch_id, result)
-                },
-            );
+            gist_comments::load_older(jobs, state, gist_id, page)
         }
         KeyOutcome::CompactGist {
             entry,
@@ -169,17 +107,7 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
         KeyOutcome::RefreshLocals => {
             jobs.request_local_scan(state);
         }
-        KeyOutcome::UnpinAtPin { index } => {
-            if unpin_at_pin_index(state, index) {
-                let len = state.visible_pin_indices().len();
-                if let Some(pins) = state.pins_mut() {
-                    pins.cursor.clamp_len(len);
-                }
-                // No filesystem rescan: unpin never touches the filesystem, and ranking reads
-                // `PinnedMapping` directly — a forced-flat rescan here used to make the local
-                // list drift back to cwd-only even while recursive mode was active (issue #409).
-            }
-        }
+        KeyOutcome::UnpinAtPin { index } => screens::pins::unpin_at(state, index),
         KeyOutcome::Revision(request) => gist_revision::dispatch(jobs, state, request),
         KeyOutcome::Mutation(request) => gist_mutation::dispatch(jobs, state, request),
         KeyOutcome::Sync(request) => crate::tui::sync::dispatch(jobs, state, request),
@@ -438,46 +366,6 @@ mod tests {
         assert_eq!(
             state.gist_content_store.lookup(&state.gist_catalog, file),
             crate::tui::gist_content::ContentLookup::Hit("last good".into())
-        );
-    }
-
-    /// The first comments load probes the total, then fetches the newest page.
-    #[test]
-    fn the_first_comments_load_probes_then_fetches_the_newest_page() {
-        let comments = include_str!("../../tests/fixtures/gh/gist-comments.json");
-        let mut state = initial_state();
-        state.enter(Screen::GistDetail(Box::new(DetailState {
-            gist_id: Some("g1".into()),
-            ..DetailState::default()
-        })));
-        let runner = scripted(vec![
-            CommandOutput::ok(format!("HTTP/2.0 200 OK\n\n{comments}")),
-            CommandOutput::ok(comments),
-        ]);
-        let mut jobs = Jobs::inline(&state.gist_catalog.clone(), runner.clone());
-
-        route_outcome(
-            KeyOutcome::FetchComments {
-                gist_id: "g1".into(),
-            },
-            &mut state,
-            &mut jobs,
-        );
-        jobs.on_action_outcome(&mut state);
-
-        assert_eq!(
-            runner.calls(),
-            vec![
-                crate::gh::gist_comments_probe_plan("g1"),
-                crate::gh::gist_comments_page_plan("g1", 1, crate::gh::COMMENTS_PAGE_SIZE),
-            ]
-        );
-        assert_eq!(
-            state
-                .detail()
-                .and_then(|d| d.comments.as_ref())
-                .map(Vec::len),
-            Some(3)
         );
     }
 }
