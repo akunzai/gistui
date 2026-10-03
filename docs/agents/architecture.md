@@ -156,6 +156,16 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
   `DeferredEntry` — and the workflow never reads the List selection or the Pins cursor
   afterwards. `Push`'s replace-or-add is fixed then too (#523). Eligibility guards stay with
   the keys: List `S` refuses an unpinned pair before any request exists.
+- **Each List key names its own pair, on purpose.** The four `SyncPair` constructions in
+  `screens/list.rs` and `upload_intent` are four rules, not one rule written four times:
+  `S` pairs both selections (they must be a pin); `d` pairs the gist file with
+  `cwd/<gist filename>` (a download lands under the gist's name); `Enter` pairs the gist file
+  with the selected local file, else `cwd/<gist filename>` (the file `d` would overwrite,
+  #524); `u` pairs the selected local file with `<local filename>` in the selected gist (an
+  upload lands under the local name). One constructor would need a mode argument that
+  re-states them. Pins builds every pair from the pin itself (`pin_pair`). `S`'s not-pinned
+  check runs again in `sync::auto` because a pin can be removed between the key and the
+  dispatch.
 - The workflow owns fetching the gist side, reading the local side, the diff labels, the
   Sync policy's identical check with the baseline confirmation it triggers, and opening the
   Diff or the upload Confirm or writing a new download. `Auto` computes `SyncStatus` at

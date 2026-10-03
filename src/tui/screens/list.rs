@@ -276,7 +276,7 @@ impl AppState {
                     return KeyOutcome::None;
                 };
                 let pair = crate::domain::SyncPair {
-                    local: self.cwd.join(&local.path),
+                    local: local.path,
                     gist: gist.file.file_ref(),
                 };
                 let key =
