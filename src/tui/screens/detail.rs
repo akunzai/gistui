@@ -469,6 +469,21 @@ impl AppState {
         None
     }
 
+    /// Open `gist_id`'s GistDetail over the current screen, on its file list with comments
+    /// not yet fetched.
+    pub fn open_gist_detail(&mut self, gist_id: String) {
+        self.enter(crate::tui::Screen::GistDetail(Box::new(
+            crate::tui::DetailState {
+                gist_id: Some(gist_id),
+                focus: DetailFocus::Files,
+                file_cursor: 0,
+                scroll: 0,
+                ..crate::tui::DetailState::default()
+            },
+        )));
+        self.reset_comment_pagination();
+    }
+
     /// Reset comment-pagination state (called when (re)opening a gist detail or switching
     /// the loaded gist), so a fresh Tab re-fetches from the newest page.
     pub fn reset_comment_pagination(&mut self) {
@@ -1733,7 +1748,7 @@ mod tests {
     #[test]
     fn detail_q_returns_to_gists() {
         let mut state = state_with_gists();
-        // Mirrors what `enter()` does when GistDetail is opened from Gists (OpenGistDetail).
+        // Mirrors what `enter()` does when GistDetail is opened from Gists (`open_gist_detail`).
         state.nav_stack.push(Screen::Gists(Box::default()));
         state.screen = Screen::GistDetail(Box::default());
         state.handle_key(KeyCode::Char('q'));

@@ -48,16 +48,6 @@ fn route_outcome(outcome: KeyOutcome, state: &mut AppState, jobs: &mut Jobs) -> 
         KeyOutcome::Quit => return LoopFlow::Quit,
         KeyOutcome::Download { mode } => download(state, mode),
         KeyOutcome::DownloadRequested { target } => request_download(state, &target),
-        KeyOutcome::OpenGistDetail { gist_id } => {
-            state.enter(Screen::GistDetail(Box::new(DetailState {
-                gist_id: Some(gist_id),
-                focus: DetailFocus::Files,
-                file_cursor: 0,
-                scroll: 0,
-                ..DetailState::default()
-            })));
-            state.reset_comment_pagination();
-        }
         KeyOutcome::FetchComments { gist_id } => gist_comments::load_initial(jobs, state, gist_id),
         KeyOutcome::LoadOlderComments { gist_id, page } => {
             gist_comments::load_older(jobs, state, gist_id, page)

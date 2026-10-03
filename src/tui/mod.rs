@@ -454,9 +454,6 @@ pub enum KeyOutcome {
         path: PathBuf,
     },
     EditUpload,
-    OpenGistDetail {
-        gist_id: String,
-    },
     FetchComments {
         gist_id: String,
     },
