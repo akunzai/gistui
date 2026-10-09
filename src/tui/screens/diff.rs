@@ -29,9 +29,8 @@ pub(crate) struct DiffVm {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SideBySideVm {
-    pub rows: Vec<crate::merge::Row>,
+    pub geometry: crate::tui::diff_geometry::DiffGeometry,
     pub selected: usize,
-    pub dimensions: Option<crate::tui::diff_geometry::Dimensions>,
     pub local_title: String,
     pub gist_title: String,
 }
@@ -78,6 +77,16 @@ pub(crate) fn diff_guard(state: &AppState, code: KeyCode) -> bool {
 }
 
 impl crate::tui::DiffState {
+    fn geometry(
+        &self,
+        radius: Option<usize>,
+        wrap: bool,
+    ) -> Option<crate::tui::diff_geometry::DiffGeometry> {
+        self.merge.as_ref().map(|merge| {
+            crate::tui::diff_geometry::DiffGeometry::new(merge, radius, self.merge_dimensions, wrap)
+        })
+    }
+
     /// The one place the unified preview and identical-state are derived: from the Merge's
     /// staged bytes under the Merge's policy, so no caller can refresh them out of order.
     fn refresh_derived(&mut self) {
@@ -168,13 +177,8 @@ impl AppState {
         let radius = self.effective_diff_context();
         let wrap = self.diff_wrap;
         if let Some(diff) = self.diff_mut() {
-            if let Some(merge) = &diff.merge {
-                diff.body.scroll = crate::tui::diff_geometry::Geometry::new(
-                    &merge.visible_rows(radius),
-                    diff.merge_dimensions.unwrap_or_default().content_width(),
-                    wrap,
-                )
-                .reveal(merge.selected);
+            if let Some(geometry) = diff.geometry(radius, wrap) {
+                diff.body.scroll = geometry.reveal(diff.merge.as_ref().unwrap().selected);
             }
         }
     }
@@ -185,14 +189,10 @@ impl AppState {
         let Some(diff) = self.diff_mut() else {
             return false;
         };
-        let Some(merge) = &mut diff.merge else {
+        let Some(geometry) = diff.geometry(radius, wrapped) else {
             return crate::tui::screens::scroll_navigation(self, action);
         };
-        let geometry = crate::tui::diff_geometry::Geometry::new(
-            &merge.visible_rows(radius),
-            diff.merge_dimensions.unwrap_or_default().content_width(),
-            wrapped,
-        );
+        let merge = diff.merge.as_mut().unwrap();
         let position = geometry.navigate(
             action,
             crate::tui::diff_geometry::Position {
@@ -208,8 +208,6 @@ impl AppState {
     }
 
     fn change_hunk(&mut self, key: char) {
-        let radius = self.effective_diff_context();
-        let wrap = self.diff_wrap;
         if let Some(diff) = self.diff_mut() {
             match key {
                 'n' | 'N' => {
@@ -225,15 +223,8 @@ impl AppState {
                 }
                 _ => {}
             }
-            if let Some(merge) = &diff.merge {
-                diff.body.scroll = crate::tui::diff_geometry::Geometry::new(
-                    &merge.visible_rows(radius),
-                    diff.merge_dimensions.unwrap_or_default().content_width(),
-                    wrap,
-                )
-                .reveal(merge.selected);
-            }
         }
+        self.reveal_hunk();
         self.status = None;
     }
 
@@ -414,23 +405,29 @@ pub(crate) fn build_diff_vm(state: &AppState) -> DiffVm {
         } else {
             state
                 .diff()
-                .and_then(|d| d.merge.as_ref())
                 .zip(state.sync_pair())
-                .map(|(merge, pair)| SideBySideVm {
-                    rows: merge.visible_rows(state.effective_diff_context()),
-                    selected: merge.selected,
-                    dimensions: state.diff().unwrap().merge_dimensions,
-                    local_title: format!(
-                        "Local{} — {}",
-                        if merge.local_dirty() { " [staged]" } else { "" },
-                        crate::config::display_path(&pair.local)
-                    ),
-                    gist_title: format!(
-                        "Gist{} — {} / {}",
-                        if merge.gist_dirty() { " [staged]" } else { "" },
-                        pair.gist.gist_id,
-                        pair.gist.filename
-                    ),
+                .and_then(|(diff, pair)| {
+                    let merge = diff.merge.as_ref()?;
+                    Some(SideBySideVm {
+                        geometry: crate::tui::diff_geometry::DiffGeometry::new(
+                            merge,
+                            state.effective_diff_context(),
+                            diff.merge_dimensions,
+                            state.diff_wrap,
+                        ),
+                        selected: merge.selected,
+                        local_title: format!(
+                            "Local{} — {}",
+                            if merge.local_dirty() { " [staged]" } else { "" },
+                            crate::config::display_path(&pair.local)
+                        ),
+                        gist_title: format!(
+                            "Gist{} — {} / {}",
+                            if merge.gist_dirty() { " [staged]" } else { "" },
+                            pair.gist.gist_id,
+                            pair.gist.filename
+                        ),
+                    })
                 })
         },
     }
@@ -913,22 +910,16 @@ mod tests {
         for _ in 0..10 {
             state.handle_key(KeyCode::PageDown);
         }
-        let merge = state.diff().unwrap().merge.as_ref().unwrap();
-        assert!(
-            usize::from(state.diff().unwrap().body.scroll)
-                < crate::tui::diff_geometry::Geometry::new(
-                    &merge.visible_rows(state.effective_diff_context()),
-                    state
-                        .diff()
-                        .unwrap()
-                        .merge_dimensions
-                        .unwrap_or_default()
-                        .content_width(),
-                    state.diff_wrap
-                )
-                .rows()
-                .len()
-        );
+        let diff = state.diff().unwrap();
+        let (geometry, _) = diff
+            .geometry(state.effective_diff_context(), state.diff_wrap)
+            .unwrap()
+            .frame(
+                diff.merge_dimensions.unwrap_or_default(),
+                diff.body.scroll,
+                diff.merge.as_ref().unwrap().selected,
+            );
+        assert!(usize::from(diff.body.scroll) < geometry.rows().len());
     }
 
     #[test]
@@ -1018,7 +1009,45 @@ mod tests {
             assert_eq!(state.diff().unwrap().body.scroll, viewport.scroll);
             // Leave the hunk before the next resize, including the height-only resize.
             state.handle_key(KeyCode::Down);
+            let manual_scroll = state.diff().unwrap().body.scroll;
+            terminal
+                .draw(|frame| {
+                    crate::tui::render::render(frame, &state, &mut layout, &mut feedback);
+                })
+                .unwrap();
+            assert_eq!(
+                feedback.diff_viewport.unwrap().scroll,
+                manual_scroll,
+                "unchanged dimensions preserve manual scrolling"
+            );
         }
+    }
+
+    #[test]
+    fn confirm_keeps_text_background_and_emits_no_diff_viewport_feedback() {
+        use ratatui::{backend::TestBackend, Terminal};
+        let mut state = initial_state();
+        crate::tui::test_support::enter_hunk_diff(&mut state, "local\nsame\n", "gist\nsame\n");
+        state.handle_key(KeyCode::Char(']'));
+        state.handle_key(KeyCode::Char('s'));
+        let before = state.diff().unwrap().clone();
+        let confirm = crate::tui::screens::confirm::build_confirm_vm(&state);
+        let crate::tui::screens::confirm::ConfirmBackgroundVm::Diff(background) =
+            confirm.background
+        else {
+            panic!("save preview uses the Diff text background")
+        };
+        assert!(background.sides.is_none());
+        let mut terminal = Terminal::new(TestBackend::new(49, 12)).unwrap();
+        let mut feedback = crate::tui::render::RenderFeedback::default();
+        let mut layout = crate::tui::MouseFrame::default();
+        terminal
+            .draw(|frame| {
+                crate::tui::render::render(frame, &state, &mut layout, &mut feedback);
+            })
+            .unwrap();
+        assert!(feedback.diff_viewport.is_none());
+        assert_eq!(state.diff().unwrap(), &before);
     }
 
     #[test]
@@ -1036,8 +1065,11 @@ mod tests {
         state.handle_key(KeyCode::Char('w'));
         state.handle_key(KeyCode::PageDown);
         let merge = state.diff().unwrap().merge.as_ref().unwrap();
-        let geometry =
-            crate::tui::diff_geometry::Geometry::new(&merge.visible_rows(None), 16, true);
+        let (geometry, _) = state.diff().unwrap().geometry(None, true).unwrap().frame(
+            state.diff().unwrap().merge_dimensions.unwrap(),
+            state.diff().unwrap().body.scroll,
+            merge.selected,
+        );
         let row = &geometry.rows()[state.diff().unwrap().body.scroll as usize];
         assert_eq!(
             row.hunk,

@@ -37,13 +37,67 @@ pub(crate) struct Position {
     pub selected: usize,
 }
 
+/// A read-only Diff projection shared by key handling and paint. Physical rows are
+/// computed at the last painted dimensions for input, and at current dimensions for paint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DiffGeometry {
+    rows: Vec<Row>,
+    dimensions: Option<Dimensions>,
+    wrap: bool,
+}
+
+impl DiffGeometry {
+    pub(crate) fn new(
+        merge: &crate::merge::Merge,
+        radius: Option<usize>,
+        dimensions: Option<Dimensions>,
+        wrap: bool,
+    ) -> Self {
+        Self {
+            rows: merge.visible_rows(radius),
+            dimensions,
+            wrap,
+        }
+    }
+
+    fn geometry(&self, dimensions: Dimensions) -> Geometry {
+        Geometry::new(&self.rows, dimensions.content_width(), self.wrap)
+    }
+
+    pub(crate) fn reveal(&self, selected: usize) -> u16 {
+        self.geometry(self.dimensions.unwrap_or_default())
+            .reveal(selected)
+    }
+
+    pub(crate) fn navigate(&self, action: NavAction, position: Position) -> Position {
+        self.geometry(self.dimensions.unwrap_or_default())
+            .navigate(action, position)
+    }
+
+    /// Resolve entry/resize before paint; unchanged dimensions preserve manual scrolling.
+    pub(crate) fn frame(
+        &self,
+        dimensions: Dimensions,
+        scroll: u16,
+        selected: usize,
+    ) -> (Geometry, DiffViewport) {
+        let geometry = self.geometry(dimensions);
+        let scroll = if Some(dimensions) != self.dimensions {
+            geometry.reveal(selected)
+        } else {
+            scroll
+        };
+        (geometry, DiffViewport { dimensions, scroll })
+    }
+}
+
 pub(crate) struct Geometry {
     rows: Vec<Row>,
     wrap: bool,
 }
 
 impl Geometry {
-    pub(crate) fn new(rows: &[Row], width: usize, wrap: bool) -> Self {
+    fn new(rows: &[Row], width: usize, wrap: bool) -> Self {
         Self {
             rows: aligned_rows(rows, width, wrap),
             wrap,
@@ -54,7 +108,7 @@ impl Geometry {
         &self.rows
     }
 
-    pub(crate) fn reveal(&self, selected: usize) -> u16 {
+    fn reveal(&self, selected: usize) -> u16 {
         self.rows
             .iter()
             .position(|r| r.hunk == Some(selected))
@@ -62,7 +116,7 @@ impl Geometry {
             .min(u16::MAX as usize) as u16
     }
 
-    pub(crate) fn navigate(&self, action: NavAction, mut position: Position) -> Position {
+    fn navigate(&self, action: NavAction, mut position: Position) -> Position {
         let max = self.rows.len().saturating_sub(1).min(u16::MAX as usize) as u16;
         match action {
             NavAction::Up => position.scroll = position.scroll.saturating_sub(1),
@@ -155,6 +209,43 @@ mod tests {
             gist: gist.map(|s| (9, s.into())),
             hunk,
             omitted: 0,
+        }
+    }
+
+    #[test]
+    fn frame_reveals_on_entry_and_resize_but_preserves_scroll_at_the_same_size() {
+        let merge = crate::merge::Merge::new(
+            Some("local\nabcdefghij\nsecond local\n".into()),
+            "gist\nabcdefghij\nsecond gist\n".into(),
+            crate::sync_content::SyncPolicy::default(),
+        );
+        let dimensions = Dimensions {
+            panes: [16, 16],
+            height: 8,
+        };
+        let first = DiffGeometry::new(&merge, None, None, true);
+        let (rows, viewport) = first.frame(dimensions, 0, 1);
+        assert_eq!(viewport.scroll, 3);
+        assert_eq!(rows.rows()[viewport.scroll as usize].hunk, Some(1));
+
+        let view = DiffGeometry::new(&merge, None, Some(dimensions), true);
+        assert_eq!(view.frame(dimensions, 1, 1).1.scroll, 1);
+        for resized in [
+            Dimensions {
+                height: 9,
+                ..dimensions
+            },
+            Dimensions {
+                panes: [21, 21],
+                ..dimensions
+            },
+        ] {
+            let (_, viewport) = view.frame(resized, 1, 1);
+            assert_eq!(viewport.dimensions, resized);
+            assert_eq!(
+                viewport.scroll,
+                if resized.panes == [21, 21] { 2 } else { 3 }
+            );
         }
     }
 
