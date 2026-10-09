@@ -212,11 +212,9 @@ fn on_saved(state: &mut AppState, request: &SaveRequest, saved: Saved) -> LoopFl
     }
     let local_saved = saved.local.is_some();
     if let Some(gist) = &saved.gist {
-        state.gist_content_store.invalidate_file(&request.pair.gist);
-        state.gist_list_stale = true;
         let sha =
             crate::sync_baseline::SyncBaseline::after_sync(b"", gist.as_bytes()).remote_blob_sha;
-        super::sync::patch_catalog_blob_sha(state, &request.pair.gist, sha.as_deref());
+        super::gist_mutation::on_gist_file_written(state, &request.pair.gist, sha.as_deref());
     }
     if let Some(diff) = state.diff_mut() {
         diff.apply_saved(saved.local, saved.gist);
@@ -274,6 +272,14 @@ mod tests {
 
     const LOCAL: &str = "local\nsame\nold\nsame\nkeep local\n";
     const GIST: &str = "old\nsame\ngist\nsame\nkeep gist\n";
+    const OLD_URL: &str = "https://gist.githubusercontent.com/u/g1/raw/1111111111111111111111111111111111111111/a.txt";
+
+    fn cache_gist_side(state: &mut AppState) -> GistFileRef {
+        let file = state.sync_pair().unwrap().gist.clone();
+        state.gist_catalog.owned[0].raw_url = Some(OLD_URL.into());
+        state.gist_content_store.insert(&file, GIST.into());
+        file
+    }
 
     fn response(content: &str) -> CommandOutput {
         CommandOutput::ok(
@@ -337,6 +343,7 @@ mod tests {
             CommandOutput::ok(""),
         ]));
         let (mut state, mut jobs) = open(&path, runner.clone());
+        let file = cache_gist_side(&mut state);
         state.handle_key(KeyCode::Char(']'));
         state.handle_key(KeyCode::Char('['));
         save(&mut state, &mut jobs);
@@ -361,6 +368,17 @@ mod tests {
             .unwrap()
             .contains("Saved Local; Gist save failed"));
         assert!(state.status.as_deref().unwrap().contains("HTTP 502"));
+        assert!(!state.gist_list_stale);
+        assert_eq!(
+            state.gist_catalog.owned[0].raw_url.as_deref(),
+            Some(OLD_URL)
+        );
+        assert_eq!(
+            state
+                .gist_content_store
+                .lookup(&state.gist_catalog, file.clone()),
+            super::super::gist_content::ContentLookup::Hit(GIST.into())
+        );
         save(&mut state, &mut jobs);
         assert!(!state.hunks_dirty());
         assert_eq!(
@@ -369,6 +387,14 @@ mod tests {
             "unselected difference remains"
         );
         assert!(state.gist_list_stale);
+        assert_eq!(
+            state.catalog_blob_sha("g1", "a.txt"),
+            Some("6544b0627d4cdbd76d113ee4cbb8a8e725a924a4")
+        );
+        assert!(matches!(
+            state.gist_content_store.lookup(&state.gist_catalog, file),
+            super::super::gist_content::ContentLookup::Miss(_)
+        ));
         let calls = runner.recorded();
         assert_eq!(calls.len(), 5);
         let payload: serde_json::Value =
@@ -425,6 +451,7 @@ mod tests {
         std::fs::write(&path, LOCAL).unwrap();
         let runner = Arc::new(SeqRunner::new(vec![response(GIST), response(GIST)]));
         let (mut state, mut jobs) = open(&path, runner.clone());
+        let file = cache_gist_side(&mut state);
         state.handle_key(KeyCode::Char('['));
         save(&mut state, &mut jobs);
         assert_eq!(runner.calls().len(), 2);
@@ -434,6 +461,14 @@ mod tests {
         );
         assert!(!state.hunks_dirty());
         assert!(!state.gist_list_stale);
+        assert_eq!(
+            state.gist_catalog.owned[0].raw_url.as_deref(),
+            Some(OLD_URL)
+        );
+        assert_eq!(
+            state.gist_content_store.lookup(&state.gist_catalog, file),
+            super::super::gist_content::ContentLookup::Hit(GIST.into())
+        );
     }
 
     #[test]
