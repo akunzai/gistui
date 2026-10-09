@@ -351,15 +351,9 @@ fn open_diff(
 
 // ---- settling what a pin believes after a sync (issue #526) -----------------------------
 
-/// Sync's one follow-up to a successful push, called by
-/// [`gist_mutation::on_upload_replace`](super::gist_mutation::on_upload_replace). It records
-/// the pair's Sync baseline from the local file's bytes on disk (not the possibly
-/// redacted/transformed bytes sent — #465), patches the uploaded file's blob sha into the
-/// in-memory catalog so the pin reads in sync before the refresh this upload triggers lands
-/// (#466), marks the pin-sync cache dirty through the existing projection
-/// ([`apply_pin_change`]), and leaves Confirm and any stale Diff — the same landing rule a
-/// download uses (#520). Content-store invalidation is the caller's: it applies to every
-/// file mutation, not just a push.
+/// Settle a successful push: publish its Gist write facts through gist_mutation, record
+/// the Sync baseline from local bytes on disk and exact sent bytes (#465), then leave
+/// Confirm and any stale Diff using the same landing rule as a download (#520).
 pub(super) fn on_push_done(
     state: &mut AppState,
     file: &crate::domain::GistFileRef,
@@ -371,7 +365,7 @@ pub(super) fn on_push_done(
         local_content.as_bytes(),
         sent_content.as_bytes(),
     );
-    patch_catalog_blob_sha(state, file, baseline.remote_blob_sha.as_deref());
+    super::gist_mutation::on_gist_file_written(state, file, baseline.remote_blob_sha.as_deref());
     record_pin_sync(
         state,
         local_path,
@@ -381,27 +375,6 @@ pub(super) fn on_push_done(
         Some(crate::domain::SyncDirection::Upload),
     );
     land_after_confirmed_sync(state);
-}
-
-/// Patch `file`'s blob sha into the in-memory catalog's `raw_url`, when both the catalog
-/// holds a raw URL to patch and a sha was recorded.
-pub(super) fn patch_catalog_blob_sha(
-    state: &mut AppState,
-    file: &crate::domain::GistFileRef,
-    sha: Option<&str>,
-) {
-    let Some(sha) = sha else { return };
-    for g in state.gist_catalog.owned.iter_mut() {
-        if g.gist_id == file.gist_id && g.filename == file.filename {
-            if let Some(url) = g
-                .raw_url
-                .as_deref()
-                .and_then(|u| crate::domain::raw_url_with_blob_sha(u, sha))
-            {
-                g.raw_url = Some(url);
-            }
-        }
-    }
 }
 
 // ---- the sync write path: download, landing, local rescan (moved from bg.rs) -----------

@@ -182,8 +182,10 @@ Help topics and `README.md` stay hand-written — the List topic is fifty lines 
   not the possibly redacted/transformed bytes sent), patches the uploaded file's blob sha into
   the in-memory catalog, marks the pin-sync cache dirty through the existing projection
   (`apply_pin_change`), and leaves Confirm and any stale Diff — `sync::land_after_confirmed_sync`,
-  the same landing rule `sync::download` uses on success. `gist_mutation.rs` keeps only what
-  applies to every file mutation: content-store invalidation.
+  the same landing rule `sync::download` uses on success. Shared Gist write facts go through
+  `gist_mutation::on_gist_file_written`: content-store invalidation, the known blob sha's
+  catalog patch, and the refresh marker. Hunk save uses this apply seam only for its saved
+  Gist side; its partial-save and baseline rules stay in `hunk_sync`.
 - Tests drive it through `sync::dispatch` + `Jobs::inline` + `SeqRunner`, as a table over
   intent × identical × pinned, plus `Auto`'s arms and List-to-Diff paths end to end.
 

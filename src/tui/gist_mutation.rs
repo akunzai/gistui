@@ -362,12 +362,31 @@ fn apply(
     LoopFlow::Proceed
 }
 
-/// `UploadReplace` outcome: invalidate the uploaded file's content-store entry (this module's
-/// job — it applies to every file mutation, not just a push) and hand the rest to sync's one
-/// after-push follow-up ([`sync::on_push_done`](super::sync::on_push_done)): the pin baseline,
-/// the catalog's blob sha, the pin-sync cache flag, and leaving Confirm and any stale Diff for
-/// the screen behind them (List, or Pins). A failure stays on Confirm with the draft intact
-/// (#476).
+/// Publish the known facts of a successful Gist file write. Baseline eligibility and
+/// navigation stay with the workflow that completed the write.
+pub(super) fn on_gist_file_written(
+    state: &mut AppState,
+    file: &crate::domain::GistFileRef,
+    sha: Option<&str>,
+) {
+    state.gist_content_store.invalidate_file(file);
+    state.gist_list_stale = true;
+    let Some(sha) = sha else { return };
+    for g in state.gist_catalog.owned.iter_mut() {
+        if g.gist_id == file.gist_id && g.filename == file.filename {
+            if let Some(url) = g
+                .raw_url
+                .as_deref()
+                .and_then(|u| crate::domain::raw_url_with_blob_sha(u, sha))
+            {
+                g.raw_url = Some(url);
+            }
+        }
+    }
+}
+
+/// Successful uploads enter sync's follow-up, which publishes the Gist write facts here,
+/// records the pin baseline and lands off Confirm/Diff. Failure keeps the draft (#476).
 pub(crate) fn on_upload_replace(
     state: &mut AppState,
     result: Result<(), String>,
@@ -377,7 +396,6 @@ pub(crate) fn on_upload_replace(
     sent_content: &str,
 ) -> LoopFlow {
     apply(state, result, "upload", |state| {
-        state.gist_content_store.invalidate_file(&file);
         super::sync::on_push_done(state, &file, local_path, local_content, sent_content);
         format!("Uploaded {} to gist {}", file.filename, file.gist_id)
     })
@@ -927,6 +945,15 @@ mod tests {
     #[test]
     fn on_upload_replace_err_sets_status() {
         let mut state = initial_state();
+        let file = gist_file_ref("g1", "a.txt");
+        state
+            .gist_content_store
+            .insert(&file, "last-known-good".into());
+        state.gist_catalog.owned = vec![crate::domain::GistFile {
+            raw_url: Some("https://gist.githubusercontent.com/u/g1/raw/1111111111111111111111111111111111111111/a.txt".into()),
+            ..crate::domain::GistFile::fixture("g1", "a.txt")
+        }];
+        let catalog = state.gist_catalog.clone();
 
         on_upload_replace(
             &mut state,
@@ -939,17 +966,24 @@ mod tests {
 
         assert_eq!(state.status.as_deref(), Some("upload failed: boom"));
         assert!(!state.gist_list_stale);
+        assert_eq!(state.gist_catalog, catalog);
+        assert_eq!(
+            state.gist_content_store.lookup(&state.gist_catalog, file),
+            crate::tui::gist_content::ContentLookup::Hit("last-known-good".into())
+        );
     }
 
-    /// This module's own share of an upload's success: invalidate the uploaded file's
-    /// content-store entry (it applies to every file mutation, not just a push) and mark the
-    /// list stale. What a pin ends up believing, and where the user lands, are sync's
-    /// (`sync::on_push_done`) — asserted on its own test surface (`src/tui/sync.rs`).
+    /// Upload success publishes Gist write facts; sync's baseline and landing are tested
+    /// through on_push_done in sync.rs.
     #[test]
-    fn on_upload_replace_ok_invalidates_content_and_marks_list_stale() {
+    fn on_upload_replace_ok_publishes_gist_write_facts() {
         let mut state = initial_state();
         let file = crate::domain::GistFileRef::id_name("g1", "a.txt");
         state.gist_content_store.insert(&file, "stale".into());
+        state.gist_catalog.owned = vec![crate::domain::GistFile {
+            raw_url: Some("https://gist.githubusercontent.com/u/g1/raw/1111111111111111111111111111111111111111/a.txt".into()),
+            ..crate::domain::GistFile::fixture("g1", "a.txt")
+        }];
 
         on_upload_replace(
             &mut state,
@@ -957,15 +991,70 @@ mod tests {
             gist_file_ref("g1", "a.txt"),
             std::path::Path::new("/tmp/a.txt"),
             "hello",
-            "hello",
+            "hello\n",
         );
 
         assert!(state.gist_list_stale);
+        assert_eq!(
+            state.catalog_blob_sha("g1", "a.txt"),
+            Some("ce013625030ba8dba906f756967f9e9ca394464a")
+        );
         assert_eq!(state.status.as_deref(), Some("Uploaded a.txt to gist g1"));
         assert!(matches!(
             state.gist_content_store.lookup(&state.gist_catalog, file),
             crate::tui::gist_content::ContentLookup::Miss(_)
         ));
+    }
+
+    #[test]
+    fn written_gist_file_invalidates_content_patches_owned_sha_and_requests_refresh() {
+        const SHA: &str = "ce013625030ba8dba906f756967f9e9ca394464a";
+        const OLD_URL: &str = "https://gist.githubusercontent.com/u/g1/raw/1111111111111111111111111111111111111111/a.txt";
+        const NEW_URL: &str = "https://gist.githubusercontent.com/u/g1/raw/ce013625030ba8dba906f756967f9e9ca394464a/a.txt";
+        for (url, sha, expected) in [
+            (Some(OLD_URL), Some(SHA), Some(NEW_URL)),
+            (None, Some(SHA), None),
+            (Some("unparseable"), Some(SHA), Some("unparseable")),
+            (Some(OLD_URL), None, Some(OLD_URL)),
+        ] {
+            let mut state = initial_state();
+            let file = gist_file_ref("g1", "a.txt");
+            let other = gist_file_ref("g1", "b.txt");
+            let owned = crate::domain::GistFile {
+                raw_url: url.map(str::to_owned),
+                ..crate::domain::GistFile::fixture("g1", "a.txt")
+            };
+            state.gist_catalog.owned = vec![
+                owned.clone(),
+                crate::domain::GistFile {
+                    raw_url: Some(OLD_URL.replace("a.txt", "b.txt")),
+                    ..crate::domain::GistFile::fixture("g1", "b.txt")
+                },
+                crate::domain::GistFile {
+                    raw_url: Some(OLD_URL.replace("/g1/", "/g2/")),
+                    ..crate::domain::GistFile::fixture("g2", "a.txt")
+                },
+            ];
+            let unrelated = state.gist_catalog.owned[1..].to_vec();
+            state.gist_catalog.starred = vec![owned];
+            state.gist_content_store.insert(&file, "stale".into());
+            state.gist_content_store.insert(&other, "unaffected".into());
+
+            on_gist_file_written(&mut state, &file, sha);
+
+            assert_eq!(state.gist_catalog.owned[0].raw_url.as_deref(), expected);
+            assert_eq!(state.gist_catalog.starred[0].raw_url.as_deref(), url);
+            assert_eq!(state.gist_catalog.owned[1..], unrelated);
+            assert!(state.gist_list_stale);
+            assert!(matches!(
+                state.gist_content_store.lookup(&state.gist_catalog, file),
+                crate::tui::gist_content::ContentLookup::Miss(_)
+            ));
+            assert_eq!(
+                state.gist_content_store.lookup(&state.gist_catalog, other),
+                crate::tui::gist_content::ContentLookup::Hit("unaffected".into())
+            );
+        }
     }
 
     /// Issue #526: a push of a pinned pair, run end to end through the mutation workflow
