@@ -293,18 +293,13 @@ fn render_side_by_side(
         panes: [panes[0].width, panes[1].width],
         height: area.height,
     };
-    let width = dimensions.content_width();
-    let geometry = crate::tui::diff_geometry::Geometry::new(&sides.rows, width, diff.wrap);
-    // Opening and resize reveal in this frame, before feedback updates AppState.
-    let scroll = if Some(dimensions) != sides.dimensions {
-        geometry.reveal(sides.selected)
-    } else {
-        diff.scroll
-    };
+    let (geometry, viewport) = sides
+        .geometry
+        .frame(dimensions, diff.scroll, sides.selected);
     for row in geometry
         .rows()
         .iter()
-        .skip(scroll as usize)
+        .skip(viewport.scroll as usize)
         .take(inners[0].height as usize)
     {
         let values = [&row.local, &row.gist];
@@ -373,7 +368,7 @@ fn render_side_by_side(
         frame.render_widget(blocks[side].clone(), panes[side]);
         frame.render_widget(Paragraph::new(text).style(theme.base_style()), inners[side]);
     }
-    crate::tui::diff_geometry::DiffViewport { dimensions, scroll }
+    viewport
 }
 
 #[cfg(test)]
